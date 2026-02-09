@@ -57,12 +57,13 @@ def handle_all(m):
             bot.reply_to(m, "Use: /analyze SBIN")
 
 if __name__ == "__main__":
-    # 1. Start Health Server (For Render Port Scan)
+    # Start the "Health Server" for Render's port check
     threading.Thread(target=run_health_server, daemon=True).start()
     
-    # 2. Start Keep-Alive Heartbeat (For 24/7 Uptime)
-    threading.Thread(target=keep_alive, daemon=True).start()
-    
+    # KILL SWITCH: Clears any lingering connection
     bot.remove_webhook()
+    time.sleep(2) 
+    
     print("🚀 Sovereign ASI 24x7 Engine Online...")
+    # skip_pending=True ignores messages sent while bot was down
     bot.infinity_polling(skip_pending=True)
