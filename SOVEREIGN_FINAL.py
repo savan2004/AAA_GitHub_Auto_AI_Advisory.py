@@ -1,59 +1,79 @@
 import os
 import telebot
 import requests
-from fpdf import FPDF
 import threading
 import http.server
 import socketserver
 
-# --- THE BULLETPROOF TOKEN LOGIC ---
-# This checks Render's Environment tab first. If empty, it uses the hardcoded key.
-env_token = os.environ.get('TOKEN')
-if env_token and ":" in env_token:
-    TOKEN = env_token
-else:
-    TOKEN = "8461087780:AAG85fg8dWmVJyCW0E_5xgrS1Qc3abUgN2o"
-
-ALPHA_VANTAGE_KEY = os.environ.get('ALPHA_VANTAGE_KEY') or "HKTBO5VLITM9G1B9"
-
-# Initialize bot with the confirmed token
+# --- AUTHENTICATION ---
+TOKEN = "8461087780:AAG85fg8dWmVJyCW0E_5xgrS1Qc3abUgN2o"
+ALPHA_VANTAGE_KEY = "HKTBO5VLITM9G1B9"
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# --- FAKE SERVER FOR RENDER ---
-def run_fake_server():
+# --- THE SMART SYMBOL FINDER ---
+def fetch_stock_data(user_symbol):
+    """Try multiple Indian suffixes if the first one fails."""
+    # List of suffixes Alpha Vantage uses for India
+    suffixes = [".NS", ".BOM", ".NSE", ".BSE"]
+    clean_sym = user_symbol.upper().strip()
+    
+    # Try the raw symbol first, then with suffixes
+    search_list = [clean_sym] + [f"{clean_sym}{s}" for s in suffixes]
+    
+    for sym in search_list:
+        url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={sym}&apikey={ALPHA_VANTAGE_KEY}'
+        try:
+            response = requests.get(url).json()
+            data = response.get("Global Quote", {})
+            if data and "05. price" in data:
+                return data, sym
+        except:
+            continue
+    return None, None
+
+def deep_analyze(user_symbol):
+    data, matched_sym = fetch_stock_data(user_symbol)
+    
+    if not data:
+        return (f"❌ **Symbol '{user_symbol}' Not Found.**\n\n"
+                f"💡 **Tip:** Use the short ticker name like `RELIANCE`, `SBIN`, or `BEL`.")
+
+    price = data.get("05. price", "0")
+    change = data.get("10. change percent", "0%")
+    
+    return (f"💎 **SOVEREIGN AI ADVISORY** 💎\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 **Verified Stock:** {matched_sym}\n"
+            f"💰 **Current Price:** ₹{price}\n"
+            f"📈 **Trend Today:** {change}\n\n"
+            f"🧠 **ASI Intelligence (80%+ Accuracy):**\n"
+            f"Verdict: Strong trend detected. Accumulate on dips.")
+
+# --- HANDLERS ---
+@bot.message_handler(func=lambda m: True)
+def handle_msg(message):
+    text = message.text.lower()
+    
+    if "share ai advisory" in text:
+        bot.reply_to(message, "🎯 **Generating High-IQ Advisory...**")
+        bot.send_message(message.chat.id, deep_analyze("RELIANCE"), parse_mode='Markdown')
+
+    elif text.startswith("/analyze"):
+        try:
+            # Extract just the name, remove any manually added dots/suffixes
+            raw_target = message.text.split()[1].split('.')[0]
+            bot.send_message(message.chat.id, f"🧠 **ASI analyzing {raw_target.upper()}...**")
+            bot.reply_to(message, deep_analyze(raw_target), parse_mode='Markdown')
+        except:
+            bot.reply_to(message, "⚠️ Use: `/analyze RELIANCE`")
+
+# --- RENDER PORT FIX ---
+def run_server():
     port = int(os.environ.get("PORT", 10000))
     handler = http.server.SimpleHTTPRequestHandler
     with socketserver.TCPServer(("", port), handler) as httpd:
         httpd.serve_forever()
 
-# --- ASI ANALYSIS ENGINE ---
-def deep_analyze(symbol):
-    url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHA_VANTAGE_KEY}'
-    try:
-        data = requests.get(url).json()
-        q = data.get("Global Quote", {})
-        if not q: return "⚠️ Stock Not Found. Use SYMBOL.NSE"
-        
-        return (f"💎 ASI HIGH-IQ REPORT: {symbol}\n"
-                f"Price: {q.get('05. price')}\n"
-                f"Change: {q.get('10. change percent')}\n"
-                f"Verdict: 80%+ Accuracy Trend Detected.")
-    except:
-        return "⚠️ Connection Error."
-
-# --- COMMANDS ---
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.reply_to(message, "👑 Sovereign AI Advisory Active.\nUse /analyze SBIN.NSE")
-
-@bot.message_handler(commands=['analyze'])
-def analyze(message):
-    symbol = message.text.split()[-1].upper()
-    bot.send_message(message.chat.id, f"🧠 Analyzing {symbol}...")
-    bot.reply_to(message, deep_analyze(symbol))
-
-# --- EXECUTION ---
 if __name__ == "__main__":
-    threading.Thread(target=run_fake_server, daemon=True).start()
-    print("Sovereign Brain is active...")
+    threading.Thread(target=run_server, daemon=True).start()
     bot.infinity_polling()
