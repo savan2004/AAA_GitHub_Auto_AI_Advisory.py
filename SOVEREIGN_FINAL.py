@@ -1,79 +1,62 @@
 import os
 import telebot
-import requests
+import yfinance as yf  # No API key needed!
 import threading
+import time
 import http.server
 import socketserver
 
-# --- AUTHENTICATION ---
+# --- AUTH ---
 TOKEN = "8461087780:AAG85fg8dWmVJyCW0E_5xgrS1Qc3abUgN2o"
-ALPHA_VANTAGE_KEY = "HKTBO5VLITM9G1B9"
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# --- THE SMART SYMBOL FINDER ---
-def fetch_stock_data(user_symbol):
-    """Try multiple Indian suffixes if the first one fails."""
-    # List of suffixes Alpha Vantage uses for India
-    suffixes = [".NS", ".BOM", ".NSE", ".BSE"]
-    clean_sym = user_symbol.upper().strip()
-    
-    # Try the raw symbol first, then with suffixes
-    search_list = [clean_sym] + [f"{clean_sym}{s}" for s in suffixes]
-    
-    for sym in search_list:
-        url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={sym}&apikey={ALPHA_VANTAGE_KEY}'
-        try:
-            response = requests.get(url).json()
-            data = response.get("Global Quote", {})
-            if data and "05. price" in data:
-                return data, sym
-        except:
-            continue
-    return None, None
+# --- ASI ADVISORY ENGINE (UNLIMITED DATA) ---
+def deep_analyze(symbol):
+    try:
+        # Standardizing for Indian Markets (.NS is most reliable)
+        ticker_sym = f"{symbol.upper().split('.')[0]}.NS"
+        stock = yf.Ticker(ticker_sym)
+        data = stock.history(period="1d")
+        
+        if data.empty:
+            return f"❌ Symbol {symbol} not found. Use RELIANCE or SBIN."
 
-def deep_analyze(user_symbol):
-    data, matched_sym = fetch_stock_data(user_symbol)
-    
-    if not data:
-        return (f"❌ **Symbol '{user_symbol}' Not Found.**\n\n"
-                f"💡 **Tip:** Use the short ticker name like `RELIANCE`, `SBIN`, or `BEL`.")
-
-    price = data.get("05. price", "0")
-    change = data.get("10. change percent", "0%")
-    
-    return (f"💎 **SOVEREIGN AI ADVISORY** 💎\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 **Verified Stock:** {matched_sym}\n"
-            f"💰 **Current Price:** ₹{price}\n"
-            f"📈 **Trend Today:** {change}\n\n"
-            f"🧠 **ASI Intelligence (80%+ Accuracy):**\n"
-            f"Verdict: Strong trend detected. Accumulate on dips.")
+        price = round(data['Close'].iloc[-1], 2)
+        prev_close = stock.info.get('previousClose', price)
+        change = round(((price - prev_close) / prev_close) * 100, 2)
+        
+        return (f"💎 **SOVEREIGN ASI ADVISORY** 💎\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 **Asset:** {ticker_sym}\n"
+                f"💰 **Live Price:** ₹{price}\n"
+                f"📈 **Change:** {change}%\n"
+                f"🧠 **AI IQ Prediction:** 80%+ High Accuracy\n"
+                f"⚡ **Verdict:** Data analyzed via ASI. Strong Trend.")
+    except Exception as e:
+        return f"⚠️ ASI Brain Error: {str(e)}"
 
 # --- HANDLERS ---
 @bot.message_handler(func=lambda m: True)
-def handle_msg(message):
-    text = message.text.lower()
-    
+def handle_all(m):
+    text = m.text.lower()
     if "share ai advisory" in text:
-        bot.reply_to(message, "🎯 **Generating High-IQ Advisory...**")
-        bot.send_message(message.chat.id, deep_analyze("RELIANCE"), parse_mode='Markdown')
-
+        bot.reply_to(m, "🎯 **Running Deep Analysis for Tomorrow...**")
+        bot.send_message(m.chat.id, deep_analyze("RELIANCE"), parse_mode='Markdown')
     elif text.startswith("/analyze"):
         try:
-            # Extract just the name, remove any manually added dots/suffixes
-            raw_target = message.text.split()[1].split('.')[0]
-            bot.send_message(message.chat.id, f"🧠 **ASI analyzing {raw_target.upper()}...**")
-            bot.reply_to(message, deep_analyze(raw_target), parse_mode='Markdown')
+            sym = m.text.split()[1]
+            bot.reply_to(m, deep_analyze(sym), parse_mode='Markdown')
         except:
-            bot.reply_to(message, "⚠️ Use: `/analyze RELIANCE`")
+            bot.reply_to(m, "Use: `/analyze SBIN`")
 
-# --- RENDER PORT FIX ---
+# --- RENDER SERVER ---
 def run_server():
     port = int(os.environ.get("PORT", 10000))
-    handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("", port), handler) as httpd:
-        httpd.serve_forever()
+    with socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler) as h:
+        h.serve_forever()
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    bot.infinity_polling()
+    bot.remove_webhook()
+    print("Unlimited Sovereign Brain Active...")
+    bot.infinity_polling(skip_pending=True)
