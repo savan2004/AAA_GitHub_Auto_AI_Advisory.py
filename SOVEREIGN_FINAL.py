@@ -36,18 +36,13 @@ def calculate_pivots(high, low, close):
     s3 = low - 2 * (high - pp)
     return pp, r1, s1, r2, s2, r3, s3
 
-# --- 4. SMART SEARCH ENGINE (AI IDENTIFIER) ---
+# --- 4. SMART SEARCH ENGINE ---
 def find_symbol(query):
-    """
-    Uses AI to convert company names/descriptions to Stock Symbols.
-    e.g., "Tata Motors" -> "TATAMOTORS"
-    """
     try:
-        if not AI_ENABLED: return query.upper().replace(" ", "") # Fallback
+        if not AI_ENABLED: return query.upper().replace(" ", "")
         
         prompt = (
-            f"User Query: '{query}'.\n"
-            f"Context: Indian Stock Market (NSE).\n"
+            f"User Query: '{query}'. Context: Indian Stock Market (NSE).\n"
             f"Task: Return ONLY the official NSE Stock Symbol in UPPERCASE. "
             f"Do not add '.NS'. Just the name. e.g., TCS, RELIANCE, HDFCBANK."
         )
@@ -57,32 +52,28 @@ def find_symbol(query):
             temperature=0.2
         )
         symbol = response.choices[0].message.content.strip().upper()
-        # Remove any extra whitespace or dots if AI added them
         return re.sub(r'\.NS|[^A-Z]', '', symbol)
     except:
-        return query.upper() # Fallback
+        return query.upper()
 
 # --- 5. CORE REPORT GENERATOR (SK AUTO ADVISORY) ---
 def get_sk_auto_report(symbol):
     try:
         sym = symbol.upper().strip()
-        
-        # Ticker Logic
         if sym in ["NIFTY", "NIFTY50"]: ticker_sym = "^NSEI"
         elif sym == "BANKNIFTY": ticker_sym = "^NSEBANK"
         elif sym == "SENSEX": ticker_sym = "^BSESN"
         else: ticker_sym = f"{sym}.NS"
 
-        # DATA FETCH
         stock = yf.Ticker(ticker_sym)
         df = stock.history(period="1y")
         info = stock.info
 
         if df.empty: 
-            # Try one more guess for indices if user messed up
+            # Fallback guess for common index typos
             if "NIFTY" in sym: ticker_sym = "^NSEI"
             elif "BANK" in sym: ticker_sym = "^NSEBANK"
-            else: return f"❌ **Error:** Symbol `{sym}` not found. Use Smart Search."
+            else: return f"❌ **Error:** Symbol `{sym}` not found."
             
             df = stock.history(period="1y")
             info = stock.info
@@ -93,22 +84,18 @@ def get_sk_auto_report(symbol):
         high_prev = df['High'].iloc[-2]
         low_prev = df['Low'].iloc[-2]
         
-        # METADATA
         company_name = info.get('longName', sym)
         sector = info.get('sector', 'N/A')
         mcap = info.get('marketCap', 0)
         pe = info.get('trailingPE', 0)
         roe = info.get('returnOnEquity', 0) * 100
 
-        # TECHNICALS
         rsi = calculate_rsi(df['Close'])
         ema_50 = df['Close'].ewm(span=50).mean().iloc[-1]
         ema_200 = df['Close'].ewm(span=200).mean().iloc[-1]
         
-        # PIVOTS
         pp, r1, s1, r2, s2, r3, s3 = calculate_pivots(high_prev, low_prev, prev_close)
 
-        # LOGIC & AI SENTIMENT
         upside_pct = round(((r2 - ltp) / ltp) * 100, 2)
         if upside_pct < 0: upside_pct = round(((r3 - ltp) / ltp) * 100, 2)
 
@@ -137,7 +124,6 @@ def get_sk_auto_report(symbol):
                     news_headlines = ai_data['news']
             except: pass
 
-        # CONCLUSION
         if ltp > ema_200 and rsi > 50:
             verdict_emoji = "📈"
             verdict_text = "STRONG BUY"
@@ -155,7 +141,6 @@ def get_sk_auto_report(symbol):
             verdict_text = "HOLD / WAIT"
             conclusion = f"{company_name} is consolidating. Wait for direction."
 
-        # --- FORMAT REPORT ---
         return (
             f"🚀 **SK AUTO AI ADVISORY** 🚀\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -190,23 +175,18 @@ def get_sk_auto_report(symbol):
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"_AIAUTO ADVISORY - Smart Investing_"
         )
-
     except Exception as e:
         return f"⚠️ **Analysis Error:** {str(e)}"
 
-# --- 6. MACRO & MARKET FUNCTIONS ---
-
+# --- 6. MACRO FUNCTIONS ---
 def get_market_analysis():
     try:
         nifty = yf.Ticker("^NSEI").history(period="5d")
         bank = yf.Ticker("^NSEBANK").history(period="5d")
-        
         nifty_ltp = nifty['Close'].iloc[-1]
         nifty_rsi = calculate_rsi(nifty['Close'])
         nifty_ema = nifty['Close'].ewm(span=20).mean().iloc[-1]
-        
         bank_ltp = bank['Close'].iloc[-1]
-        
         mood = "🟢 BULLISH BREADTH" if nifty_ltp > nifty_ema else "🔴 BEARISH BREADTH"
         
         return (
@@ -218,10 +198,7 @@ def get_market_analysis():
             f"📈 **MARKET MOOD:** {mood}\n"
             f"📊 **NIFTY RSI:** {round(nifty_rsi, 2)}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🌐 **GLOBAL CUES:**\n"
-            f"US Markets showing mixed trends. \n"
-            f"SGX Nifty indicates a flat opening.\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌐 **GLOBAL CUES:** Mixed trends.\n"
             f"_Powered by SK AUTO AI_"
         )
     except Exception as e:
@@ -234,14 +211,9 @@ def get_briefing():
         f"📅 **Date:** {datetime.now().strftime('%d-%B-%Y')}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 **KEY LEVELS:**\n"
-        f"• Nifty Resistance: 25,000\n"
-        f"• Nifty Support: 24,500\n"
-        f"• VIX: Low (Bullish for Options)\n\n"
-        f"📝 **STRATEGY:**\n"
-        f"• Focus on Buy on Dips strategy as long as Nifty holds 24,800.\n"
-        f"• BankNifty showing strength; keep an eye on HDFC Bank.\n\n"
-        f"⚠️ **ALERT:**\n"
-        f"Crude Oil prices are volatile, watch Oil & Gas sector closely.\n"
+        f"• Nifty Res: 25,000 | Sup: 24,500\n"
+        f"• Strategy: Buy on Dips.\n"
+        f"⚠️ **ALERT:** Crude Volatility.\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"_AIAUTO ADVISORY_"
     )
@@ -271,7 +243,7 @@ def start(m):
     bot.send_message(m.chat.id, 
         "🚀 **SK AUTO AI ADVISORY** 🚀\n\n"
         "Welcome to India's Smartest Financial Assistant.\n"
-        "Select a mode below to begin:", 
+        "Select a mode below:", 
         reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == '📊 Market Analysis')
@@ -286,45 +258,36 @@ def briefing(m):
 
 @bot.message_handler(func=lambda m: m.text == '🔎 Smart Search')
 def smart_search(m):
-    msg = bot.send_message(m.chat.id, "🔍 **Smart Search Activated**\n\nType Company Name or Symbol:\n(e.g. 'Tata Motors', 'Ambani Company', 'TCS')")
+    msg = bot.send_message(m.chat.id, "🔍 **Smart Search Activated**\n\nType Company Name or Symbol:")
     bot.register_next_step_handler(msg, process_smart_search)
 
 @bot.message_handler(func=lambda m: m.text == '⭐ Stock Selection')
 def stock_sel(m):
     markup = types.InlineKeyboardMarkup(row_width=3)
-    stocks = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'SBIN', 'TATAMOTORS', 'ICICIBANK', 'BAJFINANCE', 'ADANIENT']
+    stocks = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'SBIN', 'TATAMOTORS']
     btns = [types.InlineKeyboardButton(s, callback_data=f"rep_{s}") for s in stocks]
     markup.add(*btns)
     bot.send_message(m.chat.id, "⭐ Select from High Confidence Stocks:", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == '🚀 Nifty Option Trading')
 def nifty_opt(m):
-    msg = bot.send_message(m.chat.id, "🚀 **Nifty Option Sniper**\n\nEnter your Trading Budget (INR):\n(e.g. 5000, 10000)")
+    msg = bot.send_message(m.chat.id, "🚀 **Nifty Option Sniper**\n\nEnter Trading Budget (INR):")
     bot.register_next_step_handler(msg, process_options)
-
-# --- PROCESSORS ---
 
 def process_smart_search(m):
     query = m.text
     bot.send_chat_action(m.chat.id, 'typing')
-    
-    # AI identifies the symbol
     symbol = find_symbol(query)
-    
-    bot.send_message(m.chat.id, f"🧠 AI Identified: **{symbol}**\n🔍 Generating Deep Report...")
+    bot.send_message(m.chat.id, f"🧠 AI Identified: **{symbol}**")
     bot.send_message(m.chat.id, get_sk_auto_report(symbol))
 
 def process_options(m):
     try:
         budget = float(m.text.replace('₹', '').replace(',', ''))
         spot = yf.Ticker("^NSEI").history(period="1d")['Close'].iloc[-1]
-        
         bot.send_chat_action(m.chat.id, 'typing')
         bot.send_message(m.chat.id, f"🔍 Scanning for Budget: ₹{budget}...")
         
-        # Use a simplified quant logic here or reuse the OpenAI one if preferred
-        # For stability, let's use a math-based signal here to save tokens
-        # Or call OpenAI for signal:
         prompt = (
             f"Nifty Spot: {spot}. Budget: {budget}. Lot: 65.\n"
             f"Generate Nifty Option Trade. RR 1:3. Strike mult of 50.\n"
@@ -347,7 +310,6 @@ def process_options(m):
                 f"🏦 Capital: ₹{cap}\n━━━━━━━━━━━━━━━━━━━━")
         except:
             bot.send_message(m.chat.id, "⚠️ AI Signal Error. Please try again.")
-            
     except ValueError:
         bot.send_message(m.chat.id, "❌ Invalid number.")
 
@@ -357,9 +319,29 @@ def callback_rep(call):
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, get_sk_auto_report(sym))
 
+# ==========================================
+# --- 8. CONFLICT KILLER (UPDATED) ---
+# ==========================================
 if __name__ == "__main__":
-    threading.Thread(target=run_health_server, daemon=True).start()
-    bot.remove_webhook()
-    time.sleep(2)
+    # 1. Start Web Server
+    t = threading.Thread(target=run_health_server, daemon=True)
+    t.start()
+    
+    # 2. AGGRESSIVE WEBHOOK CLEANUP (The Fix)
+    print("🧹 Cleaning up old sessions/webhooks...")
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        time.sleep(3) # Wait for Telegram to propagate the change
+        print("✅ Cleanup complete. Starting bot polling...")
+    except Exception as e:
+        print(f"⚠️ Cleanup warning: {e}")
+
+    # 3. ROBUST POLLING LOOP
     print("🚀 SK AUTO AI ADVISORY Online...")
-    bot.infinity_polling(skip_pending=True, timeout=60)
+    while True:
+        try:
+            # skip_pending=True prevents processing old messages that crash the bot
+            bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=20)
+        except Exception as e:
+            print(f"⚠️ Polling interrupted ({e}). Reconnecting in 5s...")
+            time.sleep(5) # Wait before trying again
