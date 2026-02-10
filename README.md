@@ -53,10 +53,13 @@ Security
 - API request throttling (1 req/sec).
 - Input validation and retries for robustness.
 
-Deployment
-- Use Render/Heroku for hosting.
-- Set env vars in deployment settings.
-- Bot handles crashes gracefully with auto-restart.
+## Deployment on Render (Free Tier)
+1. Create a new Web Service on Render, connect your GitHub repo.
+2. Set Build Command: `pip install -r requirements.txt`
+3. Set Start Command: `python bot_main.py`
+4. Add Environment Variables: TELEGRAM_TOKEN, GEMINI_KEY, OPENAI_KEY, ALPHA_VANTAGE_KEY, NEWSAPI_KEY, ADMIN_PASSWORD, ADMIN_USER_ID, FREE_QUERIES_PER_DAY=5, PREMIUM_PRICE=99.0
+5. Deploy—bot runs at the provided URL, admin panel at <url>/admin (but code uses localhost; adjust if needed).
 
+   
 License
 [Add your license here, e.g., MIT]
