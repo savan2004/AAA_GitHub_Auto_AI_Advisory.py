@@ -1,54 +1,88 @@
+import os
 import telebot
-from telebot import types
-from config import Config
-from data_manager import DataManager
+import google.generativeai as genai
+import yfinance as yf
+import requests
+import pandas as pd
+from flask import Flask
+from threading import Thread
+import time
 
-# Initialize components
-bot = telebot.TeleBot(Config.TELEGRAM_TOKEN)
-data_manager = DataManager()
+# --- 1. CONFIGURATION (Read from Render Environment) ---
+# We use os.environ.get() so you don't expose keys in your code
+API_KEY = os.environ.get("GEMINI_API_KEY")
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+NEWS_KEY = os.environ.get("NEWS_API_KEY")
 
-def get_signal(symbol: str, price: float) -> str:
-    # Research-based signal with news integration
-    news = data_manager.get_news(symbol)
-    news_summary = " | ".join(news[:2]) if news else "No recent news"
-    if price > 1000:
-        return f"📈 Buy signal: Price above key level (research: upward trend). News: {news_summary}"
-    elif price < 500:
-        return f"📉 Sell signal: Price below support (research: potential dip). News: {news_summary}"
-    else:
-        return f"⚖️ Hold: Consolidating (research: stable range). News: {news_summary}"
+# --- 2. KEEP-ALIVE SERVER (For Render) ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I am alive! The Sovereign Bot is running."
+
+def run_http():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run_http)
+    t.start()
+
+# --- 3. BOT LOGIC ---
+bot = telebot.TeleBot(BOT_TOKEN)
+genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
+
+def get_data(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period="1mo")
+        if df.empty: return None
+        price = df['Close'].iloc[-1]
+        
+        # Simple RSI Calc
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs)).iloc[-1]
+        return price, rsi
+    except:
+        return None, None
+
+def get_news(query):
+    try:
+        url = f"https://newsapi.org/v2/everything?q={query}&apiKey={NEWS_KEY}&pageSize=3"
+        data = requests.get(url).json()
+        return "\n".join([f"- {a['title']}" for a in data.get('articles', [])])
+    except:
+        return "No news available."
 
 @bot.message_handler(commands=['start'])
-def start(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('🚀 NIFTY 50', '📈 BANK NIFTY', '📊 Signal for RELIANCE')
-    bot.send_message(message.chat.id, "🏛 **ASI Bot Online**\nUnlimited research: LTP + signals with news.", reply_markup=markup)
+def start(m):
+    bot.reply_to(m, "🏛 **Sovereign Bot Online**\nSend a ticker like 'RELIANCE' or 'NIFTY'.")
 
-@bot.message_handler(func=lambda message: True)
-def handle_requests(message):
-    if message.text == '🚀 NIFTY 50':
-        price = data_manager.get_ltp("NIFTY")
-        if price:
-            signal = get_signal("NIFTY", price)
-            bot.reply_to(message, f"🏛 **NIFTY LTP:** ₹{price}\n{signal}")
-        else:
-            bot.reply_to(message, "❌ LTP unavailable")
-    elif message.text == '📈 BANK NIFTY':
-        price = data_manager.get_ltp("BANKNIFTY")
-        if price:
-            signal = get_signal("BANKNIFTY", price)
-            bot.reply_to(message, f"🏛 **BANKNIFTY LTP:** ₹{price}\n{signal}")
-        else:
-            bot.reply_to(message, "❌ LTP unavailable")
-    elif message.text == '📊 Signal for RELIANCE':
-        price = data_manager.get_ltp("RELIANCE")
-        if price:
-            signal = get_signal("RELIANCE", price)
-            bot.reply_to(message, f"🏛 **RELIANCE LTP:** ₹{price}\n{signal}")
-        else:
-            bot.reply_to(message, "❌ LTP unavailable")
-    else:
-        bot.reply_to(message, "❓ Invalid command")
+@bot.message_handler(func=lambda m: True)
+def analyze(m):
+    symbol_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"}
+    user_text = m.text.upper()
+    ticker = symbol_map.get(user_text, user_text + ".NS") # Default to NSE stock
+    
+    bot.send_message(m.chat.id, f"🔍 Analyzing {ticker}...")
+    
+    price, rsi = get_data(ticker)
+    if not price:
+        bot.reply_to(m, "❌ Could not find data. Try 'RELIANCE' or 'TCS'.")
+        return
 
+    news = get_news(user_text)
+    
+    prompt = f"Analyze {user_text} at Price: {price}, RSI: {rsi}. News: {news}. Give Buy/Sell advice."
+    response = model.generate_content(prompt)
+    
+    bot.reply_to(m, f"📊 **Analysis for {user_text}**\nPrice: {price:.2f}\nRSI: {rsi:.2f}\n\n{response.text}")
+
+# --- 4. START EVERYTHING ---
 if __name__ == "__main__":
-    bot.polling(none_stop=True)
+    keep_alive()  # Start the fake website
+    bot.polling(non_stop=True) # Start the bot
