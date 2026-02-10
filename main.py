@@ -4,229 +4,251 @@ import yfinance as yf
 import google.generativeai as genai
 import pandas as pd
 import requests
+import random
+import time
 from flask import Flask
 from threading import Thread
 from telebot import types
 from datetime import datetime
 import pytz
 
-# --- 1. CONFIGURATION & KEYS ---
+# --- 1. CONFIGURATION ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8461087780:AAG85fg8dWmVJyCW0E_5xgrS1Qc3abUgN2o")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyCPh8wPC-rmBIyTr5FfV3Mwjb33KeZdRUE")
 NEWS_KEY = os.environ.get("NEWS_API_KEY", "47fb3f33527944ed982e6e48cc856b23")
 
-# Initialize AI & Bot
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 genai.configure(api_key=GEMINI_KEY)
 
-# Try to use the best model, fallback if needed
+# Use Stable Model
 try:
-    model = genai.GenerativeModel('gemini-1.5-pro-latest') # Smartest for deep analysis
-except:
     model = genai.GenerativeModel('gemini-pro')
+except:
+    model = None
 
-# --- 2. ADVANCED DATA ENGINE ---
-def get_full_analysis(ticker_symbol):
+# --- 2. DATA UNIVERSE (CFA LEVEL) ---
+LARGE_CAPS = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'LICI']
+MID_CAPS = ['TATACOMM', 'TRENT', 'POLYCAB', 'COFORGE', 'L&TFH', 'ASHOKLEY', 'ASTRAL', 'JUBLFOOD', 'PERSISTENT', 'MRF']
+SMALL_CAPS = ['CDSL', 'BSE', 'SUZLON', 'IDEA', 'IEX', 'NBCC', 'HUDCO', 'IRFC', 'RVNL', 'SJVN']
+
+# --- 3. ADVANCED ANALYTICS ENGINE ---
+def get_market_breadth():
+    """Estimates market sentiment using India VIX and Index movement"""
     try:
-        stock = yf.Ticker(ticker_symbol)
+        nifty = yf.Ticker("^NSEI").history(period="5d")
+        vix = yf.Ticker("^INDIAVIX").history(period="5d")
         
-        # A. Fetch Historical Data (1 Year for SMA 200)
+        if nifty.empty or vix.empty: return "Neutral"
+        
+        nifty_change = ((nifty['Close'].iloc[-1] - nifty['Close'].iloc[-2]) / nifty['Close'].iloc[-2]) * 100
+        vix_val = vix['Close'].iloc[-1]
+        
+        if nifty_change > 0.5 and vix_val < 15: return "🟢 ULTRA BULLISH (Risk On)"
+        if nifty_change > 0: return "🟢 MILDLY BULLISH"
+        if nifty_change < -0.5 and vix_val > 20: return "🔴 EXTREME FEAR (Risk Off)"
+        if nifty_change < 0: return "🔴 BEARISH"
+        return "⚖️ SIDEWAYS / CHOPPY"
+    except:
+        return "Unavailable"
+
+def get_full_analysis(symbol_input):
+    """Smart Search + Technicals + Fundamentals"""
+    try:
+        # 1. Smart Symbol Logic
+        symbol_input = symbol_input.upper().replace(" ", "")
+        if symbol_input in ["NIFTY", "NIFTY50"]: ticker = "^NSEI"
+        elif symbol_input in ["BANKNIFTY", "BANKEX"]: ticker = "^NSEBANK"
+        elif symbol_input.endswith(".NS"): ticker = symbol_input
+        else: ticker = f"{symbol_input}.NS"
+        
+        stock = yf.Ticker(ticker)
         hist = stock.history(period="1y")
+        
         if hist.empty: return None
 
-        # Current Price & Basic Info
-        current_price = hist['Close'].iloc[-1]
-        prev_close = hist['Close'].iloc[-2]
+        # 2. Extract Data
+        curr = hist['Close'].iloc[-1]
+        high_52 = hist['High'].max()
+        low_52 = hist['Low'].min()
         
-        # B. Calculate Technical Indicators (SMAs)
-        hist['SMA_20'] = hist['Close'].rolling(window=20).mean()
-        hist['SMA_50'] = hist['Close'].rolling(window=50).mean()
-        hist['SMA_200'] = hist['Close'].rolling(window=200).mean()
+        # 3. Indicators
+        sma_50 = hist['Close'].rolling(50).mean().iloc[-1]
+        sma_200 = hist['Close'].rolling(200).mean().iloc[-1]
         
-        sma_20 = hist['SMA_20'].iloc[-1]
-        sma_50 = hist['SMA_50'].iloc[-1]
-        sma_200 = hist['SMA_200'].iloc[-1]
-
-        # C. Calculate RSI
         delta = hist['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs)).iloc[-1]
-
-        # D. Pivot Points (Classic)
-        high = hist['High'].iloc[-1]
-        low = hist['Low'].iloc[-1]
-        close = hist['Close'].iloc[-1]
-        pp = (high + low + close) / 3
-        r1 = (2 * pp) - low
-        s1 = (2 * pp) - high
-        r2 = pp + (high - low)
-        s2 = pp - (high - low)
-        r3 = high + 2 * (pp - low)
-        s3 = low - 2 * (high - pp)
-
-        # E. Fetch Fundamentals (Info Dict)
-        info = stock.info
-        market_cap = info.get('marketCap', 0) / 10000000 # Convert to Cr
-        pe_ratio = info.get('trailingPE', 0)
-        roe = info.get('returnOnEquity', 0) * 100
-        fifty_high = info.get('fiftyTwoWeekHigh', 0)
-        fifty_low = info.get('fiftyTwoWeekLow', 0)
-        sector = info.get('sector', 'Unknown')
         
-        # F. Calculate Targets (Automated Math)
-        # Target 1 (Short Term): 1.5% move
-        # Target 2 (Mid Term): 5% move
-        if current_price > sma_50: # Bullish Bias
-            tgt1 = current_price * 1.015
-            tgt2 = current_price * 1.05
-            direction_bias = "BULLISH"
-        else: # Bearish Bias
-            tgt1 = current_price * 0.985
-            tgt2 = current_price * 0.95
-            direction_bias = "BEARISH"
-
+        # 4. Fundamentals (Stocks only)
+        info = stock.info
+        is_index = '^' in ticker
+        mcap = info.get('marketCap', 0) / 10000000 if not is_index else 0
+        pe = info.get('trailingPE', 0) if not is_index else 0
+        
         return {
-            "price": current_price,
-            "prev_close": prev_close,
-            "change": ((current_price - prev_close)/prev_close)*100,
+            "symbol": ticker.replace(".NS", ""),
+            "price": curr,
+            "change": ((curr - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100,
             "rsi": rsi,
-            "sma_20": sma_20,
             "sma_50": sma_50,
             "sma_200": sma_200,
-            "pp": pp, "r1": r1, "r2": r2, "r3": r3, "s1": s1, "s2": s2, "s3": s3,
-            "mcap": market_cap,
-            "pe": pe_ratio,
-            "roe": roe,
-            "52_high": fifty_high,
-            "52_low": fifty_low,
-            "sector": sector,
-            "tgt1": tgt1,
-            "tgt2": tgt2,
-            "bias": direction_bias
+            "52h": high_52,
+            "52l": low_52,
+            "mcap": mcap,
+            "pe": pe,
+            "is_index": is_index
         }
     except Exception as e:
-        print(f"Analysis Error: {e}")
+        print(e)
         return None
 
-def get_news(query):
-    try:
-        url = f"https://newsapi.org/v2/everything?q={query}&sortBy=publishedAt&apiKey={NEWS_KEY}&language=en&pageSize=3"
-        data = requests.get(url).json()
-        articles = data.get("articles", [])
-        return "\n".join([f"👉 {a['title']}" for a in articles[:3]])
-    except:
-        return "👉 No major news found."
+def generate_portfolio():
+    """Generates a 50/35/15 Portfolio"""
+    l = random.sample(LARGE_CAPS, 3)
+    m = random.sample(MID_CAPS, 2)
+    s = random.sample(SMALL_CAPS, 2)
+    return l, m, s
 
-# --- 3. AI REPORT GENERATOR ---
-def generate_report(symbol_name, ticker):
-    data = get_full_analysis(ticker)
-    if not data: return "⚠️ Error: Could not fetch deep data."
-    
-    news = get_news(symbol_name)
-    
-    # Get Current Time IST
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist)
-    date_str = now.strftime("%d-%b-%Y")
-    time_str = now.strftime("%H:%M")
-
-    # Ask AI for Qualitative Pros/Cons only (We did the math already)
+# --- 4. AI AGENT (CFA PERSONA) ---
+def ask_cfa_ai(task, data_context):
     prompt = f"""
-    Analyze {symbol_name}.
-    Data: Price {data['price']}, RSI {data['rsi']}, PE {data['pe']}, ROE {data['roe']}.
-    Trend is {data['bias']} because price is relative to SMA 50 ({data['sma_50']}).
-    News: {news}
+    You are a CFA Charterholder and Chief Technical Strategist.
     
-    Task:
-    1. List 2 Positive Points (Pros)
-    2. List 2 Negative Points (Cons)
-    3. One line conclusion.
+    CONTEXT:
+    {data_context}
     
-    Keep it strictly professional and short.
+    TASK:
+    {task}
+    
+    GUIDELINES:
+    - Be precise, professional, and risk-aware.
+    - Use terms like "Alpha", "Beta", "Hedging", "Theta Decay" where applicable.
+    - For Options: Suggest Strikes based on the Price.
     """
-    
     try:
-        ai_response = model.generate_content(prompt).text
+        return model.generate_content(prompt).text
     except:
-        ai_response = "AI Analysis Unavailable."
+        return "⚠️ CFA AI Brain Offline."
 
-    # --- FINAL MESSAGE FORMATTING (Strictly requested format) ---
-    report = (
-        f"🚀 *SK AUTO AI ADVISORY* 🚀\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📅 *DATE:* {date_str} | ⏰ *TIME:* {time_str} (IST)\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏷 *SYMBOL:* {symbol_name}\n"
-        f"🏛 *SECTOR:* {data['sector']}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 *LTP:* ₹{data['price']:.2f} ({data['change']:.2f}%)\n"
-        f"📊 *RSI:* {data['rsi']:.1f} | 📏 *52W H/L:* {data['52_high']} / {data['52_low']}\n"
-        f"📈 *TREND:* {data['bias']} (SMA200: {data['sma_200']:.1f})\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 *TARGETS (Short Term)*\n"
-        f"🚀 *TGT 1:* ₹{data['tgt1']:.2f} (1.5%)\n"
-        f"🚀 *TGT 2:* ₹{data['tgt2']:.2f} (5.0%)\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 *FUNDAMENTAL LEVELS*\n"
-        f"* Market Cap: {data['mcap']:.0f} Cr\n"
-        f"* P/E Ratio: {data['pe']:.1f}x | ROE: {data['roe']:.1f}%\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏗 *DEEP TECHNICAL LEVELS (Pivots)*\n"
-        f"🔴 R3: {data['r3']:.1f} | R2: {data['r2']:.1f}\n"
-        f"🔴 R1: {data['r1']:.1f} | 🟢 PP: {data['pp']:.1f}\n"
-        f"🟢 S1: {data['s1']:.1f} | S2: {data['s2']:.1f} | S3: {data['s3']:.1f}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🧠 *AI INTELLIGENCE*\n"
-        f"{ai_response}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📰 *LATEST NEWS:*\n"
-        f"{news}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ *RISK:* High Volatility. Consult Financial Advisor."
-    )
-    return report
+# --- 5. BOT HANDLERS ---
+@bot.message_handler(commands=['start'])
+def start(m):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    b1 = types.KeyboardButton('🚀 NIFTY 50')
+    b2 = types.KeyboardButton('📈 BANK NIFTY')
+    b3 = types.KeyboardButton('⚡ Option Strategy')
+    b4 = types.KeyboardButton('💼 Portfolio Builder')
+    b5 = types.KeyboardButton('🧠 Deep Market Scan')
+    markup.add(b1, b2, b3, b4, b5)
+    
+    bot.send_message(m.chat.id, 
+        "🏛 **Sovereign AI Advisory (CFA Edition)**\n"
+        "Advanced Institutional Grade Analytics Online.\n\n"
+        "Select a module:", reply_markup=markup)
 
-# --- 4. FLASK KEEP ALIVE ---
+@bot.message_handler(func=lambda m: True)
+def main_handler(m):
+    # 1. Anti-Loop Logic
+    if m.from_user.id == bot.get_me().id: return
+    if "Scanning" in m.text or "Analyzing" in m.text: return
+    
+    text = m.text
+    chat_id = m.chat.id
+    
+    # --- A. DEEP MARKET SCAN ---
+    if text == '🧠 Deep Market Scan':
+        bot.send_message(chat_id, "📡 **Scanning Institutional Data...**")
+        breadth = get_market_breadth()
+        vix_data = yf.Ticker("^INDIAVIX").history(period="1d")
+        vix = vix_data['Close'].iloc[-1] if not vix_data.empty else 0
+        
+        prompt = f"Market Breadth: {breadth}. India VIX: {vix}. Analyze FII Sentiment and Sector Rotation."
+        analysis = ask_cfa_ai("Provide a Market Health Report (FII View, Fear Index, Sector Focus).", prompt)
+        
+        msg = (f"🌍 **DEEP MARKET RESEARCH**\n"
+               f"━━━━━━━━━━━━━━━━━━\n"
+               f"🌡 **Market Mood:** {breadth}\n"
+               f"😨 **India VIX:** {vix:.2f}\n"
+               f"━━━━━━━━━━━━━━━━━━\n"
+               f"{analysis}")
+        bot.send_message(chat_id, msg, parse_mode="Markdown")
+        return
+
+    # --- B. PORTFOLIO BUILDER ---
+    if text == '💼 Portfolio Builder':
+        l, m, s = generate_portfolio()
+        msg = (f"💼 **AI GENERATED PORTFOLIO (Aggressive)**\n"
+               f"_(50% Large / 35% Mid / 15% Small)_\n"
+               f"━━━━━━━━━━━━━━━━━━\n"
+               f"🐘 **Large Cap (Stable):**\n"
+               f"1. {l[0]} (20%)\n2. {l[1]} (15%)\n3. {l[2]} (15%)\n\n"
+               f"🐎 **Mid Cap (Growth):**\n"
+               f"1. {m[0]} (20%)\n2. {m[1]} (15%)\n\n"
+               f"🚀 **Small Cap (Alpha):**\n"
+               f"1. {s[0]} (10%)\n2. {s[1]} (5%)\n"
+               f"━━━━━━━━━━━━━━━━━━\n"
+               f"⚠️ *Rebalance quarterly.*")
+        bot.send_message(chat_id, msg, parse_mode="Markdown")
+        return
+
+    # --- C. OPTION STRATEGY ---
+    if text == '⚡ Option Strategy':
+        msg = bot.send_message(chat_id, "🔡 **Enter Symbol for Strategy** (e.g., NIFTY, RELIANCE):")
+        bot.register_next_step_handler(msg, process_option_request)
+        return
+
+    # --- D. STANDARD STOCK/INDEX ANALYSIS ---
+    # Handle Buttons or Manual Text
+    mapping = {'🚀 NIFTY 50': 'NIFTY', '📈 BANK NIFTY': 'BANKNIFTY'}
+    symbol = mapping.get(text, text)
+    
+    bot.send_chat_action(chat_id, 'typing')
+    data = get_full_analysis(symbol)
+    
+    if not data:
+        bot.reply_to(m, "❌ Symbol not found. Try 'TCS' or 'INFY'.")
+        return
+
+    # AI Verdict
+    task = "Give Buy/Sell Verdict, Support/Resistance levels, and Red Flags."
+    context = f"Symbol: {data['symbol']}. Price: {data['price']}. RSI: {data['rsi']}. SMA200: {data['sma_200']}."
+    ai_msg = ask_cfa_ai(task, context)
+    
+    report = (f"🏛 **CFA RESEARCH NOTE: {data['symbol']}**\n"
+              f"━━━━━━━━━━━━━━━━━━\n"
+              f"💰 **LTP:** ₹{data['price']:.2f} ({data['change']:.2f}%)\n"
+              f"📊 **Score:** {int(data['rsi'])}/100 | **PE:** {data['pe']:.1f}\n"
+              f"📉 **52W High/Low:** {data['52h']:.0f} / {data['52l']:.0f}\n"
+              f"━━━━━━━━━━━━━━━━━━\n"
+              f"{ai_msg}\n"
+              f"━━━━━━━━━━━━━━━━━━")
+    bot.send_message(chat_id, report, parse_mode="Markdown")
+
+def process_option_request(m):
+    symbol = m.text
+    data = get_full_analysis(symbol)
+    if not data:
+        bot.send_message(m.chat.id, "❌ Invalid Symbol.")
+        return
+        
+    vix = yf.Ticker("^INDIAVIX").history(period="1d")['Close'].iloc[-1]
+    
+    task = f"Suggest an Option Strategy (Bull Call Spread, Iron Condor, etc) for {data['symbol']}."
+    context = f"Spot: {data['price']}. Trend: {'Bullish' if data['price']>data['sma_50'] else 'Bearish'}. VIX: {vix}."
+    
+    strat = ask_cfa_ai(task, context)
+    bot.send_message(m.chat.id, f"⚡ **OPTION STRATEGY: {data['symbol']}**\n\n{strat}", parse_mode="Markdown")
+
+# --- 6. SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "✅ SK Sovereign Bot Running 24/7"
+def home(): return "✅ CFA Bot Online"
 def run_http(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 def keep_alive(): 
     t = Thread(target=run_http)
     t.start()
-
-# --- 5. TELEGRAM HANDLERS ---
-@bot.message_handler(commands=['start'])
-def start(m):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('🚀 NIFTY 50', '📈 BANK NIFTY', '⛽ RELIANCE', '🏦 HDFC BANK')
-    bot.send_message(m.chat.id, "🏛 **SK AI System Online**\nSelect Asset for Deep Scan:", reply_markup=markup)
-
-@bot.message_handler(func=lambda m: True)
-def handle(m):
-    # Symbol Mapping
-    map_sym = {
-        '🚀 NIFTY 50': ('NIFTY 50', '^NSEI'),
-        '📈 BANK NIFTY': ('BANK NIFTY', '^NSEBANK'),
-        '⛽ RELIANCE': ('RELIANCE IND', 'RELIANCE.NS'),
-        '🏦 HDFC BANK': ('HDFC BANK', 'HDFCBANK.NS')
-    }
-    
-    # Custom Symbol Handler (e.g. user types "TCS")
-    if m.text in map_sym:
-        name, ticker = map_sym[m.text]
-    else:
-        # Try to guess Indian stock
-        name = m.text.upper()
-        ticker = f"{name}.NS"
-    
-    bot.send_chat_action(m.chat.id, 'typing')
-    bot.send_message(m.chat.id, f"🔍 **Scanning Fundamentals & Technicals for {name}...**")
-    
-    report = generate_report(name, ticker)
-    bot.send_message(m.chat.id, report, parse_mode="Markdown")
 
 if __name__ == "__main__":
     keep_alive()
