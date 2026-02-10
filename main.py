@@ -4,6 +4,7 @@ import time
 import json
 import logging
 import threading
+from threading import Thread  # <--- THIS WAS MISSING
 import sqlite3
 from datetime import datetime
 from functools import wraps
