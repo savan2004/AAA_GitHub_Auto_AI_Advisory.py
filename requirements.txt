@@ -1,5 +1,5 @@
 pyTelegramBotAPI
+google-generativeai
 yfinance
 pandas
-openai
 requests
