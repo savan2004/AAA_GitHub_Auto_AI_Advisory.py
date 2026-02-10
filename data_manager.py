@@ -5,7 +5,7 @@ import yfinance as yf
 from config import Config
 
 class DataManager:
-    """Multi-source data with retry and throttling."""
+    """Multi-source data with throttling for unlimited research."""
     
     def __init__(self):
         self.yahoo = YahooFinanceManager()
@@ -48,10 +48,10 @@ class AlphaVantageManager:
         self.news_url = "https://newsapi.org/v2/everything"
     
     def get_ltp(self, symbol: str) -> Optional[float]:
-        for attempt in range(Config.MAX_RETRIES):
+        for attempt in range(3):
             try:
                 params = {"function": "GLOBAL_QUOTE", "symbol": symbol + ".NS", "apikey": self.api_key}
-                response = requests.get(self.base_url, params=params, timeout=Config.TIMEOUT)
+                response = requests.get(self.base_url, params=params, timeout=30)
                 data = response.json()
                 if "Global Quote" in data:
                     return float(data["Global Quote"]["05. price"])
@@ -62,10 +62,10 @@ class AlphaVantageManager:
         return None
     
     def get_news(self, symbol: str) -> List[str]:
-        for attempt in range(Config.MAX_RETRIES):
+        for attempt in range(3):
             try:
                 params = {"q": symbol, "apiKey": self.news_key, "sortBy": "publishedAt", "pageSize": 3}
-                response = requests.get(self.news_url, params=params, timeout=Config.TIMEOUT)
+                response = requests.get(self.news_url, params=params, timeout=30)
                 data = response.json()
                 return [article["title"] for article in data.get("articles", [])] if "articles" in data else []
             except Exception as e:
