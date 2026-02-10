@@ -1,8 +1,8 @@
 pyTelegramBotAPI
-google-generativeai
 yfinance
 pandas
 requests
 flask
 pytz
 tabulate
+groq
