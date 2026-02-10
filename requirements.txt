@@ -3,3 +3,4 @@ google-generativeai
 yfinance
 pandas
 requests
+flask
