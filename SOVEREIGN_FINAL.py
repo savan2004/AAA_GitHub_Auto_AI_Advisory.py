@@ -1,10 +1,11 @@
 """
 ╔═══════════════════════════════════════════════════════════════════╗
-║   ADVANCED ASI TRADING BOT - PRODUCTION GRADE v2.4                ║
+║   ADVANCED ASI TRADING BOT - PRODUCTION GRADE v2.7                ║
 ║   Features: Options Strategies | Multibagger Scanner | Research   ║
-║   Author: SAVAN KOTAK                      ║
+║   Author: Enhanced for Professional Trading                       ║
 ║   Dual-Engine Redundancy: Primary & Secondary AI Engines          ║
 ║   Auto-Troubleshooting: AI-Powered Error Resolution & GitHub Updates ║
+║   Updated: Enhanced AI Report Prompt for Detailed Advisory Output ║
 ╚═══════════════════════════════════════════════════════════════════╝
 """
 
@@ -12,7 +13,6 @@ import os
 import time
 import telebot
 from telebot import types
-import google.generativeai as genai
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -43,6 +43,12 @@ try:
 except ImportError:
     print("❌ git module not found. Please install it using: pip install GitPython")
     git = None
+
+try:
+    import google.genai as genai  # Updated to new package
+except ImportError:
+    print("❌ google.genai module not found. Please install it using: pip install google-genai")
+    genai = None
 
 # ═══════════════════════════════════════════════════════════════════
 # 1. CONFIGURATION & SECURITY
@@ -190,55 +196,73 @@ class SmartAPIManager:
 # ═══════════════════════════════════════════════════════════════════
 
 class AIEngine:
-    """Single AI engine using Gemini"""
+    """Single AI engine using updated google.genai"""
     
     def __init__(self, api_key: str):
+        if genai is None:
+            raise ImportError("google.genai not available")
         self.api_key = api_key
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
         self.flash_model = genai.GenerativeModel('gemini-1.5-flash')
     
     def generate_research_report(self, symbol: str, price: float, market_data: Dict) -> str:
-        """Deep research report with technical analysis"""
+        """Deep research report with technical analysis - Enhanced for detailed advisory output"""
         prompt = f"""
-         **ADVANCED RESEARCH REPORT**
+         **SK AUTO AI ADVISORY**
         
         Asset: {symbol}
         Current Price: ₹{price}
-        Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+        Date: {datetime.now().strftime('%d-%b-%Y')} | Time: {datetime.now().strftime('%H:%M')}(IST Live)
         
-        Generate a comprehensive professional trading report with:
+        Generate a comprehensive professional trading advisory report in the exact format below. Use Indian market context. Be data-driven and professional. Include all requested enhancements.
         
-        1. **Market Overview** (50 words)
-           - Current trend analysis
-           - Key support/resistance levels
+        🚀 **SK AUTO AI ADVISORY** 🚀
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📅 **DATE:** {datetime.now().strftime('%d-%b-%Y')} | ⏰ **TIME:** {datetime.now().strftime('%H:%M')}(IST Live)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🏷 **SYMBOL:** {symbol} | [Full Company Name if available]
+        🏛 **ASI RANK:** [Calculate 0-100 based on fundamentals/technicals, e.g., 85/100 (High Confidence)]
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        💰 **LTP:** ₹{price} | 📊 **RSI:** [Current RSI value, e.g., 55.66]
+        📈 **TREND:** [BEARISH/BULLISH/NEUTRAL] | 52wk High: [Value] | 52wk Low: [Value] | Trend Pattern: [e.g., Descending Triangle, if possible via pattern finder]
         
-        2. **Technical Indicators Analysis** (100 words)
-           - RSI, MACD, Moving Averages interpretation
-           - Momentum and volume analysis
-           - Chart patterns identified
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🎯 **VERDICT:** [HOLD/WAIT/BUY/SELL] (Time Frame: [e.g., Short-term 3-6 months])
+        🚀 **Short term UPSIDE:** [5-20% up or down] (Time frame: 3-6 Months)
+        **Long Term UPSIDE:** [20-100% up or down] (1-3 Years)
         
-        3. **Price Targets** (50 words)
-           - Short-term targets (1-3 days)
-           - Medium-term targets (1-2 weeks)
-           - Stop-loss recommendations
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📦 **FUNDAMENTAL LEVELS**
+        - Market Cap: [Value Cr] | Sector: [Sector Name]
+        - P/E Ratio: [Value]x | ROE: [Value]% | Shareholding Pattern: [Promoter %, FII %, etc.] | Best Value: [Intrinsic value estimate]
         
-        4. **Risk Assessment** (50 words)
-           - Volatility analysis
-           - Key risk factors
-           - Risk-reward ratio
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🏗 **DEEP TECHNICAL LEVELS**
+        SMA 20: [Value] | SMA 50: [Value] | SMA 200: [Value]
+        🔴 R3: [Value] | R2: [Value]
+        🔴 R1: [Value] | 🟢 PP: [Value]
+        🟢 S1: [Value] | S2: [Value] | S3: [Value]
         
-        5. **Trading Strategy** (50 words)
-           - Entry points
-           - Exit strategy
-           - Position sizing recommendations
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🧠 **COMPANY INFORMATION**
+        ✅ **POSITIVE:**
+        - [List key positives, including sector strengths, company overview]
+        ❌ **NEGATIVE:**
+        - [List key negatives, including sector risks, company weaknesses]
         
-        6. **Tomorrow's Prediction** (30 words)
-           - Expected price range
-           - Probability-weighted forecast
-           - Key levels to watch
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📰 **LATEST NEWS:**
+        1. [Top News 1 - Summarize based on recent data]
+        2. [Top News 2]
+        3. [Top News 3]
         
-        Use Indian market context. Be data-driven and professional.
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📝 **CONCLUSION:**
+        [Brief summary, e.g., "{symbol} is consolidating. Wait for direction."]
+        ⚠️ **RISK:** [Key risks, e.g., Volatility and sector news may impact targets.]
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        _AI AUTO ADVISORY - [Add New Smart Tag Lines, e.g., "Invest Wisely, Trade Smartly!"]
         """
         
         try:
@@ -246,7 +270,7 @@ class AIEngine:
             return response.text
         except Exception as e:
             logger.error(f"AI Report Error: {str(e)}")
-            raise  # Re-raise to trigger fallback
+            raise
     
     def quick_signal(self, symbol: str, price: float) -> str:
         """Fast signal generation"""
@@ -300,19 +324,26 @@ class DualAIEngine:
     """Dual-engine wrapper for redundancy: Primary and Secondary AI Engines"""
     
     def __init__(self):
-        self.primary = AIEngine(Config.GEMINI_KEY_PRIMARY)
-        self.secondary = AIEngine(Config.GEMINI_KEY_SECONDARY)
-        self.current_engine = "primary"  # Track which is active
+        try:
+            self.primary = AIEngine(Config.GEMINI_KEY_PRIMARY)
+            self.secondary = AIEngine(Config.GEMINI_KEY_SECONDARY)
+            self.current_engine = "primary"
+        except ImportError:
+            logger.error("AI Engines not available due to missing google.genai")
+            self.primary = None
+            self.secondary = None
     
     def _switch_engine(self):
         """Switch to secondary if primary fails"""
-        if self.current_engine == "primary":
+        if self.current_engine == "primary" and self.secondary:
             self.current_engine = "secondary"
             logger.warning("🔄 Switching to Secondary AI Engine due to primary failure.")
         else:
-            logger.error("❌ Both AI Engines failed. Functionality limited.")
+            logger.error("❌ Both AI Engines failed or unavailable.")
     
     def generate_research_report(self, symbol: str, price: float, market_data: Dict) -> str:
+        if not self.primary:
+            return "⚠️ AI engines unavailable"
         try:
             return self.primary.generate_research_report(symbol, price, market_data)
         except Exception:
@@ -323,6 +354,8 @@ class DualAIEngine:
                 return f"⚠️ Both AI engines unavailable: {str(e)}"
     
     def quick_signal(self, symbol: str, price: float) -> str:
+        if not self.primary:
+            return "⚠️ AI engines unavailable"
         try:
             return self.primary.quick_signal(symbol, price)
         except Exception:
@@ -333,6 +366,8 @@ class DualAIEngine:
                 return f"⚠️ Both AI engines unavailable: {str(e)}"
     
     def analyze_multibagger(self, fundamentals: Dict) -> Dict:
+        if not self.primary:
+            return {}
         try:
             return self.primary.analyze_multibagger(fundamentals)
         except Exception:
@@ -347,14 +382,71 @@ class DualAIEngine:
 # 4. OPTIONS STRATEGY CALCULATOR
 # ═══════════════════════════════════════════════════════════════════
 
-# (Unchanged from previous version - same as v2.3)
-
-# ═══════════════════════════════════════════════════════════════════
-# 5. TELEGRAM BOT INTERFACE WITH DUAL ENGINE
-# ═══════════════════════════════════════════════════════════════════
-
-class TradingBot:
-    """Telegram Bot for interacting with the trading system"""
+class OptionsCalculator:
+    """Advanced options strategy calculations with validation"""
     
-    def __init__(self):
-        self.bot = telebot.TeleBot
+    @staticmethod
+    def calculate_payoff(strategy: str, spot: float, strikes: List[float], 
+                        premiums: List[float]) -> Dict:
+        """Calculate payoff for various strategies with input validation"""
+        if not strikes or not premiums or len(strikes) != len(premiums):
+            return {'error': 'Invalid strikes or premiums provided'}
+        
+        # Price range for payoff calculation
+        price_range = np.linspace(spot * 0.85, spot * 1.15, 100)
+        
+        strategies = {
+            'bull_call_spread': OptionsCalculator._bull_call_spread,
+            'bear_put_spread': OptionsCalculator._bear_put_spread,
+            'iron_condor': OptionsCalculator._iron_condor,
+            'butterfly': OptionsCalculator._butterfly,
+            'straddle': OptionsCalculator._straddle,
+            'strangle': OptionsCalculator._strangle,
+            'call_ratio_spread': OptionsCalculator._call_ratio_spread,
+            'put_ratio_spread': OptionsCalculator._put_ratio_spread,
+            'jade_lizard': OptionsCalculator._jade_lizard,
+            'reverse_iron_condor': OptionsCalculator._reverse_iron_condor
+        }
+        
+        if strategy in strategies:
+            try:
+                return strategies[strategy](spot, strikes, premiums, price_range)
+            except Exception as e:
+                logger.error(f"Strategy calculation error for {strategy}: {str(e)}")
+                return {'error': f'Calculation failed: {str(e)}'}
+        else:
+            return {'error': 'Strategy not found'}
+    
+    @staticmethod
+    def _bull_call_spread(spot, strikes, premiums, price_range):
+        """Bull Call Spread: Buy lower strike call, Sell higher strike call"""
+        if len(strikes) < 2 or len(premiums) < 2:
+            raise ValueError("Bull Call Spread requires 2 strikes and 2 premiums")
+        buy_strike, sell_strike = strikes[0], strikes[1]
+        buy_premium, sell_premium = premiums[0], premiums[1]
+        
+        net_premium = buy_premium - sell_premium
+        payoffs = []
+        
+        for price in price_range:
+            buy_payoff = max(price - buy_strike, 0) - buy_premium
+            sell_payoff = -(max(price - sell_strike, 0) - sell_premium)
+            payoffs.append(buy_payoff + sell_payoff)
+        
+        max_profit = (sell_strike - buy_strike) - net_premium
+        max_loss = net_premium
+        breakeven = buy_strike + net_premium
+        
+        return {
+            'name': 'Bull Call Spread',
+            'max_profit': max_profit,
+            'max_loss': max_loss,
+            'breakeven': breakeven,
+            'payoffs': payoffs,
+            'price_range': price_range.tolist(),
+            'recommendation': 'Use when moderately bullish'
+        }
+    
+    @staticmethod
+    def _iron_condor(spot, strikes, premiums, price_range):
+        """Iron Condor: Sell OTM call+put, Buy further OTM call
