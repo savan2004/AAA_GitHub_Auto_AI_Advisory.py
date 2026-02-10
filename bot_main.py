@@ -6,8 +6,7 @@ from data_manager import DataManager
 from user_tracker import UserTracker
 from rag_system import RAGSystem
 from admin_panel import AdminPanel
-import google.genai as genai
-import openai
+import openai  # Removed google.genai to fix Render build issues
 
 # Initialize components
 bot = telebot.TeleBot(Config.TELEGRAM_TOKEN)
@@ -15,23 +14,17 @@ data_manager = DataManager()
 user_tracker = UserTracker()
 rag_system = RAGSystem()
 admin_panel = AdminPanel(user_tracker, rag_system)
-genai.configure(api_key=Config.GEMINI_KEY)
 
 def get_signal(symbol: str, price: float) -> str:
     context = rag_system.retrieve_context(symbol)
     prompt = f"Quick signal for {symbol} at {price}. Context: {context}"
     try:
-        response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
-        return response.text
+        client = openai.OpenAI(api_key=Config.OPENAI_KEY)
+        response = client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+        return response.choices[0].message.content
     except Exception as e:
-        print(f"Gemini signal error: {e}")
-        try:
-            client = openai.OpenAI(api_key=Config.OPENAI_KEY)
-            response = client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
-            return response.choices[0].message.content
-        except Exception as e2:
-            print(f"OpenAI signal error: {e2}")
-            return "⚠️ AI unavailable"
+        print(f"OpenAI signal error: {e}")
+        return "⚠️ AI unavailable"
 
 @bot.message_handler(commands=['start'])
 def start(message):
