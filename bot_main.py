@@ -6,7 +6,7 @@ from data_manager import DataManager
 from user_tracker import UserTracker
 from rag_system import RAGSystem
 from admin_panel import AdminPanel
-import openai  # Removed google.genai to fix Render build issues
+# Removed openai to fix Render build
 
 # Initialize components
 bot = telebot.TeleBot(Config.TELEGRAM_TOKEN)
@@ -16,15 +16,13 @@ rag_system = RAGSystem()
 admin_panel = AdminPanel(user_tracker, rag_system)
 
 def get_signal(symbol: str, price: float) -> str:
-    context = rag_system.retrieve_context(symbol)
-    prompt = f"Quick signal for {symbol} at {price}. Context: {context}"
-    try:
-        client = openai.OpenAI(api_key=Config.OPENAI_KEY)
-        response = client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
-        return response.choices[0].message.content
-    except Exception as e:
-        print(f"OpenAI signal error: {e}")
-        return "⚠️ AI unavailable"
+    # Simple text-based signal (no AI for now to ensure deploy)
+    if price > 1000:  # Basic logic example
+        return "📈 Buy signal: Price above key level."
+    elif price < 500:
+        return "📉 Sell signal: Price below support."
+    else:
+        return "⚖️ Hold: Consolidating."
 
 @bot.message_handler(commands=['start'])
 def start(message):
