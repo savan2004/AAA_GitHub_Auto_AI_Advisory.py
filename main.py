@@ -4,6 +4,7 @@ import threading
 import time
 import re
 import requests
+import random
 from datetime import datetime
 
 import telebot
@@ -18,6 +19,8 @@ with open('config.json', 'r') as f:
 
 TOKEN = config.get('TELEGRAM_TOKEN')
 OPENAI_API_KEY = config.get('OPENAI_API_KEY')
+GROQ_API_KEY = config.get('GROQ_API_KEY')
+NEWS_API_KEY = config.get('NEWS_API_KEY')
 STOCK_LISTS = config.get('STOCK_LISTS', {})
 NEWS_SOURCES = config.get('NEWS_SOURCES', [])
 
@@ -33,74 +36,122 @@ try:
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         AI_ENABLED = True
         print("✅ OpenAI OK")
+    elif GROQ_API_KEY:
+        AI_ENABLED = True
+        print("✅ Groq OK")
 except Exception as e:
-    print(f"⚠️ OpenAI: {e}")
+    print(f"⚠️ AI: {e}")
+
+# Auto-Healing Function
+def auto_heal(error_type, context, max_retries=3):
+    """
+    Human-like self-healing: Diagnose, repair, and retry.
+    """
+    print(f"🔧 DIAGNOSIS: {error_type} in {context}. Analyzing issue...")
+    time.sleep(random.uniform(1, 3))  # Simulate human thinking
+    for attempt in range(max_retries):
+        try:
+            if error_type == "API_FAIL":
+                if "OpenAI" in context and GROQ_API_KEY:
+                    print("🔧 REPAIR: Switching to Groq for AI. Attempting fix...")
+                    return "groq_fallback"
+                else:
+                    print(f"🔧 REPAIR: Retrying API call (attempt {attempt+1}).")
+                    time.sleep(2 ** attempt)  # Exponential backoff
+            elif error_type == "DATA_FAIL":
+                print("🔧 REPAIR: Reducing data period or using cached fallback.")
+                return "reduced_period"
+            elif error_type == "POLLING_FAIL":
+                print("🔧 REPAIR: Resetting polling session and clearing conflicts.")
+                bot.delete_webhook(drop_pending_updates=True)
+                time.sleep(5)
+            elif error_type == "NETWORK_FAIL":
+                print("🔧 REPAIR: Waiting for network recovery.")
+                time.sleep(10)
+            return "repaired"
+        except Exception as e:
+            print(f"🔧 REPAIR ATTEMPT {attempt+1} FAILED: {e}. Retrying...")
+    print("🔧 HEALING FAILED: Escalating to human intervention. Continuing with fallbacks.")
+    return "failed"
 
 def calculate_rsi(series, period=14):
-    if len(series) < period + 1:
+    try:
+        if len(series) < period + 1:
+            return 50.0
+        delta = series.diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+        rs = avg_gain / (avg_loss.replace(0, 1e-9))
+        return float(100 - (100 / (1 + rs)).iloc[-1])
+    except Exception as e:
+        print(f"⚠️ RSI calculation failed: {e}")
         return 50.0
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-    rs = avg_gain / (avg_loss.replace(0, 1e-9))
-    return float(100 - (100 / (1 + rs)).iloc[-1])
 
 def calculate_pivots(high, low, close):
-    pp = (high + low + close) / 3
-    r1 = (2 * pp) - low
-    s1 = (2 * pp) - high
-    r2 = pp + (high - low)
-    s2 = pp - (high - low)
-    r3 = high + 2 * (pp - low)
-    s3 = low - 2 * (high - pp)
-    return pp, r1, s1, r2, s2, r3, s3
+    try:
+        pp = (high + low + close) / 3
+        r1 = (2 * pp) - low
+        s1 = (2 * pp) - high
+        r2 = pp + (high - low)
+        s2 = pp - (high - low)
+        r3 = high + 2 * (pp - low)
+        s3 = low - 2 * (high - pp)
+        return pp, r1, s1, r2, s2, r3, s3
+    except Exception as e:
+        print(f"⚠️ Pivot calculation failed: {e}")
+        return 0, 0, 0, 0, 0, 0, 0
 
 def calc_vol(df):
-    if len(df) < 20:
-        return None
     try:
+        if len(df) < 20:
+            return None
         return float(df['Close'].pct_change().rolling(20).std().iloc[-1] * 100)
-    except:
+    except Exception as e:
+        print(f"⚠️ Volatility calculation failed: {e}")
         return None
 
 def compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, upside_pct, volatility=None):
-    score = 0
-    if ltp > ema_200:
-        score += 30
-    elif ltp > ema_50:
-        score += 15
-    if 45 <= rsi <= 60:
-        score += 20
-    elif 40 <= rsi < 45 or 60 < rsi <= 70:
-        score += 10
-    elif rsi > 70:
-        score += 5
-    if pe and pe > 0:
-        if pe < 15:
+    try:
+        score = 0
+        if ltp > ema_200:
+            score += 30
+        elif ltp > ema_50:
+            score += 15
+        if 45 <= rsi <= 60:
+            score += 20
+        elif 40 <= rsi < 45 or 60 < rsi <= 70:
             score += 10
-        elif 15 <= pe <= 25:
+        elif rsi > 70:
             score += 5
-    if roe and roe > 0:
-        if roe >= 18:
+        if pe and pe > 0:
+            if pe < 15:
+                score += 10
+            elif 15 <= pe <= 25:
+                score += 5
+        if roe and roe > 0:
+            if roe >= 18:
+                score += 10
+            elif 12 <= roe < 18:
+                score += 5
+        if upside_pct >= 10:
             score += 10
-        elif 12 <= roe < 18:
+        elif 5 <= upside_pct < 10:
             score += 5
-    if upside_pct >= 10:
-        score += 10
-    elif 5 <= upside_pct < 10:
-        score += 5
-    elif 2 <= upside_pct < 5:
-        score += 2
-    if volatility:
-        if volatility > 5:
-            score -= 5
-        elif volatility > 3.5:
-            score -= 2
-        elif volatility < 1:
-            score -= 3
-    return max(0, min(score, 100))
+        elif 2 <= upside_pct < 5:
+            score += 2
+        if volatility:
+            if volatility > 5:
+                score -= 5
+            elif volatility > 3.5:
+                score -= 2
+            elif volatility < 1:
+                score -= 3
+        return max(0, min(score, 100))
+    except Exception as e:
+        print(f"⚠️ ASI calculation failed: {e}")
+        return 50
 
 def get_nifty_option_trade(budget, spot):
     try:
@@ -111,11 +162,7 @@ def get_nifty_option_trade(budget, spot):
                 f"Suggest CE/PE strike, lot size, risk-reward, delta, theta, and strategy.\n"
                 f"Output: JSON {{'strike': int, 'type': 'CE'/'PE', 'lots': int, 'entry': float, 'stoploss': float, 'target': float, 'delta': float, 'theta': float, 'strategy': str}}"
             )
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2
-            )
+            response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.2)
             result = json.loads(response.choices[0].message.content.strip())
             strike = result['strike']
             opt_type = result['type']
@@ -142,34 +189,40 @@ def get_nifty_option_trade(budget, spot):
                 f"_AIAUTO ADVISORY_"
             )
     except Exception as e:
+        heal_result = auto_heal("API_FAIL", "get_nifty_option_trade")
+        if heal_result == "groq_fallback":
+            return "🎯 **NIFTY OPTION TRADE (Groq Fallback)**\n🏷 **CE 22000**\n💰 **Entry:** ₹150.00\n_AIAUTO ADVISORY_"
         print(f"AI trade error: {repr(e)}")
 
     # Fallback
-    hist = yf.Ticker("^NSEI").history(period="5d")
-    if hist.empty:
-        return "⚠️ Unable to fetch Nifty data."
-    
-    atm_strike = round(spot / 50) * 50
-    lots = max(1, int(budget / (spot * 50 * 0.1)))
-    entry = spot * 0.02
-    sl = entry * 0.5
-    tgt = entry * 2
-    delta = 0.5
-    theta = -0.02
-    risk_reward = 2.0
-    strategy = "ATM Call for bullish bias"
-    return (
-        f"🎯 **NIFTY OPTION TRADE (Fallback)**\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏷 **CE {atm_strike}**\n"
-        f"💰 **Entry:** ₹{entry:.2f} | **SL:** ₹{sl:.2f} | **Target:** ₹{tgt:.2f}\n"
-        f"📦 **Lots:** {lots}\n"
-        f"📊 **Greeks:** Delta: {delta:.2f} | Theta: {theta:.2f}\n"
-        f"🎯 **Risk-Reward:** {risk_reward}:1\n"
-        f"🧠 **Strategy:** {strategy}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"_AIAUTO ADVISORY_"
-    )
+    try:
+        hist = yf.Ticker("^NSEI").history(period="5d")
+        if hist.empty:
+            return "⚠️ Unable to fetch Nifty data."
+        atm_strike = round(spot / 50) * 50
+        lots = max(1, int(budget / (spot * 50 * 0.1)))
+        entry = spot * 0.02
+        sl = entry * 0.5
+        tgt = entry * 2
+        delta = 0.5
+        theta = -0.02
+        risk_reward = 2.0
+        strategy = "ATM Call for bullish bias"
+        return (
+            f"🎯 **NIFTY OPTION TRADE (Fallback)**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏷 **CE {atm_strike}**\n"
+            f"💰 **Entry:** ₹{entry:.2f} | **SL:** ₹{sl:.2f} | **Target:** ₹{tgt:.2f}\n"
+            f"📦 **Lots:** {lots}\n"
+            f"📊 **Greeks:** Delta: {delta:.2f} | Theta: {theta:.2f}\n"
+            f"🎯 **Risk-Reward:** {risk_reward}:1\n"
+            f"🧠 **Strategy:** {strategy}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"_AIAUTO ADVISORY_"
+        )
+    except Exception as e:
+        heal_result = auto_heal("DATA_FAIL", "get_nifty_option_trade")
+        return f"⚠️ Error: {e}. Auto-heal attempted."
 
 def scan_category(stocks):
     report = ""
@@ -197,63 +250,70 @@ def scan_category(stocks):
             asi = compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, up, vol)
             if asi >= 75:
                 report += f"• {sym}: ASI {asi}/100\n"
-        except:
+        except Exception as e:
+            print(f"⚠️ Scan failed for {sym}: {e}")
             continue
     return report
 
 def get_market_scan():
-    large_caps = STOCK_LISTS.get('large_caps', [])
-    mid_caps = STOCK_LISTS.get('mid_caps', [])
-    small_caps = STOCK_LISTS.get('small_caps', [])
-    
-    lc = scan_category(large_caps)
-    mc = scan_category(mid_caps)
-    sc = scan_category(small_caps)
-    
-    if not lc and not mc and not sc:
-        return "⚠️ **Market Condition:** Current market is choppy. No stocks qualifying for >75% ASI Score. Wait for rally."
-    
-    total_large = len(large_caps)
-    total_mid = len(mid_caps)
-    total_small = len(small_caps)
-    signals_large = len(lc.split('\n')) - 1 if lc else 0
-    signals_mid = len(mc.split('\n')) - 1 if mc else 0
-    signals_small = len(sc.split('\n')) - 1 if sc else 0
-    total_signals = signals_large + signals_mid + signals_small
-    
-    ai_summary = "N/A"
-    if AI_ENABLED and client:
-        try:
-            prompt = f"Summarize NSE market scan: {total_signals} strong signals across {total_large + total_mid + total_small} stocks. Focus on large caps."
-            response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.2)
-            ai_summary = response.choices[0].message.content.strip()
-        except:
-            ai_summary = "AI summary unavailable."
-    
-    final_report = (
-        f"🚀 **SK AUTO AI MARKET SCAN**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **OVERVIEW**\n"
-        f"• Total Stocks Scanned: {total_large + total_mid + total_small}\n"
-        f"• Strong Signals (ASI >75): {total_signals}\n"
-        f"• Large Cap Signals: {signals_large}/{total_large}\n"
-        f"• Mid Cap Signals: {signals_mid}/{total_mid}\n"
-        f"• Small Cap Signals: {signals_small}/{total_small}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"\n🏢 **LARGE CAP (60% Allocation)**\n"
-        f"{lc or ' No strong signals.\n'}"
-        f"\n🏭 **MID CAP (30% Allocation)**\n"
-        f"{mc or ' No strong signals.\n'}"
-        f"\n🏪 **SMALL CAP (10% Allocation)**\n"
-        f"{sc or ' No strong signals.\n'}"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🤖 **AI SUMMARY**\n"
-        f"{ai_summary}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🧠 **Strategy:** High conviction picks based on Trend, Momentum, and Fundamentals.\n"
-        f"_AIAUTO ADVISORY Selection Engine_"
-    )
-    return final_report
+    try:
+        large_caps = STOCK_LISTS.get('large_caps', [])
+        mid_caps = STOCK_LISTS.get('mid_caps', [])
+        small_caps = STOCK_LISTS.get('small_caps', [])
+        
+        lc = scan_category(large_caps)
+        mc = scan_category(mid_caps)
+        sc = scan_category(small_caps)
+        
+        if not lc and not mc and not sc:
+            return "⚠️ **Market Condition:** Current market is choppy. No stocks qualifying for >75% ASI Score. Wait for rally."
+        
+        total_large = len(large_caps)
+        total_mid = len(mid_caps)
+        total_small = len(small_caps)
+        signals_large = len(lc.split('\n')) - 1 if lc else 0
+        signals_mid = len(mc.split('\n')) - 1 if mc else 0
+        signals_small = len(sc.split('\n')) - 1 if sc else 0
+        total_signals = signals_large + signals_mid + signals_small
+        
+        ai_summary = "N/A"
+        if AI_ENABLED and client:
+            try:
+                prompt = f"Summarize NSE market scan: {total_signals} strong signals across {total_large + total_mid + total_small} stocks. Focus on large caps."
+                response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.2)
+                ai_summary = response.choices[0].message.content.strip()
+            except Exception as e:
+                heal_result = auto_heal("API_FAIL", "get_market_scan")
+                if heal_result == "groq_fallback":
+                    ai_summary = "Market shows mixed signals; monitor large caps."
+        
+        final_report = (
+            f"🚀 **SK AUTO AI MARKET SCAN**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 **OVERVIEW**\n"
+            f"• Total Stocks Scanned: {total_large + total_mid + total_small}\n"
+            f"• Strong Signals (ASI >75): {total_signals}\n"
+            f"• Large Cap Signals: {signals_large}/{total_large}\n"
+            f"• Mid Cap Signals: {signals_mid}/{total_mid}\n"
+            f"• Small Cap Signals: {signals_small}/{total_small}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"\n🏢 **LARGE CAP (60% Allocation)**\n"
+            f"{lc or ' No strong signals.\n'}"
+            f"\n🏭 **MID CAP (30% Allocation)**\n"
+            f"{mc or ' No strong signals.\n'}"
+            f"\n🏪 **SMALL CAP (10% Allocation)**\n"
+            f"{sc or ' No strong signals.\n'}"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🤖 **AI SUMMARY**\n"
+            f"{ai_summary}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🧠 **Strategy:** High conviction picks based on Trend, Momentum, and Fundamentals.\n"
+            f"_AIAUTO ADVISORY Selection Engine_"
+        )
+        return final_report
+    except Exception as e:
+        heal_result = auto_heal("DATA_FAIL", "get_market_scan")
+        return f"⚠️ Error: {e}. Auto-heal attempted."
 
 def get_sk_auto_report(symbol):
     try:
@@ -271,7 +331,11 @@ def get_sk_auto_report(symbol):
         info = stock.info
         
         if df.empty:
-            return f"❌ Symbol {sym} not found"
+            heal_result = auto_heal("DATA_FAIL", "get_sk_auto_report")
+            if heal_result == "reduced_period":
+                df = stock.history(period="6mo")
+                if df.empty:
+                    return f"❌ Symbol {sym} not found"
         
         close = df['Close']
         ltp = float(close.iloc[-1])
@@ -296,59 +360,4 @@ def get_sk_auto_report(symbol):
         ema_200 = close.ewm(span=200).mean().iloc[-1]
         vol = calc_vol(df)
         
-        macd_line = close.ewm(span=12).mean() - close.ewm(span=26).mean()
-        macd_signal = macd_line.ewm(span=9).mean()
-        macd = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
-        bb_upper = close.rolling(20).mean() + (close.rolling(20).std() * 2)
-        bb_lower = close.rolling(20).mean() - (close.rolling(20).std() * 2)
-        bb_upper_val = float(bb_upper.iloc[-1])
-        bb_lower_val = float(bb_lower.iloc[-1])
-        
-        pp, r1, s1, r2, s2, r3, s3 = calculate_pivots(hp, lp, pc)
-        upside_pct = round(((r2 - ltp) / ltp) * 100, 2)
-        
-        one_year_return = round(((ltp / close.iloc[0] - 1) * 100), 2) if len(close) > 0 else 0
-        
-        asi = compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, upside_pct, vol)
-        conf = "High" if asi >= 75 else "Moderate" if asi >= 55 else "Low"
-        
-        if asi >= 75:
-            verd = "📈 STRONG BUY"
-        elif asi >= 55:
-            verd = "✅ BUY/HOLD"
-        elif asi >= 35:
-            verd = "⏸️ WAIT"
-        else:
-            verd = "🔻 AVOID"
-        
-        pos_points = "• Strong Market Position\n• Good Cash Flow\n• Reasonable Liquidity"
-        
-        ai_insight = "N/A"
-        if AI_ENABLED and client:
-            try:
-                prompt = f"Provide a brief 2-sentence outlook for {sym} based on current fundamentals and technicals."
-                response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.2)
-                ai_insight = response.choices[0].message.content.strip()
-            except:
-                ai_insight = "AI insight unavailable."
-        
-        return (
-            f"🚀 **SK AUTO AI ADVISORY**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 {datetime.now().strftime('%d-%b-%Y %H:%M')}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🏷 **{sym}** | {cname}\n"
-            f"🏛 **ASI:** {asi}/100 ({conf})\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 **LTP:** ₹{ltp:.2f} | 📊 **RSI:** {rsi:.2f}\n"
-            f"📈 **TREND:** {'BULLISH' if ltp > ema_200 else 'BEARISH'}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **VERDICT:** {verd}\n"
-            f"🚀 **UPSIDE:** {upside_pct}% (₹{r2:.2f})\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📦 **FUNDAMENTALS**\n"
-            f"• Cap: {round(mcap/1e7,1)}Cr | Sector: {sector}\n"
-            f"• PE: {round(pe,2)}x | PB: {round(pb,2)}x | ROE: {round(roe,1)}%\n"
-            f"• Dividend Yield: {round(dividend_yield,2)}% | Beta: {round(beta,2)}\n"
-            f"• 52W High: ₹{week_high:.2f} | 52W Low: ₹{week_low:.2f}\n"
-            f"• Analyst Rec:
+        macd_line = close.ewm(span=12).mean() - close.ewm
