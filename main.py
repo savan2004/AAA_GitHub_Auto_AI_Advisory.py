@@ -1,93 +1,57 @@
-import os, telebot, time, pyotp, sqlite3, re
-from SmartApi import SmartConnect
+import os
+import telebot
+import yfinance as yf
 from telebot import types
-from datetime import datetime
-import google.generativeai as genai
+from google import genai
+from google.genai import types as ai_types
+from dotenv import load_dotenv
 
-# --- 1. CONFIGURATION ---
-# Replace these with your actual Angel One details
-API_KEY = "C4FHABYE3VUS2JUDB3BAYU44VQ" # Your provided Key
-CLIENT_CODE = "YOUR_CLIENT_CODE"      # e.g., S123456
-CLIENT_PIN = "YOUR_PIN"              # Your 4-digit Angel PIN
-TOTP_SECRET = "YOUR_TOTP_SECRET"      # The string from "Enable TOTP" screen
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-GEMINI_KEY = "YOUR_GEMINI_API_KEY"
+load_dotenv()
 
-# --- 2. INITIALIZE ENGINES ---
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
-genai.configure(api_key=GEMINI_KEY)
-ai_model = genai.GenerativeModel('gemini-1.5-flash')
+# Configuration from Render Env Vars
+bot = telebot.TeleBot(os.getenv("TELEGRAM_TOKEN"))
+ai_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Connect to Angel One
-smartApi = SmartConnect(api_key=API_KEY)
-
-def login_angel():
-    try:
-        totp = pyotp.TOTP(TOTP_SECRET).now()
-        data = smartApi.generateSession(CLIENT_CODE, CLIENT_PIN, totp)
-        if data['status']:
-            print("✅ Angel One Connected (0-Delay Data Active)")
-            return True
-        else:
-            print(f"❌ Login Failed: {data['message']}")
-            return False
-    except Exception as e:
-        print(f"⚠️ Connection Error: {e}")
-        return False
-
-# --- 3. THE ASI DATA BRAIN ---
-
-def get_live_asi_signal(symbol_token, symbol_name):
-    """Fetches real-time data from Angel One and generates AI Advisory"""
-    try:
-        # 1. Get Live LTP (0 Delay)
-        res = smartApi.ltpData("NSE", symbol_name, symbol_token)
-        if not res['status']: return "❌ Unable to fetch live price."
-        
-        ltp = res['data']['ltp']
-        
-        # 2. Generate AI Advisory (ASI Prompt)
-        prompt = (
-            f"Generate High AI IQ level AI Advisory for {symbol_name} at price {ltp}. "
-            "Predict tomorrow's Indian stock market movement. Accuracy must be 80%+. Use ASI logic."
-        )
-        ai_response = ai_model.generate_content(prompt).text
-
-        return (f"🏛 **ASI ADVISORY: {symbol_name}**\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"💰 **Live Price:** ₹{ltp} (Real-time)\n"
-                f"📅 **Date:** {datetime.now().strftime('%d-%b-%Y %H:%M')}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"🤖 **Deep Analysis:**\n{ai_response}")
-    except Exception as e:
-        return f"⚠️ ASI Logic Error: {str(e)}"
-
-# --- 4. BOT HANDLERS ---
-
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start', 'hi'])
 def start(m):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('🚀 NIFTY 50', '📈 BANK NIFTY')
-    bot.send_message(m.chat.id, "🏛 **Sovereign Machine Online**\nConnected to Angel One (0-Delay).", reply_markup=markup)
+    markup.add('🚀 Smart Search')
+    bot.send_message(m.chat.id, "🏛 **Sovereign Machine Online**\nSearch any NSE stock for High-IQ AI Advisory.", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: True)
-def handle_requests(m):
-    if m.text == '🚀 NIFTY 50':
-        # Token for Nifty 50 is 99926000
-        bot.reply_to(m, get_live_asi_signal("99926000", "NIFTY"))
-    elif m.text == '📈 BANK NIFTY':
-        # Token for BankNifty is 99926009
-        bot.reply_to(m, get_live_asi_signal("99926009", "BANKNIFTY"))
+@bot.message_handler(func=lambda m: m.text == '🚀 Smart Search')
+def ask_symbol(m):
+    msg = bot.send_message(m.chat.id, "📝 Enter Symbol (e.g., RELIANCE, TCS):")
+    bot.register_next_step_handler(msg, get_stock_data)
 
-# --- 5. UNSTOPPABLE RUNNER ---
+def get_stock_data(m):
+    symbol = m.text.upper().strip()
+    try:
+        ticker = yf.Ticker(f"{symbol}.NS")
+        info = ticker.fast_info
+        price = info['lastPrice']
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔍 Deep AI Analysis", callback_data=f"deep_{symbol}"))
+        
+        bot.send_message(m.chat.id, f"📈 **{symbol}**\n💰 Price: ₹{price:.2f}", reply_markup=markup)
+    except:
+        bot.reply_to(m, "❌ Invalid symbol. Please use NSE tickers.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('deep_'))
+def handle_deep_analysis(call):
+    symbol = call.data.split('_')[1]
+    bot.answer_callback_query(call.id, "Analyzing...")
+    
+    # Professional AI prompt with Web Search
+    prompt = f"Perform a high-IQ financial analysis for {symbol} (NSE India). Include SWOT, latest news, and a buy/sell/hold rating with 80%+ accuracy logic."
+    
+    response = ai_client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
+        config=ai_types.GenerateContentConfig(tools=[ai_types.Tool(google_search=ai_types.GoogleSearch())])
+    )
+
+    bot.send_message(call.message.chat.id, f"🏛 **AI ADVISORY: {symbol}**\n\n{response.text}", parse_mode='Markdown')
 
 if __name__ == "__main__":
-    if login_angel():
-        while True:
-            try:
-                bot.polling(none_stop=True, interval=0, timeout=20)
-            except Exception as e:
-                print(f"Connection lost, restarting: {e}")
-                time.sleep(5)
-    else:
-        print("CRITICAL: Could not start bot without Angel One Session.")
+    bot.infinity_polling()
