@@ -355,4 +355,7 @@ def process_search(m):
     query = m.text or ""
     bot.send_chat_action(m.chat.id, "typing")
     sym = find_symbol(query)
-    bot.send_message(m.chat.id, f"🧠
+    bot.send_message(m.chat.id, f"🧠 Symbol: **{sym}**", parse_mode="Markdown")
+    bot.send_message(m.chat.id, get_sk_auto_report(sym), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m
