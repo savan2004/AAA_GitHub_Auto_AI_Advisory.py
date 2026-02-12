@@ -1,23 +1,26 @@
 # AAA_GitHub_Auto_AI_Advisory.py
 
-A high-end Telegram bot for stock analysis using AI, yfinance, and JSON config.
+Production-ready bot for stock analysis, news sentiment, and AI-driven portfolio suggestions.
 
-## Setup
-1. Clone this repo.
-2. Install dependencies: `pip install -r requirements.txt`.
-3. Edit `config.json` with your API keys, stock lists, and news sources.
-4. Run: `python main.py`.
-5. Deploy on Render as Background Worker.
+## 🚀 Features
+- **Smart Search**: Fundamentals + Technicals + AI Insight.
+- **Market Scan**: Watchlist health checks.
+- **AI Options**: Strategy suggestions with Greeks.
+- **News Sentiment**: Fetches real-time news and analyzes mood.
+- **Auto-Healing**: Automatic retries and fallback to Groq AI if OpenAI fails.
 
-## Features
-- Smart Search: Analyze stocks with ASI score.
-- Market Scan: Scan large/mid/small caps.
-- Nifty Options: AI-powered trade suggestions.
-- Portfolio Tracker: Track user stocks (updated format).
-- News Alerts: Get latest news for stocks.
-- Technical Indicators: Detailed RSI/EMA/Vol.
-- Market Sentiment: AI-driven sentiment analysis.
-- AI Portfolio Builder: Build 10-stock portfolio with 3-year fundamentals.
+## 🛠 Deployment (Render)
+1. Create a **Background Worker**.
+2. Connect your GitHub repo.
+3. Add **Environment Variables**:
+   - `TELEGRAM_BOT_TOKEN`
+   - `OPENAI_API_KEY`
+   - `GROQ_API_KEY`
+   - `NEWS_API_KEY`
+   - `WATCHLIST_JSON`: `{"LARGE_CAP":["RELIANCE.NS"],"MID_CAP":["DIXON.NS"]}`4. Set Build Command: `pip install -r requirements.txt`
+5. Set Start Command: `python main.py`
 
-## Config
-Update `config.json` for customization.
+## 💻 Local Setup
+1. Install dependencies: `pip install -r requirements.txt`.
+2. Fill `config.json`.
+3. Run `python main.py`.
