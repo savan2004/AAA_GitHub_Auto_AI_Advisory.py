@@ -1,50 +1,18 @@
-"""
-SK AUTO AI - Configuration Module
-Handles all environment variables and constants
-"""
-
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# =============== TELEGRAM CONFIG ===============
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("❌ TELEGRAM_TOKEN not found in .env or environment")
-
-# =============== OPENAI CONFIG ===============
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-AI_ENABLED = bool(OPENAI_API_KEY)
-
-# =============== RENDER CONFIG ===============
-PORT = int(os.getenv("PORT", "10000"))
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
-
-# =============== ASI SCORING WEIGHTS ===============
-ASI_WEIGHTS = {
-    "trend": 30,
-    "momentum": 20,
-    "valuation": 10,
-    "quality": 10,
-    "risk_reward": 10,
-    "volatility": 5,
+{
+  "TELEGRAM_TOKEN": "8461087780:AAG85fg8dWmVJyCW0E_5xgrS1Qc3abUgN2o",
+  "OPENAI_API_KEY": "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",
+  "ALPHA_VANTAGE_KEY": "HKTBO5VLITM9G1B9",
+  "GEMINI_API_KEY": "AIzaSyCPh8wPC-rmBIyTr5FfV3Mwjb33KeZdRUE",
+  "GROQ_API_KEY": "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",
+  "HUGGINGFACE_TOKEN": "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",
+  "NEWS_API_KEY": "47fb3f33527944ed982e6e48cc856b23",
+  "WEATHER_API_KEY": "5ed725e428aef2711d17f9d6c8bd2231",
+  "YOUR_CHAT_ID": "6284854709",
+  "STOCK_LISTS": {
+    "large_caps": ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY"],
+    "mid_caps": ["BAJFINANCE", "MARUTI", "SHREECEM", "DMART", "PIDILITIND"],
+    "small_caps": ["NYKAA", "POLYCAB", "METROPOLIS", "CAMS", "AFFLE"],
+    "all_stocks": ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BAJFINANCE", "MARUTI", "SHREECEM", "DMART", "PIDILITIND", "NYKAA", "POLYCAB", "METROPOLIS", "CAMS", "AFFLE", "ITC", "WIPRO", "LT", "AXISBANK", "KOTAKBANK"]
+  },
+  "NEWS_SOURCES": ["bbc-news", "reuters", "the-times-of-india"]
 }
-
-# =============== STOCK CATEGORIES ===============
-LARGE_CAPS = ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY"]
-MID_CAPS = ["BAJFINANCE", "MARUTI", "SHREECEM", "DMART", "PIDILITIND"]
-SMALL_CAPS = ["NYKAA", "POLYCAB", "METROPOLIS", "CAMS", "AFFLE"]
-
-# =============== TECHNICAL INDICATORS ===============
-RSI_PERIOD = 14
-EMA_50_PERIOD = 50
-EMA_200_PERIOD = 200
-VOLATILITY_WINDOW = 20
-
-# =============== ASI THRESHOLDS ===============
-ASI_STRONG_BUY = 75
-ASI_BUY_HOLD = 55
-ASI_WAIT = 35
-
-print("✅ Configuration loaded successfully")
