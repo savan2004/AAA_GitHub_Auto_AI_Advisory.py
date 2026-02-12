@@ -15,4 +15,5 @@
     "all_stocks": ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BAJFINANCE", "MARUTI", "SHREECEM", "DMART", "PIDILITIND", "NYKAA", "POLYCAB", "METROPOLIS", "CAMS", "AFFLE", "ITC", "WIPRO", "LT", "AXISBANK", "KOTAKBANK"]
   },
   "NEWS_SOURCES": ["bbc-news", "reuters", "the-times-of-india"]
-}
+  }
+  
