@@ -1,215 +1,264 @@
 import os
-import re
 import json
-import time
 import threading
+import time
+import re
+import requests
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from zoneinfo import ZoneInfo
 
 import telebot
 from telebot import types
 import yfinance as yf
 import pandas as pd
-from dotenv import load_dotenv
+import openai
 
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
+# Load config from JSON
+with open('config.json', 'r') as f:
+    config = json.load(f)
 
-load_dotenv()
-
-# =============== CONFIG ===============
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
-PORT = int(os.getenv("PORT", "10000"))
+TOKEN = config.get('TELEGRAM_TOKEN')
+OPENAI_API_KEY = config.get('OPENAI_API_KEY')
+STOCK_LISTS = config.get('STOCK_LISTS', {})
+NEWS_SOURCES = config.get('NEWS_SOURCES', [])
 
 if not TOKEN:
-    raise RuntimeError("❌ TELEGRAM_TOKEN missing in .env")
+    raise RuntimeError("TELEGRAM_TOKEN not set in config.json")
 
 bot = telebot.TeleBot(TOKEN)
-client = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 
-print("✅ Bot initialized")
+AI_ENABLED = False
+client = None
+try:
+    if OPENAI_API_KEY:
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        AI_ENABLED = True
+        print("✅ OpenAI OK")
+except Exception as e:
+    print(f"⚠️ OpenAI: {e}")
 
-# =============== TECH FUNCTIONS ===============
-
-def calc_rsi(series, period=14):
-    """Calculate RSI"""
+def calculate_rsi(series, period=14):
     if len(series) < period + 1:
         return 50.0
-    try:
-        delta = series.diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-        rs = avg_gain / (avg_loss.replace(0, 1e-9))
-        return float(100 - (100 / (1 + rs)).iloc[-1])
-    except:
-        return 50.0
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+    rs = avg_gain / (avg_loss.replace(0, 1e-9))
+    return float(100 - (100 / (1 + rs)).iloc[-1])
 
-def calc_ema(series, period):
-    """Calculate EMA"""
-    try:
-        return float(series.ewm(span=period).mean().iloc[-1])
-    except:
-        return float(series.iloc[-1])
-
-def calc_ma(series, period):
-    """Calculate Simple MA"""
-    try:
-        return float(series.rolling(period).mean().iloc[-1])
-    except:
-        return float(series.iloc[-1])
-
-def calc_pivots(h, l, c):
-    """Calculate Pivot Points"""
-    pp = (h + l + c) / 3
-    return pp, (2*pp)-l, (2*pp)-h, pp+(h-l), pp-(h-l), h+2*(pp-l), l-2*(h-pp)
+def calculate_pivots(high, low, close):
+    pp = (high + low + close) / 3
+    r1 = (2 * pp) - low
+    s1 = (2 * pp) - high
+    r2 = pp + (high - low)
+    s2 = pp - (high - low)
+    r3 = high + 2 * (pp - low)
+    s3 = low - 2 * (high - pp)
+    return pp, r1, s1, r2, s2, r3, s3
 
 def calc_vol(df):
-    """Calculate Volatility"""
     if len(df) < 20:
-        return 0.0
+        return None
     try:
-        return float(df["Close"].pct_change().rolling(20).std().iloc[-1] * 100)
+        return float(df['Close'].pct_change().rolling(20).std().iloc[-1] * 100)
     except:
-        return 0.0
+        return None
 
-def calc_asi(ltp, ema50, ema200, rsi, pe, roe, upside, vol=None):
-    """Calculate ASI Score (0-100)"""
+def compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, upside_pct, volatility=None):
     score = 0
-    
-    # TREND (0-30)
-    if ltp > ema200:
+    if ltp > ema_200:
         score += 30
-    elif ltp > ema50:
+    elif ltp > ema_50:
         score += 15
-    
-    # MOMENTUM (0-20)
     if 45 <= rsi <= 60:
         score += 20
-    elif (40 <= rsi < 45) or (60 < rsi <= 70):
+    elif 40 <= rsi < 45 or 60 < rsi <= 70:
         score += 10
     elif rsi > 70:
         score += 5
-    
-    # VALUATION (0-10)
     if pe and pe > 0:
         if pe < 15:
             score += 10
         elif 15 <= pe <= 25:
             score += 5
-    
-    # QUALITY (0-10)
     if roe and roe > 0:
         if roe >= 18:
             score += 10
         elif 12 <= roe < 18:
             score += 5
-    
-    # RISK-REWARD (0-10)
-    if upside >= 10:
+    if upside_pct >= 10:
         score += 10
-    elif 5 <= upside < 10:
+    elif 5 <= upside_pct < 10:
         score += 5
-    elif 2 <= upside < 5:
+    elif 2 <= upside_pct < 5:
         score += 2
-    
-    # VOLATILITY (±5)
-    if vol is not None:
-        if vol > 5:
+    if volatility:
+        if volatility > 5:
             score -= 5
-        elif vol > 3.5:
+        elif volatility > 3.5:
             score -= 2
-        elif vol < 1:
+        elif volatility < 1:
             score -= 3
-    
     return max(0, min(score, 100))
 
-def get_verdict(asi):
-    """Get verdict from ASI score"""
-    if asi >= 75:
-        return "📈 STRONG BUY"
-    elif asi >= 55:
-        return "✅ BUY/HOLD"
-    elif asi >= 35:
-        return "⏸️ WAIT"
-    else:
-        return "🔻 AVOID"
-
-def get_trend_signal(ltp, ema50, ema200, ma20, close_series):
-    """Get trend signal (Daily/Weekly/Monthly)"""
-    # Check if price above EMAs = bullish
-    if ltp > ema200 and ltp > ema50 and ltp > ma20:
-        return "🔵 DAILY BULLISH | Weekly BULLISH"
-    elif ltp > ema200 and ltp > ema50:
-        return "🟣 DAILY BULLISH | Weekly NEUTRAL"
-    elif ltp > ema50:
-        return "🟡 DAILY NEUTRAL | Weekly BEARISH"
-    else:
-        return "🔴 DAILY BEARISH | Weekly BEARISH"
-
-def get_upside_type(upside):
-    """Classify upside by timeframe"""
-    if upside >= 15:
-        return f"{upside}% (Long-term Swing 1-3 Months)"
-    elif upside >= 10:
-        return f"{upside}% (Medium-term Swing 2-4 Weeks)"
-    elif upside >= 5:
-        return f"{upside}% (Short-term 1-2 Weeks)"
-    else:
-        return f"{upside}% (Intraday/Very Short-term)"
-
-def get_ai_comment(asi, rsi, upside, pe, roe):
-    """Generate AI comment (2-3 lines)"""
+def get_nifty_option_trade(budget, spot):
     try:
-        if client and OPENAI_KEY:
-            prompt = f"Stock: ASI {asi}, RSI {rsi:.1f}, Upside {upside}%, PE {pe:.1f}, ROE {roe:.1f}%. Give 2 short trading tips."
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=80
+        if AI_ENABLED and client:
+            prompt = (
+                f"Nifty Options Research Desk.\n"
+                f"Spot: {spot}, Budget: ₹{budget}.\n"
+                f"Suggest CE/PE strike, lot size, risk-reward, delta, theta, and strategy.\n"
+                f"Output: JSON {{'strike': int, 'type': 'CE'/'PE', 'lots': int, 'entry': float, 'stoploss': float, 'target': float, 'delta': float, 'theta': float, 'strategy': str}}"
             )
-            return resp.choices[0].message.content.strip()
-    except:
-        pass
-    
-    # Fallback comments
-    if asi >= 75:
-        return "Strong uptrend with good momentum. Entry point at support zones. Target R2/R3."
-    elif asi >= 55:
-        return "Neutral to bullish setup. Wait for confirmation at MA20. Use 5% SL."
-    elif asi >= 35:
-        return "Mixed signals. Better opportunities elsewhere. Monitor for reversal."
-    else:
-        return "Downtrend intact. Avoid until trend reversal. Wait for ASI > 50."
-
-def find_symbol(query):
-    """Find NSE symbol from query"""
-    try:
-        if client and OPENAI_KEY:
-            prompt = f"User: '{query}'. Return ONLY NSE symbol UPPERCASE (like RELIANCE, TCS)."
-            resp = client.chat.completions.create(
+            response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2
             )
-            raw = resp.choices[0].message.content.strip().upper()
-            return re.sub(r"\\.NS|[^A-Z]", "", raw)
-    except:
-        pass
-    return query.upper().replace(" ", "")
+            result = json.loads(response.choices[0].message.content.strip())
+            strike = result['strike']
+            opt_type = result['type']
+            lots = result['lots']
+            entry = result['entry']
+            sl = result['stoploss']
+            tgt = result['target']
+            delta = result['delta']
+            theta = result['theta']
+            strategy = result['strategy']
+            risk_reward = round((tgt - entry) / (entry - sl), 2) if entry > sl else 0
+            return (
+                f"🎯 **NIFTY OPTION TRADE**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📅 {datetime.now().strftime('%d-%b-%Y')}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🏷 **{opt_type} {strike}**\n"
+                f"💰 **Entry:** ₹{entry:.2f} | **SL:** ₹{sl:.2f} | **Target:** ₹{tgt:.2f}\n"
+                f"📦 **Lots:** {lots} | **Risk:** ₹{(entry - sl) * lots * 50:.0f}\n"
+                f"📊 **Greeks:** Delta: {delta:.2f} | Theta: {theta:.2f}\n"
+                f"🎯 **Risk-Reward:** {risk_reward}:1\n"
+                f"🧠 **Strategy:** {strategy}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"_AIAUTO ADVISORY_"
+            )
+    except Exception as e:
+        print(f"AI trade error: {repr(e)}")
 
-def get_stock_report(sym):
-    """Generate enhanced stock analysis report"""
+    # Fallback
+    hist = yf.Ticker("^NSEI").history(period="5d")
+    if hist.empty:
+        return "⚠️ Unable to fetch Nifty data."
+    
+    atm_strike = round(spot / 50) * 50
+    lots = max(1, int(budget / (spot * 50 * 0.1)))
+    entry = spot * 0.02
+    sl = entry * 0.5
+    tgt = entry * 2
+    delta = 0.5
+    theta = -0.02
+    risk_reward = 2.0
+    strategy = "ATM Call for bullish bias"
+    return (
+        f"🎯 **NIFTY OPTION TRADE (Fallback)**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏷 **CE {atm_strike}**\n"
+        f"💰 **Entry:** ₹{entry:.2f} | **SL:** ₹{sl:.2f} | **Target:** ₹{tgt:.2f}\n"
+        f"📦 **Lots:** {lots}\n"
+        f"📊 **Greeks:** Delta: {delta:.2f} | Theta: {theta:.2f}\n"
+        f"🎯 **Risk-Reward:** {risk_reward}:1\n"
+        f"🧠 **Strategy:** {strategy}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"_AIAUTO ADVISORY_"
+    )
+
+def scan_category(stocks):
+    report = ""
+    for sym in stocks:
+        try:
+            tsym = f"{sym}.NS"
+            stock = yf.Ticker(tsym)
+            df = stock.history(period="1y")
+            if df.empty:
+                continue
+            close = df['Close']
+            ltp = float(close.iloc[-1])
+            pc = float(close.iloc[-2])
+            hp = float(df['High'].iloc[-2])
+            lp = float(df['Low'].iloc[-2])
+            info = stock.info
+            pe = float(info.get('trailingPE', 0) or 0)
+            roe = float((info.get('returnOnEquity', 0) or 0) * 100)
+            rsi = calculate_rsi(close)
+            ema_50 = close.ewm(span=50).mean().iloc[-1]
+            ema_200 = close.ewm(span=200).mean().iloc[-1]
+            vol = calc_vol(df)
+            pp, r1, s1, r2, s2, r3, s3 = calculate_pivots(hp, lp, pc)
+            up = round(((r2 - ltp) / ltp) * 100, 2)
+            asi = compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, up, vol)
+            if asi >= 75:
+                report += f"• {sym}: ASI {asi}/100\n"
+        except:
+            continue
+    return report
+
+def get_market_scan():
+    large_caps = STOCK_LISTS.get('large_caps', [])
+    mid_caps = STOCK_LISTS.get('mid_caps', [])
+    small_caps = STOCK_LISTS.get('small_caps', [])
+    
+    lc = scan_category(large_caps)
+    mc = scan_category(mid_caps)
+    sc = scan_category(small_caps)
+    
+    if not lc and not mc and not sc:
+        return "⚠️ **Market Condition:** Current market is choppy. No stocks qualifying for >75% ASI Score. Wait for rally."
+    
+    total_large = len(large_caps)
+    total_mid = len(mid_caps)
+    total_small = len(small_caps)
+    signals_large = len(lc.split('\n')) - 1 if lc else 0
+    signals_mid = len(mc.split('\n')) - 1 if mc else 0
+    signals_small = len(sc.split('\n')) - 1 if sc else 0
+    total_signals = signals_large + signals_mid + signals_small
+    
+    ai_summary = "N/A"
+    if AI_ENABLED and client:
+        try:
+            prompt = f"Summarize NSE market scan: {total_signals} strong signals across {total_large + total_mid + total_small} stocks. Focus on large caps."
+            response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.2)
+            ai_summary = response.choices[0].message.content.strip()
+        except:
+            ai_summary = "AI summary unavailable."
+    
+    final_report = (
+        f"🚀 **SK AUTO AI MARKET SCAN**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 **OVERVIEW**\n"
+        f"• Total Stocks Scanned: {total_large + total_mid + total_small}\n"
+        f"• Strong Signals (ASI >75): {total_signals}\n"
+        f"• Large Cap Signals: {signals_large}/{total_large}\n"
+        f"• Mid Cap Signals: {signals_mid}/{total_mid}\n"
+        f"• Small Cap Signals: {signals_small}/{total_small}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"\n🏢 **LARGE CAP (60% Allocation)**\n"
+        f"{lc or ' No strong signals.\n'}"
+        f"\n🏭 **MID CAP (30% Allocation)**\n"
+        f"{mc or ' No strong signals.\n'}"
+        f"\n🏪 **SMALL CAP (10% Allocation)**\n"
+        f"{sc or ' No strong signals.\n'}"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 **AI SUMMARY**\n"
+        f"{ai_summary}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🧠 **Strategy:** High conviction picks based on Trend, Momentum, and Fundamentals.\n"
+        f"_AIAUTO ADVISORY Selection Engine_"
+    )
+    return final_report
+
+def get_sk_auto_report(symbol):
     try:
-        sym = sym.upper().strip()
+        sym = symbol.upper().strip()
         
-        # Handle indices
         if sym in ["NIFTY", "NIFTY50"]:
             tsym = "^NSEI"
         elif sym == "BANKNIFTY":
@@ -217,7 +266,6 @@ def get_stock_report(sym):
         else:
             tsym = f"{sym}.NS"
         
-        # Fetch data
         stock = yf.Ticker(tsym)
         df = stock.history(period="1y")
         info = stock.info
@@ -225,94 +273,82 @@ def get_stock_report(sym):
         if df.empty:
             return f"❌ Symbol {sym} not found"
         
-        # Extract values
-        close = df["Close"]
+        close = df['Close']
         ltp = float(close.iloc[-1])
         pc = float(close.iloc[-2])
-        hp = float(df["High"].iloc[-2])
-        lp = float(df["Low"].iloc[-2])
+        hp = float(df['High'].iloc[-2])
+        lp = float(df['Low'].iloc[-2])
         
-        # 52 Week High/Low
-        week52_high = float(df["High"].tail(252).max())
-        week52_low = float(df["Low"].tail(252).min())
+        cname = info.get('longName', sym)
+        sector = info.get('sector', 'N/A')
+        mcap = float(info.get('marketCap', 0) or 0)
+        pe = float(info.get('trailingPE', 0) or 0)
+        pb = float(info.get('priceToBook', 0) or 0)
+        roe = float((info.get('returnOnEquity', 0) or 0) * 100)
+        dividend_yield = float(info.get('dividendYield', 0) or 0) * 100
+        beta = float(info.get('beta', 0) or 0)
+        week_high = float(info.get('fiftyTwoWeekHigh', 0) or 0)
+        week_low = float(info.get('fiftyTwoWeekLow', 0) or 0)
+        recommendation = info.get('recommendationKey', 'N/A')
         
-        cname = info.get("longName", sym)
-        about = info.get("longBusinessSummary", "N/A")[:120]  # First 120 chars
-        sector = info.get("sector", "N/A")
-        industry = info.get("industry", "N/A")
-        mcap = float(info.get("marketCap", 0) or 0)
-        pe = float(info.get("trailingPE", 0) or 0)
-        pb = float(info.get("priceToBook", 0) or 0)
-        roe = float((info.get("returnOnEquity", 0) or 0) * 100)
-        
-        # Calculate technicals
-        rsi = calc_rsi(close)
-        ema50 = calc_ema(close, 50)
-        ema200 = calc_ema(close, 200)
-        ma20 = calc_ma(close, 20)
-        ma50 = calc_ma(close, 50)
-        ma200 = calc_ma(close, 200)
+        rsi = calculate_rsi(close)
+        ema_50 = close.ewm(span=50).mean().iloc[-1]
+        ema_200 = close.ewm(span=200).mean().iloc[-1]
         vol = calc_vol(df)
         
-        # Pivot points
-        pp, r1, s1, r2, s2, r3, s3 = calc_pivots(hp, lp, pc)
-        upside = round(((r2 - ltp) / ltp) * 100, 2)
+        macd_line = close.ewm(span=12).mean() - close.ewm(span=26).mean()
+        macd_signal = macd_line.ewm(span=9).mean()
+        macd = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
+        bb_upper = close.rolling(20).mean() + (close.rolling(20).std() * 2)
+        bb_lower = close.rolling(20).mean() - (close.rolling(20).std() * 2)
+        bb_upper_val = float(bb_upper.iloc[-1])
+        bb_lower_val = float(bb_lower.iloc[-1])
         
-        # ASI Score
-        asi = calc_asi(ltp, ema50, ema200, rsi, pe, roe, upside, vol)
-        verd = get_verdict(asi)
+        pp, r1, s1, r2, s2, r3, s3 = calculate_pivots(hp, lp, pc)
+        upside_pct = round(((r2 - ltp) / ltp) * 100, 2)
+        
+        one_year_return = round(((ltp / close.iloc[0] - 1) * 100), 2) if len(close) > 0 else 0
+        
+        asi = compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, upside_pct, vol)
         conf = "High" if asi >= 75 else "Moderate" if asi >= 55 else "Low"
-        trend_signal = get_trend_signal(ltp, ema50, ema200, ma20, close)
-        upside_type = get_upside_type(upside)
-        ai_comment = get_ai_comment(asi, rsi, upside, pe, roe)
         
-        # IST Timestamp
-        ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M IST")
+        if asi >= 75:
+            verd = "📈 STRONG BUY"
+        elif asi >= 55:
+            verd = "✅ BUY/HOLD"
+        elif asi >= 35:
+            verd = "⏸️ WAIT"
+        else:
+            verd = "🔻 AVOID"
+        
+        pos_points = "• Strong Market Position\n• Good Cash Flow\n• Reasonable Liquidity"
+        
+        ai_insight = "N/A"
+        if AI_ENABLED and client:
+            try:
+                prompt = f"Provide a brief 2-sentence outlook for {sym} based on current fundamentals and technicals."
+                response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.2)
+                ai_insight = response.choices[0].message.content.strip()
+            except:
+                ai_insight = "AI insight unavailable."
         
         return (
             f"🚀 **SK AUTO AI ADVISORY**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 {ist}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 {datetime.now().strftime('%d-%b-%Y %H:%M')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🏷 **{sym}** | {cname}\n"
-            f"💼 **About:** {about}...\n"
             f"🏛 **ASI:** {asi}/100 ({conf})\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 **LTP:** ₹{ltp:.2f} | 📊 **RSI:** {rsi:.2f}\n"
-            f"📈 **TREND SIGNAL:** {trend_signal}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 **TREND:** {'BULLISH' if ltp > ema_200 else 'BEARISH'}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **VERDICT:** {verd}\n"
-            f"🚀 **UPSIDE:** {upside_type} (Target: ₹{r2:.2f})\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🚀 **UPSIDE:** {upside_pct}% (₹{r2:.2f})\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📦 **FUNDAMENTALS**\n"
-            f"• Sector: {sector} | Industry: {industry}\n"
-            f"• Market Cap: {round(mcap/1e7, 1)}Cr\n"
-            f"• PE: {round(pe, 2)}x | PB: {round(pb, 2)}x | ROE: {round(roe, 1)}%\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 **52 WEEK RANGE**\n"
-            f"• High: ₹{week52_high:.2f} | Low: ₹{week52_low:.2f}\n"
-            f"• Current: {round(((ltp - week52_low)/(week52_high - week52_low))*100, 1)}% of range\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🏗 **MOVING AVERAGES**\n"
-            f"• MA20: ₹{ma20:.2f} | MA50: ₹{ma50:.2f} | MA200: ₹{ma200:.2f}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **TECHNICAL ZONES**\n"
-            f"• R3: ₹{r3:.2f} | R2: ₹{r2:.2f} | R1: ₹{r1:.2f}\n"
-            f"• PP: ₹{pp:.2f} | S1: ₹{s1:.2f} | S2: ₹{s2:.2f}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 **VOLATILITY:** {vol:.2f}%\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🤖 **AI INSIGHTS:**\n"
-            f"💡 {ai_comment}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"_AIAUTO ADVISORY_"
-        )
-    except Exception as e:
-        return f"⚠️ Error: {str(e)}"
-
-def scan_stocks(stocks_list):
-    """Scan stocks for ASI > 75"""
-    report = ""
-    for sym in stocks_list:
-        try:
-            stock = y
+            f"• Cap: {round(mcap/1e7,1)}Cr | Sector: {sector}\n"
+            f"• PE: {round(pe,2)}x | PB: {round(pb,2)}x | ROE: {round(roe,1)}%\n"
+            f"• Dividend Yield: {round(dividend_yield,2)}% | Beta: {round(beta,2)}\n"
+            f"• 52W High: ₹{week_high:.2f} | 52W Low: ₹{week_low:.2f}\n"
+            f"• Analyst Rec:
