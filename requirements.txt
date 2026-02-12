@@ -1,5 +1,7 @@
-pyTelegramBotAPI
-yfinance
-pandas
-openai>=1.6.0
-requests
+pyTelegramBotAPI==4.17.0
+yfinance==0.2.40
+pandas==2.2.2
+openai==1.40.0
+requests==2.32.3
+python-dotenv==1.0.0
+
