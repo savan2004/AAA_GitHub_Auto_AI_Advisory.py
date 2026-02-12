@@ -1,4 +1,6 @@
 pyTelegramBotAPI
+openai
+google-generativeai
 yfinance
-google-genai
+pandas
 python-dotenv
