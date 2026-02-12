@@ -360,4 +360,9 @@ def get_sk_auto_report(symbol):
         ema_200 = close.ewm(span=200).mean().iloc[-1]
         vol = calc_vol(df)
         
-        macd_line = close.ewm(span=12).mean() - close.ewm
+        macd_line = close.ewm(span=12).mean() - close.ewm(span=26).mean()
+        macd_signal = macd_line.ewm(span=9).mean()
+        macd = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
+        bb_upper = close.rolling(20).mean() + (close.rolling(20).std() * 2)
+        bb_lower = close.rolling(20).mean() - (close.rolling(20).std() * 2)
+       
