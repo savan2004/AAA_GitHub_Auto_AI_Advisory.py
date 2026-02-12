@@ -1,6 +1,0 @@
-pyTelegramBotAPI
-openai
-google-generativeai
-yfinance
-pandas
-python-dotenv
