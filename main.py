@@ -365,4 +365,4 @@ def get_sk_auto_report(symbol):
         macd = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
         bb_upper = close.rolling(20).mean() + (close.rolling(20).std() * 2)
         bb_lower = close.rolling(20).mean() - (close.rolling(20).std() * 2)
-       
+        bb_upper_val = float(bb
