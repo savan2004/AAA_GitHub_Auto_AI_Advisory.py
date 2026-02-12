@@ -1,319 +1,327 @@
-# AAA_GitHub_Auto_AI_Advisory.py
-# Enhanced by Blackbox AI for detailed outputs, OpenAI integration, and robustness.
-
 import os
+import threading
 import time
+import json
+import re
+from datetime import datetime
+
 import telebot
 from telebot import types
+import yfinance as yf
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from functools import lru_cache
-import logging
-import json
-import subprocess
-import sys
-from typing import Dict, List, Tuple, Optional
-import threading
-import traceback
-import sqlite3
-import re
-import requests  # For news fetching
-import matplotlib.pyplot as plt  # For optional chart rendering (text-based fallback)
+import requests
+import openai
 
-# Conditional imports
+# --- CONFIG ---
+
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN not set in environment.")
+
+bot = telebot.TeleBot(TOKEN)
+
+# --- OPENAI CLIENT ---
+
+AI_ENABLED = False
+client = None
 try:
-    import yfinance as yf
-except ImportError:
-    print("❌ yfinance not found. Install: pip install yfinance")
-    yf = None
+    if OPENAI_API_KEY:
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        AI_ENABLED = True
+        print("✅ OpenAI initialized.")
+except Exception as e:
+    print(f"⚠️ OpenAI error: {repr(e)}")
 
-try:
-    import git
-except ImportError:
-    print("❌ GitPython not found. Install: pip install GitPython")
-    git = None
+# --- TECHNICAL HELPERS ---
 
-try:
-    import openai
-except ImportError:
-    print("❌ openai not found. Install: pip install openai")
-    openai = None
 
-# Configuration
-class Config:
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_OPENAI_API_KEY")
-    GITHUB_REPO_PATH = os.getenv("GITHUB_REPO_PATH", "/path/to/your/repo")
-    GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
-    NEWS_API_KEY = os.getenv("NEWS_API_KEY", "YOUR_NEWS_API_KEY")  # For news (optional)
-    CACHE_DURATION = 300
-    MAX_RETRIES = 3
-    TIMEOUT = 30
+def calculate_rsi(series, period=14):
+    if len(series) < period + 1:
+        return 50.0
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    rs = avg_gain / (avg_loss.replace(0, 1e-9))
+    return float(100 - (100 / (1 + rs)).iloc[-1])
 
-# Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
-                    handlers=[logging.FileHandler('asi_bot.log'), logging.StreamHandler()])
-logger = logging.getLogger(__name__)
 
-# RAG System
-class RAGSystem:
-    def __init__(self, db_path='asi_rag.db'):
-        self.db_path = db_path
-        self.init_db()
-    
-    def init_db(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS historical_data (
-                id INTEGER PRIMARY KEY,
-                symbol TEXT,
-                date TEXT,
-                ltp REAL,
-                rsi REAL,
-                macd REAL,
-                trend TEXT,
-                news TEXT,
-                analysis TEXT
+def calculate_pivots(high, low, close):
+    pp = (high + low + close) / 3
+    r1 = (2 * pp) - low
+    s1 = (2 * pp) - high
+    r2 = pp + (high - low)
+    s2 = pp - (high - low)
+    r3 = high + 2 * (pp - low)
+    s3 = low - 2 * (high - pp)
+    return pp, r1, s1, r2, s2, r3, s3
+
+
+def calculate_volatility(df):
+    if len(df) < 20:
+        return None
+    try:
+        vol = float(df['Close'].pct_change().rolling(20).std().iloc[-1] * 100)
+        return vol
+    except Exception:
+        return None
+
+
+def compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, upside_pct, volatility=None):
+    """
+    ASI (Advanced Sovereign Intelligence) Score 0-100.
+    - Trend: 30 pts
+    - Momentum: 20 pts
+    - Valuation: 10 pts
+    - Quality: 10 pts
+    - Risk-Reward: 10 pts
+    - Volatility: ±5 pts
+    """
+    score = 0
+
+    # TREND (0-30)
+    if ltp > ema_200:
+        score += 30
+    elif ltp > ema_50:
+        score += 15
+
+    # MOMENTUM (0-20)
+    if 45 <= rsi <= 60:
+        score += 20
+    elif 40 <= rsi < 45 or 60 < rsi <= 70:
+        score += 10
+    elif rsi > 70:
+        score += 5
+
+    # VALUATION (0-10)
+    if pe and pe > 0:
+        if pe < 15:
+            score += 10
+        elif 15 <= pe <= 25:
+            score += 5
+
+    # QUALITY (0-10)
+    if roe and roe > 0:
+        if roe >= 18:
+            score += 10
+        elif 12 <= roe < 18:
+            score += 5
+
+    # RISK-REWARD (0-10)
+    if upside_pct >= 10:
+        score += 10
+    elif 5 <= upside_pct < 10:
+        score += 5
+    elif 2 <= upside_pct < 5:
+        score += 2
+
+    # VOLATILITY (±5)
+    if volatility is not None:
+        if volatility > 5:
+            score -= 5
+        elif volatility > 3.5:
+            score -= 2
+        elif volatility < 1:
+            score -= 3
+
+    return max(0, min(score, 100))
+
+
+STATIC_NOTES = {
+    "DLF": "Leading real-estate developer with cyclical earnings. Sensitive to rate cycles.",
+    "RELIANCE": "Diversified conglomerate (energy, retail, telecom). Proxy for India growth.",
+    "HDFCBANK": "Leading private bank with strong deposit franchise.",
+    "INFY": "Large IT services company. Exposed to global IT spend and USD-INR.",
+    "TCS": "India's largest IT firm. Dividend aristocrat with strong FCF.",
+    "BANKNIFTY": "12 large-cap banks. Highly liquid, correlated with RBI policy.",
+}
+
+
+# --- NIFTY OPTION TRADING ---
+
+
+def get_nifty_option_trade(budget, spot):
+    try:
+        # AI approach
+        if AI_ENABLED and client:
+            prompt = (
+                f"Nifty Options Research Desk.\n"
+                f"Spot: {spot:.2f} | Budget: ₹{budget} | Lot: 65\n"
+                f"Generate ONE conviction trade: RR 1:3 min, Strike = multiple of 50.\n"
+                f"Return ONLY JSON: {{'strike':int,'type':'CALL/PUT','expiry':'DD-MMM',"
+                f"'entry':float,'target':float,'sl':float,'lots':int,'bias':'bullish/bearish',"
+                f"'reason':'1-line reason'}}"
             )
-        ''')
-        conn.commit()
-        conn.close()
-    
-    def store_data(self, symbol: str, data: Dict):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO historical_data (symbol, date, ltp, rsi, macd, trend, news, analysis) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                       (symbol, datetime.now().strftime('%Y-%m-%d'), data.get('ltp'), data.get('rsi'), data.get('macd'), data.get('trend'), data.get('news'), data.get('analysis')))
-        conn.commit()
-        conn.close()
-    
-    def retrieve_context(self, symbol: str, limit=5) -> str:
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT date, ltp, rsi, macd, trend, news, analysis FROM historical_data WHERE symbol = ? ORDER BY date DESC LIMIT ?',
-                       (symbol, limit))
-        rows = cursor.fetchall()
-        conn.close()
-        context = f"Historical data for {symbol}:\n"
-        for row in rows:
-            context += f"Date: {row[0]}, LTP: {row[1]}, RSI: {row[2]}, MACD: {row[3]}, Trend: {row[4]}, News: {row[5]}, Analysis: {row[6]}\n"
-        return context
-
-# Yahoo Finance Manager
-class YahooFinanceManager:
-    def __init__(self):
-        self.available = yf is not None
-    
-    @lru_cache(maxsize=100)
-    def get_ltp(self, symbol: str) -> Optional[float]:
-        if not self.available: return None
-        try:
-            ticker = yf.Ticker(symbol + ".NS")
-            data = ticker.history(period="1d", interval="1m")
-            return data['Close'].iloc[-1] if not data.empty else None
-        except Exception as e:
-            logger.error(f"LTP Error for {symbol}: {e}")
-            return None
-    
-    def get_market_data(self, symbol: str) -> Dict:
-        if not self.available: return {}
-        try:
-            ticker = yf.Ticker(symbol + ".NS")
-            info = ticker.info
-            hist = ticker.history(period="1y")
-            rsi = self._calculate_rsi(hist['Close'])
-            macd = self._calculate_macd(hist['Close'])
-            return {
-                'ltp': hist['Close'].iloc[-1] if not hist.empty else None,
-                'rsi': rsi,
-                'macd': macd,
-                '52w_high': info.get('fiftyTwoWeekHigh'),
-                '52w_low': info.get('fiftyTwoWeekLow'),
-                'market_cap': info.get('marketCap'),
-                'pe_ratio': info.get('trailingPE'),
-                'roe': info.get('returnOnEquity'),
-                'sector': info.get('sector')
-            }
-        except Exception as e:
-            logger.error(f"Market Data Error for {symbol}: {e}")
-            return {}
-    
-    def _calculate_rsi(self, prices, period=14):
-        delta = prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs)).iloc[-1]
-    
-    def _calculate_macd(self, prices):
-        ema12 = prices.ewm(span=12).mean()
-        ema26 = prices.ewm(span=26).mean()
-        return (ema12 - ema26).iloc[-1]
-    
-    def get_option_chain(self, symbol: str, expiry: str) -> Optional[pd.DataFrame]:
-        if not self.available: return None
-        try:
-            ticker = yf.Ticker(symbol + ".NS")
-            options = ticker.option_chain(expiry)
-            return pd.DataFrame(options.calls.append(options.puts))
-        except Exception as e:
-            logger.error(f"Option Chain Error for {symbol}: {e}")
-            return None
-    
-    def fetch_news(self, symbol: str) -> List[str]:
-        try:
-            url = f"https://newsapi.org/v2/everything?q={symbol}&apiKey={Config.NEWS_API_KEY}&pageSize=3"
-            response = requests.get(url, timeout=Config.TIMEOUT)
-            articles = response.json().get('articles', [])
-            return [f"{a['title']}: {a['description']}" for a in articles[:3]]
-        except Exception as e:
-            logger.error(f"News Fetch Error: {e}")
-            return ["No recent news available."]
-
-# AI Engine with OpenAI
-class AIEngine:
-    def __init__(self, api_key: str, rag_system: RAGSystem):
-        if openai is None: raise ImportError("OpenAI not available")
-        openai.api_key = api_key
-        self.rag = rag_system
-    
-    def generate_research_report(self, symbol: str, price: float, market_data: Dict) -> str:
-        context = self.rag.retrieve_context(symbol)
-        news = YahooFinanceManager().fetch_news(symbol)
-        prompt = f"""
-        Generate a detailed professional trading advisory report for {symbol} at ₹{price}. Use context: {context}. News: {news}. Market Data: {json.dumps(market_data)}.
-        
-        Format exactly as:
-        🚀 **SK AUTO AI ADVISORY** 🚀
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        📅 **DATE:** {datetime.now().strftime('%d-%b-%Y')} | ⏰ **TIME:** {datetime.now().strftime('%H:%M')}(IST)
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        🏷 **SYMBOL:** {symbol}
-        🏛 **ASI RANK:** [0-100 score]
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        💰 **LTP:** ₹{price} | 📊 **RSI:** {market_data.get('rsi', 'N/A')} | 📈 **MACD:** {market_data.get('macd', 'N/A')}
-        📈 **TREND:** [BEARISH/BULLISH/NEUTRAL] | 52wk High: {market_data.get('52w_high', 'N/A')} | 52wk Low: {market_data.get('52w_low', 'N/A')}
-        
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        🎯 **VERDICT:** [HOLD/WAIT/BUY/SELL] (Time Frame: Short-term)
-        🚀 **Short term UPSIDE:** [5-20%] (3-6 Months)
-        **Long Term UPSIDE:** [20-100%] (1-3 Years)
-        
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        📦 **FUNDAMENTAL LEVELS**
-        - Market Cap: {market_data.get('market_cap', 'N/A')} Cr | Sector: {market_data.get('sector', 'N/A')}
-        - P/E Ratio: {market_data.get('pe_ratio', 'N/A')}x | ROE: {market_data.get('roe', 'N/A')}% | Best Value: [Estimate]
-        
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        🏗 **DEEP TECHNICAL LEVELS** (Enhanced)
-        SMA 20: [Calc] | SMA 50: [Calc] | SMA 200: [Calc]
-        Bollinger Upper: [Calc] | Lower: [Calc]
-        🔴 R3: [Calc] | R2: [Calc] | R1: [Calc] | 🟢 PP: [Calc] | S1: [Calc] | S2: [Calc] | S3: [Calc]
-        📊 **ASCII Chart:** [Simple text chart of price trend]
-        
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        🧠 **COMPANY INFORMATION**
-        ✅ **POSITIVE:** [List 3+]
-        ❌ **NEGATIVE:** [List 3+]
-        
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        📰 **LATEST NEWS:** {'; '.join(news)}
-        
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        📝 **CONCLUSION:** [Summary]
-        ⚠️ **RISK:** [Key risks]
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        _AI AUTO ADVISORY - Invest Wisely, Trade Smartly!_
-        """
-        try:
-            response = openai.ChatCompletion.create(model="gpt-4", messages=[{"role": "user", "content": prompt}], max_tokens=2000)
-            analysis = response['choices'][0]['message']['content']
-            self.rag.store_data(symbol, {**market_data, 'news': '; '.join(news), 'analysis': analysis[:500]})
-            return analysis
-        except Exception as e:
-            logger.error(f"AI Report Error: {e}")
-            return "⚠️ AI Report Unavailable"
-    
-    def quick_signal(self, symbol: str, price: float) -> str:
-        context = self.rag.retrieve_context(symbol)
-        prompt = f"Quick signal for {symbol} at ₹{price}. Context: {context}. Provide: Buy/Sell/Hold, key indicator, target, stop-loss, probability (0-100%)."
-        try:
-            response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}])
-            return response['choices'][0]['message']['content']
-        except Exception as e:
-            return "⚠️ Quick Signal Unavailable"
-    
-    def analyze_multibagger(self, fundamentals: Dict) -> Dict:
-        prompt = f"Analyze for multibagger potential: {json.dumps(fundamentals)}. Return JSON with keys: growth_score, health_score, position_score, risks, timeline, entry_price, target_price, stop_loss."
-        try:
-            response = openai.ChatCompletion.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
-            return json.loads(response['choices'][0]['message']['content'])
-        except Exception as e:
-            return {}
-
-# Dual AI Engine
-class DualAIEngine:
-    def __init__(self, rag_system: RAGSystem):
-        self.rag = rag_system
-        self.primary = AIEngine(Config.OPENAI_API_KEY, self.rag)
-        self.secondary = None  # Add secondary if needed
-        self.current_engine = "primary"
-    
-    def generate_research_report(self, symbol: str, price: float, market_data: Dict) -> str:
-        try:
-            return self.primary.generate_research_report(symbol, price, market_data)
-        except Exception as e:
-            return "⚠️ AI Unavailable"
-    
-    def quick_signal(self, symbol: str, price: float) -> str:
-        try:
-            return self.primary.quick_signal(symbol, price)
-        except Exception as e:
-            return "⚠️ AI Unavailable"
-    
-    def analyze_multibagger(self, fundamentals: Dict) -> Dict:
-        try:
-            return self.primary.analyze_multibagger(fundamentals)
-        except Exception as e:
-            return {}
-
-# Options Calculator (Completed)
-class OptionsCalculator:
-    @staticmethod
-    def calculate_payoff(strategy: str, spot: float, strikes: List[float], premiums: List[float]) -> Dict:
-        if not strikes or not premiums or len(strikes) != len(premiums):
-            return {'error': 'Invalid inputs'}
-        price_range = np.linspace(spot * 0.85, spot * 1.15, 100)
-        strategies = {
-            'bull_call_spread': OptionsCalculator._bull_call_spread,
-            'bear_put_spread': OptionsCalculator._bear_put_spread,
-            'iron_condor': OptionsCalculator._iron_condor,
-            'butterfly': OptionsCalculator._butterfly,
-            'straddle': OptionsCalculator._straddle,
-            'strangle': OptionsCalculator._strangle,
-            'call_ratio_spread': OptionsCalculator._call_ratio_spread,
-            'put_ratio_spread': OptionsCalculator._put_ratio_spread,
-            'jade_lizard': OptionsCalculator._jade_lizard,
-            'reverse_iron_condor': OptionsCalculator._reverse_iron_condor
-        }
-        if strategy in strategies:
             try:
-                return strategies[strategy](spot, strikes, premiums, price_range)
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.5,
+                    timeout=10,
+                )
+                content = response.choices[0].message.content
+                match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+                if match:
+                    data = json.loads(match.group())
+                    capital = round(data['entry'] * 65 * data['lots'])
+                    rr = round((data['target'] - data['entry']) / max(data['entry'] - data['sl'], 0.01), 2)
+
+                    return (
+                        "🚀 **NIFTY QUANT SIGNAL (AI)**\n"
+                        "━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 Spot: {spot:.2f}\n"
+                        f"🎯 **{data['strike']} {data['type']}** | {data['expiry']}\n"
+                        f"💰 Entry: ₹{data['entry']:.2f} | Target: ₹{data['target']:.2f}\n"
+                        f"🛑 SL: ₹{data['sl']:.2f}\n"
+                        f"📍 Lots: {data['lots']} | Capital: ₹{capital}\n"
+                        f"📊 RR: 1:{rr}\n"
+                        f"📈 Bias: {data['bias'].upper()}\n"
+                        f"💡 {data['reason']}\n"
+                        "━━━━━━━━━━━━━━━━━━━━"
+                    )
             except Exception as e:
-                return {'error': str(e)}
-        return {'error': 'Strategy not found'}
-    
-    @staticmethod
-    def _bull_call_spread(spot, strikes, premiums, price_range):
-        buy_strike, sell_strike = strikes[0], strikes[1]
-        buy_premium, sell_premium = premiums[0], premiums[1]
-        net_premium = buy_premium - sell_premium
-        payoffs = [max(price - buy_strike, 0) - buy_premium - (max(price - sell_strike, 0) - sell_premium) for price in price_range]
-        return {'payoffs': payoffs, 'price_range': price_range.tolist(), 'net_premium': net_premium, 'max_profit': sell_strike - buy_strike - net_premium, 'max_loss': net_premium}
-    
-    # Add similar methods for other strategies (e.g., _bear_put_spread, etc.) - abbreviated for brevity
-    @staticmethod
-    def _bear_put_spread(spot, strikes, premiums, price_range):
-        # Implement
+                print(f"AI trade error: {repr(e)}")
+
+        # FALLBACK
+        hist = yf.Ticker("^NSEI").history(period="5d")
+        if hist.empty:
+            return "⚠️ Unable to fetch Nifty data."
+
+        prev_close = float(hist['Close'].iloc[-2])
+        vol = float(hist['Close'].pct_change().rolling(5).std().iloc[-1] * 100)
+
+        strike = round(spot / 50) * 50
+        opt_type = "CALL" if spot > prev_close else "PUT"
+        premium = max(50, spot * 0.005 + vol * 4)
+        lots = max(1, int(budget / (premium * 65)))
+
+        return (
+            "⚠️ **MATH FALLBACK**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Spot: {spot:.2f}\n"
+            f"🎯 **{strike} {opt_type}**\n"
+            f"💰 Entry: ₹{premium:.2f} | Target: ₹{premium*1.3:.2f}\n"
+            f"📍 Lots: {lots}\n"
+            "━━━━━━━━━━━━━━━━━━━━"
+        )
+
+    except Exception as e:
+        return f"⚠️ Option Error: {str(e)}"
+
+
+# --- SMART PORTFOLIO ---
+
+
+def get_smart_portfolio():
+    try:
+        large_caps = ['RELIANCE', 'HDFCBANK', 'INFY', 'ICICIBANK', 'SBIN', 'BHARTIARTL', 'ITC', 'TCS', 'KOTAKBANK', 'LT']
+        mid_caps = ['PERSISTENT', 'MOTHERSON', 'MAXHEALTH', 'AUBANK', 'PEL', 'LATENTVIEW', 'TRENT', 'TATACONSUM', 'CHOLAHLDNG', 'M&MFIN']
+        small_caps = ['SUZLON', 'HEG', 'TANLA', 'BAJAJELEC', 'ORIENTELEC', 'SHARDACROP', 'JINDALSTEL', 'PRAJINDS', 'DCMSHRIRAM', 'IIFLSEC']
+
+        final_report = "💎 **SMART PORTFOLIO (ASI 75%+)**\n"
+        final_report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+        def scan_category(stocks):
+            selected = []
+            for sym in stocks:
+                try:
+                    df = yf.Ticker(f"{sym}.NS").history(period="200d")
+                    if df.empty or len(df) < 50:
+                        continue
+                    close = df['Close']
+                    ltp = float(close.iloc[-1])
+                    rsi = calculate_rsi(close)
+                    ema_50 = close.ewm(span=50).mean().iloc[-1]
+                    ema_200 = close.ewm(span=200).mean().iloc[-1]
+                    vol = calculate_volatility(df)
+
+                    high_prev = float(df['High'].iloc[-2])
+                    low_prev = float(df['Low'].iloc[-2])
+                    prev_close = float(close.iloc[-2])
+                    pp, r1, s1, r2, s2, r3, s3 = calculate_pivots(high_prev, low_prev, prev_close)
+                    upside = round(((r2 - ltp) / ltp) * 100, 2)
+
+                    score = compute_asi_score(ltp, ema_50, ema_200, rsi, 0, 0, upside, vol)
+
+                    if score >= 75:
+                        selected.append({"sym": sym, "score": score, "ltp": f"{ltp:.2f}"})
+                except Exception:
+                    continue
+
+            selected.sort(key=lambda x: x['score'], reverse=True)
+            return selected[:2]
+
+        lc = scan_category(large_caps)
+        mc = scan_category(mid_caps)
+        sc = scan_category(small_caps)
+
+        if not lc and not mc and not sc:
+            return "⚠️ **Market Condition:** Current market is choppy. No stocks qualifying for >75% ASI Score. Wait for rally."
+
+        final_report += "\n🏢 **LARGE CAP (60% Allocation)**\n"
+        if lc:
+            for i, stock in enumerate(lc, 1):
+                final_report += f"{i}. **{stock['sym']}** | LTP: ₹{stock['ltp']}\n   🏛 ASI Score: {stock['score']}/100\n"
+        else:
+            final_report += " No strong signals.\n"
+
+        final_report += "\n🏫 **MID CAP (35% Allocation)**\n"
+        if mc:
+            for i, stock in enumerate(mc, 1):
+                final_report += f"{i}. **{stock['sym']}** | LTP: ₹{stock['ltp']}\n   🏛 ASI Score: {stock['score']}/100\n"
+        else:
+            final_report += " No strong signals.\n"
+
+        final_report += "\n🚗 **SMALL CAP (15% Allocation)**\n"
+        if sc:
+            for i, stock in enumerate(sc, 1):
+                final_report += f"{i}. **{stock['sym']}** | LTP: ₹{stock['ltp']}\n   🏛 ASI Score: {stock['score']}/100\n"
+        else:
+            final_report += " No strong signals.\n"
+
+        final_report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        final_report += "🧠 **Strategy:** High conviction picks based on Trend, Momentum, and Fundamentals.\n"
+        final_report += "_AIAUTO ADVISORY Selection Engine_"
+
+        return final_report
+
+    except Exception as e:
+        return f"⚠️ Portfolio Error: {e}"
+
+
+# --- DETAILED REPORT ---
+
+
+def get_sk_auto_report(symbol):
+    try:
+        sym = symbol.upper().strip()
+
+        if sym in ["NIFTY", "NIFTY50"]:
+            ticker_sym = "^NSEI"
+        elif sym == "BANKNIFTY":
+            ticker_sym = "^NSEBANK"
+        elif sym == "SENSEX":
+            ticker_sym = "^BSESN"
+        else:
+            ticker_sym = f"{sym}.NS"
+
+        stock = yf.Ticker(ticker_sym)
+        df = stock.history(period="1y")
+        info = stock.info
+
+        if df.empty:
+            return f"❌ Symbol `{sym}` not found."
+
+        close = df['Close']
+        ltp = float(close.iloc[-1])
+        prev_close = float(close.iloc[-2])
+        high_prev = float(df['High'].iloc[-2])
+        low_prev = float(df['Low'].iloc[-2])
+
+        company_name = info.get('longName', sym)
+        sector = info.get('sector', 'N/A')
+        mcap = float(info.get('marketCap', 0) or 0)
+        pe = float(info.get('trailingPE', 0) or 0)
