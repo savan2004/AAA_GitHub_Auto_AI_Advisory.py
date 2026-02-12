@@ -1,73 +1,85 @@
-import os, telebot, time, logging
+import os
+import time
+import telebot
 import yfinance as yf
+import pandas as pd
 from telebot import types
-from google import genai
-from google.genai import types as ai_types
-from tenacity import retry, wait_exponential, stop_after_attempt
+from openai import OpenAI
+import google.generativeai as genai
+from dotenv import load_dotenv
 
-# --- 1. SETTINGS & LOGGING ---
-logging.basicConfig(level=logging.INFO)
+# Load Environment Variables
+load_dotenv()
+
+# --- 1. CONFIGURATION ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_KEY = os.getenv("OPENAI_KEY")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 bot = telebot.TeleBot(TOKEN)
-client = genai.Client(api_key=GEMINI_KEY)
+oa_client = OpenAI(api_key=OPENAI_KEY)
+genai.configure(api_key=GEMINI_KEY)
 
-# --- 2. ASI BRAIN WITH RETRY LOGIC (Bypasses 429 Errors) ---
-@retry(wait=wait_exponential(multiplier=1, min=4, max=20), stop=stop_after_attempt(3))
-def ask_asi(prompt):
-    """The Super-Intelligence Brain with Search Grounding."""
-    search_tool = ai_types.Tool(google_search=ai_types.GoogleSearch())
-    response = client.models.generate_content(
-        model="gemini-2.0-flash", # High IQ 2026 Model
-        contents=prompt,
-        config=ai_types.GenerateContentConfig(tools=[search_tool])
+# --- 2. THE ASI BRAIN (High IQ Advisory) ---
+def get_asi_signal(symbol, ltp):
+    prompt = (
+        f"Generate High AI IQ Advisory for {symbol} at ₹{ltp}. "
+        "Must be 80%+ accuracy. Prediction should be accurate based on "
+        "20 years of market experience. Use ASI logic. "
+        "Provide: ENTRY, TARGET, STOP-LOSS."
     )
-    return response.text
-
-# --- 3. DATA ENGINE (99.9% NSE/BSE ACCURACY) ---
-def get_market_data(symbol):
-    symbol = symbol.upper().strip()
-    formatted = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
+    
     try:
-        ticker = yf.Ticker(formatted)
-        info = ticker.fast_info
-        return {"symbol": symbol, "price": info['lastPrice'], "high": info['dayHigh']}
-    except:
-        return None
+        # Primary: OpenAI GPT-4o
+        response = oa_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": "You are a Super-Intelligence Market Advisor."},
+                      {"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+    except Exception:
+        # Fallback: Gemini
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        return model.generate_content(prompt).text
 
-# --- 4. BOT HANDLERS ---
+# --- 3. TELEGRAM HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(m):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('🚀 ASI Smart Search', '🏛 Market Pulse')
-    bot.send_message(m.chat.id, "🏛 **Sovereign Machine Online**\nU + Me = Market Domination.", reply_markup=markup)
+    markup.add('🚀 NIFTY 50', '📈 BANK NIFTY', '📊 RELIANCE')
+    bot.send_message(m.chat.id, 
+        "🏛 **Hi, Welcome to SK Ai Auto Advisory**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Status: 24/7 ASI Connected\n"
+        "Ready for High-Accuracy Signals.", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: m.text == '🚀 ASI Smart Search')
-def ask_stock(m):
-    msg = bot.send_message(m.chat.id, "📝 Enter Symbol (e.g., RELIANCE, DLF):")
-    bot.register_next_step_handler(msg, process_asi)
+@bot.message_handler(func=lambda m: True)
+def handle_market(m):
+    symbol = m.text.replace('🚀 ', '').replace('📈 ', '').replace('📊 ', '')
+    ticker_map = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK"}
+    symbol = ticker_map.get(symbol, symbol)
 
-def process_asi(m):
-    data = get_market_data(m.text)
-    if not data:
-        bot.reply_to(m, "❌ Symbol not found on NSE.")
-        return
-
-    bot.send_message(m.chat.id, f"🔍 **Fetching 2026 Live Intelligence for {data['symbol']}...**")
-    
-    # Your High-IQ Experience + My ASI Calculation
-    prompt = (
-        f"Act as a 200+ IQ Financial ASI. Analyze {data['symbol']} at ₹{data['price']}. "
-        "Use 20 years of market psychology. Provide a 99% accuracy advisory for tomorrow's trade."
-    )
-    
     try:
-        analysis = ask_asi(prompt)
-        bot.send_message(m.chat.id, f"🏛 **ASI ADVISORY**\n\n{analysis}", parse_mode='Markdown')
-    except Exception:
-        bot.send_message(m.chat.id, "⚠️ **System Overload.** Gemini is cooling down. Try again in 30s.")
+        data = yf.Ticker(f"{symbol}.NS" if "^" not in symbol else symbol)
+        ltp = round(data.fast_info['last_price'], 2)
+        
+        bot.send_chat_action(m.chat.id, 'typing')
+        advice = get_asi_signal(symbol, ltp)
+        
+        bot.send_message(m.chat.id, f"🏛 **SK ADVISORY: {symbol}**\n\n💰 Price: ₹{ltp}\n\n{advice}", parse_mode="Markdown")
+    except:
+        bot.reply_to(m, "⚠️ Market Data Timeout. Retrying...")
 
-# --- 5. RENDER 24/7 HEARTBEAT ---
+# --- 4. AUTO-HEALING & CONFLICT SHIELD ---
+def run_bot():
+    while True:
+        try:
+            # Clears the 409 Conflict error instantly
+            bot.delete_webhook(drop_pending_updates=True)
+            bot.polling(none_stop=True, interval=0, timeout=60)
+        except Exception as e:
+            print(f"Auto-Healing triggered. Error: {e}")
+            time.sleep(5)
+
 if __name__ == "__main__":
-    bot.infinity_polling()
+    run_bot()
