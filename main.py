@@ -68,7 +68,7 @@ def fetch_stock_data(symbol):
 
 # --- Bot Command Handlers ---
 
-@bot.message_handler(commands=['start'])def welcome(message):
+
     help_text = (
         "🚀 *AI Stock Analysis Bot*\n\n"
         "🔍 /search `SYMBOL` - Full Report\n"
