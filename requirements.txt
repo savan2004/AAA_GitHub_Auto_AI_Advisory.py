@@ -2,7 +2,8 @@ pyTelegramBotAPI
 yfinance
 pandas
 requests
-flask
-pytz
-tabulate
-groq
+google-genai
+nsepython
+pyotp
+SmartApi-python
+python-dotenv
