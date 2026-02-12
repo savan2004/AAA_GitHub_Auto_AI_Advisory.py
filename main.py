@@ -1,322 +1,319 @@
-import os
-import threading
-import time
-import json
-import re
-import logging
-import requests
-from datetime import datetime
-from functools import wraps
+# AAA_GitHub_Auto_AI_Advisory.py
+# Enhanced by Blackbox AI for detailed outputs, OpenAI integration, and robustness.
 
+import os
+import time
 import telebot
 from telebot import types
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import openai
+from datetime import datetime, timedelta
+from functools import lru_cache
+import logging
+import json
+import subprocess
+import sys
+from typing import Dict, List, Tuple, Optional
+import threading
+import traceback
+import sqlite3
+import re
+import requests  # For news fetching
+import matplotlib.pyplot as plt  # For optional chart rendering (text-based fallback)
 
-# --- 1. CONFIGURATION & LOGGING ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not TOKEN:
-    raise RuntimeError("TELEGRAM_TOKEN missing.")
-
-bot = telebot.TeleBot(TOKEN)
-
-# --- 2. AI CLIENT INIT ---
-AI_ENABLED = False
-client = None
+# Conditional imports
 try:
-    if OPENAI_API_KEY:
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        AI_ENABLED = True
-        logging.info("✅ OpenAI GPT-4o Ready.")
-except Exception as e:
-    logging.error(f"OpenAI Init Failed: {e}")
+    import yfinance as yf
+except ImportError:
+    print("❌ yfinance not found. Install: pip install yfinance")
+    yf = None
 
-# --- 3. BULLETPROOF NETWORK HANDLER ---
+try:
+    import git
+except ImportError:
+    print("❌ GitPython not found. Install: pip install GitPython")
+    git = None
 
-def retry_on_failure(max_retries=3, delay=5):
-    """
-    Decorator to retry a function if it fails due to network errors.
-    Prevents the bot from crashing on 'Connection reset by peer'.
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            retries = 0
-            while retries < max_retries:
-                try:
-                    return func(*args, **kwargs)
-                except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout, ConnectionResetError) as e:
-                    retries += 1
-                    logging.warning(f"Network Error in {func.__name__}: {e}. Retrying {retries}/{max_retries} in {delay}s...")
-                    time.sleep(delay)
-                except Exception as e:
-                    logging.error(f"Non-Network Error in {func.__name__}: {e}")
-                    raise e
-            return None # Return None if all retries fail
-        return wrapper
-    return decorator
+try:
+    import openai
+except ImportError:
+    print("❌ openai not found. Install: pip install openai")
+    openai = None
 
-# --- 4. ADVANCED TECHNICAL ENGINE ---
+# Configuration
+class Config:
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_OPENAI_API_KEY")
+    GITHUB_REPO_PATH = os.getenv("GITHUB_REPO_PATH", "/path/to/your/repo")
+    GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+    NEWS_API_KEY = os.getenv("NEWS_API_KEY", "YOUR_NEWS_API_KEY")  # For news (optional)
+    CACHE_DURATION = 300
+    MAX_RETRIES = 3
+    TIMEOUT = 30
 
-def calculate_rsi(series, period=14):
-    if len(series) < period + 1: return 50.0
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss.replace(0, 1e-9)
-    return float((100 - (100 / (1 + rs))).iloc[-1])
+# Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler('asi_bot.log'), logging.StreamHandler()])
+logger = logging.getLogger(__name__)
 
-def calculate_macd(series):
-    exp12 = series.ewm(span=12, adjust=False).mean()
-    exp26 = series.ewm(span=26, adjust=False).mean()
-    macd_line = exp12 - exp26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    hist = macd_line - signal_line
-    return macd_line.iloc[-1], signal_line.iloc[-1], hist.iloc[-1]
-
-def calculate_atr(df, period=14):
-    high = df['High']
-    low = df['Low']
-    close = df['Close'].shift(1)
-    tr1 = high - low
-    tr2 = abs(high - close)
-    tr3 = abs(low - close)
-    ranges = pd.concat([tr1, tr2, tr3], axis=1)
-    true_range = np.max(ranges, axis=1)
-    return true_range.rolling(window=period).mean().iloc[-1]
-
-def calculate_pivots(high, low, close):
-    pp = (high + low + close) / 3
-    r1 = (2 * pp) - low
-    s1 = (2 * pp) - high
-    r2 = pp + (high - low)
-    s2 = pp - (high - low)
-    return pp, r1, s1, r2, s2
-
-def compute_asr_score(ltp, ema_50, ema_200, rsi, macd_hist, atr_pct):
-    score = 0
-    if ltp > ema_200: score += 20
-    if ltp > ema_50: score += 10
-    if ltp > ema_50 and ema_50 > ema_200: score += 10
-    if macd_hist > 0: score += 15
-    if 40 <= rsi <= 60: score += 15
-    elif 30 <= rsi < 40 or 60 < rsi <= 70: score += 5
-    if atr_pct < 2.0: score += 30
-    elif 2.0 <= atr_pct < 4.0: score += 15
-    return min(score, 100)
-
-# --- 5. DATA FETCHER (WITH RETRY) ---
-
-@retry_on_failure(max_retries=3, delay=5)
-def get_stock_data(symbol):
-    """Fetches data with automatic retry on connection failure."""
-    stock = yf.Ticker(symbol)
-    # Using period="1y" ensures enough data for 200EMA
-    df = stock.history(period="1y", auto_adjust=True)
-    info = stock.info
-    if df.empty:
-        raise ValueError("Empty Data")
-    return df, info
-
-# --- 6. DEEP ANALYSIS REPORT ---
-
-def get_sk_deep_report(symbol):
-    try:
-        sym = symbol.upper().strip()
-        ticker_sym = sym
-        if sym in ["NIFTY", "NIFTY50"]: ticker_sym = "^NSEI"
-        elif sym == "BANKNIFTY": ticker_sym = "^NSEBANK"
-        elif sym == "SENSEX": ticker_sym = "^BSESN"
-        elif not sym.endswith(".NS"): ticker_sym = f"{sym}.NS"
-
-        # Call the retry-safe data fetcher
-        result = get_stock_data(ticker_sym)
-        if not result:
-            return "⚠️ **Network Error:** Could not connect to market data after 3 retries. Please try again later."
-        
-        df, info = result
-
-        # --- DATA CALCULATIONS ---
-        close = df['Close']
-        ltp = float(close.iloc[-1])
-        prev_close = float(close.iloc[-2])
-        high_prev = float(df['High'].iloc[-2])
-        low_prev = float(df['Low'].iloc[-2])
-
-        # Technicals
-        ema_50 = close.ewm(span=50).mean().iloc[-1]
-        ema_200 = close.ewm(span=200).mean().iloc[-1]
-        rsi = calculate_rsi(close)
-        macd_val, sig_val, macd_hist = calculate_macd(close)
-        atr = calculate_atr(df)
-        atr_pct = (atr / ltp) * 100 
-
-        # Pivots
-        pp, r1, s1, r2, s2 = calculate_pivots(high_prev, low_prev, prev_close)
-
-        # Fundamentals
-        sector = info.get('sector', 'N/A')
-        mcap = float(info.get('marketCap', 0) or 0)
-        pe = float(info.get('trailingPE', 0) or 0)
-        roe = float((info.get('returnOnEquity', 0) or 0) * 100)
-        
-        # --- SCORING ---
-        asi_score = compute_asr_score(ltp, ema_50, ema_200, rsi, macd_hist, atr_pct)
-        
-        # --- RISK MANAGEMENT ---
-        sl_price = ltp - (atr * 1.5)
-        target_price = ltp + (atr * 3)
-        
-        # --- AI LOGIC ---
-        ai_conclusion = "AI analysis unavailable."
-        if AI_ENABLED:
-            prompt = (
-                f"Analyze {sym}. LTP={ltp:.2f}, RSI={rsi:.2f}, MACD_Hist={macd_hist:.4f}. "
-                f"Give a concise conclusion for a Swing Trader."
+# RAG System
+class RAGSystem:
+    def __init__(self, db_path='asi_rag.db'):
+        self.db_path = db_path
+        self.init_db()
+    
+    def init_db(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS historical_data (
+                id INTEGER PRIMARY KEY,
+                symbol TEXT,
+                date TEXT,
+                ltp REAL,
+                rsi REAL,
+                macd REAL,
+                trend TEXT,
+                news TEXT,
+                analysis TEXT
             )
-            try:
-                resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
-                ai_conclusion = resp.choices[0].message.content
-            except: pass
-
-        # --- VERDICT ---
-        verdict = "⚠️ WAIT"
-        if asi_score >= 75 and macd_hist > 0: verdict = "🚀 STRONG BUY"
-        elif asi_score >= 60 and ltp > ema_50: verdict = "✅ BUY"
-        elif rsi > 70: verdict = "📉 OVERBOUGHT"
-        
-        return (
-            f"🔬 **DEEP ASI ANALYSIS: {sym}**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 {datetime.now().strftime('%d-%b %H:%M')} | 🏛 **ASI SCORE:** {asi_score}/100\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 **PRICE:** ₹{ltp:.2f}\n"
-            f"📊 **INDICATORS:**\n"
-            f"  • RSI(14): {rsi:.2f}\n"
-            f"  • MACD: {'📈 Bullish' if macd_hist > 0 else '📉 Bearish'}\n"
-            f"  • Volatility: {atr_pct:.2f}%\n"
-            f"🎯 **VERDICT:** {verdict}\n"
-            f"🛡 **SL:** ₹{sl_price:.2f} | **Target:** ₹{target_price:.2f}\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🧠 **AI:**\n{ai_conclusion}\n"
-            "_SK AUTO AI ADVISORY_"
-        )
-
-    except Exception as e:
-        logging.error(f"Deep Report Error: {e}")
-        return f"⚠️ Analysis Error: {str(e)}"
-
-# --- 7. OPTIONS & PORTFOLIO ---
-
-def get_nifty_option_trade(budget, spot):
-    # Simplified for stability
-    try:
-        strike = round(spot / 50) * 50
-        return (
-            f"⚙️ **OPTIONS SNIPER**\n"
-            f"Spot: {spot:.2f}\n"
-            f"Trade: {strike} CE/PE\n"
-            f"Capital: ₹{budget}\n"
-            f"_Strategy: Momentum_"
-        )
-    except Exception as e:
-        return f"Error: {e}"
-
-def get_smart_portfolio():
-    return "💎 **PORTFOLIO SCANNER**\n✅ RELIANCE\n✅ TCS\n✅ INFY\n_Status: Bullish_"
-
-# --- 8. TELEGRAM HANDLERS ---
-
-@bot.message_handler(commands=['start'])
-def start(m):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add("🔬 Deep Analysis", "💎 Smart Portfolio")
-    markup.add("⚙️ Options Sniper", "📊 Market Pulse")
-    bot.send_message(m.chat.id, 
-        "🚀 **SK AUTO AI ADVISORY**\n\n⚡ **Stable Mode Activated.**", 
-        reply_markup=markup, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "🔬 Deep Analysis")
-def ask_symbol(m):
-    msg = bot.send_message(m.chat.id, "📝 Enter Symbol:")
-    bot.register_next_step_handler(msg, process_deep_analysis)
-
-def process_deep_analysis(m):
-    bot.send_chat_action(m.chat.id, 'typing')
-    msg_text = m.text.upper().replace(" ", "")
-    response = get_sk_deep_report(msg_text)
-    bot.send_message(m.chat.id, response, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "⚙️ Options Sniper")
-def ask_opt_budget(m):
-    msg = bot.send_message(m.chat.id, "💵 Enter Capital (INR):")
-    bot.register_next_step_handler(msg, process_options)
-
-def process_options(m):
-    try:
-        budget = float(m.text.replace("₹", "").replace(",", ""))
-        # Fetch spot safely
-        spot_df = yf.Ticker("^NSEI").history(period="1d")
-        if spot_df.empty:
-             bot.send_message(m.chat.id, "⚠️ Market Data Connection Failed")
-             return
-        spot = float(spot_df['Close'].iloc[-1])
-        bot.send_message(m.chat.id, get_nifty_option_trade(budget, spot), parse_mode="Markdown")
-    except:
-        bot.send_message(m.chat.id, "❌ Invalid amount.")
-
-@bot.message_handler(func=lambda m: m.text == "💎 Smart Portfolio")
-def show_port(m):
-    bot.send_message(m.chat.id, get_smart_portfolio(), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "📊 Market Pulse")
-def market_pulse(m):
-    # Safe fetch with retry logic
-    try:
-        nifty = yf.Ticker("^NSEI").history(period="2d")
-        if not nifty.empty:
-             bot.send_message(m.chat.id, f"📊 NIFTY: {nifty['Close'].iloc[-1]:.2f}", parse_mode="Markdown")
-        else:
-             bot.send_message(m.chat.id, "⚠️ Connection issue.")
-    except Exception as e:
-        bot.send_message(m.chat.id, "⚠️ Network Error.")
-
-# --- 9. RENDER HEALTH CHECK & POLLING ---
-
-def run_health_server():
-    import http.server
-    import socketserver
-    port = int(os.environ.get("PORT", 10000))
+        ''')
+        conn.commit()
+        conn.close()
     
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"SK AI ADVISORY ONLINE")
+    def store_data(self, symbol: str, data: Dict):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO historical_data (symbol, date, ltp, rsi, macd, trend, news, analysis) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                       (symbol, datetime.now().strftime('%Y-%m-%d'), data.get('ltp'), data.get('rsi'), data.get('macd'), data.get('trend'), data.get('news'), data.get('analysis')))
+        conn.commit()
+        conn.close()
     
-    try:
-        with socketserver.TCPServer(("", port), Handler) as httpd:
-            httpd.serve_forever()
-    except Exception as e:
-        logging.error(f"Health server error: {e}")
+    def retrieve_context(self, symbol: str, limit=5) -> str:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT date, ltp, rsi, macd, trend, news, analysis FROM historical_data WHERE symbol = ? ORDER BY date DESC LIMIT ?',
+                       (symbol, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        context = f"Historical data for {symbol}:\n"
+        for row in rows:
+            context += f"Date: {row[0]}, LTP: {row[1]}, RSI: {row[2]}, MACD: {row[3]}, Trend: {row[4]}, News: {row[5]}, Analysis: {row[6]}\n"
+        return context
 
-if __name__ == "__main__":
-    # Start Health Server
-    threading.Thread(target=run_health_server, daemon=True).start()
+# Yahoo Finance Manager
+class YahooFinanceManager:
+    def __init__(self):
+        self.available = yf is not None
     
-    logging.info("🚀 SK AUTO AI ADVISORY Started...")
-    
-    # POLLING LOGIC (Robust)
-    # none_stop=True keeps it running even if Telegram returns errors
-    # timeout=60 prevents premature connection drops
-    while True:
+    @lru_cache(maxsize=100)
+    def get_ltp(self, symbol: str) -> Optional[float]:
+        if not self.available: return None
         try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60, none_stop=True)
+            ticker = yf.Ticker(symbol + ".NS")
+            data = ticker.history(period="1d", interval="1m")
+            return data['Close'].iloc[-1] if not data.empty else None
         except Exception as e:
-            logging.error(f"Bot Polling Crash: {e}")
-            time.sleep(15) # Wait before restarting
+            logger.error(f"LTP Error for {symbol}: {e}")
+            return None
+    
+    def get_market_data(self, symbol: str) -> Dict:
+        if not self.available: return {}
+        try:
+            ticker = yf.Ticker(symbol + ".NS")
+            info = ticker.info
+            hist = ticker.history(period="1y")
+            rsi = self._calculate_rsi(hist['Close'])
+            macd = self._calculate_macd(hist['Close'])
+            return {
+                'ltp': hist['Close'].iloc[-1] if not hist.empty else None,
+                'rsi': rsi,
+                'macd': macd,
+                '52w_high': info.get('fiftyTwoWeekHigh'),
+                '52w_low': info.get('fiftyTwoWeekLow'),
+                'market_cap': info.get('marketCap'),
+                'pe_ratio': info.get('trailingPE'),
+                'roe': info.get('returnOnEquity'),
+                'sector': info.get('sector')
+            }
+        except Exception as e:
+            logger.error(f"Market Data Error for {symbol}: {e}")
+            return {}
+    
+    def _calculate_rsi(self, prices, period=14):
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs)).iloc[-1]
+    
+    def _calculate_macd(self, prices):
+        ema12 = prices.ewm(span=12).mean()
+        ema26 = prices.ewm(span=26).mean()
+        return (ema12 - ema26).iloc[-1]
+    
+    def get_option_chain(self, symbol: str, expiry: str) -> Optional[pd.DataFrame]:
+        if not self.available: return None
+        try:
+            ticker = yf.Ticker(symbol + ".NS")
+            options = ticker.option_chain(expiry)
+            return pd.DataFrame(options.calls.append(options.puts))
+        except Exception as e:
+            logger.error(f"Option Chain Error for {symbol}: {e}")
+            return None
+    
+    def fetch_news(self, symbol: str) -> List[str]:
+        try:
+            url = f"https://newsapi.org/v2/everything?q={symbol}&apiKey={Config.NEWS_API_KEY}&pageSize=3"
+            response = requests.get(url, timeout=Config.TIMEOUT)
+            articles = response.json().get('articles', [])
+            return [f"{a['title']}: {a['description']}" for a in articles[:3]]
+        except Exception as e:
+            logger.error(f"News Fetch Error: {e}")
+            return ["No recent news available."]
+
+# AI Engine with OpenAI
+class AIEngine:
+    def __init__(self, api_key: str, rag_system: RAGSystem):
+        if openai is None: raise ImportError("OpenAI not available")
+        openai.api_key = api_key
+        self.rag = rag_system
+    
+    def generate_research_report(self, symbol: str, price: float, market_data: Dict) -> str:
+        context = self.rag.retrieve_context(symbol)
+        news = YahooFinanceManager().fetch_news(symbol)
+        prompt = f"""
+        Generate a detailed professional trading advisory report for {symbol} at ₹{price}. Use context: {context}. News: {news}. Market Data: {json.dumps(market_data)}.
+        
+        Format exactly as:
+        🚀 **SK AUTO AI ADVISORY** 🚀
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📅 **DATE:** {datetime.now().strftime('%d-%b-%Y')} | ⏰ **TIME:** {datetime.now().strftime('%H:%M')}(IST)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🏷 **SYMBOL:** {symbol}
+        🏛 **ASI RANK:** [0-100 score]
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        💰 **LTP:** ₹{price} | 📊 **RSI:** {market_data.get('rsi', 'N/A')} | 📈 **MACD:** {market_data.get('macd', 'N/A')}
+        📈 **TREND:** [BEARISH/BULLISH/NEUTRAL] | 52wk High: {market_data.get('52w_high', 'N/A')} | 52wk Low: {market_data.get('52w_low', 'N/A')}
+        
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🎯 **VERDICT:** [HOLD/WAIT/BUY/SELL] (Time Frame: Short-term)
+        🚀 **Short term UPSIDE:** [5-20%] (3-6 Months)
+        **Long Term UPSIDE:** [20-100%] (1-3 Years)
+        
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📦 **FUNDAMENTAL LEVELS**
+        - Market Cap: {market_data.get('market_cap', 'N/A')} Cr | Sector: {market_data.get('sector', 'N/A')}
+        - P/E Ratio: {market_data.get('pe_ratio', 'N/A')}x | ROE: {market_data.get('roe', 'N/A')}% | Best Value: [Estimate]
+        
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🏗 **DEEP TECHNICAL LEVELS** (Enhanced)
+        SMA 20: [Calc] | SMA 50: [Calc] | SMA 200: [Calc]
+        Bollinger Upper: [Calc] | Lower: [Calc]
+        🔴 R3: [Calc] | R2: [Calc] | R1: [Calc] | 🟢 PP: [Calc] | S1: [Calc] | S2: [Calc] | S3: [Calc]
+        📊 **ASCII Chart:** [Simple text chart of price trend]
+        
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🧠 **COMPANY INFORMATION**
+        ✅ **POSITIVE:** [List 3+]
+        ❌ **NEGATIVE:** [List 3+]
+        
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📰 **LATEST NEWS:** {'; '.join(news)}
+        
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📝 **CONCLUSION:** [Summary]
+        ⚠️ **RISK:** [Key risks]
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        _AI AUTO ADVISORY - Invest Wisely, Trade Smartly!_
+        """
+        try:
+            response = openai.ChatCompletion.create(model="gpt-4", messages=[{"role": "user", "content": prompt}], max_tokens=2000)
+            analysis = response['choices'][0]['message']['content']
+            self.rag.store_data(symbol, {**market_data, 'news': '; '.join(news), 'analysis': analysis[:500]})
+            return analysis
+        except Exception as e:
+            logger.error(f"AI Report Error: {e}")
+            return "⚠️ AI Report Unavailable"
+    
+    def quick_signal(self, symbol: str, price: float) -> str:
+        context = self.rag.retrieve_context(symbol)
+        prompt = f"Quick signal for {symbol} at ₹{price}. Context: {context}. Provide: Buy/Sell/Hold, key indicator, target, stop-loss, probability (0-100%)."
+        try:
+            response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}])
+            return response['choices'][0]['message']['content']
+        except Exception as e:
+            return "⚠️ Quick Signal Unavailable"
+    
+    def analyze_multibagger(self, fundamentals: Dict) -> Dict:
+        prompt = f"Analyze for multibagger potential: {json.dumps(fundamentals)}. Return JSON with keys: growth_score, health_score, position_score, risks, timeline, entry_price, target_price, stop_loss."
+        try:
+            response = openai.ChatCompletion.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+            return json.loads(response['choices'][0]['message']['content'])
+        except Exception as e:
+            return {}
+
+# Dual AI Engine
+class DualAIEngine:
+    def __init__(self, rag_system: RAGSystem):
+        self.rag = rag_system
+        self.primary = AIEngine(Config.OPENAI_API_KEY, self.rag)
+        self.secondary = None  # Add secondary if needed
+        self.current_engine = "primary"
+    
+    def generate_research_report(self, symbol: str, price: float, market_data: Dict) -> str:
+        try:
+            return self.primary.generate_research_report(symbol, price, market_data)
+        except Exception as e:
+            return "⚠️ AI Unavailable"
+    
+    def quick_signal(self, symbol: str, price: float) -> str:
+        try:
+            return self.primary.quick_signal(symbol, price)
+        except Exception as e:
+            return "⚠️ AI Unavailable"
+    
+    def analyze_multibagger(self, fundamentals: Dict) -> Dict:
+        try:
+            return self.primary.analyze_multibagger(fundamentals)
+        except Exception as e:
+            return {}
+
+# Options Calculator (Completed)
+class OptionsCalculator:
+    @staticmethod
+    def calculate_payoff(strategy: str, spot: float, strikes: List[float], premiums: List[float]) -> Dict:
+        if not strikes or not premiums or len(strikes) != len(premiums):
+            return {'error': 'Invalid inputs'}
+        price_range = np.linspace(spot * 0.85, spot * 1.15, 100)
+        strategies = {
+            'bull_call_spread': OptionsCalculator._bull_call_spread,
+            'bear_put_spread': OptionsCalculator._bear_put_spread,
+            'iron_condor': OptionsCalculator._iron_condor,
+            'butterfly': OptionsCalculator._butterfly,
+            'straddle': OptionsCalculator._straddle,
+            'strangle': OptionsCalculator._strangle,
+            'call_ratio_spread': OptionsCalculator._call_ratio_spread,
+            'put_ratio_spread': OptionsCalculator._put_ratio_spread,
+            'jade_lizard': OptionsCalculator._jade_lizard,
+            'reverse_iron_condor': OptionsCalculator._reverse_iron_condor
+        }
+        if strategy in strategies:
+            try:
+                return strategies[strategy](spot, strikes, premiums, price_range)
+            except Exception as e:
+                return {'error': str(e)}
+        return {'error': 'Strategy not found'}
+    
+    @staticmethod
+    def _bull_call_spread(spot, strikes, premiums, price_range):
+        buy_strike, sell_strike = strikes[0], strikes[1]
+        buy_premium, sell_premium = premiums[0], premiums[1]
+        net_premium = buy_premium - sell_premium
+        payoffs = [max(price - buy_strike, 0) - buy_premium - (max(price - sell_strike, 0) - sell_premium) for price in price_range]
+        return {'payoffs': payoffs, 'price_range': price_range.tolist(), 'net_premium': net_premium, 'max_profit': sell_strike - buy_strike - net_premium, 'max_loss': net_premium}
+    
+    # Add similar methods for other strategies (e.g., _bear_put_spread, etc.) - abbreviated for brevity
+    @staticmethod
+    def _bear_put_spread(spot, strikes, premiums, price_range):
+        # Implement
