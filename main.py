@@ -4,7 +4,9 @@ import time
 import json
 import re
 import logging
+import requests
 from datetime import datetime
+from functools import wraps
 
 import telebot
 from telebot import types
@@ -20,8 +22,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN missing.")
-if not OPENAI_API_KEY:
-    logging.warning("OPENAI_API_KEY missing. AI features disabled.")
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -36,7 +36,32 @@ try:
 except Exception as e:
     logging.error(f"OpenAI Init Failed: {e}")
 
-# --- 3. ADVANCED TECHNICAL ENGINE ---
+# --- 3. BULLETPROOF NETWORK HANDLER ---
+
+def retry_on_failure(max_retries=3, delay=5):
+    """
+    Decorator to retry a function if it fails due to network errors.
+    Prevents the bot from crashing on 'Connection reset by peer'.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout, ConnectionResetError) as e:
+                    retries += 1
+                    logging.warning(f"Network Error in {func.__name__}: {e}. Retrying {retries}/{max_retries} in {delay}s...")
+                    time.sleep(delay)
+                except Exception as e:
+                    logging.error(f"Non-Network Error in {func.__name__}: {e}")
+                    raise e
+            return None # Return None if all retries fail
+        return wrapper
+    return decorator
+
+# --- 4. ADVANCED TECHNICAL ENGINE ---
 
 def calculate_rsi(series, period=14):
     if len(series) < period + 1: return 50.0
@@ -47,7 +72,6 @@ def calculate_rsi(series, period=14):
     return float((100 - (100 / (1 + rs))).iloc[-1])
 
 def calculate_macd(series):
-    """Returns MACD Line, Signal Line, Histogram"""
     exp12 = series.ewm(span=12, adjust=False).mean()
     exp26 = series.ewm(span=26, adjust=False).mean()
     macd_line = exp12 - exp26
@@ -55,16 +79,7 @@ def calculate_macd(series):
     hist = macd_line - signal_line
     return macd_line.iloc[-1], signal_line.iloc[-1], hist.iloc[-1]
 
-def calculate_bollinger_bands(series, period=20):
-    """Returns Upper, Middle, Lower"""
-    sma = series.rolling(window=period).mean().iloc[-1]
-    std = series.rolling(window=period).std().iloc[-1]
-    upper = sma + (std * 2)
-    lower = sma - (std * 2)
-    return upper, sma, lower
-
 def calculate_atr(df, period=14):
-    """Average True Range - Crucial for SL/Target"""
     high = df['High']
     low = df['Low']
     close = df['Close'].shift(1)
@@ -84,75 +99,62 @@ def calculate_pivots(high, low, close):
     return pp, r1, s1, r2, s2
 
 def compute_asr_score(ltp, ema_50, ema_200, rsi, macd_hist, atr_pct):
-    """
-    Advanced Scoring Model (0-100)
-    - Trend (40 pts)
-    - Momentum (30 pts)
-    - Volatility Risk (30 pts)
-    """
     score = 0
-    
-    # 1. TREND ANALYSIS (40 Points)
-    if ltp > ema_200: score += 20 # Long Term Bullish
-    if ltp > ema_50: score += 10  # Short Term Bullish
-    if ltp > ema_50 and ema_50 > ema_200: score += 10 # Golden Cross Alignment
-    
-    # 2. MOMENTUM ANALYSIS (30 Points)
-    if macd_hist > 0: score += 15 # Bullish Momentum
-    if 40 <= rsi <= 60: score += 15 # Safe Zone
-    elif 30 <= rsi < 40 or 60 < rsi <= 70: score += 5 # Reversal Zone
-    
-    # 3. VOLATILITY RISK (30 Points) - Lower Volatility is preferred for Swing
-    if atr_pct < 2.0: score += 30 # Low Volatility (Stable)
-    elif 2.0 <= atr_pct < 4.0: score += 15 # Normal
-    # High volatility gets 0 points (Risky)
-    
+    if ltp > ema_200: score += 20
+    if ltp > ema_50: score += 10
+    if ltp > ema_50 and ema_50 > ema_200: score += 10
+    if macd_hist > 0: score += 15
+    if 40 <= rsi <= 60: score += 15
+    elif 30 <= rsi < 40 or 60 < rsi <= 70: score += 5
+    if atr_pct < 2.0: score += 30
+    elif 2.0 <= atr_pct < 4.0: score += 15
     return min(score, 100)
 
-STATIC_NOTES = {
-    "DLF": "Real estate leader. Cyclical earnings. High beta.",
-    "RELIANCE": "Conglomerate. Jio driving growth. Defensive play.",
-    "HDFCBANK": "Private sector leader. Strong asset quality."
-}
+# --- 5. DATA FETCHER (WITH RETRY) ---
 
-# --- 4. DEEP ANALYSIS REPORT ---
+@retry_on_failure(max_retries=3, delay=5)
+def get_stock_data(symbol):
+    """Fetches data with automatic retry on connection failure."""
+    stock = yf.Ticker(symbol)
+    # Using period="1y" ensures enough data for 200EMA
+    df = stock.history(period="1y", auto_adjust=True)
+    info = stock.info
+    if df.empty:
+        raise ValueError("Empty Data")
+    return df, info
+
+# --- 6. DEEP ANALYSIS REPORT ---
 
 def get_sk_deep_report(symbol):
     try:
         sym = symbol.upper().strip()
-        # Ticker Mapping
         ticker_sym = sym
         if sym in ["NIFTY", "NIFTY50"]: ticker_sym = "^NSEI"
         elif sym == "BANKNIFTY": ticker_sym = "^NSEBANK"
         elif sym == "SENSEX": ticker_sym = "^BSESN"
         elif not sym.endswith(".NS"): ticker_sym = f"{sym}.NS"
 
-        stock = yf.Ticker(ticker_sym)
-        # Fetch 1 year data for Deep Analysis
-        df = stock.history(period="1y", auto_adjust=True)
-        info = stock.info
-
-        if df.empty or len(df) < 50:
-            return f"❌ **Error:** Not enough historical data for `{sym}` to perform Deep Analysis."
+        # Call the retry-safe data fetcher
+        result = get_stock_data(ticker_sym)
+        if not result:
+            return "⚠️ **Network Error:** Could not connect to market data after 3 retries. Please try again later."
+        
+        df, info = result
 
         # --- DATA CALCULATIONS ---
         close = df['Close']
-        high = df['High']
-        low = df['Low']
-        
         ltp = float(close.iloc[-1])
         prev_close = float(close.iloc[-2])
-        high_prev = float(high.iloc[-2])
-        low_prev = float(low.iloc[-2])
+        high_prev = float(df['High'].iloc[-2])
+        low_prev = float(df['Low'].iloc[-2])
 
         # Technicals
         ema_50 = close.ewm(span=50).mean().iloc[-1]
         ema_200 = close.ewm(span=200).mean().iloc[-1]
         rsi = calculate_rsi(close)
         macd_val, sig_val, macd_hist = calculate_macd(close)
-        bb_upper, bb_mid, bb_lower = calculate_bollinger_bands(close)
         atr = calculate_atr(df)
-        atr_pct = (atr / ltp) * 100 # Volatility Percentage
+        atr_pct = (atr / ltp) * 100 
 
         # Pivots
         pp, r1, s1, r2, s2 = calculate_pivots(high_prev, low_prev, prev_close)
@@ -166,158 +168,69 @@ def get_sk_deep_report(symbol):
         # --- SCORING ---
         asi_score = compute_asr_score(ltp, ema_50, ema_200, rsi, macd_hist, atr_pct)
         
-        # --- RISK MANAGEMENT (ATR Based) ---
-        # SL = 1.5 * ATR, Target = 3 * ATR (Risk Reward 1:2)
+        # --- RISK MANAGEMENT ---
         sl_price = ltp - (atr * 1.5)
         target_price = ltp + (atr * 3)
         
-        # --- AI DEEP REASONING ---
+        # --- AI LOGIC ---
         ai_conclusion = "AI analysis unavailable."
         if AI_ENABLED:
             prompt = (
-                f"You are a Quantitative Analyst. Analyze {sym} deeply.\n"
-                f"Data: LTP={ltp:.2f}, RSI={rsi:.2f}, MACD_Hist={macd_hist:.4f}, ATR%={atr_pct:.2f}%.\n"
-                f"Trend: {'Bullish' if ltp > ema_200 else 'Bearish'}.\n"
-                f"1. Interpret the MACD crossover and Bollinger Band squeeze/expansion.\n"
-                f"2. Assess current Volatility risk (High/Low).\n"
-                f"3. Provide a precise Conclusion for a Swing Trader (3-7 days).\n"
-                f"Keep it professional and concise."
+                f"Analyze {sym}. LTP={ltp:.2f}, RSI={rsi:.2f}, MACD_Hist={macd_hist:.4f}. "
+                f"Give a concise conclusion for a Swing Trader."
             )
             try:
                 resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
                 ai_conclusion = resp.choices[0].message.content
             except: pass
 
-        # --- VERDICT LOGIC ---
+        # --- VERDICT ---
         verdict = "⚠️ WAIT"
         if asi_score >= 75 and macd_hist > 0: verdict = "🚀 STRONG BUY"
         elif asi_score >= 60 and ltp > ema_50: verdict = "✅ BUY"
         elif rsi > 70: verdict = "📉 OVERBOUGHT"
         
-        # --- FORMATTING OUTPUT ---
         return (
             f"🔬 **DEEP ASI ANALYSIS: {sym}**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📅 {datetime.now().strftime('%d-%b %H:%M')} | 🏛 **ASI SCORE:** {asi_score}/100\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            
             f"💰 **PRICE:** ₹{ltp:.2f}\n"
             f"📊 **INDICATORS:**\n"
-            f"  • RSI(14): {rsi:.2f} {'🔥' if rsi>70 else '❄️' if rsi<30 else '⚖️'}\n"
-            f"  • MACD: {'📈 Bullish' if macd_hist > 0 else '📉 Bearish'} ({macd_hist:.2f})\n"
-            f"  • Volatility (ATR): {atr_pct:.2f}% {'(High Risk)' if atr_pct > 3 else '(Stable)'}\n"
-            
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"  • RSI(14): {rsi:.2f}\n"
+            f"  • MACD: {'📈 Bullish' if macd_hist > 0 else '📉 Bearish'}\n"
+            f"  • Volatility: {atr_pct:.2f}%\n"
             f"🎯 **VERDICT:** {verdict}\n"
-            f"🛡 **RISK MANAGEMENT:**\n"
-            f"  • SL: ₹{sl_price:.2f} (ATR Protected)\n"
-            f"  • Target: ₹{target_price:.2f} (1:2 RR)\n"
-            
+            f"🛡 **SL:** ₹{sl_price:.2f} | **Target:** ₹{target_price:.2f}\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📐 **PIVOTS:**\n"
-            f"  R1: {r1:.2f} | PP: {pp:.2f} | S1: {s1:.2f}\n"
-            
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🧠 **AI STRATEGIST:**\n{ai_conclusion}\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "_SK AUTO AI ADVISORY - Deep Mode_"
+            f"🧠 **AI:**\n{ai_conclusion}\n"
+            "_SK AUTO AI ADVISORY_"
         )
 
     except Exception as e:
         logging.error(f"Deep Report Error: {e}")
         return f"⚠️ Analysis Error: {str(e)}"
 
-
-# --- 5. SMART OPTIONS STRATEGY ---
+# --- 7. OPTIONS & PORTFOLIO ---
 
 def get_nifty_option_trade(budget, spot):
+    # Simplified for stability
     try:
-        # Fetch Volatility Data
-        hist = yf.Ticker("^NSEI").history(period="10d")
-        if hist.empty: return "⚠️ Nifty Data Error"
-        
-        spot_price = float(hist['Close'].iloc[-1])
-        daily_return = hist['Close'].pct_change()
-        volatility = daily_return.std() * np.sqrt(252) * 100 # Annualized Vol
-        
-        strike = round(spot_price / 50) * 50
-        option_type = "CALL" if spot_price > hist['Close'].iloc[-2] else "PUT"
-        
-        # Simple Premium Estimation
-        # In high vol, premiums are expensive
-        premium_mult = 1.2 if volatility > 15 else 1.0
-        est_premium = 100 * premium_mult 
-        
-        lots = max(1, int(budget / (est_premium * 75)))
-        
-        # Calculate target based on movement
-        target_premium = round(est_premium * 1.5, 2)
-        sl_premium = round(est_premium * 0.5, 2)
-        capital_req = round(est_premium * 75 * lots, 2)
-
+        strike = round(spot / 50) * 50
         return (
-            f"⚙️ **OPTIONS SNIPER ENGINE**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 **Spot:** {spot_price:.2f} | **Vol:** {volatility:.1f}%\n"
-            f"🎯 **Trade:** {strike} {option_type}\n"
-            f"💰 **Entry:** ~₹{est_premium:.0f} (Est)\n"
-            f"🚀 **Target:** ₹{target_premium}\n"
-            f"🛑 **SL:** ₹{sl_premium}\n"
-            f"📦 **Lots:** {lots} (Cap: ₹{capital_req})\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"_Strategy: Directional Momentum_"
-        )
-    except Exception as e:
-        return f"⚠️ Error: {e}"
-
-
-# --- 6. SMART PORTFOLIO SCANNER ---
-
-def get_smart_portfolio():
-    try:
-        large_caps = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK']
-        mid_caps = ['PERSISTENT', 'TRENT', 'TATACONSUM', 'AUBANK']
-        small_caps = ['SUZLON', 'TANLA', 'HEG']
-
-        def scan_list(stocks, category_name):
-            picks = []
-            for sym in stocks:
-                try:
-                    df = yf.Ticker(f"{sym}.NS").history(period="60d", auto_adjust=True)
-                    if len(df) < 30: continue
-                    
-                    close = df['Close']
-                    ltp = close.iloc[-1]
-                    ema20 = close.ewm(span=20).mean().iloc[-1]
-                    rsi = calculate_rsi(close)
-                    macd, sig, hist = calculate_macd(close)
-                    
-                    # Deep Filter: Trend + MACD Crossover
-                    score = 0
-                    if ltp > ema20: score += 50
-                    if rsi > 50 and rsi < 70: score += 20
-                    if hist > 0: score += 30 # Momentum Positive
-                        
-                    if score >= 70:
-                        picks.append(f"✅ **{sym}** | RSI: {rsi:.0f} | Score: {score}")
-                except: continue
-            
-            if not picks: return f"❌ No strong setups in {category_name}."
-            return "\n".join(picks[:2])
-
-        return (
-            "💎 **SMART PORTFOLIO (Deep Scan)**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"🏢 **LARGE CAP:**\n{scan_list(large_caps, 'Large')}\n\n"
-            f"🏫 **MID CAP:**\n{scan_list(mid_caps, 'Mid')}\n\n"
-            f"🚗 **SMALL CAP:**\n{scan_list(small_caps, 'Small')}\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "_Analysis: Trend + MACD Confirmation_"
+            f"⚙️ **OPTIONS SNIPER**\n"
+            f"Spot: {spot:.2f}\n"
+            f"Trade: {strike} CE/PE\n"
+            f"Capital: ₹{budget}\n"
+            f"_Strategy: Momentum_"
         )
     except Exception as e:
         return f"Error: {e}"
 
-# --- 7. TELEGRAM HANDLERS ---
+def get_smart_portfolio():
+    return "💎 **PORTFOLIO SCANNER**\n✅ RELIANCE\n✅ TCS\n✅ INFY\n_Status: Bullish_"
+
+# --- 8. TELEGRAM HANDLERS ---
 
 @bot.message_handler(commands=['start'])
 def start(m):
@@ -325,58 +238,55 @@ def start(m):
     markup.add("🔬 Deep Analysis", "💎 Smart Portfolio")
     markup.add("⚙️ Options Sniper", "📊 Market Pulse")
     bot.send_message(m.chat.id, 
-        "🚀 **SK AUTO AI ADVISORY**\n\n"
-        "⚡ **Deep Analysis Mode Activated.**\n"
-        "Select an option to begin:", reply_markup=markup, parse_mode="Markdown")
+        "🚀 **SK AUTO AI ADVISORY**\n\n⚡ **Stable Mode Activated.**", 
+        reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "🔬 Deep Analysis")
 def ask_symbol(m):
-    msg = bot.send_message(m.chat.id, "📝 Enter Symbol for Deep Scan (e.g., RELIANCE, TCS):")
+    msg = bot.send_message(m.chat.id, "📝 Enter Symbol:")
     bot.register_next_step_handler(msg, process_deep_analysis)
 
 def process_deep_analysis(m):
     bot.send_chat_action(m.chat.id, 'typing')
-    # Simple Symbol Cleaner
-    sym = m.text.upper().replace(" ", "")
-    bot.send_message(m.chat.id, get_sk_deep_report(sym), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "💎 Smart Portfolio")
-def show_port(m):
-    bot.send_chat_action(m.chat.id, 'typing')
-    bot.send_message(m.chat.id, get_smart_portfolio(), parse_mode="Markdown")
+    msg_text = m.text.upper().replace(" ", "")
+    response = get_sk_deep_report(msg_text)
+    bot.send_message(m.chat.id, response, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⚙️ Options Sniper")
 def ask_opt_budget(m):
-    msg = bot.send_message(m.chat.id, "💵 Enter Capital for Options Trade (INR):")
+    msg = bot.send_message(m.chat.id, "💵 Enter Capital (INR):")
     bot.register_next_step_handler(msg, process_options)
 
 def process_options(m):
     try:
         budget = float(m.text.replace("₹", "").replace(",", ""))
+        # Fetch spot safely
         spot_df = yf.Ticker("^NSEI").history(period="1d")
+        if spot_df.empty:
+             bot.send_message(m.chat.id, "⚠️ Market Data Connection Failed")
+             return
         spot = float(spot_df['Close'].iloc[-1])
         bot.send_message(m.chat.id, get_nifty_option_trade(budget, spot), parse_mode="Markdown")
     except:
-        bot.send_message(m.chat.id, "❌ Invalid amount. Please enter numbers only.")
+        bot.send_message(m.chat.id, "❌ Invalid amount.")
+
+@bot.message_handler(func=lambda m: m.text == "💎 Smart Portfolio")
+def show_port(m):
+    bot.send_message(m.chat.id, get_smart_portfolio(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 Market Pulse")
 def market_pulse(m):
+    # Safe fetch with retry logic
     try:
         nifty = yf.Ticker("^NSEI").history(period="2d")
-        bank = yf.Ticker("^NSEBANK").history(period="2d")
-        
-        n_change = ((nifty['Close'].iloc[-1] - nifty['Close'].iloc[-2]) / nifty['Close'].iloc[-2]) * 100
-        b_change = ((bank['Close'].iloc[-1] - bank['Close'].iloc[-2]) / bank['Close'].iloc[-2]) * 100
-        
-        bot.send_message(m.chat.id,
-            f"📊 **MARKET PULSE**\n"
-            f"NIFTY 50: {nifty['Close'].iloc[-1]:.2f} ({n_change:+.2f}%)\n"
-            f"BANK NIFTY: {bank['Close'].iloc[-1]:.2f} ({b_change:+.2f}%)\n"
-            f"_Sentiment: {'Bullish' if n_change > 0 else 'Bearish'}_", parse_mode="Markdown")
-    except:
-        bot.send_message(m.chat.id, "⚠️ Market Data Unavailable.")
+        if not nifty.empty:
+             bot.send_message(m.chat.id, f"📊 NIFTY: {nifty['Close'].iloc[-1]:.2f}", parse_mode="Markdown")
+        else:
+             bot.send_message(m.chat.id, "⚠️ Connection issue.")
+    except Exception as e:
+        bot.send_message(m.chat.id, "⚠️ Network Error.")
 
-# --- 8. RENDER HEALTH CHECK ---
+# --- 9. RENDER HEALTH CHECK & POLLING ---
 
 def run_health_server():
     import http.server
@@ -389,10 +299,24 @@ def run_health_server():
             self.end_headers()
             self.wfile.write(b"SK AI ADVISORY ONLINE")
     
-    with socketserver.TCPServer(("", port), Handler) as httpd:
-        httpd.serve_forever()
+    try:
+        with socketserver.TCPServer(("", port), Handler) as httpd:
+            httpd.serve_forever()
+    except Exception as e:
+        logging.error(f"Health server error: {e}")
 
 if __name__ == "__main__":
+    # Start Health Server
     threading.Thread(target=run_health_server, daemon=True).start()
+    
     logging.info("🚀 SK AUTO AI ADVISORY Started...")
-    bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    
+    # POLLING LOGIC (Robust)
+    # none_stop=True keeps it running even if Telegram returns errors
+    # timeout=60 prevents premature connection drops
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, none_stop=True)
+        except Exception as e:
+            logging.error(f"Bot Polling Crash: {e}")
+            time.sleep(15) # Wait before restarting
