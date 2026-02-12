@@ -1,9 +1,4 @@
 pyTelegramBotAPI
 yfinance
-pandas
-requests
 google-genai
-nsepython
-pyotp
-SmartApi-python
 python-dotenv
