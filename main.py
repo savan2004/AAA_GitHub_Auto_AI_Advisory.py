@@ -71,54 +71,33 @@ def calculate_volatility(df):
 
 
 def compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, upside_pct, volatility=None):
-    """
-    ASI (Advanced Sovereign Intelligence) Score 0-100.
-    - Trend: 30 pts
-    - Momentum: 20 pts
-    - Valuation: 10 pts
-    - Quality: 10 pts
-    - Risk-Reward: 10 pts
-    - Volatility: ±5 pts
-    """
     score = 0
-
-    # TREND (0-30)
     if ltp > ema_200:
         score += 30
     elif ltp > ema_50:
         score += 15
-
-    # MOMENTUM (0-20)
     if 45 <= rsi <= 60:
         score += 20
     elif 40 <= rsi < 45 or 60 < rsi <= 70:
         score += 10
     elif rsi > 70:
         score += 5
-
-    # VALUATION (0-10)
     if pe and pe > 0:
         if pe < 15:
             score += 10
         elif 15 <= pe <= 25:
             score += 5
-
-    # QUALITY (0-10)
     if roe and roe > 0:
         if roe >= 18:
             score += 10
         elif 12 <= roe < 18:
             score += 5
-
-    # RISK-REWARD (0-10)
     if upside_pct >= 10:
         score += 10
     elif 5 <= upside_pct < 10:
         score += 5
     elif 2 <= upside_pct < 5:
         score += 2
-
-    # VOLATILITY (±5)
     if volatility is not None:
         if volatility > 5:
             score -= 5
@@ -126,7 +105,6 @@ def compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, upside_pct, volatility
             score -= 2
         elif volatility < 1:
             score -= 3
-
     return max(0, min(score, 100))
 
 
@@ -145,7 +123,6 @@ STATIC_NOTES = {
 
 def get_nifty_option_trade(budget, spot):
     try:
-        # AI approach
         if AI_ENABLED and client:
             prompt = (
                 f"Nifty Options Research Desk.\n"
@@ -185,7 +162,6 @@ def get_nifty_option_trade(budget, spot):
             except Exception as e:
                 print(f"AI trade error: {repr(e)}")
 
-        # FALLBACK
         hist = yf.Ticker("^NSEI").history(period="5d")
         if hist.empty:
             return "⚠️ Unable to fetch Nifty data."
@@ -259,7 +235,7 @@ def get_smart_portfolio():
         sc = scan_category(small_caps)
 
         if not lc and not mc and not sc:
-            return "⚠️ **Market Condition:** Current market is choppy. No stocks qualifying for >75% ASI Score. Wait for rally."
+            return "⚠️ **Market Condition:** Current market is choppy. No stocks qualifying for >75% ASI Score."
 
         final_report += "\n🏢 **LARGE CAP (60% Allocation)**\n"
         if lc:
@@ -283,8 +259,7 @@ def get_smart_portfolio():
             final_report += " No strong signals.\n"
 
         final_report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        final_report += "🧠 **Strategy:** High conviction picks based on Trend, Momentum, and Fundamentals.\n"
-        final_report += "_AIAUTO ADVISORY Selection Engine_"
+        final_report += "🧠 **Strategy:** High conviction picks.\n_AIAUTO ADVISORY_"
 
         return final_report
 
@@ -325,3 +300,15 @@ def get_sk_auto_report(symbol):
         sector = info.get('sector', 'N/A')
         mcap = float(info.get('marketCap', 0) or 0)
         pe = float(info.get('trailingPE', 0) or 0)
+        pb = float(info.get('priceToBook', 0) or 0)
+        roe = float((info.get('returnOnEquity', 0) or 0) * 100)
+
+        rsi = calculate_rsi(close)
+        ema_50 = close.ewm(span=50).mean().iloc[-1]
+        ema_200 = close.ewm(span=200).mean().iloc[-1]
+        vol = calculate_volatility(df)
+
+        pp, r1, s1, r2, s2, r3, s3 = calculate_pivots(high_prev, low_prev, prev_close)
+        upside_pct = round(((r2 - ltp) / ltp) * 100, 2)
+
+        pos_points = "• Strong Market Position\n• Good Cash Flow\n• Reasonable Liquidity
