@@ -19,25 +19,24 @@ def init_ai():
             from groq import Groq
             AI['groq'] = Groq(api_key=GROQ_KEY)
             print("✅ GROQ Ready")
-        except: print("⚠️ GROQ Failed")
-    if OPENAI_KEY:
-        try:
-            import openai
-            openai.api_key = OPENAI_KEY
-            AI['openai'] = openai
-            print("✅ OpenAI Ready")
-        except: print("⚠️ OpenAI Failed")
+        except Exception as e: 
+            print(f"⚠️ GROQ Failed: {e}")
 
 init_ai()
 
 def ask_ai(prompt, tokens=2000):
     if AI.get('groq'):
-        try: return AI['groq'].chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], max_tokens=tokens).choices[0].message.content
-        except: pass
-    if AI.get('openai'):
-        try: return AI['openai'].ChatCompletion.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], max_tokens=tokens).choices[0].message.content
-        except: pass
-    return "AI temporarily unavailable"
+        try: 
+            return AI['groq'].chat.completions.create(
+                model="llama-3.3-70b-versatile", 
+                messages=[{"role": "user", "content": prompt}], 
+                max_tokens=tokens,
+                temperature=0.7
+            ).choices[0].message.content
+        except Exception as e:
+            print(f"AI Error: {e}")
+            return "AI analysis in progress..."
+    return "Using mathematical analysis..."
 
 def get_news(symbol, name):
     if not NEWS_KEY: return "Market sentiment mixed"
@@ -253,14 +252,18 @@ def health_server():
 if __name__ == "__main__":
     threading.Thread(target=health_server, daemon=True).start()
     time.sleep(2)
-    print("🚀 BOT STARTING...")
-    print(f"✅ GROQ: {'Yes' if AI.get('groq') else 'No'}")
-    print(f"✅ OpenAI: {'Yes' if AI.get('openai') else 'No'}")
-    print(f"✅ News: {'Yes' if NEWS_KEY else 'No'}")
+    print("=" * 50)
+    print("🚀 AI STOCK ADVISORY BOT STARTING...")
+    print("=" * 50)
+    print(f"✅ GROQ AI: {'Enabled' if AI.get('groq') else 'Disabled'}")
+    print(f"✅ News API: {'Enabled' if NEWS_KEY else 'Disabled'}")
     print(f"✅ Watchlist: {sum(len(v) for v in WATCHLIST.values())} stocks")
+    print(f"✅ Stocks: {', '.join(WATCHLIST['LARGE_CAP'])}")
+    print("=" * 50)
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(2)
-    print("✅ ONLINE!")
+    print("✅ BOT IS ONLINE!")
+    print("=" * 50)
     while True:
         try: bot.infinity_polling(timeout=60, skip_pending=True)
         except Exception as e: print(f"❌ {e}"); time.sleep(10)
