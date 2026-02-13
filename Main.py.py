@@ -404,7 +404,7 @@ def process_options(m):
         bot.send_message(m.chat.id, f"🔍 Scanning for Budget: ₹{budget}...")
         
         # NOW CALLING THE ACTUAL LOGIC FUNCTION
-        bot.send_message(m.chat.id, 57
+        bot.send_message(m.chat.id, get_nifty_option_trade
                          (budget, spot))
     except ValueError:
         bot.send_message(m.chat.id, "❌ Invalid number.")
