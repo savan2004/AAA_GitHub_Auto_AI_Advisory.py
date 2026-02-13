@@ -152,14 +152,12 @@ def get_smart_portfolio():
                 except: continue
             
             selected.sort(key=lambda x: x['score'], reverse=True)
-            return selected[:2], selected[:3], selected[:2] # Return top lists
-        
+            return selected[:2]  # Return top 2 stocks        
         # SCAN
         lc, mc, sc = [], [], [] # Placeholders
-        lc = scan_category(large_caps, "Large Cap", "🏢")[0]
-        mc = scan_category(mid_caps, "Mid Cap", "🏫")[0]
-        sc = scan_category(small_caps, "Small Cap", "🚗")[0]
-        
+        lc = scan_category(large_caps, "Large Cap", "🏢")
+        mc = scan_category(mid_caps, "Mid Cap", "🏫")
+        sc = scan_category(small_caps, "Small Cap", "🚗")        
         # FORMATTING
         if not lc and not mc and not sc:
             return "⚠️ **Market Condition:** Current market is choppy. No stocks qualifying for >80% ASI Score. Wait for a rally."
@@ -264,9 +262,7 @@ def get_sk_auto_report(symbol):
                 content = response.choices[0].message.content
                 clean_json = re.search(r'\{.*\}', content, re.DOTALL)
                 if clean_json:
-                    ai_59
-                    (clean_json.group())
-                    pos_points = ai_data['pros']
+                    ai_data = json.loads(clean_json.group())                    pos_points = ai_data['pros']
                     neg_points = ai_data['cons']
                     news_headlines = ai_data['news']
             except: pass
