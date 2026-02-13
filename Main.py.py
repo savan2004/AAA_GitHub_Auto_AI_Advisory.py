@@ -54,8 +54,10 @@ def get_nifty_option_trade(budget, spot):
                 )
                 # Clean parsing
                 content = response.choices[0].message.content
-                data = json.loads(re.search(r'\{.*\}', content, re.DOTALL).group())
-                
+            json_match = re.search(r'\{[\s\S]*\}', content, re.DOTALL)                
+                        if not json_match: raise ValueError("Invalid AI response format")
+                                        data = json.loads(json_match.group())
+            
                 capital = round(data['entry'] * 65 * data['lots'])
                 return (
                     f"🚀 **NIFTY QUANT SIGNAL (AI)**\n"
@@ -74,7 +76,12 @@ def get_nifty_option_trade(budget, spot):
         strike = round(spot / 50) * 50
         
         # 2. Determine Type (Based on Spot vs Prev Close)
-        prev_close = yf.Ticker("^NSEI").history(period="2d")['Close'].iloc[-2]
+            # Get history and safely access prev_close("^NSEI").history(period="2d")['Close'].iloc[-2]
+            hist = yf.Ticker("^NSEI").history(period="3d")
+            if len(hist) >= 2:
+                                prev_close = hist['Close'].iloc[-2]
+                            else:
+                                                prev_close = spot  # Fallback to current spot price
         option_type = "CALL" if spot > prev_close else "PUT"
         
         # 3. Estimate Entry Price (Simulated ATM Premium)
@@ -257,7 +264,8 @@ def get_sk_auto_report(symbol):
                 content = response.choices[0].message.content
                 clean_json = re.search(r'\{.*\}', content, re.DOTALL)
                 if clean_json:
-                    ai_data = json.loads(clean_json.group())
+                    ai_59
+                    (clean_json.group())
                     pos_points = ai_data['pros']
                     neg_points = ai_data['cons']
                     news_headlines = ai_data['news']
@@ -396,7 +404,8 @@ def process_options(m):
         bot.send_message(m.chat.id, f"🔍 Scanning for Budget: ₹{budget}...")
         
         # NOW CALLING THE ACTUAL LOGIC FUNCTION
-        bot.send_message(m.chat.id, get_nifty_option_trade(budget, spot))
+        bot.send_message(m.chat.id, 57
+                         (budget, spot))
     except ValueError:
         bot.send_message(m.chat.id, "❌ Invalid number.")
 
