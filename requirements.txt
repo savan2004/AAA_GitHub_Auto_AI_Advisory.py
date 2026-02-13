@@ -1,5 +1,0 @@
-yfinance
-pandas
-pandas_ta
-openai
-requests
