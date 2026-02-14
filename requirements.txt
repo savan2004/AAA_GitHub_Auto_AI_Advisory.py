@@ -1,5 +1,7 @@
 pyTelegramBotAPI
 yfinance
 pandas
-openai
 requests
+python-dotenv
+groq
+google-generativeai
