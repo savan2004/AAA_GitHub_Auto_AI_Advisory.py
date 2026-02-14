@@ -1,9 +1,8 @@
 import os
 import time
-import json
 import re
-from datetime import datetime
 import threading
+from datetime import datetime
 
 import telebot
 from telebot import types
@@ -17,7 +16,12 @@ import google.genai as genai
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
-# --- 1. CONFIG & ENV ---
+# =========================
+# 1. CONFIG & ENV
+# =========================
+
+EDU_HEADER = "📜 *Educational Analysis Only* – Not SEBI-registered advice.\n"
+EDU_FOOTER = "⚠️ Use this as research input, *not* a direct buy/sell/hold signal."
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -28,10 +32,8 @@ if not TELEGRAM_TOKEN:
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="Markdown")
 
-# GROQ client
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# Gemini client (new google.genai SDK)
 gemini_client = None
 if GEMINI_API_KEY:
     try:
@@ -40,7 +42,9 @@ if GEMINI_API_KEY:
         print("Gemini init error:", repr(e))
 
 
-# --- 2. COMMON MARKET HELPERS ---
+# =========================
+# 2. COMMON HELPERS
+# =========================
 
 def safe_history(ticker, period="1y", interval="1d"):
     try:
@@ -118,11 +122,12 @@ def quality_score(ltp, ema200, rsi, pe, roe):
     return max(0, min(score, 100))
 
 
-# --- 3. AI LAYER: GROQ → GEMINI → FALLBACK ---
+# =========================
+# 3. AI LAYER: GROQ → GEMINI → FALLBACK
+# =========================
 
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
-    """Multi-provider AI with failover: GROQ → Gemini → fallback text."""
-    # 1) GROQ
+    """Multi-provider AI with failover: GROQ → Gemini → fallback."""
     if groq_client:
         try:
             resp = groq_client.chat.completions.create(
@@ -135,7 +140,6 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             print("GROQ error:", repr(e))
 
-    # 2) Gemini (google.genai)
     if gemini_client:
         try:
             result = gemini_client.models.generate_content(
@@ -146,14 +150,46 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             print("Gemini error:", repr(e))
 
-    # 3) Fallback
     return (
         "AI providers not available. Using mathematical and rule-based analysis only. "
-        "Focus on trend (vs 200DMA), RSI, valuation, and sector before taking decisions."
+        "Focus on trend vs 200DMA, RSI, valuation, and sector before taking decisions."
     )
 
 
-# --- 4. DEEP STOCK ANALYSIS ---
+# =========================
+# 4. QUICK VIEW FOR STOCK
+# =========================
+
+def quick_stock_view(sym: str, name: str, sector: str, ltp: float, prev_close: float,
+                     rsi: float, ema200: float, pe: float, roe: float, qi: int) -> str:
+    change_pct = ((ltp - prev_close) / prev_close) * 100 if prev_close else 0
+    trend = "Above 200DMA (uptrend)" if ltp > ema200 else "Below 200DMA (weak/sideways)"
+
+    if qi >= 75:
+        tag = "High quality, momentum aligned."
+    elif qi >= 55:
+        tag = "Reasonable quality, stable trend."
+    elif qi >= 40:
+        tag = "Mixed quality, use caution."
+    else:
+        tag = "Weak setup, avoid aggressive bets."
+
+    return (
+        f"{EDU_HEADER}"
+        f"📌 *Quick View*: `{sym}` – {name}\n"
+        f"Sector: {sector}\n"
+        f"Price: ₹{ltp:.2f} ({change_pct:+.2f}% vs prev close)\n"
+        f"Trend: {trend}\n"
+        f"RSI: {rsi:.1f} | P/E: {pe:.1f} | ROE: {roe:.1f}%\n"
+        f"Quality Score: {qi}/100 – {tag}\n\n"
+        f"🧭 *Idea*: Treat this as a starting point for your own research.\n"
+        f"{EDU_FOOTER}"
+    )
+
+
+# =========================
+# 5. DEEP STOCK ANALYSIS
+# =========================
 
 def deep_stock_analysis(symbol: str) -> str:
     sym = symbol.upper().strip()
@@ -161,7 +197,7 @@ def deep_stock_analysis(symbol: str) -> str:
 
     df = safe_history(ticker, period="1y", interval="1d")
     if df is None:
-        return f"❌ Could not fetch data for `{sym}`. Check the NSE symbol."
+        return f"{EDU_HEADER}❌ Could not fetch data for `{sym}`. Check the NSE symbol.\n{EDU_FOOTER}"
 
     close = df["Close"]
     high = df["High"]
@@ -203,6 +239,8 @@ def deep_stock_analysis(symbol: str) -> str:
     qi = quality_score(ltp, ema200, rsi, pe, roe)
 
     sentiment_prompt = (
+        "You are an educational stock analysis assistant for Indian equities.\n"
+        "If you are not sure about something, say 'uncertain' and do NOT invent numbers or news.\n\n"
         f"Stock: {name} ({sym})\n"
         f"LTP: {ltp:.2f}, RSI: {rsi:.1f}, MACD: {macd:.2f}, MACD_signal: {macd_signal:.2f},\n"
         f"PE: {pe}, PB: {pb}, ROE: {roe:.1f}%, DivYield: {div_yield:.2f}%.\n"
@@ -210,10 +248,13 @@ def deep_stock_analysis(symbol: str) -> str:
         "1) 3 bullish points\n"
         "2) 3 bearish points\n"
         "3) 1-line sentiment (Strong Buy / Buy / Hold / Avoid / Sell)\n"
-        "Format:\n"
-        "Bullish:\n- ...\nBearish:\n- ...\nSentiment: ...\n"
+        "Format exactly as:\n"
+        "Bullish:\n- ...\n- ...\n- ...\n"
+        "Bearish:\n- ...\n- ...\n- ...\n"
+        "Sentiment: ...\n"
     )
     sentiment_text = ai_call(sentiment_prompt, max_tokens=400)
+    sentiment_text = sentiment_text[:2000]
 
     if "Sentiment:" in sentiment_text:
         sentiment_line = (
@@ -229,7 +270,8 @@ def deep_stock_analysis(symbol: str) -> str:
         else:
             sentiment_line = "Avoid / High risk."
 
-    return (
+    full = (
+        f"{EDU_HEADER}"
         f"📊 **DEEP ANALYSIS: {sym}**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"🏢 *{name}* | Sector: {sector}\n"
@@ -244,58 +286,137 @@ def deep_stock_analysis(symbol: str) -> str:
         f"ATR(14): {atr:.2f}\n"
         f"Pivots: PP {pp:.2f} | R1 {r1:.2f} | R2 {r2:.2f} | S1 {s1:.2f} | S2 {s2:.2f}\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🎯 **Targets & Risk**\n"
+        "🎯 **Targets & Risk (Illustrative)**\n"
         f"Short-term (1W / 1M / 3M): "
         f"₹{st_1w:.2f} / ₹{st_1m:.2f} / ₹{st_3m:.2f}\n"
         f"Long-term (6M / 1Y / 2Y): "
         f"₹{lt_6m:.2f} / ₹{lt_1y:.2f} / ₹{lt_2y:.2f}\n"
         f"Stop Loss (swing): ₹{sl:.2f}\n"
+        "These levels are *educational scenarios*, not trading calls.\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **Quality Score:** {qi}/100\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"🤖 **AI Sentiment & Factors**\n{sentiment_text}\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"Final View: {sentiment_line}\n"
-        "⚠️ Educational only. Not SEBI registered.\n"
+        f"{EDU_FOOTER}"
     )
 
+    return full
 
-# --- 5. MARKET ANALYSIS ---
 
-def market_analysis() -> str:
-    nifty = safe_history("^NSEI", period="5d")
-    bank = safe_history("^NSEBANK", period="5d")
-    if nifty is None or bank is None:
-        return "⚠️ Unable to fetch Nifty/BankNifty data."
+# =========================
+# 6. INDEX VIEWS
+# =========================
 
-    nltp = float(nifty["Close"].iloc[-1])
-    bltp = float(bank["Close"].iloc[-1])
+def nifty_view() -> str:
+    df = safe_history("^NSEI", period="1mo")
+    if df is None or len(df) < 10:
+        return f"{EDU_HEADER}⚠️ Unable to fetch Nifty data.\n{EDU_FOOTER}"
 
-    breadth_text = "Breadth via free data is approximate; use indices as proxy."
+    close = df["Close"]
+    ltp = float(close.iloc[-1])
+    prev_close = float(close.iloc[-2])
+    rsi = calc_rsi(close)
+    ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+    ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
+    ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+
+    change_pct = ((ltp - prev_close) / prev_close) * 100 if prev_close else 0
+    trend = "Uptrend (above 200DMA)" if ltp > ema200 else "Weak/Sideways (below 200DMA)"
 
     prompt = (
-        f"Nifty: {nltp:.2f}, last 5 closes: {list(nifty['Close'].round(2).tail(5))}\n"
-        f"BankNifty: {bltp:.2f}, last 5 closes: {list(bank['Close'].round(2).tail(5))}\n"
-        "Give 1) Short market outlook (1-3 days), 2) Trading stance, 3) Risks.\n"
-        "Use bullet points."
+        "You are an educational index analyst for Indian markets.\n"
+        "Do NOT give trading calls. Describe scenarios only.\n\n"
+        f"Nifty levels: last closes: {list(close.round(2).tail(10))}\n"
+        f"Latest: {ltp:.2f}, RSI: {rsi:.1f}, EMA20: {ema20:.2f}, EMA50: {ema50:.2f}, EMA200: {ema200:.2f}.\n"
+        "Give:\n"
+        "1) 2-3 bullet points on trend & momentum\n"
+        "2) 2 key support/pressure zones (approx)\n"
+        "3) Stance for intraday traders and positional swing traders.\n"
+        "Keep it short and educational."
     )
-    outlook = ai_call(prompt, max_tokens=350)
+    ai_txt = ai_call(prompt, max_tokens=300)[:1500]
 
     return (
-        "🇮🇳 **INDIAN MARKET ANALYSIS**\n"
+        f"{EDU_HEADER}"
+        "📈 **NIFTY VIEW (EDUCATIONAL)**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"Nifty 50: {nltp:.2f}\n"
-        f"Bank Nifty: {bltp:.2f}\n"
+        f"LTP: {ltp:.2f} ({change_pct:+.2f}% vs prev close)\n"
+        f"Trend: {trend}\n"
+        f"RSI: {rsi:.1f} | EMA20: {ema20:.2f} | EMA50: {ema50:.2f} | EMA200: {ema200:.2f}\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Market Breadth: {breadth_text}\n"
+        f"🤖 AI Summary:\n{ai_txt}\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"🤖 AI Outlook:\n{outlook}\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "⚠️ Educational view only.\n"
+        f"{EDU_FOOTER}"
     )
 
 
-# --- 6. PORTFOLIO SCANNER ---
+def banknifty_view() -> str:
+    df = safe_history("^NSEBANK", period="1mo")
+    if df is None or len(df) < 10:
+        return f"{EDU_HEADER}⚠️ Unable to fetch Bank Nifty data.\n{EDU_FOOTER}"
+
+    close = df["Close"]
+    ltp = float(close.iloc[-1])
+    prev_close = float(close.iloc[-2])
+    rsi = calc_rsi(close)
+    ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+    ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
+    ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+
+    change_pct = ((ltp - prev_close) / prev_close) * 100 if prev_close else 0
+    trend = "Uptrend (above 200DMA)" if ltp > ema200 else "Weak/Sideways (below 200DMA)"
+
+    prompt = (
+        "You are an educational index analyst for Indian markets.\n"
+        "Do NOT give trading calls. Describe scenarios only.\n\n"
+        f"Bank Nifty levels: last closes: {list(close.round(2).tail(10))}\n"
+        f"Latest: {ltp:.2f}, RSI: {rsi:.1f}, EMA20: {ema20:.2f}, EMA50: {ema50:.2f}, EMA200: {ema200:.2f}.\n"
+        "Give:\n"
+        "1) 2-3 bullet points on trend & volatility\n"
+        "2) 2 key zones where bulls/bears may react\n"
+        "3) Stance for option buyers vs option sellers (educational only).\n"
+        "Keep it short and educational."
+    )
+    ai_txt = ai_call(prompt, max_tokens=300)[:1500]
+
+    return (
+        f"{EDU_HEADER}"
+        "🏦 **BANK NIFTY VIEW (EDUCATIONAL)**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"LTP: {ltp:.2f} ({change_pct:+.2f}% vs prev close)\n"
+        f"Trend: {trend}\n"
+        f"RSI: {rsi:.1f} | EMA20: {ema20:.2f} | EMA50: {ema50:.2f} | EMA200: {ema200:.2f}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 AI Summary:\n{ai_txt}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"{EDU_FOOTER}"
+    )
+
+
+def index_strategies_view() -> str:
+    return (
+        f"{EDU_HEADER}"
+        "🧭 **INDEX STRATEGIES (NIFTY / BANK NIFTY – EDUCATIONAL)**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📌 For *trend following* traders:\n"
+        "- Look for price holding above 200DMA with RSI 45–60.\n"
+        "- Use pullbacks towards EMA20/EMA50 as reference zones, not exact levels.\n\n"
+        "📌 For *range traders*:\n"
+        "- Identify recent swing high/low on daily chart as outer range.\n"
+        "- Consider neutral option structures (Iron Condor) only when IV is elevated.\n\n"
+        "📌 For *investors* using index funds:\n"
+        "- Use larger corrections (10–20% off highs) for staggered SIP/top-up.\n"
+        "- Focus on time in market, not perfect entry.\n\n"
+        "All points are for learning purposes only; always use your own judgment.\n"
+        f"{EDU_FOOTER}"
+    )
+
+
+# =========================
+# 7. PORTFOLIO SCANNER
+# =========================
 
 def portfolio_scanner() -> str:
     large_caps = ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "SBIN", "ITC"]
@@ -328,9 +449,10 @@ def portfolio_scanner() -> str:
     sc = scan(small_caps)
 
     if not lc and not mc and not sc:
-        return "⚠️ No qualifying stocks found; market may be sideways/choppy."
+        return f"{EDU_HEADER}⚠️ No qualifying stocks found; market may be sideways/choppy.\n{EDU_FOOTER}"
 
-    txt = "💎 **PORTFOLIO SCANNER (EDU)**\n"
+    txt = f"{EDU_HEADER}"
+    txt += "💎 **PORTFOLIO SCANNER (EDU)**\n"
     txt += "Suggested allocation: Large 60% | Mid 30% | Small 10%\n"
     txt += "━━━━━━━━━━━━━━━━━━━━\n"
 
@@ -356,14 +478,17 @@ def portfolio_scanner() -> str:
         txt += "- No strong small caps.\n"
 
     txt += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    txt += "Use as starting universe only. Not investment advice.\n"
+    txt += f"{EDU_FOOTER}"
     return txt
 
 
-# --- 7. OPTION STRATEGIES (EDUCATIONAL) ---
+# =========================
+# 8. OPTION STRATEGIES (EDU)
+# =========================
 
 def option_strategies_text() -> str:
     return (
+        f"{EDU_HEADER}"
         "🛡️ **OPTION STRATEGIES (EDUCATIONAL)**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "1️⃣ Bull Call Spread:\n"
@@ -381,20 +506,26 @@ def option_strategies_text() -> str:
         "- Hold equity, buy OTM Put as insurance.\n"
         "- Limits downside, keeps upside open.\n\n"
         "Always manage position size and risk. Options are high risk.\n"
+        f"{EDU_FOOTER}"
     )
 
 
-# --- 8. TELEGRAM HANDLERS ---
+# =========================
+# 9. TELEGRAM HANDLERS
+# =========================
 
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(m):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add("📊 Stock Analysis", "🇮🇳 Market Analysis")
     kb.add("💎 Portfolio Scanner", "🛡️ Option Strategies")
+    kb.add("📈 Nifty View", "🏦 Bank Nifty View")
+    kb.add("🧭 Index Strategies")
     bot.send_message(
         m.chat.id,
         "👑 *AI Stock Advisory Bot*\n\n"
-        "Select an option or type an NSE symbol (e.g. RELIANCE, TCS, HDFCBANK).",
+        "Select an option or type an NSE symbol (e.g. RELIANCE, TCS, HDFCBANK).\n"
+        "For indices, use Nifty/Bank Nifty buttons.",
         reply_markup=kb,
     )
 
@@ -416,7 +547,7 @@ def handle_stock_symbol(m):
 @bot.message_handler(func=lambda msg: msg.text == "🇮🇳 Market Analysis")
 def menu_market(m):
     bot.send_chat_action(m.chat.id, "typing")
-    bot.send_message(m.chat.id, market_analysis())
+    bot.send_message(m.chat.id, nifty_view() + "\n\n" + banknifty_view())
 
 
 @bot.message_handler(func=lambda msg: msg.text == "💎 Portfolio Scanner")
@@ -431,21 +562,49 @@ def menu_options(m):
     bot.send_message(m.chat.id, option_strategies_text())
 
 
+@bot.message_handler(func=lambda msg: msg.text == "📈 Nifty View")
+def menu_nifty(m):
+    bot.send_chat_action(m.chat.id, "typing")
+    bot.send_message(m.chat.id, nifty_view())
+
+
+@bot.message_handler(func=lambda msg: msg.text == "🏦 Bank Nifty View")
+def menu_banknifty(m):
+    bot.send_chat_action(m.chat.id, "typing")
+    bot.send_message(m.chat.id, banknifty_view())
+
+
+@bot.message_handler(func=lambda msg: msg.text == "🧭 Index Strategies")
+def menu_index_strat(m):
+    bot.send_chat_action(m.chat.id, "typing")
+    bot.send_message(m.chat.id, index_strategies_view())
+
+
 @bot.message_handler(func=lambda m: True)
 def fallback_symbol(m):
-    """Direct symbol query like RELIANCE, TCS, etc."""
     text = m.text.strip()
+    m_full = re.match(r"FULL\s+([A-Za-z ]{3,20})", text.upper())
+    if m_full:
+        sym = m_full.group(1).strip()
+        bot.send_chat_action(m.chat.id, "typing")
+        bot.send_message(m.chat.id, deep_stock_analysis(sym))
+        return
+
     if re.fullmatch(r"[A-Za-z ]{3,20}", text):
         bot.send_chat_action(m.chat.id, "typing")
         bot.send_message(m.chat.id, deep_stock_analysis(text))
     else:
         bot.send_message(
             m.chat.id,
-            "I did not understand. Use menu or send NSE symbol (e.g. RELIANCE, TCS).",
+            "I did not understand.\n"
+            "Use menu or send NSE symbol (e.g. RELIANCE, TCS).\n"
+            "For full report, send: `FULL RELIANCE`",
         )
 
 
-# --- 9. HEALTH SERVER FOR RENDER WEB SERVICE ---
+# =========================
+# 10. HEALTH SERVER FOR RENDER
+# =========================
 
 def run_health_server():
     port = int(os.environ.get("PORT", 10000))
@@ -462,7 +621,9 @@ def run_health_server():
         httpd.serve_forever()
 
 
-# --- 10. MAIN LOOP ---
+# =========================
+# 11. MAIN
+# =========================
 
 if __name__ == "__main__":
     print("🤖 AI Stock Advisory Bot starting...")
