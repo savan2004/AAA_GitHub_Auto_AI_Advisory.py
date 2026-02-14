@@ -3,6 +3,7 @@ import time
 import json
 import re
 from datetime import datetime
+import threading
 
 import telebot
 from telebot import types
@@ -13,6 +14,8 @@ import requests
 
 from groq import Groq
 import google.genai as genai
+from http.server import SimpleHTTPRequestHandler
+from socketserver import TCPServer
 
 # --- 1. CONFIG & ENV ---
 
@@ -38,7 +41,6 @@ if GEMINI_API_KEY:
 
 
 # --- 2. COMMON MARKET HELPERS ---
-
 
 def safe_history(ticker, period="1y", interval="1d"):
     try:
@@ -118,7 +120,6 @@ def quality_score(ltp, ema200, rsi, pe, roe):
 
 # --- 3. AI LAYER: GROQ → GEMINI → FALLBACK ---
 
-
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
     """Multi-provider AI with failover: GROQ → Gemini → fallback text."""
     # 1) GROQ
@@ -153,7 +154,6 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
 
 
 # --- 4. DEEP STOCK ANALYSIS ---
-
 
 def deep_stock_analysis(symbol: str) -> str:
     sym = symbol.upper().strip()
@@ -262,7 +262,6 @@ def deep_stock_analysis(symbol: str) -> str:
 
 # --- 5. MARKET ANALYSIS ---
 
-
 def market_analysis() -> str:
     nifty = safe_history("^NSEI", period="5d")
     bank = safe_history("^NSEBANK", period="5d")
@@ -297,7 +296,6 @@ def market_analysis() -> str:
 
 
 # --- 6. PORTFOLIO SCANNER ---
-
 
 def portfolio_scanner() -> str:
     large_caps = ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "SBIN", "ITC"]
@@ -364,7 +362,6 @@ def portfolio_scanner() -> str:
 
 # --- 7. OPTION STRATEGIES (EDUCATIONAL) ---
 
-
 def option_strategies_text() -> str:
     return (
         "🛡️ **OPTION STRATEGIES (EDUCATIONAL)**\n"
@@ -388,7 +385,6 @@ def option_strategies_text() -> str:
 
 
 # --- 8. TELEGRAM HANDLERS ---
-
 
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(m):
@@ -449,11 +445,28 @@ def fallback_symbol(m):
         )
 
 
-# --- 9. MAIN LOOP ---
+# --- 9. HEALTH SERVER FOR RENDER WEB SERVICE ---
 
+def run_health_server():
+    port = int(os.environ.get("PORT", 10000))
+
+    class Handler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Bot is running")
+
+    TCPServer.allow_reuse_address = True
+    with TCPServer(("0.0.0.0", port), Handler) as httpd:
+        httpd.serve_forever()
+
+
+# --- 10. MAIN LOOP ---
 
 if __name__ == "__main__":
     print("🤖 AI Stock Advisory Bot starting...")
+    threading.Thread(target=run_health_server, daemon=True).start()
     while True:
         try:
             bot.infinity_polling(skip_pending=True, timeout=60)
