@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 import openai
 
-# --- 1. CONFIG (GitHub + Render friendly) ---
+# --- 1. CONFIG ---
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -41,7 +41,7 @@ except Exception as e:
 
 
 def calculate_rsi(series, period=14):
-    """Calculate RSI using EMA method (robust fallback if data short)."""
+    """Calculate RSI using EMA method."""
     if len(series) < period + 1:
         return 50.0
     delta = series.diff()
@@ -55,7 +55,7 @@ def calculate_rsi(series, period=14):
 
 
 def calculate_pivots(high, low, close):
-    """Calculate pivot points for support/resistance."""
+    """Calculate pivot points."""
     pp = (high + low + close) / 3
     r1 = (2 * pp) - low
     s1 = (2 * pp) - high
@@ -139,12 +139,12 @@ def compute_asi_score(ltp, ema_50, ema_200, rsi, pe, roe, upside_pct, volatility
 
 
 STATIC_NOTES = {
-    "DLF": "DLF Ltd: Leading realty developer with cyclical earnings. Exposed to residential, commercial, and retail segments.",
-    "RELIANCE": "Reliance Industries: Diversified conglomerate spanning energy, retail, telecom (Jio). Strong cash generation and dividend policy.",
-    "HDFCBANK": "HDFC Bank: Large private-sector bank with strong liability franchise. Leading in mortgages and retail deposits.",
+    "DLF": "DLF Ltd: Leading realty developer with cyclical earnings. Exposed to residential, commercial, and retail segments. Sensitive to rate cycles and property market sentiment.",
+    "RELIANCE": "Reliance Industries: Diversified conglomerate spanning energy, retail, telecom (Jio). Strong cash generation and dividend policy. Proxy for India's consumption and energy transition.",
+    "HDFCBANK": "HDFC Bank: Large private-sector bank with strong liability franchise. Leading in mortgages and retail deposits. Exposed to credit cycle and NPA normalization.",
     "INFY": "Infosys: Tier-1 IT services company. Exposed to global IT spend, forex (USD/INR), and digital transformation trends.",
-    "TCS": "TCS: India's largest IT company by market cap. Dominant in banking, financials, and global delivery.",
-    "BANKNIFTY": "Bank Nifty Index: 12 large-cap bank stocks. Highly correlated with RBI policy, credit cycle, and institutional inflows.",
+    "TCS": "TCS: India's largest IT company by market cap. Dominant in banking, financials, and global delivery. Dividend aristocrat with strong free cash flow.",
+    "BANKNIFTY": "Bank Nifty Index: 12 large-cap bank stocks. Highly correlated with RBI policy, credit cycle, and institutional inflows. High beta instrument.",
 }
 
 
@@ -193,7 +193,17 @@ def get_nifty_option_trade(budget, spot):
                 f"- Type = CALL or PUT\n"
                 f"- Consider volatility and Greeks\n\n"
                 f"Return ONLY JSON:\n"
-                f'{{"strike":int,"type":"CALL/PUT","expiry":"DD-MMM","entry":float,"target":float,"sl":float,"lots":int,"bias":"bullish/bearish/neutral","reason":"1-line reason"}}'
+                f"{{"
+                f"\"strike\":int,"
+                f"\"type\":\"CALL/PUT\","
+                f"\"expiry\":\"DD-MMM\","
+                f"\"entry\":float,"
+                f"\"target\":float,"
+                f"\"sl\":float,"
+                f"\"lots\":int,"
+                f"\"bias\":\"bullish/bearish/neutral\","
+                f"\"reason\":\"1-line institutional reason\""
+                f"}}"
             )
             try:
                 response = client.chat.completions.create(
@@ -272,20 +282,40 @@ def get_nifty_option_trade(budget, spot):
 
 
 def get_smart_portfolio():
-    """Scan large/mid/small caps and return high-ASI picks (delisted removed)."""
+    """Scan large/mid/small caps and return high-ASI picks."""
     try:
         large_caps = [
-            "RELIANCE", "HDFCBANK", "INFY", "ICICIBANK", "SBIN",
-            "BHARTIARTL", "ITC", "TCS", "KOTAKBANK", "LT"
+            "RELIANCE",
+            "HDFCBANK",
+            "INFY",
+            "ICICIBANK",
+            "SBIN",
+            "BHARTIARTL",
+            "ITC",
+            "TCS",
+            "KOTAKBANK",
+            "LT",
         ]
         mid_caps = [
-            "PERSISTENT", "MOTHERSON", "MAXHEALTH", "AUBANK",
-            "LATENTVIEW", "TRENT", "TATACONSUM", "CHOLAHLDNG", "M&MFIN"
+            "PERSISTENT",
+            "MOTHERSON",
+            "MAXHEALTH",
+            "AUBANK",
+            "LATENTVIEW",
+            "TRENT",
+            "TATACONSUM",
+            "CHOLAHLDNG",
+            "M&MFIN",
         ]
-        # Removed: PEL, PRAJINDS, IIFLSEC (delisted/404 errors)
         small_caps = [
-            "SUZLON", "HEG", "TANLA", "BAJAJELEC", "ORIENTELEC",
-            "SHARDACROP", "JINDALSTEL", "DCMSHRIRAM"
+            "SUZLON",
+            "HEG",
+            "TANLA",
+            "BAJAJELEC",
+            "ORIENTELEC",
+            "SHARDACROP",
+            "JINDALSTEL",
+            "DCMSHRIRAM",
         ]
 
         final_report = "💎 **SMART PORTFOLIO (ASI 75%+)**\n"
@@ -322,5 +352,189 @@ def get_smart_portfolio():
                     continue
             return selected
 
-        final_report += (
-            "🚀 **LARGE
+        large_list = scan_category(large_caps)
+        mid_list = scan_category(mid_caps)
+        small_list = scan_category(small_caps)
+
+        final_report += "🚀 **LARGE CAPS:**\n"
+        final_report += ("\n".join(large_list) or "No top picks") + "\n\n"
+
+        final_report += "📈 **MID CAPS:**\n"
+        final_report += ("\n".join(mid_list) or "No top picks") + "\n\n"
+
+        final_report += "💎 **SMALL CAPS:**\n"
+        final_report += ("\n".join(small_list) or "No top picks")
+
+        return final_report
+    except Exception as e:
+        return f"⚠️ Portfolio scan error: {str(e)}"
+
+
+# --- 6. TELEGRAM HANDLERS ---
+
+
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    item1 = types.KeyboardButton("🚀 Option Sniper")
+    item2 = types.KeyboardButton("💎 Smart Portfolio")
+    markup.add(item1, item2)
+
+    welcome_text = (
+        "👑 **Sovereign Quant Terminal**\n"
+        "Institutional-grade analysis at your fingertips.\n\n"
+        "Commands:\n"
+        "/analyze <SYMBOL> - Full technical & AI report\n"
+        "/option <BUDGET> - High conviction Nifty trade\n"
+        "/portfolio - Scan for top ASI picks"
+    )
+    bot.reply_to(message, welcome_text, parse_mode="Markdown", reply_markup=markup)
+
+
+@bot.message_handler(func=lambda message: message.text == "🚀 Option Sniper")
+def option_sniper_menu(message):
+    bot.reply_to(
+        message,
+        "Enter your trading budget (e.g. /option 25000)",
+    )
+
+
+@bot.message_handler(func=lambda message: message.text == "💎 Smart Portfolio")
+def portfolio_menu(message):
+    msg = bot.reply_to(
+        message, "🔍 Scanning market for high-ASI gems... please wait."
+    )
+    report = get_smart_portfolio()
+    bot.edit_message_text(
+        report,
+        chat_id=msg.chat.id,
+        message_id=msg.message_id,
+        parse_mode="Markdown",
+    )
+
+
+@bot.message_handler(commands=["option"])
+def handle_option(message):
+    try:
+        args = message.text.split()
+        budget = float(args[1]) if len(args) > 1 else 20000.0
+        msg = bot.reply_to(
+            message, "🎯 Calculating high-conviction Nifty trade..."
+        )
+        spot = yf.Ticker("^NSEI").fast_info["last_price"]
+        trade = get_nifty_option_trade(budget, spot)
+        bot.edit_message_text(
+            trade,
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ Error: {str(e)}")
+
+
+@bot.message_handler(commands=["portfolio"])
+def handle_portfolio(message):
+    msg = bot.reply_to(
+        message, "🔍 Scanning market for high-ASI gems... please wait."
+    )
+    report = get_smart_portfolio()
+    bot.edit_message_text(
+        report,
+        chat_id=msg.chat.id,
+        message_id=msg.message_id,
+        parse_mode="Markdown",
+    )
+
+
+@bot.message_handler(commands=["analyze"])
+def handle_analyze(message):
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Usage: /analyze RELIANCE")
+            return
+
+        sym = args[1].upper()
+        msg = bot.reply_to(
+            message, f"🔍 Generating Institutional Report for {sym}..."
+        )
+
+        ticker = yf.Ticker(f"{sym}.NS")
+        df = ticker.history(period="200d")
+        if df.empty:
+            bot.edit_message_text(
+                "⚠️ Could not find data for that symbol.",
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+            )
+            return
+
+        info = ticker.info
+        close = df["Close"]
+        ltp = float(close.iloc[-1])
+        rsi = calculate_rsi(close)
+        ema_50 = close.ewm(span=50).mean().iloc[-1]
+        ema_200 = close.ewm(span=200).mean().iloc[-1]
+        vol = calculate_volatility(df)
+
+        high_prev = float(df["High"].iloc[-2])
+        low_prev = float(df["Low"].iloc[-2])
+        prev_close = float(close.iloc[-2])
+        _, _, s1, r2, _, _, _ = calculate_pivots(
+            high_prev, low_prev, prev_close
+        )
+
+        pe = info.get("forwardPE") or info.get("trailingPE")
+        roe_raw = info.get("returnOnEquity", 0) or 0
+        roe = roe_raw * 100
+
+        upside = ((r2 - ltp) / ltp) * 100 if ltp > 0 else 0
+
+        asi_score = compute_asi_score(
+            ltp, ema_50, ema_200, rsi, pe, roe, upside, vol
+        )
+        verdict_emoji, verdict_text, conclusion = get_verdict_and_conclusion(
+            ltp, ema_50, ema_200, rsi, asi_score, sym
+        )
+
+        report = (
+            f"{verdict_emoji} **INSTITUTIONAL REPORT: {sym}**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 **LTP:** ₹{ltp:.2f} | **ASI:** {asi_score}%\n"
+            f"📢 **VERDICT:** {verdict_text}\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 **EMA 50:** {ema_50:.2f} | **EMA 200:** {ema_200:.2f}\n"
+            f"📉 **RSI:** {rsi:.1f} | **VOL:** {vol:.2f}%\n"
+            f"🎯 **TARGET (R2):** {r2:.2f} | **SUPPORT (S1):** {s1:.2f}\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 **THESIS:** {conclusion}\n"
+        )
+
+        if sym in STATIC_NOTES:
+            report += f"\n📖 **NOTE:** {STATIC_NOTES[sym]}"
+
+        bot.edit_message_text(
+            report,
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+            parse_mode="Markdown",
+        )
+
+    except Exception as e:
+        try:
+            bot.edit_message_text(
+                f"⚠️ Analysis Error: {str(e)}",
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+            )
+        except Exception:
+            bot.reply_to(message, f"⚠️ Analysis Error: {str(e)}")
+
+
+# --- 7. MAIN LOOP ---
+
+
+if __name__ == "__main__":
+    print("🤖 Bot is starting...")
+    bot.infinity_polling(skip_pending=True, timeout=60)
