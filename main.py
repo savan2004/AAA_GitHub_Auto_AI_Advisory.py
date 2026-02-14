@@ -2,7 +2,7 @@ import os
 import time
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import telebot
 from telebot import types
@@ -11,38 +11,30 @@ import pandas as pd
 import numpy as np
 import requests
 
-# Optional AI providers
-try:
-    from groq import Groq
-except ImportError:
-    Groq = None
-
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
+from groq import Groq
+import google.genai as genai
 
 # --- 1. CONFIG & ENV ---
 
-TELEGRAM_TOKEN = os.getenv("8461087780:AAE4l58egcDN7LRbqXAp7x7x0nkfX6jTGEc")
-GROQ_API_KEY = os.getenv("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")
-GEMINI_API_KEY = os.getenv("AIzaSyCPh8wPC-rmBIyTr5FfV3Mwjb33KeZdRUE")
-
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN not set in environment.")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="Markdown")
 
-# Multi‑provider AI flags
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY and Groq else None
-if GEMINI_API_KEY and genai:
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel("gemini-1.5-flash")
-else:
-    gemini_model = None
+# GROQ client
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"  # simple text model
+# Gemini client (new google.genai SDK)
+gemini_client = None
+if GEMINI_API_KEY:
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print("Gemini init error:", repr(e))
 
 
 # --- 2. COMMON MARKET HELPERS ---
@@ -105,21 +97,17 @@ def calc_pivots(h, l, c):
 
 def quality_score(ltp, ema200, rsi, pe, roe):
     score = 0
-    # trend
     if ltp > ema200:
         score += 30
-    # momentum
     if 45 <= rsi <= 60:
         score += 25
     elif 40 <= rsi < 45 or 60 < rsi <= 70:
         score += 10
-    # valuation
     if pe and pe > 0:
         if pe < 15:
             score += 15
         elif 15 <= pe <= 25:
             score += 8
-    # quality
     if roe and roe > 0:
         if roe >= 18:
             score += 20
@@ -128,11 +116,11 @@ def quality_score(ltp, ema200, rsi, pe, roe):
     return max(0, min(score, 100))
 
 
-# --- 3. AI LAYER WITH FAILOVER ---
+# --- 3. AI LAYER: GROQ → GEMINI → FALLBACK ---
 
 
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
-    """Multi-provider AI with failover: GROQ → Gemini → HuggingFace → fallback text."""
+    """Multi-provider AI with failover: GROQ → Gemini → fallback text."""
     # 1) GROQ
     if groq_client:
         try:
@@ -146,33 +134,21 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             print("GROQ error:", repr(e))
 
-    # 2) Gemini
-    if gemini_model:
+    # 2) Gemini (google.genai)
+    if gemini_client:
         try:
-            out = gemini_model.generate_content(prompt)
-            return out.text.strip()
+            result = gemini_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            )
+            return result.text.strip()
         except Exception as e:
             print("Gemini error:", repr(e))
 
-    # 3) HuggingFace (simple text generation)
-    if HUGGINGFACE_TOKEN:
-        try:
-            url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-            headers = {"Authorization": f"Bearer {HUGGINGFACE_TOKEN}"}
-            payload = {"inputs": prompt, "parameters": {"max_new_tokens": max_tokens}}
-            r = requests.post(url, headers=headers, json=payload, timeout=20)
-            r.raise_for_status()
-            data = r.json()
-            if isinstance(data, list) and data:
-                txt = data[0].get("generated_text", "")
-                return txt.strip()
-        except Exception as e:
-            print("HF error:", repr(e))
-
-    # 4) Fallback
+    # 3) Fallback
     return (
         "AI providers not available. Using mathematical and rule-based analysis only. "
-        "Consider trend (price vs. 200DMA), RSI, valuation, and sector view before taking any decision."
+        "Focus on trend (vs 200DMA), RSI, valuation, and sector before taking decisions."
     )
 
 
@@ -190,7 +166,6 @@ def deep_stock_analysis(symbol: str) -> str:
     close = df["Close"]
     high = df["High"]
     low = df["Low"]
-    volume = df["Volume"]
 
     ltp = float(close.iloc[-1])
     prev_close = float(close.iloc[-2])
@@ -241,7 +216,9 @@ def deep_stock_analysis(symbol: str) -> str:
     sentiment_text = ai_call(sentiment_prompt, max_tokens=400)
 
     if "Sentiment:" in sentiment_text:
-        sentiment_line = sentiment_text.split("Sentiment:")[-1].strip().splitlines()[0]
+        sentiment_line = (
+            sentiment_text.split("Sentiment:")[-1].strip().splitlines()[0]
+        )
     else:
         if qi >= 75:
             sentiment_line = "Strong Buy (High quality and trend)."
@@ -260,7 +237,7 @@ def deep_stock_analysis(symbol: str) -> str:
         f"📈 52W High: ₹{df['High'].max():.2f} | 52W Low: ₹{df['Low'].min():.2f}\n"
         f"🏦 MCap: {mcap/1e7:.1f} Cr | P/E: {pe:.2f} | P/B: {pb:.2f} | ROE: {roe:.1f}% | Div: {div_yield:.2f}%\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📌 **Technicals**\n"
+        "📌 **Technicals**\n"
         f"RSI: {rsi:.1f} | MACD: {macd:.2f} vs Signal: {macd_signal:.2f}\n"
         f"BB: U {bb_u:.2f} | M {bb_m:.2f} | L {bb_l:.2f}\n"
         f"EMA20: {ema20:.2f} | EMA50: {ema50:.2f} | EMA200: {ema200:.2f}\n"
@@ -295,17 +272,13 @@ def market_analysis() -> str:
     nltp = float(nifty["Close"].iloc[-1])
     bltp = float(bank["Close"].iloc[-1])
 
-    # Breadth approximation via NIFTYBEES & banking ETF if needed
-    breadth_text = "Breadth data not fully available via free APIs; using index action instead."
+    breadth_text = "Breadth via free data is approximate; use indices as proxy."
 
     prompt = (
-        f"Nifty: {nltp:.2f} last 5 closes: {list(nifty['Close'].round(2).tail(5))}\n"
-        f"BankNifty: {bltp:.2f} last 5 closes: {list(bank['Close'].round(2).tail(5))}\n"
-        "Give:\n"
-        "1) Short market outlook for India (1-3 days)\n"
-        "2) Trading stance (BTST, intraday, wait & watch)\n"
-        "3) Key risk factors.\n"
-        "Be concise, bullet points."
+        f"Nifty: {nltp:.2f}, last 5 closes: {list(nifty['Close'].round(2).tail(5))}\n"
+        f"BankNifty: {bltp:.2f}, last 5 closes: {list(bank['Close'].round(2).tail(5))}\n"
+        "Give 1) Short market outlook (1-3 days), 2) Trading stance, 3) Risks.\n"
+        "Use bullet points."
     )
     outlook = ai_call(prompt, max_tokens=350)
 
@@ -357,7 +330,7 @@ def portfolio_scanner() -> str:
     sc = scan(small_caps)
 
     if not lc and not mc and not sc:
-        return "⚠️ No qualifying stocks found. Market might be sideways/choppy."
+        return "⚠️ No qualifying stocks found; market may be sideways/choppy."
 
     txt = "💎 **PORTFOLIO SCANNER (EDU)**\n"
     txt += "Suggested allocation: Large 60% | Mid 30% | Small 10%\n"
@@ -385,7 +358,7 @@ def portfolio_scanner() -> str:
         txt += "- No strong small caps.\n"
 
     txt += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    txt += "Use as a starting universe only. Not investment advice.\n"
+    txt += "Use as starting universe only. Not investment advice.\n"
     return txt
 
 
@@ -404,9 +377,9 @@ def option_strategies_text() -> str:
         "- Sell OTM Call + Buy further OTM Call\n"
         "- Sell OTM Put + Buy further OTM Put\n"
         "- Range-bound market, limited risk.\n\n"
-        "3️⃣ Straddle (Long):\n"
+        "3️⃣ Long Straddle:\n"
         "- Buy ATM Call + Buy ATM Put\n"
-        "- Expect big move either side, high premium cost.\n\n"
+        "- Expect big move either side, high premium.\n\n"
         "4️⃣ Protective Put:\n"
         "- Hold equity, buy OTM Put as insurance.\n"
         "- Limits downside, keeps upside open.\n\n"
@@ -425,14 +398,16 @@ def start_cmd(m):
     bot.send_message(
         m.chat.id,
         "👑 *AI Stock Advisory Bot*\n\n"
-        "Select an option or type a stock symbol (e.g. RELIANCE, TCS, HDFCBANK).",
+        "Select an option or type an NSE symbol (e.g. RELIANCE, TCS, HDFCBANK).",
         reply_markup=kb,
     )
 
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Stock Analysis")
 def menu_stock(m):
-    msg = bot.send_message(m.chat.id, "Send NSE symbol or company name (e.g. RELIANCE, TCS, HDFCBANK).")
+    msg = bot.send_message(
+        m.chat.id, "Send NSE symbol or company name (e.g. RELIANCE, TCS, HDFCBANK)."
+    )
     bot.register_next_step_handler(msg, handle_stock_symbol)
 
 
@@ -464,7 +439,7 @@ def menu_options(m):
 def fallback_symbol(m):
     """Direct symbol query like RELIANCE, TCS, etc."""
     text = m.text.strip()
-    if re.fullmatch(r"[A-Za-z]{3,10}", text.replace(" ", "")):
+    if re.fullmatch(r"[A-Za-z ]{3,20}", text):
         bot.send_chat_action(m.chat.id, "typing")
         bot.send_message(m.chat.id, deep_stock_analysis(text))
     else:
