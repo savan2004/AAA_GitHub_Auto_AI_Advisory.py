@@ -1,162 +1,276 @@
+import json
+import re
 import os
-from flask import Flask
-import telebot
-from threading import Thread
-import logging
+import time
+import random
+import threading
+import pandas as pd
 from datetime import datetime
+import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 
-# Disable noisy logs
-logging.getLogger('werkzeug').disabled = True
-log = logging.getLogger(__name__)
+import telebot
+from telebot import types
 
-app = Flask(__name__)
+from groq import Groq
+import google.generativeai as genai
+from http.server import SimpleHTTPRequestHandler
+from socketserver import TCPServer
 
-# 🔑 RENDER ENVIRONMENT KEYS
-TOKEN = os.getenv('TELEGRAM_TOKEN')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-ALPHA_VANTAGE_KEY = os.getenv('ALPHA_VANTAGE_KEY', 'demo')
+# Tavily for better prompts/research
+try:
+    from tavily import TavilyClient
+    TAVILY_AVAILABLE = True
+    tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY", ""))
+except ImportError:
+    TAVILY_AVAILABLE = False
+    tavily = None
+    print("Tavily not available - pip install tavily-python")
 
-print(f"🚀 main.py STARTED")
-print(f"✅ Telegram: {'OK' if TOKEN else 'MISSING'}")
-print(f"✅ OpenAI: {'OK' if OPENAI_API_KEY else 'MISSING'}")
+# --- 1. CONFIG & ENV ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-bot = telebot.TeleBot(TOKEN)
+genai.configure(api_key=GEMINI_API_KEY)
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# --- AI RESEARCH BUTTONS ---
-@bot.message_handler(commands=['start', '/start'])
-def start(message):
-    markup = telebot.types.InlineKeyboardMarkup(row_width=2)
-    buttons = [
-        ("💎 AI Portfolio", "portfolio"),
-        ("🚀 Nifty 50", "nifty"),
-        ("🏦 RELIANCE", "reliance"),
-        ("💳 HDFCBANK", "hdfcbank"),
-        ("⚡ TCS", "tcs")
-    ]
+# Cache for data (simple dict, expires in 10min)
+cache = {}
+CACHE_EXPIRY = 600  # seconds
+
+# Lock for yfinance
+yf_lock = threading.Lock()
+
+# --- 2. COMMON MARKET HELPERS ---
+def get_cached(key, expiry=CACHE_EXPIRY):
+    now = time.time()
+    if key in cache and now - cache[key]['time'] < expiry:
+        return cache[key]['data']
+    return None
+
+def set_cached(key, data):
+    cache[key] = {'data': data, 'time': time.time()}
+
+def safe_history(ticker, period="1y", interval="1d"):
+    key = f"{ticker}_{period}_{interval}"
+    data = get_cached(key)
+    if data is not None:
+        return data
+
+    with yf_lock:
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                df = yf.Ticker(ticker).history(period=period, interval=interval)
+                if not df.empty:
+                    set_cached(key, df)
+                    return df
+            except YFRateLimitError:
+                wait = (2 ** attempt) + random.uniform(0, 2)
+                time.sleep(wait)
+            except Exception:
+                break
+        return pd.DataFrame()
+
+# Other helpers like quality_score remain same...
+def quality_score(ltp, ema200, rsi, pe, roe):
+    score = 0
+    if ltp > ema200 * 0.95: score += 1
+    if 30 < rsi < 70: score += 1
+    if pe < 25: score += 1
+    if roe > 15: score += 1
+    return score / 4 * 100
+
+# --- 3. AI LAYER: Enhanced with Tavily ---
+def enhance_prompt_with_research(base_prompt, query):
+    if not TAVILY_AVAILABLE:
+        return base_prompt
+    try:
+        # Tavily research for fresh insights
+        response = tavily.search(
+            query=f"latest analysis {query} NSE stock India market news",
+            search_depth="basic",
+            max_results=3,
+            include_answer=True
+        )
+        research = response.get('answer', '') + '\nSources: ' + ', '.join([r['url'] for r in response.get('results', [])[:2]])
+        return f"{base_prompt}\n\nLatest Research Context:\n{research[:2000]}\n\nUse this for accurate, timely advice."
+    except:
+        return base_prompt
+
+def ai_call(prompt: str, max_tokens: int = 600, research_query: str = None) -> str:
+    if research_query:
+        prompt = enhance_prompt_with_research(prompt, research_query)
     
-    for text, callback in buttons:
-        markup.add(telebot.types.InlineKeyboardButton(text, callback_data=callback))
+    # Groq first
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+        resp = client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=0.3
+        )
+        return resp.choices[0].message.content
+    except:
+        pass
     
-    bot.send_message(message.chat.id,
-        f"🤖 **AI RESEARCH BOT** | {datetime.now().strftime('%d/%m %H:%M')}\n\n"
-        "💎 Perfect AI analysis\n"
-        "🔥 Unlimited sources\n"
-        f"✅ Render LIVE | Keys: OK",
-        reply_markup=markup)
-
-# --- PERFECT AI RESEARCH RESPONSES ---
-@bot.callback_query_handler(func=lambda call: True)
-def ai_research(call):
-    bot.answer_callback_query(call.id)
+    # Gemini fallback
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        resp = model.generate_content(prompt)
+        return resp.text
+    except:
+        pass
     
-    research = {
-        "portfolio": """💎 **AI PORTFOLIO 2026** (₹10L)
+    return "AI temporarily unavailable. Try again later."
 
-🏦 **RELIANCE** 60% | ₹2,950 | BUY 92% 🎯 ₹3,500
-💳 **HDFCBANK** 25% | ₹1,650 | BUY 85% 🎯 ₹1,900  
-⚡ **TCS** 15% | ₹4,200 | HOLD 78% 🎯 ₹4,500
+# --- 4. DEEP STOCK ANALYSIS (Cached) ---
+def deep_stock_analysis(symbol: str) -> str:
+    sym = symbol.upper().strip()
+    ticker = f"{sym}.NS"
+    key = f"analysis_{sym}"
+    data = get_cached(key, 1800)  # 30min cache
+    if data:
+        return data
 
-📊 **Expected Return: +27% (12m)**
-⚖️ **Risk: Low-Medium**
-🤖 *OpenAI Multi-Source Analysis*""",
-        
-        "nifty": """🚀 **NIFTY50 RESEARCH**
+    df = safe_history(ticker, "2y")
+    if df.empty:
+        return f"No data for {sym}. Try valid NSE symbol."
 
-📊 **Spot**: ₹24,650 | +1.8% (weekly)
-📈 **Trend**: BULLISH (EMA 200)
-📊 **RSI**: 62 (Neutral-Momentum)
+    ltp = df['Close'][-1]
+    ema200 = df['Close'].ewm(span=200).mean()[-1]
+    rsi = compute_rsi(df['Close'])
+    rsi_val = rsi[-1] if not pd.isna(rsi[-1]) else 50
+    info = yf.Ticker(ticker).info
+    pe = info.get('trailingPE', 0)
+    roe = info.get('returnOnEquity', 0) * 100
 
-💎 **VERDICT**: BUY 87% confidence
-🎯 **Target**: ₹26,200 (+6.3%)
-⏰ **Timeframe**: 1-3 months
-
-⚠️ **Risks**: FII flows, rates
-✅ **Sources**: yf+NSE+AlphaV""",
-        
-        "reliance": """🔥 **RELIANCE INDUSTRIES**
-
-📊 **LTP**: ₹2,950 | +2.1%
-📈 **Trend**: Strong uptrend
-💹 **P/E**: 28x | ROE: 9.5%
-
-💎 **VERDICT**: **BUY** 92% confidence
-🎯 **Target**: ₹3,500 (+18%)
-⏰ **Hold**: 3-6 months
-
-✅ **Catalysts**: Jio 5G, Retail
-⚠️ **Risks**: Oil volatility""",
-        
-        "hdfcbank": """🏦 **HDFC BANK**
-
-📊 **LTP**: ₹1,650 | +0.9%
-📈 **Trend**: Range breakout
-💹 **P/E**: 19x | ROE: 16%
-
-💎 **VERDICT**: **BUY** 88% confidence  
-🎯 **Target**: ₹1,900 (+15%)
-⏰ **Hold**: 6 months
-
-✅ **Strengths**: CASA growth
-⚠️ **Risks**: Loan growth slowdown""",
-        
-        "tcs": """⚡ **TCS LTD**
-
-📊 **LTP**: ₹4,200 | -0.5%
-📈 **Trend**: Consolidation
-💹 **P/E**: 32x | ROE: 44%
-
-💎 **VERDICT**: **ACCUMULATE** 78%
-🎯 **Target**: ₹4,700 (+12%)
-⏰ **Hold**: 12 months
-
-✅ **AI/Cloud deals**
-⚠️ **Margin pressure"""
-    }
+    score = quality_score(ltp, ema200, rsi_val, pe, roe)
     
-    bot.edit_message_text(
-        research.get(call.data, "🔍 Research loading..."),
-        call.message.chat.id,
-        call.message.message_id)
+    prompt = f"""
+    Analyze {sym}.NS: LTP {ltp:.2f}, EMA200 {ema200:.2f}, RSI {rsi_val:.1f}, PE {pe:.1f}, ROE {roe:.1f}, Score {score:.0f}/100.
+    Recent trend: {'Bullish' if ltp > ema200 else 'Bearish'}.
+    Provide BUY/HOLD/SELL rec with reasons, risks, target. Educational only.
+    """
+    
+    analysis = ai_call(prompt, 800, f"{sym} stock analysis")
+    full = f"**{sym} Analysis**\nScore: {score:.0f}/100\n\n{analysis}"
+    set_cached(key, full)
+    return full
 
-# --- QUICK TEXT SEARCH ---
-@bot.message_handler(func=lambda m: m.text)
-def quick_search(m):
+def compute_rsi(prices, window=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+# --- 5. MARKET ANALYSIS (Cached) ---
+def market_analysis() -> str:
+    key = "market_analysis"
+    data = get_cached(key)
+    if data:
+        return data
+
+    nifty = safe_history("^NSEI", "5d")
+    bank = safe_history("^NSEBANK", "5d")
+    if nifty.empty or bank.empty:
+        return "Market data unavailable."
+
+    nifty_chg = ((nifty['Close'][-1] - nifty['Close'][0]) / nifty['Close'][0]) * 100
+    bank_chg = ((bank['Close'][-1] - bank['Close'][0]) / bank['Close'][0]) * 100
+
+    prompt = f"Nifty50: {nifty_chg:.2f}%, BankNifty: {bank_chg:.2f}%. Market outlook?"
+    analysis = ai_call(prompt, 400, "NSE Nifty BankNifty latest")
+
+    full = f"**Market Snapshot**\nNifty: {nifty_chg:.2f}%\nBankNifty: {bank_chg:.2f}%\n\n{analysis}"
+    set_cached(key, full)
+    return full
+
+# --- 6. PORTFOLIO SCANNER (Batched) ---
+def portfolio_scanner() -> str:
+    key = "portfolio_scan"
+    data = get_cached(key, 900)  # 15min
+    if data:
+        return data
+
+    large_caps = ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "SBIN", "ITC"]
+    mid_caps = ["PERSISTENT", "MOTHERSON", "TRENT", "AUBANK", "TATACOMM"]
+
+    # Batch download
+    all_tickers = " ".join([f"{s}.NS" for s in large_caps + mid_caps])
+    data = yf.download(all_tickers, period="3mo", group_by='ticker', threads=False, prepost=False)
+
+    results = []
+    for sym in large_caps + mid_caps:
+        try:
+            closes = data['Close'][sym].dropna()
+            if len(closes) > 10:
+                ltp = closes[-1]
+                ema = closes.ewm(span=50).mean()[-1]
+                score = 100 if ltp > ema else 0
+                results.append(f"{sym}: {score:.0f}")
+        except:
+            pass
+
+    prompt = f"Top picks from: {' | '.join(results[:10])}. Suggest 3-5 buys."
+    recs = ai_call(prompt, 500, "best NSE stocks now")
+    full = f"**Portfolio Scan**\n{recs}\n(Updated: {datetime.now().strftime('%H:%M')})"
+    set_cached(key, full)
+    return full
+
+# Option strategies text remains same...
+def option_strategies_text() -> str:
+    return "🛡️ **OPTION STRATEGIES (EDUCATIONAL)**\n- Iron Condor: Range bound\n- Straddle: High vol expected\nAlways use stops. Not advice."
+
+# --- 7. TELEGRAM HANDLERS ---
+@bot.message_handler(commands=["start", "help"])
+def start_cmd(m):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add(types.KeyboardButton("📊 Market"), types.KeyboardButton("🔍 Scanner"))
+    kb.add(types.KeyboardButton("💰 Portfolio"), types.KeyboardButton("🛡️ Options"))
+    bot.send_message(m.chat.id, "🤖 AI Stock Bot\nEducational analysis only.\nPick:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: True)
+def handle_msg(m):
     text = m.text.upper()
-    if any(word in text for word in ['RELIANCE', 'RIL']):
-        bot.reply_to(m, "🔥 RELIANCE ₹2,950 | **BUY 92%** 🎯 ₹3,500")
-    elif any(word in text for word in ['NIFTY', 'NSEI']):
-        bot.reply_to(m, "🚀 NIFTY ₹24,650 | **BULLISH** 📈")
-    elif any(word in text for word in ['HDFC', 'HDFCBANK']):
-        bot.reply_to(m, "🏦 HDFCBANK ₹1,650 | **BUY 88%** 🎯 ₹1,900")
-    elif 'PORT' in text or 'PORTFOLIO' in text:
-        bot.reply_to(m, "💎 **PORTFOLIO**: RELIANCE 60% + HDFC 25% + TCS 15%\n📊 +27% expected")
+    if "MARKET" in text:
+        bot.reply_to(m, market_analysis())
+    elif "SCANNER" in text or "PORTFOLIO" in text:
+        bot.reply_to(m, portfolio_scanner())
+    elif "OPTIONS" in text:
+        bot.reply_to(m, option_strategies_text())
+    else:
+        # Assume stock symbol
+        bot.reply_to(m, deep_stock_analysis(text))
 
-# --- RENDER HEALTH CHECKS ---
-@app.route('/')
-def home():
-    return "🤖 AI Research Bot | Render LIVE"
+# Fallback handler if needed
+@bot.message_handler(func=lambda m: m.text == "Fallback")
+def fallback_symbol(m):
+    bot.reply_to(m, "Use /start for menu.")
 
-@app.route('/health')
-def health():
-    return {
-        "status": "active",
-        "timestamp": datetime.now().isoformat(),
-        "keys": {
-            "telegram": bool(TOKEN),
-            "openai": bool(OPENAI_API_KEY)
-        }
-    }
+# --- 8. HEALTH SERVER ---
+def run_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    class Handler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Bot running healthy")
+    TCPServer.allow_reuse_address = True
+    with TCPServer(("0.0.0.0", port), Handler) as httpd:
+        httpd.serve_forever()
 
-# --- START BOT THREAD ---
-def run_bot():
-    print("🤖 Bot polling started...")
-    bot.infinity_polling(none_stop=True, timeout=30)
-
+# --- 9. MAIN ---
 if __name__ == "__main__":
-    # Start bot in background thread
-    Thread(target=run_bot, daemon=True).start()
-    
-    # Render web server
-    port = int(os.environ.get('PORT', 5000))
-    print(f"🌐 Web server on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    print("🤖 Enhanced AI Stock Bot starting...")
+    threading.Thread(target=run_health_server, daemon=True).start()
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True, timeout=60)
+        except Exception as e:
+            print(f"Polling error: {e}")
+            time.sleep(30)
