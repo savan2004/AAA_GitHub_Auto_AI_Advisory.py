@@ -7,7 +7,6 @@ from collections import deque
 import pandas as pd
 import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
-
 from groq import Groq
 import google.generativeai as genai
 
@@ -17,7 +16,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# --- yfinance safe layer (independent from main) ---
+# --- yfinance safe layer ---
 
 YF_WINDOW_SEC = 60
 YF_MAX_CALLS_PER_WINDOW = 10
@@ -129,7 +128,7 @@ def swing_signal(df: pd.DataFrame):
     bbl = float(bb_low.iloc[-1])
     adx_last = float(adx_val.iloc[-1])
 
-    # Example long filter: uptrend + pullback + strong trend
+    # Long setup: strong uptrend + pullback + strong trend
     long_trend_ok = (ltp > e200) and (e50 > e200)
     long_pullback = (bbl <= ltp <= bbm) and (ltp >= e20 * 0.98)
     long_adx = adx_last >= 25
@@ -147,7 +146,7 @@ def swing_signal(df: pd.DataFrame):
             "adx": adx_last,
         }
 
-    # Example short filter: downtrend + pullback + strong trend
+    # Short setup: strong downtrend + pullback + strong trend
     short_trend_ok = (ltp < e200) and (e50 < e200)
     short_pullback = (bbm <= ltp <= bbu) and (ltp <= e20 * 1.02)
     short_adx = adx_last >= 25
@@ -241,18 +240,24 @@ def get_daily_swing_trades() -> str:
             candidates.append((sym, sig))
 
     if not candidates:
-        text = "📊 Swing Trades\nNo high-confidence setups today as per EMA20/50/200 + BB + ADX rules."
+        text = (
+            "Swing Trades\n"
+            "No high-confidence setups today as per EMA20/50/200 + Bollinger Bands + ADX rules."
+        )
         _cached_daily["date"] = today
         _cached_daily["text"] = text
         return text
 
     ideas = candidates[:2]
-    lines = ["📊 Swing Trades (Rules-based, Educational)\n"]
+    lines = ["Swing Trades (Rules-based, Educational)\n"]
     for sym, sig in ideas:
         explanation = _ai_explain_swing(sym, sig)
-        lines.append(f"*{sym}* – {sig['signal']} setup\n{explanation}\n")
+        lines.append(f"{sym} – {sig['signal']} setup\n{explanation}\n")
 
-    final = "\n".join(lines) + "\nDisclaimer: Educational technical analysis only, not trade advice."
+    final = (
+        "\n".join(lines)
+        + "\nDisclaimer: Educational technical analysis only, not trade advice."
+    )
     _cached_daily["date"] = today
     _cached_daily["text"] = final
     return final
