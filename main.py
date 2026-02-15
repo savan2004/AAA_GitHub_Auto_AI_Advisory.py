@@ -1,9 +1,7 @@
 import os
 import time
-import random
-import re
 from datetime import datetime
-from collections import defaultdict, deque
+from collections import deque
 
 import pandas as pd
 import telebot
@@ -17,26 +15,25 @@ from yfinance.exceptions import YFRateLimitError
 
 # ========== 1. CONFIG & CLIENTS ==========
 
-TELEGRAM_TOKEN = os.getenv("8461087780:AAE4l58egcDN7LRbqXAp7x7x0nkfX6jTGEc", "")
-GROQ_API_KEY = os.getenv("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", "")
-GEMINI_API_KEY = os.getenv("AIzaSyCPh8wPC-rmBIyTr5FfV3Mwjb33KeZdRUE", "")
+ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+OPENAI_KEY = os.getenv("OPENAI_KEY")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TELEGRAM_TOKEN:
-    print("WARNING: TELEGRAM_TOKEN not set – bot polling will fail if you start it.")
-if not GROQ_API_KEY:
-    print("WARNING: GROQ_API_KEY not set – Groq AI will not work.")
-if not GEMINI_API_KEY:
-    print("WARNING: GEMINI_API_KEY not set – Gemini fallback will not work.")
+    print("WARNING: TELEGRAM_TOKEN not set – bot will not start polling.")
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)  # no global parse_mode
-genai.configure(api_key=GEMINI_API_KEY)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")  # use HTML, not Markdown
 nse = Nse()
 
-# Simple in-memory cache
-CACHE = {}
-CACHE_TTL_DEFAULT = 60  # 1 min for live quotes
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
-# yfinance rate limiting
+# Simple cache
+CACHE = {}
+CACHE_TTL_DEFAULT = 60  # 1 min
 YF_WINDOW_SEC = 60
 YF_MAX_CALLS_PER_WINDOW = 20
 YF_CALL_TIMES = deque()
@@ -58,28 +55,7 @@ def cache_set(key, val):
     CACHE[key] = {"val": val, "ts": time.time()}
 
 
-# ========== 3. SAFE MARKDOWN SENDER (FIX 400 ERROR) ==========
-
-def escape_markdown(text: str) -> str:
-    # Escape characters that break Telegram Markdown parsing
-    return re.sub(r'([_*`\[])', r'\\\1', text)
-
-def send_markdown(chat_id, text, reply_to=None):
-    safe = escape_markdown(text)
-    try:
-        if reply_to:
-            bot.reply_to(reply_to, safe, parse_mode="Markdown")
-        else:
-            bot.send_message(chat_id, safe, parse_mode="Markdown")
-    except telebot.apihelper.ApiTelegramException:
-        # Fallback: send without formatting if still broken
-        if reply_to:
-            bot.reply_to(reply_to, text)
-        else:
-            bot.send_message(chat_id, text)
-
-
-# ========== 4. NSE HELPERS (BEL + INDICES) ==========
+# ========== 3. NSE HELPERS (SAFE) ==========
 
 def get_stock_quote(symbol: str):
     sym = symbol.upper().strip()
@@ -87,9 +63,8 @@ def get_stock_quote(symbol: str):
     cached = cache_get(key)
     if cached is not None:
         return cached
-
     try:
-        q = nse.get_quote(sym)  # returns dict or None[web:107]
+        q = nse.get_quote(sym)  # returns dict or None if invalid[web:105]
         if not q:
             return None
         cache_set(key, q)
@@ -111,8 +86,9 @@ def basic_stock_snapshot(symbol: str) -> str:
     high = q.get("dayHigh", 0.0)
     low = q.get("dayLow", 0.0)
 
+    # HTML formatting, safe for Telegram
     return (
-        f"*{sym} (NSE)*\n"
+        f"<b>{sym} (NSE)</b>\n"
         f"LTP: ₹{ltp:.2f} | {change:.2f} ({pchange:.2f}%)\n"
         f"Prev: ₹{prev_close:.2f} | Range: ₹{low:.2f}–₹{high:.2f}\n"
     )
@@ -123,9 +99,8 @@ def get_index_quote_safe(name: str):
     cached = cache_get(key)
     if cached is not None:
         return cached
-
     try:
-        q = nse.get_index_quote(name)  # dict or None[web:106][web:150]
+        q = nse.get_index_quote(name)  # dict or None[web:106]
         if not q:
             return None
         cache_set(key, q)
@@ -152,13 +127,13 @@ def market_overview_text() -> str:
     b_name, b_last, b_chg, b_pchg = fmt_idx(nbk)
 
     return (
-        "📈 *Market View*\n"
+        "<b>📈 Market View</b>\n"
         f"{n_name}: {n_last:.2f} ({n_chg:.2f}, {n_pchg:.2f}%)\n"
         f"{b_name}: {b_last:.2f} ({b_chg:.2f}, {b_pchg:.2f}%)"
     )
 
 
-# ========== 5. LIGHT YFINANCE HISTORY (OPTIONAL, SAFE) ==========
+# ========== 4. LIGHT YFINANCE (OPTIONAL) ==========
 
 def yf_allow_call():
     now = time.time()
@@ -172,7 +147,6 @@ def yf_register_call():
 def safe_yf_history(ticker: str, period="6mo", interval="1d") -> pd.Series:
     if not yf_allow_call():
         return pd.Series(dtype=float)
-
     try:
         yf_register_call()
         df = yf.Ticker(ticker).history(period=period, interval=interval)
@@ -185,32 +159,34 @@ def safe_yf_history(ticker: str, period="6mo", interval="1d") -> pd.Series:
     return pd.Series(dtype=float)
 
 
-# ========== 6. AI LAYER ==========
+# ========== 5. AI LAYER (GROQ -> GEMINI) ==========
 
 def ai_call(prompt: str, max_tokens: int = 400) -> str:
-    # Groq first
-    try:
-        gclient = Groq(api_key=GROQ_API_KEY)
-        resp = gclient.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.3,
-        )
-        return resp.choices[0].message.content
-    except Exception:
-        pass
+    if GROQ_API_KEY:
+        try:
+            gclient = Groq(api_key=GROQ_API_KEY)
+            resp = gclient.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                temperature=0.3,
+            )
+            return resp.choices[0].message.content
+        except Exception:
+            pass
 
-    # Gemini fallback
-    try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content(prompt)
-        return resp.text
-    except Exception:
-        return "AI is temporarily unavailable. Please try again later."
+    if GEMINI_API_KEY:
+        try:
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            resp = model.generate_content(prompt)
+            return resp.text
+        except Exception:
+            pass
+
+    return "AI is temporarily unavailable. Please try again later."
 
 
-# ========== 7. DEEP STOCK ANALYSIS (BEL, ETC.) ==========
+# ========== 6. DEEP STOCK ANALYSIS ==========
 
 def deep_stock_analysis(symbol: str) -> str:
     sym = symbol.upper().strip()
@@ -218,23 +194,21 @@ def deep_stock_analysis(symbol: str) -> str:
 
     q = get_stock_quote(sym)
     if not q:
-        # Still give educational text without pretending data is live
         prompt = f"""
 User asked about {sym}.
 Data API could not return a live quote.
 
 Give 3–5 educational points about how to think about a stock like this
 (e.g., if BEL: defense/electronics PSU), including:
-- business dependence on government
-- cyclicality
-- valuation
+- business model
+- dependence on government or sector cycles
+- valuation factors
 - key risks
 Educational only, no buy/sell calls.
 """
         analysis = ai_call(prompt, max_tokens=350)
         return snap + "\n\n" + analysis
 
-    # Optional yfinance trend
     series = safe_yf_history(f"{sym}.NS", period="6mo", interval="1d")
     trend = "Unknown"
     if len(series) >= 30:
@@ -251,7 +225,7 @@ Approx trend vs 200‑day EMA (if data available): {trend}.
 1. Short‑term view (1–4 weeks).
 2. Medium‑term view (3–6 months).
 3. Educational BUY / HOLD / AVOID style view (no direct recommendation).
-4. 3 key risks suitable for a PSU / sector stock like this.
+4. 3 key risks for this type of stock.
 
 Use simple language, about 8–12 sentences.
 """
@@ -259,7 +233,7 @@ Use simple language, about 8–12 sentences.
     return snap + f"Trend (approx): {trend}\n\n" + analysis
 
 
-# ========== 8. TELEGRAM HANDLERS ==========
+# ========== 7. TELEGRAM HANDLERS ==========
 
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(m):
@@ -275,7 +249,7 @@ def start_cmd(m):
 @bot.message_handler(func=lambda m: m.text == "📈 Market View")
 def handle_market(m):
     text = market_overview_text()
-    send_markdown(m.chat.id, text, reply_to=m)
+    bot.reply_to(m, text)
 
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Stock")
@@ -290,7 +264,7 @@ def handle_stock_symbol(m):
         bot.reply_to(m, "Empty symbol. Try again.")
         return
     text = deep_stock_analysis(sym)
-    send_markdown(m.chat.id, text, reply_to=m)
+    bot.reply_to(m, text)
 
 
 @bot.message_handler(func=lambda m: True)
@@ -300,25 +274,25 @@ def fallback_stock(m):
         bot.reply_to(m, "Send NSE stock symbol like BEL or use /start.")
         return
     text = deep_stock_analysis(sym)
-    send_markdown(m.chat.id, text, reply_to=m)
+    bot.reply_to(m, text)
 
 
-# ========== 9. SIMULATION & MAIN LOOP ==========
+# ========== 8. MAIN (SIMULATION + POLLING) ==========
 
 if __name__ == "__main__":
-    # --- SIMULATION: run these once to test without Telegram ---
-    print("=== SIMULATION: MARKET VIEW ===")
+    # Simulation in logs
+    print("=== SIM TEST: MARKET VIEW ===")
     print(market_overview_text())
-    print("\n=== SIMULATION: BEL ANALYSIS (first 600 chars) ===")
-    sim_text = deep_stock_analysis("BEL")
-    print(sim_text[:600])
-    print("\n=== END SIMULATION ===\n")
+    print("=== SIM TEST: BEL ANALYSIS (first 400 chars) ===")
+    print(deep_stock_analysis("BEL")[:400])
 
-    # Uncomment below lines only when TELEGRAM_TOKEN is set and you are ready to run the bot:
-    # print("Starting Telegram bot polling...")
-    # while True:
-    #     try:
-    #         bot.infinity_polling(skip_pending=True, timeout=60)
-    #     except Exception as e:
-#         print(f\"Polling error: {e}\")
-#         time.sleep(10)
+    if TELEGRAM_TOKEN:
+        print("Starting Telegram bot polling...")
+        while True:
+            try:
+                bot.infinity_polling(skip_pending=True, timeout=60)
+            except Exception as e:
+                print(f"Polling error: {e}")
+                time.sleep(10)
+    else:
+        print("TELEGRAM_TOKEN not set; bot polling not started.")
