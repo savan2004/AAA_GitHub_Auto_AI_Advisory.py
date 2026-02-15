@@ -1,8 +1,7 @@
-pyTelegramBotAPI
-yfinance
-pandas
-numpy
-requests
-python-dotenv
-groq
-google-genai
+pyTelegramBotAPI==4.14.0
+openai==1.35.0
+yfinance==0.2.40
+requests==2.32.3
+pandas==2.2.2
+python-dotenv==1.0.1
+gunicorn==22.0.0
