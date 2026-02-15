@@ -16,7 +16,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# --- yfinance safe layer ---
+# --- yfinance safe layer (only for fixed watchlist symbols) ---
 
 YF_WINDOW_SEC = 60
 YF_MAX_CALLS_PER_WINDOW = 10
@@ -114,21 +114,20 @@ def swing_signal(df: pd.DataFrame):
     close = df["Close"]
     ltp = float(close.iloc[-1])
 
-    ema20 = ema(close, 20)
-    ema50 = ema(close, 50)
-    ema200 = ema(close, 200)
+    ema20_val = ema(close, 20)
+    ema50_val = ema(close, 50)
+    ema200_val = ema(close, 200)
     bb_mid, bb_up, bb_low = bollinger_bands(close, 20, 2)
     adx_val = adx(df, 14)
 
-    e20 = float(ema20.iloc[-1])
-    e50 = float(ema50.iloc[-1])
-    e200 = float(ema200.iloc[-1])
+    e20 = float(ema20_val.iloc[-1])
+    e50 = float(ema50_val.iloc[-1])
+    e200 = float(ema200_val.iloc[-1])
     bbm = float(bb_mid.iloc[-1])
     bbu = float(bb_up.iloc[-1])
     bbl = float(bb_low.iloc[-1])
     adx_last = float(adx_val.iloc[-1])
 
-    # Long setup: strong uptrend + pullback + strong trend
     long_trend_ok = (ltp > e200) and (e50 > e200)
     long_pullback = (bbl <= ltp <= bbm) and (ltp >= e20 * 0.98)
     long_adx = adx_last >= 25
@@ -146,7 +145,6 @@ def swing_signal(df: pd.DataFrame):
             "adx": adx_last,
         }
 
-    # Short setup: strong downtrend + pullback + strong trend
     short_trend_ok = (ltp < e200) and (e50 < e200)
     short_pullback = (bbm <= ltp <= bbu) and (ltp <= e20 * 1.02)
     short_adx = adx_last >= 25
@@ -168,39 +166,14 @@ def swing_signal(df: pd.DataFrame):
 
 # --- AI explanation ---
 
-def _ai_explain_swing(symbol: str, sig: dict) -> str:
-    side = sig["signal"]
-    ltp = sig["ltp"]
-    adx_val = sig["adx"]
-    e20, e50, e200 = sig["ema20"], sig["ema50"], sig["ema200"]
-    bbm, bbu, bbl = sig["bb_mid"], sig["bb_up"], sig["bb_low"]
-
-    prompt = f"""
-You are an Indian swing trader.
-
-Stock: {symbol} on NSE.
-Latest price: {ltp:.2f}
-Signal: {side}
-EMA20: {e20:.2f}, EMA50: {e50:.2f}, EMA200: {e200:.2f}
-BB upper/mid/lower: {bbu:.2f} / {bbm:.2f} / {bbl:.2f}
-ADX(14): {adx_val:.2f}
-
-Explain WHY this looks like a potential {side} swing setup:
-- confirm trend direction and strength (ADX, EMAs, BB)
-- describe ideal entry zone and invalidation zone qualitatively (no exact price)
-- mention 3 key risks
-- end with a strong disclaimer: purely educational, not a recommendation.
-
-Max 200 words.
-"""
-
+def _ai_call(prompt: str, max_tokens: int = 600) -> str:
     if GROQ_API_KEY:
         try:
             client = Groq(api_key=GROQ_API_KEY)
             resp = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
+                max_tokens=max_tokens,
                 temperature=0.3,
             )
             return resp.choices[0].message.content
@@ -217,9 +190,36 @@ Max 200 words.
 
     return "AI explanation temporarily unavailable."
 
+def explain_swing(symbol: str, sig: dict) -> str:
+    side = sig["signal"]
+    ltp = sig["ltp"]
+    adx_val = sig["adx"]
+    e20, e50, e200 = sig["ema20"], sig["ema50"], sig["ema200"]
+    bbm, bbu, bbl = sig["bb_mid"], sig["bb_up"], sig["bb_low"]
+
+    prompt = f"""
+You are an Indian swing trader.
+
+Stock: {symbol} on NSE.
+Latest price: {ltp:.2f}
+Signal: {side}
+EMA20: {e20:.2f}, EMA50: {e50:.2f}, EMA200: {e200:.2f}
+BB upper/mid/lower: {bbu:.2f} / {bbm:.2f} / {bbl:.2f}
+ADX(14): {adx_val:.2f}
+
+Explain briefly why this looks like a potential {side} swing setup:
+- confirm trend and strength (EMAs, ADX, BB)
+- describe entry zone and invalidation qualitatively (no exact price)
+- mention 3 key risks
+- end with: "Note: Educational example, not a recommendation."
+
+Max 200 words.
+"""
+    return _ai_call(prompt, max_tokens=350)
+
 # --- public API for bot ---
 
-_cached_daily = {"date": None, "text": ""}
+_cached_swing = {"date": None, "text": ""}
 
 WATCHLIST = [
     "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK",
@@ -228,8 +228,8 @@ WATCHLIST = [
 
 def get_daily_swing_trades() -> str:
     today = date.today().isoformat()
-    if _cached_daily["date"] == today and _cached_daily["text"]:
-        return _cached_daily["text"]
+    if _cached_swing["date"] == today and _cached_swing["text"]:
+        return _cached_swing["text"]
 
     candidates = []
     for sym in WATCHLIST:
@@ -244,20 +244,20 @@ def get_daily_swing_trades() -> str:
             "Swing Trades\n"
             "No high-confidence setups today as per EMA20/50/200 + Bollinger Bands + ADX rules."
         )
-        _cached_daily["date"] = today
-        _cached_daily["text"] = text
+        _cached_swing["date"] = today
+        _cached_swing["text"] = text
         return text
 
     ideas = candidates[:2]
     lines = ["Swing Trades (Rules-based, Educational)\n"]
     for sym, sig in ideas:
-        explanation = _ai_explain_swing(sym, sig)
+        explanation = explain_swing(sym, sig)
         lines.append(f"{sym} – {sig['signal']} setup\n{explanation}\n")
 
     final = (
         "\n".join(lines)
         + "\nDisclaimer: Educational technical analysis only, not trade advice."
     )
-    _cached_daily["date"] = today
-    _cached_daily["text"] = final
+    _cached_swing["date"] = today
+    _cached_swing["text"] = final
     return final
