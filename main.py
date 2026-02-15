@@ -2,7 +2,6 @@
 import os
 import time
 import threading
-from datetime import date
 from collections import deque
 
 import pandas as pd
@@ -18,6 +17,8 @@ import google.generativeai as genai
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
+from swing_trades import get_daily_swing_trades  # Swing module
+
 # ========== 1. CONFIG ==========
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
@@ -29,7 +30,7 @@ if GEMINI_API_KEY:
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)  # plain text, no parse_mode
 
-# yfinance rate‑limit + cache (shared for analysis + swing)
+# yfinance rate‑limit + cache for stock analysis ONLY
 YF_WINDOW_SEC = 60
 YF_MAX_CALLS_PER_WINDOW = 10
 YF_CALL_TIMES = deque()
@@ -38,7 +39,7 @@ CACHE = {}
 CACHE_TTL = 900  # 15 min
 
 
-# ========== 2. CACHE & HISTORY HELPERS ==========
+# ========== 2. CACHE & HISTORY HELPERS (STOCK ANALYSIS) ==========
 
 def cache_get(key):
     data = CACHE.get(key)
@@ -61,8 +62,8 @@ def yf_allow_call():
 def yf_register_call():
     YF_CALL_TIMES.append(time.time())
 
-def safe_history(ticker, period="6mo", interval="1d") -> pd.DataFrame:
-    key = f"hist:{ticker}:{period}:{interval}"
+def safe_history(ticker, period="1y", interval="1d") -> pd.DataFrame:
+    key = f"main:{ticker}:{period}:{interval}"
     cached = cache_get(key)
     if cached is not None:
         return cached
@@ -86,7 +87,7 @@ def safe_history(ticker, period="6mo", interval="1d") -> pd.DataFrame:
     return pd.DataFrame()
 
 
-# ========== 3. INDICATORS ==========
+# ========== 3. INDICATORS (STOCK ANALYSIS) ==========
 
 def ema(series: pd.Series, span: int):
     return series.ewm(span=span, adjust=False).mean()
@@ -129,7 +130,7 @@ def adx(df: pd.DataFrame, period: int = 14):
     return adx_val
 
 
-# ========== 4. AI WRAPPER ==========
+# ========== 4. AI WRAPPER (STOCK ANALYSIS) ==========
 
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
     if GROQ_API_KEY:
@@ -156,7 +157,7 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
     return "AI explanation temporarily unavailable."
 
 
-# ========== 5. STOCK ANALYSIS (2 MESSAGES) ==========
+# ========== 5. STOCK ANALYSIS (2 MESSAGES, SYMBOL ONLY) ==========
 
 def deep_stock_analysis(symbol: str):
     sym = symbol.upper().strip()
@@ -167,9 +168,6 @@ def deep_stock_analysis(symbol: str):
         return [f"Could not fetch data for {sym}. Try again later."]
 
     close = df["Close"]
-    high = df["High"]
-    low = df["Low"]
-
     ltp = float(close.iloc[-1])
     ema20_val = float(ema(close, 20).iloc[-1])
     ema50_val = float(ema(close, 50).iloc[-1])
@@ -232,139 +230,7 @@ Total length under 250 words.
     return [msg1, msg2]
 
 
-# ========== 6. SWING TRADES (RULES-BASED) ==========
-
-def swing_signal(df: pd.DataFrame):
-    if df.empty or len(df) < 250:
-        return {"signal": "NONE"}
-
-    close = df["Close"]
-    ltp = float(close.iloc[-1])
-
-    ema20_val = ema(close, 20)
-    ema50_val = ema(close, 50)
-    ema200_val = ema(close, 200)
-    bb_mid, bb_up, bb_low = bollinger_bands(close, 20, 2)
-    adx_val = adx(df, 14)
-
-    e20 = float(ema20_val.iloc[-1])
-    e50 = float(ema50_val.iloc[-1])
-    e200 = float(ema200_val.iloc[-1])
-    bbm = float(bb_mid.iloc[-1])
-    bbu = float(bb_up.iloc[-1])
-    bbl = float(bb_low.iloc[-1])
-    adx_last = float(adx_val.iloc[-1])
-
-    long_trend_ok = (ltp > e200) and (e50 > e200)
-    long_pullback = (bbl <= ltp <= bbm) and (ltp >= e20 * 0.98)
-    long_adx = adx_last >= 25
-
-    if long_trend_ok and long_pullback and long_adx:
-        return {
-            "signal": "LONG",
-            "ltp": ltp,
-            "ema20": e20,
-            "ema50": e50,
-            "ema200": e200,
-            "bb_mid": bbm,
-            "bb_up": bbu,
-            "bb_low": bbl,
-            "adx": adx_last,
-        }
-
-    short_trend_ok = (ltp < e200) and (e50 < e200)
-    short_pullback = (bbm <= ltp <= bbu) and (ltp <= e20 * 1.02)
-    short_adx = adx_last >= 25
-
-    if short_trend_ok and short_pullback and short_adx:
-        return {
-            "signal": "SHORT",
-            "ltp": ltp,
-            "ema20": e20,
-            "ema50": e50,
-            "ema200": e200,
-            "bb_mid": bbm,
-            "bb_up": bbu,
-            "bb_low": bbl,
-            "adx": adx_last,
-        }
-
-    return {"signal": "NONE"}
-
-
-def explain_swing(symbol: str, sig: dict) -> str:
-    side = sig["signal"]
-    ltp = sig["ltp"]
-    adx_val = sig["adx"]
-    e20, e50, e200 = sig["ema20"], sig["ema50"], sig["ema200"]
-    bbm, bbu, bbl = sig["bb_mid"], sig["bb_up"], sig["bb_low"]
-
-    prompt = f"""
-You are an Indian swing trader.
-
-Stock: {symbol} on NSE.
-Latest price: {ltp:.2f}
-Signal: {side}
-EMA20: {e20:.2f}, EMA50: {e50:.2f}, EMA200: {e200:.2f}
-BB upper/mid/lower: {bbu:.2f} / {bbm:.2f} / {bbl:.2f}
-ADX(14): {adx_val:.2f}
-
-Explain in brief why this looks like a potential {side} swing setup:
-- confirm trend and strength (EMAs, ADX, BB)
-- describe ideal entry zone and invalidation qualitatively (no exact price)
-- mention 3 key risks
-- end with: "Note: Educational example, not a recommendation."
-
-Max 200 words.
-"""
-    return ai_call(prompt, max_tokens=350)
-
-
-_cached_swing = {"date": None, "text": ""}
-
-WATCHLIST = [
-    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK",
-    "SBIN", "INFY", "ITC", "LT", "AXISBANK", "KOTAKBANK",
-]
-
-def get_daily_swing_trades() -> str:
-    today = date.today().isoformat()
-    if _cached_swing["date"] == today and _cached_swing["text"]:
-        return _cached_swing["text"]
-
-    candidates = []
-    for sym in WATCHLIST:
-        t = f"{sym}.NS"
-        df = safe_history(t, period="6mo", interval="1d")
-        sig = swing_signal(df)
-        if sig["signal"] in ["LONG", "SHORT"]:
-            candidates.append((sym, sig))
-
-    if not candidates:
-        text = (
-            "Swing Trades\n"
-            "No high-confidence setups today as per EMA20/50/200 + Bollinger Bands + ADX rules."
-        )
-        _cached_swing["date"] = today
-        _cached_swing["text"] = text
-        return text
-
-    ideas = candidates[:2]
-    lines = ["Swing Trades (Rules-based, Educational)\n"]
-    for sym, sig in ideas:
-        explanation = explain_swing(sym, sig)
-        lines.append(f"{sym} – {sig['signal']} setup\n{explanation}\n")
-
-    final = (
-        "\n".join(lines)
-        + "\nDisclaimer: Educational technical analysis only, not trade advice."
-    )
-    _cached_swing["date"] = today
-    _cached_swing["text"] = final
-    return final
-
-
-# ========== 7. MARKET & OPTIONS PLACEHOLDERS ==========
+# ========== 6. MARKET & OPTIONS PLACEHOLDERS ==========
 
 def market_analysis() -> str:
     return "Market View\n(Integrate your own market analysis here.)"
@@ -380,7 +246,7 @@ def option_strategies_text() -> str:
     )
 
 
-# ========== 8. TELEGRAM HANDLERS ==========
+# ========== 7. TELEGRAM HANDLERS ==========
 
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(m):
@@ -420,6 +286,10 @@ def handle_symbol_analysis(m):
     if not sym:
         bot.reply_to(m, "Empty symbol. Try again.")
         return
+    # ensure only alphanumeric symbol goes to analysis
+    if not sym.isalnum():
+        bot.reply_to(m, "Please send a valid NSE symbol like RELIANCE.")
+        return
     parts = deep_stock_analysis(sym)
     for p in parts:
         bot.reply_to(m, p)
@@ -435,13 +305,14 @@ def handle_options(m):
 
 @bot.message_handler(func=lambda m: True)
 def fallback(m):
+    # Do NOT treat arbitrary text as symbol here to avoid menu text as ticker
     bot.reply_to(
         m,
         "Use the menu: Market View, Stock Analysis, Swing Trades, Option Ideas."
     )
 
 
-# ========== 9. HEALTH SERVER & MAIN LOOP ==========
+# ========== 8. HEALTH SERVER & MAIN LOOP ==========
 
 def run_health_server():
     port = int(os.environ.get("PORT", 10000))
@@ -461,13 +332,6 @@ def run_health_server():
 if __name__ == "__main__":
     print("Bot starting with Stock Analysis + Swing Trades...")
     threading.Thread(target=run_health_server, daemon=True).start()
-
-    # optional simulation in logs
-    try:
-        print("SIM SWING (first 400 chars):")
-        print(get_daily_swing_trades()[:400])
-    except Exception as e:
-        print("Swing simulation error:", e)
 
     while True:
         try:
