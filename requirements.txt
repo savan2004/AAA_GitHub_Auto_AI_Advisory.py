@@ -4,5 +4,4 @@ pandas
 groq
 google-generativeai
 requests
-cachetools
 flask
