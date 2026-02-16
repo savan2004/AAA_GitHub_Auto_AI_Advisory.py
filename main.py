@@ -1,4 +1,8 @@
-import os, time, json, threading
+```python
+import os
+import time
+import json
+import threading
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -81,30 +85,33 @@ End with: Note: This is educational AI analysis only, not a recommendation.
 
 def stock_ai_advisory(symbol: str) -> str:
     sym = symbol.upper().strip()
-    df = yf.Ticker(f"{sym}.NS").history(period="1y", interval="1d")
-    if df.empty or "Close" not in df.columns:
-        return f"Could not fetch data for {sym}. Try again later."
+    try:
+        df = yf.Ticker(f"{sym}.NS").history(period="1y", interval="1d")
+        if df.empty or "Close" not in df.columns:
+            return f"Could not fetch data for {sym}. Try again later."
 
-    close = df["Close"]
-    if len(close) < 60:
-        return f"Not enough price history for {sym}."
+        close = df["Close"]
+        if len(close) < 60:
+            return f"Not enough price history for {sym}."
 
-    ltp = float(close.iloc[-1])
-    ema200 = float(ema(close, 200).iloc[-1])
-    rsi_val = float(rsi(close, 14).iloc[-1])
-    trend = "Bullish" if ltp > ema200 else "Bearish"
+        ltp = float(close.iloc[-1])
+        ema200 = float(ema(close, 200).iloc[-1])
+        rsi_val = float(rsi(close, 14).iloc[-1])
+        trend = "Bullish" if ltp > ema200 else "Bearish"
 
-    snap = (
-        f"STOCK SNAPSHOT\n"
-        f"Symbol: {sym} (NSE)\n"
-        f"LTP: ₹{ltp:.2f}\n"
-        f"Trend vs 200 EMA: {trend}\n"
-        f"RSI(14): {rsi_val:.2f}\n"
-    )
+        snap = (
+            f"STOCK SNAPSHOT\n"
+            f"Symbol: {sym} (NSE)\n"
+            f"LTP: ₹{ltp:.2f}\n"
+            f"Trend vs 200 EMA: {trend}\n"
+            f"RSI(14): {rsi_val:.2f}\n"
+        )
 
-    prompt = build_prompt(sym, ltp, trend, rsi_val)
-    adv = ai_call(prompt, max_tokens=320)
-    return snap + "\nAI ADVISORY – " + sym + "\n\n" + adv
+        prompt = build_prompt(sym, ltp, trend, rsi_val)
+        adv = ai_call(prompt, max_tokens=320)
+        return snap + "\nAI ADVISORY – " + sym + "\n\n" + adv
+    except Exception as e:
+        return f"An error occurred: {e}"
 
 # ---------- TELEGRAM ----------
 
@@ -184,3 +191,4 @@ if __name__ == "__main__":
         except Exception as e:
             print("Polling error:", e)
             time.sleep(10)
+```
