@@ -1,4 +1,3 @@
-# main_short.py
 import os, time, json, threading
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -7,7 +6,7 @@ import pandas as pd
 import yfinance as yf
 import telebot
 from groq import Groq
-from google import genai
+import google.generativeai as genai
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
@@ -17,7 +16,7 @@ if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN not set")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode=None)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+genai.configure(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # ---------- TA HELPERS ----------
 
@@ -47,13 +46,11 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             print("Groq error:", e)
 
-    if gemini_client:
+    if GEMINI_API_KEY:
         try:
-            r = gemini_client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=prompt,
-            )
-            t = (getattr(r, "text", "") or "").strip()
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt)
+            t = (response.text or "").strip()
             if t:
                 return t
         except Exception as e:
