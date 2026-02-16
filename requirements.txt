@@ -6,6 +6,4 @@ google-generativeai
 requests
 cachetools
 flask
-redis
 gunicorn
-aiohttp
