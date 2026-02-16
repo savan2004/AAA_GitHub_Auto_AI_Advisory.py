@@ -1,6 +1,10 @@
-pyTelegramBotAPI
-nsetools
+telebot
 yfinance
+pandas
 groq
 google-generativeai
-pandas
+requests
+cachetools
+flask
+redis
+gunicorn
