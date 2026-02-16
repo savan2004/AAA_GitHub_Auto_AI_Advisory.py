@@ -1,6 +1,6 @@
 # main.py
 """
-AI NSE Advisory Telegram Bot (Groq + Gemini + Financial Advisor framing, 2026-ready)
+AI NSE Advisory Telegram Bot (Groq + Gemini + Financial Advisor framing)
 
 Telegram:
 - /start → shows menu.
