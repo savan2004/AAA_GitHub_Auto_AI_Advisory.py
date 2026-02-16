@@ -10,6 +10,7 @@ import yfinance as yf
 import telebot
 from groq import Groq
 import google.generativeai as genai
+import numpy as np
 
 # ---------- CONFIG ----------
 
@@ -37,7 +38,175 @@ def rsi(s: pd.Series, period: int = 14) -> pd.Series:
     rs = up / down
     return 100 - (100 / (1 + rs))
 
-# ---------- AI LAYER ----------
+def macd(s: pd.Series) -> tuple:
+    exp1 = s.ewm(span=12, adjust=False).mean()
+    exp2 = s.ewm(span=26, adjust=False).mean()
+    macd_line = exp1 - exp2
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    return macd_line.iloc[-1], signal_line.iloc[-1]
+
+def bollinger_bands(s: pd.Series, period: int = 20) -> tuple:
+    sma = s.rolling(window=period).mean().iloc[-1]
+    std = s.rolling(window=period).std().iloc[-1]
+    upper = sma + (std * 2)
+    lower = sma - (std * 2)
+    return upper, sma, lower
+
+def atr(df: pd.DataFrame, period: int = 14) -> float:
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
+    
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean().iloc[-1]
+
+def pivot_points(df: pd.DataFrame) -> dict:
+    last_candle = df.iloc[-1]
+    high = last_candle['High']
+    low = last_candle['Low']
+    close = last_candle['Close']
+    
+    pp = (high + low + close) / 3
+    r1 = (2 * pp) - low
+    r2 = pp + (high - low)
+    s1 = (2 * pp) - high
+    s2 = pp - (high - low)
+    
+    return {
+        'PP': pp, 'R1': r1, 'R2': r2,
+        'S1': s1, 'S2': s2
+    }
+
+def get_fundamental_info(symbol: str) -> dict:
+    try:
+        ticker = yf.Ticker(f"{symbol}.NS")
+        info = ticker.info
+        
+        return {
+            'sector': info.get('sector', 'N/A'),
+            'market_cap': info.get('marketCap', 0),
+            'pe_ratio': info.get('trailingPE', 0),
+            'pb_ratio': info.get('priceToBook', 0),
+            'roe': info.get('returnOnEquity', 0) * 100 if info.get('returnOnEquity') else 0,
+            'dividend_yield': info.get('dividendYield', 0) * 100 if info.get('dividendYield') else 0,
+            'high_52w': info.get('fiftyTwoWeekHigh', 0),
+            'low_52w': info.get('fiftyTwoWeekLow', 0),
+            'prev_close': info.get('regularMarketPreviousClose', 0)
+        }
+    except:
+        return {}
+
+def calculate_targets(current_price: float, atr_value: float, trend: str) -> dict:
+    """Calculate short and long-term targets based on ATR"""
+    targets = {}
+    
+    # Short-term targets (1W, 1M, 3M)
+    targets['short_term'] = {
+        '1W': current_price + (atr_value * 1.5),
+        '1M': current_price + (atr_value * 4),
+        '3M': current_price + (atr_value * 8)
+    }
+    
+    # Long-term targets (6M, 1Y, 2Y)
+    targets['long_term'] = {
+        '6M': current_price + (atr_value * 15),
+        '1Y': current_price + (atr_value * 25),
+        '2Y': current_price + (atr_value * 40)
+    }
+    
+    # Stop loss for swing trading
+    targets['stop_loss'] = current_price - (atr_value * 2)
+    
+    return targets
+
+def calculate_quality_score(df: pd.DataFrame, fundamental: dict) -> int:
+    """Calculate quality score out of 100"""
+    score = 0
+    close = df['Close']
+    
+    # Technical factors (50 points)
+    # Trend (20 points)
+    ema20 = ema(close, 20).iloc[-1]
+    ema50 = ema(close, 50).iloc[-1]
+    ema200 = ema(close, 200).iloc[-1]
+    
+    if close.iloc[-1] > ema20: score += 5
+    if close.iloc[-1] > ema50: score += 5
+    if close.iloc[-1] > ema200: score += 10
+    
+    # RSI (10 points)
+    rsi_val = rsi(close, 14).iloc[-1]
+    if 40 <= rsi_val <= 60: score += 10
+    elif 30 <= rsi_val <= 70: score += 5
+    
+    # Volume trend (10 points)
+    volume_avg = df['Volume'].rolling(20).mean().iloc[-1]
+    current_volume = df['Volume'].iloc[-1]
+    if current_volume > volume_avg * 1.5: score += 10
+    elif current_volume > volume_avg: score += 5
+    
+    # ATR stability (10 points)
+    atr_value = atr(df)
+    atr_percentage = (atr_value / close.iloc[-1]) * 100
+    if atr_percentage < 3: score += 10
+    elif atr_percentage < 5: score += 5
+    
+    # Fundamental factors (50 points)
+    if fundamental:
+        # PE ratio (15 points)
+        pe = fundamental.get('pe_ratio', 0)
+        if 10 < pe < 25: score += 15
+        elif pe <= 10: score += 10
+        elif pe < 40: score += 5
+        
+        # ROE (15 points)
+        roe = fundamental.get('roe', 0)
+        if roe > 20: score += 15
+        elif roe > 15: score += 10
+        elif roe > 10: score += 5
+        
+        # PB ratio (10 points)
+        pb = fundamental.get('pb_ratio', 0)
+        if 1 < pb < 3: score += 10
+        elif pb <= 1: score += 5
+        
+        # Dividend yield (10 points)
+        div = fundamental.get('dividend_yield', 0)
+        if div > 3: score += 10
+        elif div > 1: score += 5
+    
+    return min(score, 100)
+
+def get_ai_sentiment(symbol: str, technical_data: dict, fundamental: dict) -> str:
+    """Get AI-powered sentiment analysis"""
+    prompt = f"""
+Analyze {symbol} (NSE) stock based on:
+
+Technical:
+- Price: ₹{technical_data['ltp']:.2f}
+- RSI: {technical_data['rsi']:.1f}
+- MACD: {technical_data['macd']:.2f} vs Signal: {technical_data['signal']:.2f}
+- Trend vs 200 EMA: {technical_data['trend']}
+
+Fundamental:
+- P/E: {fundamental.get('pe_ratio', 'N/A')}
+- P/B: {fundamental.get('pb_ratio', 'N/A')}
+- ROE: {fundamental.get('roe', 0):.1f}%
+- Div Yield: {fundamental.get('dividend_yield', 0):.1f}%
+
+Provide:
+1. 3 bullish factors (bullet points)
+2. 3 bearish factors (bullet points)
+3. Overall sentiment (Bullish/Bearish/Neutral/Avoid)
+
+Keep it concise under 150 words.
+"""
+    
+    return ai_call(prompt, max_tokens=300)
 
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
     # 1) GROQ
@@ -68,33 +237,15 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
             print("Gemini error:", e)
 
     # 3) FALLBACK
-    return (
-        "AI advisory (fallback): External models are unavailable. "
-        "Use trend vs 200 EMA and RSI as basic guides. "
-        "Note: This is educational AI analysis only, not a recommendation."
-    )
-
-def build_prompt(sym: str, ltp: float, trend: str, rsi_val: float) -> str:
-    bias = "overbought" if rsi_val > 70 else "oversold" if rsi_val < 30 else "neutral"
-    return f"""
-You are an Indian equity advisor.
-
-Stock: {sym} (NSE)
-LTP: {ltp:.2f}
-Trend vs 200 EMA: {trend}
-RSI(14): {rsi_val:.2f} ({bias})
-
-In under 180 words:
-- Give a 1–4 week view for aggressive vs conservative traders.
-- Give a 3–6 month view for investors (allocation, staggered entries, partial profit booking).
-- List 3 key risks as bullet lines.
-End with: Note: This is educational AI analysis only, not a recommendation.
-""".strip()
+    return "AI analysis temporarily unavailable. Using technical indicators only."
 
 def stock_ai_advisory(symbol: str) -> str:
     sym = symbol.upper().strip()
     try:
-        df = yf.Ticker(f"{sym}.NS").history(period="1y", interval="1d")
+        # Fetch data
+        ticker = yf.Ticker(f"{sym}.NS")
+        df = ticker.history(period="1y", interval="1d")
+        
         if df.empty or "Close" not in df.columns:
             return f"Could not fetch data for {sym}. Try again later."
 
@@ -102,22 +253,72 @@ def stock_ai_advisory(symbol: str) -> str:
         if len(close) < 60:
             return f"Not enough price history for {sym}."
 
+        # Technical calculations
         ltp = float(close.iloc[-1])
-        ema200 = float(ema(close, 200).iloc[-1])
+        prev_close = float(df['Close'].iloc[-2]) if len(df) > 1 else ltp
+        
+        # Get fundamental data
+        fundamental = get_fundamental_info(sym)
+        
+        # Technical indicators
+        ema20_val = float(ema(close, 20).iloc[-1])
+        ema50_val = float(ema(close, 50).iloc[-1])
+        ema200_val = float(ema(close, 200).iloc[-1])
         rsi_val = float(rsi(close, 14).iloc[-1])
-        trend = "Bullish" if ltp > ema200 else "Bearish"
+        macd_val, signal_val = macd(close)
+        
+        bb_upper, bb_mid, bb_lower = bollinger_bands(close)
+        atr_val = float(atr(df))
+        pivots = pivot_points(df)
+        
+        trend = "Bullish" if ltp > ema200_val else "Bearish"
+        
+        # Calculate targets
+        targets = calculate_targets(ltp, atr_val, trend)
+        
+        # Quality score
+        quality_score = calculate_quality_score(df, fundamental)
+        
+        # AI Sentiment
+        technical_data = {
+            'ltp': ltp,
+            'rsi': rsi_val,
+            'macd': macd_val,
+            'signal': signal_val,
+            'trend': trend
+        }
+        
+        ai_sentiment = get_ai_sentiment(sym, technical_data, fundamental)
+        
+        # Format the final message
+        output = f"""📊 DEEP ANALYSIS: {sym}
+━━━━━━━━━━━━━━━━━━━━
+🏢 {fundamental.get('sector', 'N/A')} | Sector: {fundamental.get('sector', 'N/A')}
+💰 LTP: ₹{ltp:.2f} (Prev: ₹{prev_close:.2f})
+📈 52W High: ₹{fundamental.get('high_52w', 0):.2f} | 52W Low: ₹{fundamental.get('low_52w', 0):.2f}
+🏦 MCap: {fundamental.get('market_cap', 0)/10000000:.1f} Cr | P/E: {fundamental.get('pe_ratio', 0):.2f} | P/B: {fundamental.get('pb_ratio', 0):.2f} | ROE: {fundamental.get('roe', 0):.1f}% | Div: {fundamental.get('dividend_yield', 0):.2f}%
+━━━━━━━━━━━━━━━━━━━━
+📌 Technicals
+RSI: {rsi_val:.1f} | MACD: {macd_val:.2f} vs Signal: {signal_val:.2f}
+BB: U {bb_upper:.2f} | M {bb_mid:.2f} | L {bb_lower:.2f}
+EMA20: {ema20_val:.2f} | EMA50: {ema50_val:.2f} | EMA200: {ema200_val:.2f}
+ATR(14): {atr_val:.2f}
+Pivots: PP {pivots['PP']:.2f} | R1 {pivots['R1']:.2f} | R2 {pivots['R2']:.2f} | S1 {pivots['S1']:.2f} | S2 {pivots['S2']:.2f}
+━━━━━━━━━━━━━━━━━━━━
+🎯 Targets & Risk
+Short-term (1W / 1M / 3M): ₹{targets['short_term']['1W']:.2f} / ₹{targets['short_term']['1M']:.2f} / ₹{targets['short_term']['3M']:.2f}
+Long-term (6M / 1Y / 2Y): ₹{targets['long_term']['6M']:.2f} / ₹{targets['long_term']['1Y']:.2f} / ₹{targets['long_term']['2Y']:.2f}
+Stop Loss (swing): ₹{targets['stop_loss']:.2f}
+━━━━━━━━━━━━━━━━━━━━
+📊 Quality Score: {quality_score}/100
+━━━━━━━━━━━━━━━━━━━━
+🤖 AI Sentiment & Factors
+{ai_sentiment}
+━━━━━━━━━━━━━━━━━━━━
+⚠️ Educational only. Not SEBI registered."""
 
-        snap = (
-            "STOCK SNAPSHOT\n"
-            f"Symbol: {sym} (NSE)\n"
-            f"LTP: ₹{ltp:.2f}\n"
-            f"Trend vs 200 EMA: {trend}\n"
-            f"RSI(14): {rsi_val:.2f}\n"
-        )
-
-        prompt = build_prompt(sym, ltp, trend, rsi_val)
-        adv = ai_call(prompt, max_tokens=320)
-        return snap + "\nAI ADVISORY – " + sym + "\n\n" + adv
+        return output
+        
     except Exception as e:
         print("stock_ai_advisory error:", e)
         return f"An error occurred: {e}"
@@ -149,12 +350,22 @@ def handle_symbol(m):
     if not sym or not sym.isalnum():
         bot.reply_to(m, "Send a valid NSE symbol like BEL or RELIANCE.")
         return
+    
+    # Send typing indicator
+    bot.send_chat_action(m.chat.id, 'typing')
+    
     try:
         txt = stock_ai_advisory(sym)
     except Exception as e:
         print("handle_symbol error:", e)
         txt = "Error generating AI advisory. Try again."
-    bot.reply_to(m, txt[:4000])
+    
+    # Split long messages if needed
+    if len(txt) > 4000:
+        for i in range(0, len(txt), 4000):
+            bot.reply_to(m, txt[i:i+4000])
+    else:
+        bot.reply_to(m, txt)
 
 @bot.message_handler(func=lambda m: m.text == "Swing Trades")
 def swing_trades(m):
@@ -203,7 +414,7 @@ def run_http():
 # ---------- MAIN ----------
 
 if __name__ == "__main__":
-    print("Starting short AI NSE Advisory Bot...")
+    print("Starting enhanced AI NSE Advisory Bot...")
     threading.Thread(target=run_http, daemon=True).start()
     while True:
         try:
