@@ -8,3 +8,4 @@ cachetools
 flask
 redis
 gunicorn
+aiohttp
