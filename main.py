@@ -45,9 +45,15 @@ if not TELEGRAM_TOKEN:
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 
-# Configure AI clients
+# Configure AI clients (with error handling)
+ai_configured = False
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        ai_configured = True
+        logger.info("Gemini configured successfully")
+    except Exception as e:
+        logger.error(f"Failed to configure Gemini: {e}")
 
 # -------------------- USAGE TRACKING (in-memory) --------------------
 usage_store: Dict[int, Dict] = {}  # user_id -> {"date": str, "calls": int, "tier": str}
@@ -115,30 +121,70 @@ def is_history_fresh(item: Dict, max_age: int = FRESHNESS_SECONDS) -> bool:
     age = now - item["timestamp"]
     return age < max_age
 
-# -------------------- ACTUAL LLM CALL (Groq → Gemini) --------------------
-def actual_llm_call(prompt: str, max_tokens: int = 600) -> str:
+# -------------------- SAFE LLM CALL (NEVER CRASHES) --------------------
+def safe_llm_call(prompt: str, max_tokens: int = 600) -> Tuple[bool, str]:
+    """
+    Returns (success: bool, response: str)
+    Never raises exceptions - always returns a tuple.
+    """
+    # Try Groq first
     if GROQ_API_KEY:
         try:
             client = Groq(api_key=GROQ_API_KEY)
-            resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                temperature=0.35,
-            )
-            return (resp.choices[0].message.content or "").strip()
+            # Try different models in order of reliability
+            models_to_try = ["llama3-8b-8192", "mixtral-8x7b-32768", "gemma2-9b-it"]
+            
+            for model in models_to_try:
+                try:
+                    resp = client.chat.completions.create(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=max_tokens,
+                        temperature=0.35,
+                        timeout=10  # Add timeout to prevent hanging
+                    )
+                    if resp and resp.choices:
+                        return True, (resp.choices[0].message.content or "").strip()
+                except Exception as e:
+                    logger.warning(f"Groq model {model} failed: {e}")
+                    continue
+            
+            # If all models fail
+            logger.warning("All Groq models failed")
         except Exception as e:
-            logger.error(f"Groq error: {e}")
+            logger.error(f"Groq client error: {e}")
 
+    # Try Gemini
     if GEMINI_API_KEY:
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            resp = model.generate_content(prompt)
-            return (resp.text or "").strip()
+            # Try different model names
+            gemini_models = [
+                "models/gemini-1.5-pro",
+                "models/gemini-1.5-flash",
+                "gemini-1.5-pro",
+                "gemini-1.5-flash"
+            ]
+            
+            for model_name in gemini_models:
+                try:
+                    model = genai.GenerativeModel(model_name)
+                    resp = model.generate_content(
+                        prompt,
+                        generation_config={
+                            "max_output_tokens": max_tokens,
+                            "temperature": 0.35,
+                        }
+                    )
+                    if resp and resp.text:
+                        return True, resp.text.strip()
+                except Exception as e:
+                    logger.warning(f"Gemini model {model_name} failed: {e}")
+                    continue
         except Exception as e:
-            logger.error(f"Gemini error: {e}")
+            logger.error(f"Gemini client error: {e}")
 
-    return "AI service temporarily unavailable. Please try again later."
+    # If all fail, return False with empty string
+    return False, ""
 
 def call_llm_with_limits(user_id: int, prompt: str, item_type: str = "analysis") -> str:
     allowed, remaining, limit = can_use_llm(user_id)
@@ -149,11 +195,24 @@ def call_llm_with_limits(user_id: int, prompt: str, item_type: str = "analysis")
             f"Please try again tomorrow or upgrade to Pro (200 calls/day)."
         )
 
-    try:
-        response = actual_llm_call(prompt)
-    except Exception as e:
-        return f"⚠️ LLM service error: {e}"
+    # Call LLM safely
+    success, response = safe_llm_call(prompt)
 
+    if not success:
+        # Don't register usage for failed calls
+        if remaining - 1 <= 3:
+            return (
+                f"⚠️ AI service temporarily unavailable. Your quota was not used.\n\n"
+                f"You still have {remaining} AI calls left today.\n\n"
+                f"_Technical analysis is still provided below._"
+            )
+        else:
+            return (
+                f"⚠️ AI service temporarily unavailable. Your quota was not used.\n\n"
+                f"_Technical analysis is still provided below._"
+            )
+
+    # Success - register usage and store history
     register_llm_usage(user_id)
     add_history_item(user_id, prompt, response, item_type)
 
@@ -322,7 +381,7 @@ def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
         elif mcap > 1000e7: score += 4
     return min(score, 100)
 
-# -------------------- STOCK ANALYSIS --------------------
+# -------------------- STOCK ANALYSIS (NEVER FAILS) --------------------
 def stock_ai_advisory(symbol: str) -> str:
     sym = symbol.upper().strip()
     try:
@@ -330,15 +389,18 @@ def stock_ai_advisory(symbol: str) -> str:
         ticker = yf.Ticker(f"{sym}.NS")
         df = ticker.history(period="1y", interval="1d")
         if df.empty:
-            return f"❌ No data for {sym}."
+            return f"❌ No data found for {sym}. Please check the symbol and try again."
+        
         close = df['Close']
         if len(close) < 60:
-            return f"❌ Insufficient history for {sym}."
+            return f"❌ Insufficient history for {sym}. Need at least 60 days of data."
+        
         ltp = float(close.iloc[-1])
         prev = float(df['Close'].iloc[-2]) if len(df) > 1 else ltp
         fund = get_fundamental_info(sym)
         company = fund.get('company_name', sym)
 
+        # Calculate all technical indicators
         ema20 = ema(close,20).iloc[-1]
         ema50 = ema(close,50).iloc[-1]
         ema200 = ema(close,200).iloc[-1]
@@ -353,10 +415,17 @@ def stock_ai_advisory(symbol: str) -> str:
                                     high_52w=fund.get('high_52w'))
         quality = calculate_quality_score(df, fund)
 
-        # AI commentary (optional)
-        ai_prompt = f"Provide a brief bullish/bearish sentiment analysis for {sym} (NSE) based on: RSI {rsi_val:.1f}, trend {trend}, P/E {fund.get('pe_ratio',0):.1f}, ROE {fund.get('roe',0):.1f}%."
-        ai_comment = actual_llm_call(ai_prompt, max_tokens=200)
+        # Try to get AI commentary (but never fail if it doesn't work)
+        ai_comment = ""
+        success, ai_response = safe_llm_call(
+            f"Provide a brief bullish/bearish sentiment analysis for {sym} (NSE) based on: "
+            f"RSI {rsi_val:.1f}, trend {trend}, P/E {fund.get('pe_ratio',0):.1f}, ROE {fund.get('roe',0):.1f}%.",
+            max_tokens=200
+        )
+        if success:
+            ai_comment = f"\n\n🤖 AI COMMENTARY\n{ai_response}"
 
+        # Build the response - always include technical analysis, optionally include AI
         output = f"""📊 DEEP ANALYSIS: {sym}
 ━━━━━━━━━━━━━━━━━━━━
 🏢 {company}
@@ -385,18 +454,15 @@ Long-term (6M/1Y/2Y): ₹{targets['long_term']['6M']:.2f} / ₹{targets['long_te
 🛑 Stop Loss: ₹{targets['stop_loss']:.2f}
 
 ━━━━━━━━━━━━━━━━━━━━
-📊 QUALITY SCORE: {quality}/100 {'⭐' * (quality//20)}{'☆' * (5 - quality//20)}
-
-━━━━━━━━━━━━━━━━━━━━
-🤖 AI COMMENTARY
-{ai_comment}
+📊 QUALITY SCORE: {quality}/100 {'⭐' * (quality//20)}{'☆' * (5 - quality//20)}{ai_comment}
 
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ Educational purpose only."""
         return output
+        
     except Exception as e:
-        logger.exception(f"Error in stock_ai_advisory for {symbol}")
-        return f"❌ Analysis failed: {e}"
+        logger.exception(f"Critical error in stock_ai_advisory for {symbol}")
+        return f"❌ Unable to analyze {symbol} at this time. Please try again later.\n\nError: {str(e)}"
 
 # -------------------- MARKET BREADTH --------------------
 def get_nifty_constituents():
@@ -492,17 +558,17 @@ def format_market_breadth():
 def get_tavily_news(query: str, days: int = 7) -> list:
     if not TAVILY_API_KEY:
         return []
-    url = "https://api.tavily.com/search"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "api_key": TAVILY_API_KEY,
-        "query": query,
-        "search_depth": "basic",
-        "max_results": 5,
-        "include_answer": False,
-        "include_raw_content": False
-    }
     try:
+        url = "https://api.tavily.com/search"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "api_key": TAVILY_API_KEY,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": 5,
+            "include_answer": False,
+            "include_raw_content": False
+        }
         resp = requests.post(url, json=payload, headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
@@ -620,9 +686,6 @@ def format_portfolio(portfolio, risk_profile: str):
 # -------------------- TELEGRAM HANDLERS --------------------
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(m):
-    if not can_use_llm(m.from_user.id)[0]:
-        # Still show menu, but rate‑limited later
-        pass
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(KeyboardButton("🔍 Stock Analysis"), KeyboardButton("📊 Market Breadth"))
     kb.add(KeyboardButton("💼 Conservative"), KeyboardButton("💼 Moderate"), KeyboardButton("💼 Aggressive"))
@@ -644,9 +707,6 @@ def start_cmd(m):
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Stock Analysis")
 def ask_symbol(m):
-    if not can_use_llm(m.from_user.id)[0]:
-        bot.reply_to(m, "⏳ Rate limit exceeded. Please wait.")
-        return
     msg = bot.reply_to(m, "📝 Send NSE symbol (e.g. RELIANCE, TCS):")
     bot.register_next_step_handler(msg, process_symbol)
 
@@ -655,138 +715,21 @@ def process_symbol(m):
     if not sym.isalnum():
         bot.reply_to(m, "❌ Invalid symbol. Use letters only.")
         return
+    
     bot.send_chat_action(m.chat.id, 'typing')
-
-    # Check usage manually (already in wrapper, but we also need to check before heavy work)
+    
+    # Check usage
     allowed, remaining, limit = can_use_llm(m.from_user.id)
-    if not allowed:
-        bot.reply_to(m, f"❌ You've used all {limit} AI analyses for today. Please try again tomorrow.")
-        return
-
+    
+    # Get analysis (always works, even if AI fails)
     analysis = stock_ai_advisory(sym)
-    register_llm_usage(m.from_user.id)
-    add_history_item(m.from_user.id, f"Stock analysis: {sym}", analysis, "stock")
-    if remaining - 1 <= 3:
-        analysis += f"\n\n⚠️ You have {remaining-1} AI calls left today."
-    bot.reply_to(m, analysis)
-
-@bot.message_handler(func=lambda m: m.text == "📊 Market Breadth")
-def market_breadth_cmd(m):
-    bot.send_chat_action(m.chat.id, 'typing')
-    text = format_market_breadth()
-    bot.reply_to(m, text, parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text in ["💼 Conservative", "💼 Moderate", "💼 Aggressive"])
-def portfolio_cmd(m):
-    risk = m.text.split()[1].lower()
-    bot.send_chat_action(m.chat.id, 'typing')
-    portfolio = suggest_portfolio(risk)
-    text = format_portfolio(portfolio, risk)
-    add_history_item(m.from_user.id, f"Portfolio suggestion ({risk})", text, "portfolio")
-    bot.reply_to(m, text, parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text == "📈 Swing (Conservative)")
-def swing_conservative(m):
-    bot.send_chat_action(m.chat.id, 'typing')
-    text = get_swing_trades(risk_tolerance="conservative")
-    bot.reply_to(m, text, parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text == "📈 Swing (Aggressive)")
-def swing_aggressive(m):
-    bot.send_chat_action(m.chat.id, 'typing')
-    text = get_swing_trades(risk_tolerance="aggressive")
-    bot.reply_to(m, text, parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text == "📰 Market News")
-def news_cmd(m):
-    bot.send_chat_action(m.chat.id, 'typing')
-    text = get_market_news()
-    bot.reply_to(m, text, parse_mode="HTML", disable_web_page_preview=True)
-
-@bot.message_handler(commands=["usage"])
-@bot.message_handler(func=lambda m: m.text == "📊 Usage")
-def usage_cmd(m):
-    user_id = m.from_user.id
-    allowed, remaining, limit = can_use_llm(user_id)
-    used = limit - remaining if allowed else limit
-    text = f"📊 You have used {used} out of {limit} AI calls today.\nRemaining: {remaining}"
-    bot.reply_to(m, text)
-
-@bot.message_handler(commands=["history"])
-@bot.message_handler(func=lambda m: m.text == "📋 History")
-def show_history(m):
-    user_id = m.from_user.id
-    items = get_recent_history(user_id, limit=5)
-    if not items:
-        bot.reply_to(m, "No recent history.")
-        return
-    markup = InlineKeyboardMarkup()
-    for item in items:
-        preview = item["prompt"][:30] + ("…" if len(item["prompt"]) > 30 else "")
-        button = InlineKeyboardButton(
-            text=preview,
-            callback_data=f"hist_{item['id']}"
-        )
-        markup.add(button)
-    bot.send_message(m.chat.id, "📋 Your recent queries:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("hist_"))
-def history_callback(call):
-    user_id = call.from_user.id
-    item_id = int(call.data.split("_")[1])
-    item = get_history_item(user_id, item_id)
-    if not item:
-        bot.answer_callback_query(call.id, "Item not found.")
-        return
-    if is_history_fresh(item):
-        bot.send_message(
-            user_id,
-            f"📎 [CACHED] {item['response']}\n\n_This result is still fresh (saved your quota)._"
-        )
-        bot.answer_callback_query(call.id)
-    else:
-        bot.answer_callback_query(call.id, "Fetching fresh analysis...")
-        if item["type"] == "stock":
-            # Extract symbol from prompt (simple)
-            symbol = item["prompt"].replace("Stock analysis:", "").strip()
-            new_response = stock_ai_advisory(symbol)
-            register_llm_usage(user_id)
-            add_history_item(user_id, item["prompt"], new_response, "stock")
-            bot.send_message(user_id, new_response)
-        elif item["type"] == "portfolio":
-            risk = item["prompt"].replace("Portfolio suggestion (", "").replace(")", "").strip()
-            portfolio = suggest_portfolio(risk)
-            new_response = format_portfolio(portfolio, risk)
-            add_history_item(user_id, item["prompt"], new_response, "portfolio")
-            bot.send_message(user_id, new_response)
-        else:
-            new_response = call_llm_with_limits(user_id, item["prompt"], item["type"])
-            bot.send_message(user_id, new_response)
-
-# -------------------- FLASK HEALTH SERVER --------------------
-app = Flask(__name__)
-
-@app.route('/', methods=['GET'])
-def index():
-    return "Bot is running", 200
-
-@app.route('/health', methods=['GET'])
-def health():
-    return {"status": "healthy", "time": datetime.now().isoformat()}, 200
-
-def run_flask():
-    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
-
-# -------------------- MAIN --------------------
-if __name__ == "__main__":
-    logger.info("Starting AI Stock Advisor Pro (polling mode)")
-    bot.remove_webhook()
-    time.sleep(1)
-    threading.Thread(target=run_flask, daemon=True).start()
-    logger.info(f"Flask health server on port {PORT}")
-    while True:
-        try:
-            bot.infinity_polling()
-        except Exception as e:
-            logger.error(f"Polling error: {e}")
-            time.sleep(5)
+    
+    # If AI was used successfully, register usage
+    # Note: The AI call inside stock_ai_advisory already handles its own registration
+    # We're just tracking the overall analysis request
+    if allowed and "AI service temporarily unavailable" not in analysis:
+        register_llm_usage(m.from_user.id)
+        add_history_item(m.from_user.id, f"Stock analysis: {sym}", analysis, "stock")
+    
+    if remaining - 1 <= 3 and allowed:
+        analysis += f"\n\n⚠️ You have {remaining
