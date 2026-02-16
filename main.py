@@ -3,9 +3,8 @@ import time
 import json
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
-from functools import lru_cache
 
 import pandas as pd
 import yfinance as yf
@@ -22,8 +21,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # e.g. https://your-app.onrender.com
-PORT = int(os.getenv("PORT", 8443))
+PORT = int(os.getenv("PORT", 8080))          # Render sets this
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 
 # Logging
@@ -33,7 +31,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Validate token
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN not set")
 
@@ -44,16 +41,13 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Cache setup (in-memory TTL cache, 5 minutes)
+# Cache and rate limiter
 cache = TTLCache(maxsize=1000, ttl=300)
-
-# Rate limiter (per user, 10 requests/minute)
 rate_limits = defaultdict(list)
 
 # -------------------- HELPER FUNCTIONS --------------------
 def check_rate_limit(user_id: int) -> bool:
     now = time.time()
-    # Clean old entries
     rate_limits[user_id] = [t for t in rate_limits[user_id] if now - t < 60]
     if len(rate_limits[user_id]) >= 10:
         return False
@@ -88,7 +82,7 @@ def get_market_breadth():
                 data[name] = (last, change)
         except Exception as e:
             logger.error(f"Error fetching {name}: {e}")
-    # Placeholder for advance/decline (you can replace with real data)
+    # Advance/Decline placeholder
     ad = {"advances": 1250, "declines": 750, "unchanged": 100}
     return data, ad
 
@@ -163,10 +157,9 @@ def calculate_stock_score(symbol: str) -> dict:
         elif debt_eq and debt_eq < 2:
             fund_score += 1
 
-        # Sentiment score (placeholder, you can integrate AI here)
+        # Sentiment score (placeholder)
         sentiment_score = 5
 
-        # Total (weighted)
         total = (tech_score * 0.4) + (fund_score * 0.4) + (sentiment_score * 0.2)
         rating = "Strong Buy" if total >= 8 else "Buy" if total >= 6 else "Hold" if total >= 4 else "Avoid"
 
@@ -219,14 +212,14 @@ def get_ai_analysis(symbol: str) -> str:
     if cache_key in cache:
         logger.info(f"Cache hit for {symbol}")
         return cache[cache_key]
-    result = stock_ai_advisory(symbol)  # your existing function
+    result = stock_ai_advisory(symbol)
     cache[cache_key] = result
     return result
 
 def stock_ai_advisory(symbol: str) -> str:
-    # This is a placeholder – replace with your actual detailed analysis function
-    # For brevity, I'm returning a simplified message. You can copy your full function here.
-    return f"📊 Analysis for {symbol} will appear here. (Your full analysis function goes here.)"
+    # Replace this with your full detailed analysis function
+    # (Copy your comprehensive function from earlier)
+    return f"📊 Detailed analysis for {symbol} will appear here."
 
 # -------------------- TELEGRAM HANDLERS --------------------
 @bot.message_handler(commands=["start", "help"])
@@ -322,7 +315,7 @@ def news_cmd(m):
         text += f"{i}. <a href='{art['url']}'>{title}</a>\n   📌 {source} | {date}\n\n"
     bot.reply_to(m, text, parse_mode="HTML", disable_web_page_preview=True)
 
-# -------------------- FLASK WEBHOOK SERVER --------------------
+# -------------------- FLASK SERVER FOR HEALTH CHECKS --------------------
 app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
@@ -333,45 +326,28 @@ def index():
 def health():
     return {"status": "healthy", "time": datetime.now().isoformat()}, 200
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return '', 200
-    return 'Bad request', 400
-
 def run_flask():
-    app.run(host='0.0.0.0', port=PORT)
-
-# -------------------- WEBHOOK SETUP --------------------
-def set_webhook():
-    bot.remove_webhook()
-    time.sleep(1)
-    bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-    logger.info(f"Webhook set to {WEBHOOK_URL}/webhook")
+    """Run Flask server in a separate thread."""
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
 
 # -------------------- MAIN --------------------
 if __name__ == "__main__":
-    logger.info("Starting AI Stock Advisor Pro")
+    logger.info("Starting AI Stock Advisor Pro (polling mode)")
 
-    if WEBHOOK_URL:
-        # Webhook mode
-        set_webhook()
-        # Run Flask in a separate thread (or use gunicorn in production)
-        threading.Thread(target=run_flask, daemon=True).start()
-        # Keep main thread alive (optional heartbeat)
-        while True:
-            time.sleep(60)
-            if ADMIN_CHAT_ID:
-                try:
-                    bot.send_message(ADMIN_CHAT_ID, "💓 Bot heartbeat OK")
-                except Exception as e:
-                    logger.error(f"Heartbeat failed: {e}")
-    else:
-        # Polling mode – ensure no webhook is active
-        logger.info("No WEBHOOK_URL set, removing any existing webhook and starting polling...")
-        bot.remove_webhook()
-        time.sleep(1)
-        bot.infinity_polling()
+    # Remove any existing webhook to avoid 409 conflict
+    bot.remove_webhook()
+    time.sleep(1)
+
+    # Start Flask for health checks (required by Render)
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Flask health server started on port {PORT}")
+
+    # Start polling (blocking)
+    logger.info("Starting polling...")
+    while True:
+        try:
+            bot.infinity_polling()
+        except Exception as e:
+            logger.error(f"Polling error: {e}")
+            time.sleep(5)   # Wait before restarting polling
