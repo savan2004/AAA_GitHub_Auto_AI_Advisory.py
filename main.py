@@ -28,7 +28,6 @@ if GEMINI_API_KEY:
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)  # text only
 
-# yfinance rate-limit + cache
 YF_WINDOW_SEC = 60
 YF_MAX_CALLS_PER_WINDOW = 10
 YF_CALL_TIMES = deque()
@@ -154,19 +153,19 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             print("Gemini error:", e)
 
-    # 3) Fallback: simple rules-based text, no external API
+    # 3) Fallback simple text
     return "AI explanation not available on server. Use the indicator snapshot above as primary view."
 
 
-# ========= 5. STOCK ANALYSIS =========
+# ========= 5. STOCK ANALYSIS (COMBINED MESSAGE) =========
 
-def deep_stock_analysis(symbol: str):
+def deep_stock_analysis(symbol: str) -> str:
     sym = symbol.upper().strip()
     ticker = f"{sym}.NS"
 
     df = safe_history(ticker, period="1y", interval="1d")
     if df.empty:
-        return [f"Could not fetch data for {sym}. Try again later."]
+        return f"Could not fetch data for {sym}. Try again later."
 
     close = df["Close"]
     ltp = float(close.iloc[-1])
@@ -192,7 +191,7 @@ def deep_stock_analysis(symbol: str):
     if adx_val >= 20:
         quality += 1
 
-    msg1 = (
+    snapshot = (
         "STOCK SNAPSHOT\n"
         f"Symbol: {sym} (NSE)\n"
         f"LTP: ₹{ltp:.2f}\n"
@@ -227,11 +226,17 @@ Write a SHORT, structured view:
 Total length under 220 words.
 """
     explanation = ai_call(prompt, max_tokens=350)
-    msg2 = f"ANALYST VIEW – {sym}\n\n{explanation}"
-    return [msg1, msg2]
+
+    combined = (
+        snapshot
+        + "\n"
+        + f"ANALYST VIEW – {sym}\n\n"
+        + explanation
+    )
+    return combined
 
 
-# ========= 6. SIMPLE SWING TRADES (NO AI) =========
+# ========= 6. SWING TRADES (SIMPLE) =========
 
 WATCHLIST = [
     "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK",
@@ -264,18 +269,14 @@ def swing_signal(df: pd.DataFrame):
     long_adx = adx_last >= 25
 
     if long_trend_ok and long_pullback and long_adx:
-        return {"signal": "LONG", "ltp": ltp, "ema20": e20, "ema50": e50,
-                "ema200": e200, "bb_mid": bbm, "bb_up": bbu,
-                "bb_low": bbl, "adx": adx_last}
+        return {"signal": "LONG", "ltp": ltp, "adx": adx_last}
 
     short_trend_ok = (ltp < e200) and (e50 < e200)
     short_pullback = (bbm <= ltp <= bbu)
     short_adx = adx_last >= 25
 
     if short_trend_ok and short_pullback and short_adx:
-        return {"signal": "SHORT", "ltp": ltp, "ema20": e20, "ema50": e50,
-                "ema200": e200, "bb_mid": bbm, "bb_up": bbu,
-                "bb_low": bbl, "adx": adx_last}
+        return {"signal": "SHORT", "ltp": ltp, "adx": adx_last}
 
     return {"signal": "NONE"}
 
@@ -290,8 +291,7 @@ def get_daily_swing_trades() -> str:
             ltp = sig["ltp"]
             adx_val = sig["adx"]
             lines.append(
-                f"{sym}: {side} bias, LTP ~ ₹{ltp:.2f}, ADX14 ~ {adx_val:.1f} "
-                f"(trend + pullback condition met)."
+                f"{sym}: {side} bias, LTP ~ ₹{ltp:.2f}, ADX14 ~ {adx_val:.1f}."
             )
 
     if len(lines) == 1:
@@ -364,10 +364,8 @@ def handle_symbol_analysis(m):
     if not sym.isalnum():
         bot.reply_to(m, "Please send a valid NSE symbol like RELIANCE.")
         return
-    parts = deep_stock_analysis(sym)
-    for p in parts:
-        bot.reply_to(m, p)
-        time.sleep(0.5)
+    text = deep_stock_analysis(sym)
+    bot.reply_to(m, text)
 
 @bot.message_handler(func=lambda m: m.text == "Swing Trades")
 def handle_swing(m):
@@ -386,7 +384,7 @@ def fallback(m):
     )
 
 
-# ========= 9. HEALTH SERVER & MAIN LOOP =========
+# ========= 9. HEALTH SERVER & SIMULATION =========
 
 def run_health_server():
     port = int(os.environ.get("PORT", 10000))
@@ -405,6 +403,16 @@ def run_health_server():
 
 if __name__ == "__main__":
     print("Bot starting...")
+
+    # Simulation: BEL analysis in logs
+    try:
+        sim_text = deep_stock_analysis("BEL")
+        print("===== SIMULATION: BEL ANALYSIS (first 600 chars) =====")
+        print(sim_text[:600])
+        print("======================================================")
+    except Exception as e:
+        print("Simulation error:", e)
+
     threading.Thread(target=run_health_server, daemon=True).start()
 
     while True:
