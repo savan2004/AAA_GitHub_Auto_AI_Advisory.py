@@ -20,7 +20,7 @@ from flask import Flask, request
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")   # New: Tavily for news
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 PORT = int(os.getenv("PORT", 8080))
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 
@@ -34,15 +34,13 @@ logger = logging.getLogger(__name__)
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN not set")
 
-# Initialize bot
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 
-# Configure AI clients
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # Cache and rate limiter
-cache = TTLCache(maxsize=1000, ttl=300)          # 5-minute cache
+cache = TTLCache(maxsize=1000, ttl=300)
 rate_limits = defaultdict(list)
 
 # -------------------- HELPER FUNCTIONS --------------------
@@ -63,9 +61,8 @@ def safe_request(url, params=None, headers=None, timeout=10):
         logger.error(f"Request failed: {url} - {e}")
         return None
 
-# -------------------- TAVILY NEWS (replaces NewsAPI) --------------------
+# -------------------- TAVILY NEWS --------------------
 def get_tavily_news(query: str, days: int = 7) -> list:
-    """Fetch news from Tavily API for a given query."""
     if not TAVILY_API_KEY:
         logger.warning("TAVILY_API_KEY not set")
         return []
@@ -75,19 +72,15 @@ def get_tavily_news(query: str, days: int = 7) -> list:
         "api_key": TAVILY_API_KEY,
         "query": query,
         "search_depth": "basic",
-        "include_domains": [],
-        "exclude_domains": [],
         "max_results": 5,
         "include_answer": False,
-        "include_raw_content": False,
-        "include_images": False
+        "include_raw_content": False
     }
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         results = data.get("results", [])
-        # Filter by date (approx)
         cutoff = datetime.now() - timedelta(days=days)
         filtered = []
         for r in results:
@@ -98,7 +91,7 @@ def get_tavily_news(query: str, days: int = 7) -> list:
                     if pub_dt >= cutoff:
                         filtered.append(r)
                 except:
-                    filtered.append(r)   # include if date parsing fails
+                    filtered.append(r)
             else:
                 filtered.append(r)
         return filtered[:5]
@@ -118,7 +111,7 @@ def format_news(news_list: list, title: str) -> str:
         text += f"{i}. <a href='{url}'>{title}</a>\n   📌 {source} | {date}\n\n"
     return text
 
-# -------------------- TECHNICAL INDICATORS --------------------
+# -------------------- TECHNICAL INDICATORS (unchanged) --------------------
 def ema(s: pd.Series, span: int) -> pd.Series:
     return s.ewm(span=span, adjust=False).mean()
 
@@ -246,7 +239,7 @@ def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
         elif mcap > 1000e7: score += 4
     return min(score, 100)
 
-# -------------------- AI ADVISORY (with Tavily news) --------------------
+# -------------------- AI ADVISORY --------------------
 def get_ai_analysis(symbol: str) -> str:
     cache_key = f"ai:{symbol}"
     if cache_key in cache:
@@ -397,14 +390,83 @@ Long-term (6M/1Y/2Y): ₹{targets['long_term']['6M']:.2f} / ₹{targets['long_te
         logger.exception(f"Error in stock_ai_advisory for {symbol}")
         return f"❌ Analysis failed: {e}"
 
-# -------------------- MARKET BREADTH (with timestamp) --------------------
-def get_market_breadth():
+# -------------------- ENHANCED MARKET BREADTH --------------------
+def get_nifty_constituents():
+    """Fetch current Nifty 50 constituents using yfinance (hardcoded fallback)."""
+    # This list is subject to change; consider updating periodically.
+    # Source: https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050
+    # For simplicity, we use a hardcoded list; in production, you could scrape or use an API.
+    return [
+        "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC",
+        "KOTAKBANK", "SBIN", "BHARTIARTL", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
+        "MARUTI", "TATAMOTORS", "TITAN", "SUNPHARMA", "ONGC", "NTPC", "M&M",
+        "POWERGRID", "ULTRACEMCO", "BAJFINANCE", "BAJAJFINSV", "TATACONSUM",
+        "HDFC", "HDFCLIFE", "SBILIFE", "BRITANNIA", "INDUSINDBK", "CIPLA",
+        "DRREDDY", "DIVISLAB", "GRASIM", "HINDALCO", "JSWSTEEL", "TECHM",
+        "BPCL", "IOC", "HEROMOTOCO", "EICHERMOT", "COALINDIA", "SHREECEM",
+        "UPL", "ADANIPORTS", "AXISBANK", "BAJAJ-AUTO", "NESTLE", "TATASTEEL"
+    ]
+
+def get_advance_decline():
+    """Compute advances and declines from Nifty 50 stocks."""
+    constituents = get_nifty_constituents()
+    advances = 0
+    declines = 0
+    unchanged = 0
+    total = 0
+    sector_perf = defaultdict(lambda: {'adv':0, 'dec':0, 'total':0})
+    for sym in constituents:
+        try:
+            ticker = yf.Ticker(f"{sym}.NS")
+            hist = ticker.history(period="2d")
+            if len(hist) < 2:
+                continue
+            prev_close = hist['Close'].iloc[-2]
+            last_price = hist['Close'].iloc[-1]
+            change = last_price - prev_close
+            if change > 0:
+                advances += 1
+            elif change < 0:
+                declines += 1
+            else:
+                unchanged += 1
+            total += 1
+
+            # Sector performance (optional)
+            info = ticker.info
+            sector = info.get('sector', 'Other')
+            if change > 0:
+                sector_perf[sector]['adv'] += 1
+            elif change < 0:
+                sector_perf[sector]['dec'] += 1
+            sector_perf[sector]['total'] += 1
+        except Exception as e:
+            logger.error(f"Error processing {sym}: {e}")
+            continue
+    return advances, declines, unchanged, total, sector_perf
+
+def get_fii_dii_flow():
+    """Approximate FII/DII flow using Tavily news."""
+    news = get_tavily_news("FII DII flow Indian market", days=1)
+    if news:
+        # Combine headlines to guess net flow
+        text = " ".join([item.get('title','') for item in news])
+        if "net buyers" in text.lower() or "buy" in text.lower():
+            return "FIIs were net buyers"
+        elif "net sellers" in text.lower() or "sell" in text.lower():
+            return "FIIs were net sellers"
+        else:
+            return "FII/DII flows mixed"
+    return "FII/DII data unavailable (use Tavily for latest)"
+
+def format_market_breadth():
     indices = {
         "NIFTY 50": "^NSEI",
         "BANK NIFTY": "^NSEBANK",
-        "NIFTY IT": "^CNXIT"
+        "NIFTY IT": "^CNXIT",
+        "NIFTY AUTO": "^CNXAUTO"  # optional
     }
-    data = {}
+    ind_data = {}
     for name, sym in indices.items():
         try:
             ticker = yf.Ticker(sym)
@@ -413,34 +475,40 @@ def get_market_breadth():
                 last = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2] if len(hist) > 1 else last
                 change = ((last - prev) / prev) * 100 if prev != 0 else 0
-                data[name] = (last, change)
+                ind_data[name] = (last, change)
             else:
-                data[name] = (0, 0)
-        except Exception as e:
-            logger.error(f"Error fetching {name}: {e}")
-            data[name] = (0, 0)
-    # Placeholder A/D – you could scrape from NSE if desired
-    ad = {"advances": 1250, "declines": 750, "unchanged": 100}
-    return data, ad
+                ind_data[name] = (0, 0)
+        except:
+            ind_data[name] = (0, 0)
 
-def format_market_breadth():
-    indices, ad = get_market_breadth()
+    adv, dec, unc, total, sector_perf = get_advance_decline()
+    fii_dii = get_fii_dii_flow()
     timestamp = datetime.now().strftime("%d-%b-%Y %I:%M %p")
+
     text = f"📊 <b>Market Breadth (NSE)</b> – {timestamp}\n\n"
-    for name, (last, chg) in indices.items():
+    for name, (last, chg) in ind_data.items():
         arrow = "🟢" if chg > 0 else "🔴" if chg < 0 else "⚪"
         text += f"{arrow} {name}: {last:,.2f} ({chg:+.2f}%)\n"
-    text += f"\n📈 Advances: {ad['advances']}\n📉 Declines: {ad['declines']}\n⚖️ Unchanged: {ad['unchanged']}\n"
-    if ad['declines'] > 0:
-        ratio = ad['advances'] / ad['declines']
+
+    text += f"\n📈 Advances: {adv}\n📉 Declines: {dec}\n⚖️ Unchanged: {unc}\n"
+    if dec > 0:
+        ratio = adv / dec
     else:
-        ratio = ad['advances']
-    text += f"\n🔄 A/D Ratio: {ratio:.2f}"
+        ratio = adv
+    text += f"🔄 A/D Ratio: {ratio:.2f} (out of {total} stocks)\n\n"
+
+    # Top sectors (optional)
+    text += "🏭 <b>Sector Snapshot</b>\n"
+    for sector, data in sorted(sector_perf.items(), key=lambda x: x[1]['adv']-x[1]['dec'], reverse=True)[:5]:
+        net = data['adv'] - data['dec']
+        arrow = "🟢" if net > 0 else "🔴" if net < 0 else "⚪"
+        text += f"{arrow} {sector}: {data['adv']} up, {data['dec']} down\n"
+
+    text += f"\n💰 <b>FII/DII Flow (approx)</b>: {fii_dii}\n"
     return text
 
 # -------------------- PORTFOLIO SUGGESTION (CFA-style) --------------------
 def score_stock(symbol: str) -> dict:
-    """Return score and metadata for a stock."""
     try:
         ticker = yf.Ticker(f"{symbol}.NS")
         info = ticker.info
@@ -450,42 +518,34 @@ def score_stock(symbol: str) -> dict:
         close = hist['Close']
         latest = close.iloc[-1]
         ema200 = close.ewm(span=200).mean().iloc[-1]
-        # Simple score (0-10) based on trend, PE, ROE, etc.
         score = 5.0
-        # Trend
         if latest > ema200:
             score += 1.5
         else:
             score -= 1.0
-        # PE
         pe = info.get('trailingPE', 25)
         if pe and pe < 20:
             score += 1.5
         elif pe and pe > 30:
             score -= 1.0
-        # ROE
         roe = info.get('returnOnEquity', 0.1) * 100
         if roe > 15:
             score += 1.5
         elif roe < 8:
             score -= 1.0
-        # PB
         pb = info.get('priceToBook', 2)
         if pb < 2:
             score += 0.5
         elif pb > 4:
             score -= 0.5
-        # Cap size preference (large caps get slight boost)
         mcap = info.get('marketCap', 0)
         if mcap > 50000e7:
             score += 0.5
         elif mcap < 1000e7:
             score -= 0.5
-        # Dividend
         div = info.get('dividendYield', 0)
         if div and div > 0.02:
             score += 0.5
-
         score = max(0, min(10, score))
         rating = "Strong Buy" if score >= 8 else "Buy" if score >= 6 else "Hold" if score >= 4 else "Avoid"
         return {
@@ -500,11 +560,6 @@ def score_stock(symbol: str) -> dict:
         return None
 
 def suggest_portfolio(risk_profile: str = "moderate"):
-    """
-    Generate a diversified portfolio based on scores and risk profile.
-    risk_profile: 'conservative', 'moderate', 'aggressive'
-    """
-    # Expanded universe
     candidates = [
         "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "ITC", "SBIN",
         "BHARTIARTL", "KOTAKBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
@@ -513,24 +568,19 @@ def suggest_portfolio(risk_profile: str = "moderate"):
     scored = []
     for sym in candidates:
         data = score_stock(sym)
-        if data and data["score"] >= 4:   # include Hold and above
+        if data and data["score"] >= 4:
             scored.append(data)
     scored.sort(key=lambda x: x["score"], reverse=True)
 
-    # Adjust based on risk profile
     if risk_profile == "conservative":
-        # Prefer large caps, higher scores
         filtered = [s for s in scored if s["mcap"] > 10000e7][:6]
     elif risk_profile == "aggressive":
-        # Include mid-caps, still high score
         filtered = [s for s in scored if s["score"] >= 6][:8]
-    else:  # moderate
+    else:
         filtered = [s for s in scored if s["score"] >= 5][:7]
 
     if not filtered:
         return []
-
-    # Allocation based on score (higher score gets higher weight)
     total_score = sum(s["score"] for s in filtered)
     for s in filtered:
         s["allocation"] = round((s["score"] / total_score) * 100, 1)
@@ -560,8 +610,8 @@ def start_cmd(m):
     bot.send_message(
         m.chat.id,
         "🤖 <b>AI Stock Advisor Pro</b>\n\n"
-        "• Stock Analysis: detailed tech+fundamental+AI\n"
-        "• Market Breadth: Nifty indices, A/D ratio\n"
+        "• Stock Analysis: detailed tech+fundamental+AI with news\n"
+        "• Market Breadth: Nifty indices, A/D ratio, sector snapshot, FII/DII flow (via news)\n"
         "• Portfolio: Choose risk profile (Conservative/Moderate/Aggressive)\n"
         "• Market News: latest headlines via Tavily\n\n"
         "Select an option below:",
@@ -607,7 +657,7 @@ def portfolio_cmd(m):
     if not check_rate_limit(m.from_user.id):
         bot.reply_to(m, "⏳ Rate limit exceeded.")
         return
-    risk = m.text.split()[1].lower()  # Conservative, Moderate, Aggressive
+    risk = m.text.split()[1].lower()
     bot.send_chat_action(m.chat.id, 'typing')
     portfolio = suggest_portfolio(risk)
     text = format_portfolio(portfolio, risk)
