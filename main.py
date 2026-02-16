@@ -1,4 +1,3 @@
-```python
 import os
 import time
 import json
@@ -12,6 +11,8 @@ import telebot
 from groq import Groq
 import google.generativeai as genai
 
+# ---------- CONFIG ----------
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -20,7 +21,9 @@ if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN not set")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode=None)
-genai.configure(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # ---------- TA HELPERS ----------
 
@@ -34,7 +37,10 @@ def rsi(s: pd.Series, period: int = 14) -> pd.Series:
     rs = up / down
     return 100 - (100 / (1 + rs))
 
+# ---------- AI LAYER ----------
+
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
+    # 1) GROQ
     if GROQ_API_KEY:
         try:
             c = Groq(api_key=GROQ_API_KEY)
@@ -50,16 +56,18 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             print("Groq error:", e)
 
+    # 2) GEMINI
     if GEMINI_API_KEY:
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel("gemini-1.5-flash")
             response = model.generate_content(prompt)
-            t = (response.text or "").strip()
+            t = (getattr(response, "text", "") or "").strip()
             if t:
                 return t
         except Exception as e:
             print("Gemini error:", e)
 
+    # 3) FALLBACK
     return (
         "AI advisory (fallback): External models are unavailable. "
         "Use trend vs 200 EMA and RSI as basic guides. "
@@ -100,7 +108,7 @@ def stock_ai_advisory(symbol: str) -> str:
         trend = "Bullish" if ltp > ema200 else "Bearish"
 
         snap = (
-            f"STOCK SNAPSHOT\n"
+            "STOCK SNAPSHOT\n"
             f"Symbol: {sym} (NSE)\n"
             f"LTP: ₹{ltp:.2f}\n"
             f"Trend vs 200 EMA: {trend}\n"
@@ -111,12 +119,14 @@ def stock_ai_advisory(symbol: str) -> str:
         adv = ai_call(prompt, max_tokens=320)
         return snap + "\nAI ADVISORY – " + sym + "\n\n" + adv
     except Exception as e:
+        print("stock_ai_advisory error:", e)
         return f"An error occurred: {e}"
 
 # ---------- TELEGRAM ----------
 
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(m):
+    print("Received /start from", m.chat.id)
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(telebot.types.KeyboardButton("Stock Analysis"))
     kb.add(telebot.types.KeyboardButton("Swing Trades"))
@@ -128,11 +138,14 @@ def start_cmd(m):
 
 @bot.message_handler(func=lambda m: m.text == "Stock Analysis")
 def ask_symbol(m):
+    print("User requested Stock Analysis:", m.chat.id)
     msg = bot.reply_to(m, "Send NSE symbol (e.g. BEL, RELIANCE):")
     bot.register_next_step_handler(msg, handle_symbol)
 
 def handle_symbol(m):
     sym = (m.text or "").strip().upper()
+    print("handle_symbol received:", sym, "from", m.chat.id)
+
     if not sym or not sym.isalnum():
         bot.reply_to(m, "Send a valid NSE symbol like BEL or RELIANCE.")
         return
@@ -145,10 +158,12 @@ def handle_symbol(m):
 
 @bot.message_handler(func=lambda m: m.text == "Swing Trades")
 def swing_trades(m):
+    print("User requested Swing Trades:", m.chat.id)
     bot.reply_to(m, "Swing Trades feature is under development.")
 
 @bot.message_handler(func=lambda m: True)
 def fallback(m):
+    print("Fallback from", m.chat.id, "text:", m.text)
     bot.reply_to(m, "Use the 'Stock Analysis' or 'Swing Trades' button or /start.")
 
 # ---------- HTTP ----------
@@ -168,8 +183,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             sym = (parse_qs(p.query).get("symbol", ["BEL"])[0] or "BEL").upper()
             try:
                 txt = stock_ai_advisory(sym)
-                self._send(200, json.dumps({"symbol": sym, "analysis": txt}, ensure_ascii=False),
-                           ct="application/json")
+                self._send(
+                    200,
+                    json.dumps({"symbol": sym, "analysis": txt}, ensure_ascii=False),
+                    ct="application/json",
+                )
             except Exception as e:
                 print("simulate error:", e)
                 self._send(500, "Simulation error")
@@ -182,6 +200,8 @@ def run_http():
     print(f"HTTP server on {port}")
     srv.serve_forever()
 
+# ---------- MAIN ----------
+
 if __name__ == "__main__":
     print("Starting short AI NSE Advisory Bot...")
     threading.Thread(target=run_http, daemon=True).start()
@@ -191,4 +211,3 @@ if __name__ == "__main__":
         except Exception as e:
             print("Polling error:", e)
             time.sleep(10)
-```
