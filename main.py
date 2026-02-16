@@ -1,3 +1,4 @@
+# main.py
 import os
 import time
 import logging
@@ -14,6 +15,9 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from groq import Groq
 import google.generativeai as genai
 from flask import Flask
+
+# Import swing trade module
+from swing_trades import get_swing_trades
 
 # -------------------- CONFIGURATION --------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
@@ -113,7 +117,6 @@ def is_history_fresh(item: Dict, max_age: int = FRESHNESS_SECONDS) -> bool:
 
 # -------------------- ACTUAL LLM CALL (Groq → Gemini) --------------------
 def actual_llm_call(prompt: str, max_tokens: int = 600) -> str:
-    # Try Groq first
     if GROQ_API_KEY:
         try:
             client = Groq(api_key=GROQ_API_KEY)
@@ -127,7 +130,6 @@ def actual_llm_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             logger.error(f"Groq error: {e}")
 
-    # Fallback to Gemini
     if GEMINI_API_KEY:
         try:
             model = genai.GenerativeModel("gemini-1.5-flash")
@@ -136,7 +138,6 @@ def actual_llm_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             logger.error(f"Gemini error: {e}")
 
-    # Ultimate fallback
     return "AI service temporarily unavailable. Please try again later."
 
 def call_llm_with_limits(user_id: int, prompt: str, item_type: str = "analysis") -> str:
@@ -161,7 +162,7 @@ def call_llm_with_limits(user_id: int, prompt: str, item_type: str = "analysis")
 
     return response
 
-# -------------------- TECHNICAL INDICATORS (from earlier) --------------------
+# -------------------- TECHNICAL INDICATORS --------------------
 def ema(s: pd.Series, span: int) -> pd.Series:
     return s.ewm(span=span, adjust=False).mean()
 
@@ -229,15 +230,47 @@ def get_fundamental_info(symbol: str) -> dict:
         logger.error(f"Fundamental error for {symbol}: {e}")
         return {}
 
-def calculate_targets(price: float, atr_val: float, trend: str) -> dict:
+def calculate_targets(price: float, atr_val: float, trend: str,
+                      low_52w: float = None, high_52w: float = None) -> dict:
+    """Improved targets with safety caps."""
     if trend == "Bullish":
-        short = {'1W': price + atr_val*1.2, '1M': price + atr_val*3, '3M': price + atr_val*6}
-        long = {'6M': price + atr_val*12, '1Y': price + atr_val*20, '2Y': price + atr_val*35}
-        sl = price - atr_val*2
+        short = {
+            '1W': price + atr_val * 1.2,
+            '1M': price + atr_val * 3,
+            '3M': price + atr_val * 6
+        }
+        long = {
+            '6M': price + atr_val * 12,
+            '1Y': price + atr_val * 20,
+            '2Y': price + atr_val * 35
+        }
+        sl = price - atr_val * 2
+        if high_52w:
+            cap = high_52w * 2
+            for k in long:
+                if long[k] > cap:
+                    long[k] = cap
     else:
-        short = {'1W': price - atr_val*1.2, '1M': price - atr_val*3, '3M': price - atr_val*6}
-        long = {'6M': price - atr_val*12, '1Y': price - atr_val*20, '2Y': price - atr_val*35}
-        sl = price + atr_val*2
+        short = {
+            '1W': price - atr_val * 1.2,
+            '1M': price - atr_val * 3,
+            '3M': price - atr_val * 6
+        }
+        long = {
+            '6M': price - atr_val * 10,
+            '1Y': price - atr_val * 15,
+            '2Y': price - atr_val * 20
+        }
+        sl = price + atr_val * 2
+        floor = price * 0.1
+        for k in short:
+            short[k] = max(short[k], floor)
+        for k in long:
+            long[k] = max(long[k], floor)
+        if low_52w:
+            for k in long:
+                if long[k] < low_52w * 0.9:
+                    long[k] = low_52w * 0.9
     return {'short_term': short, 'long_term': long, 'stop_loss': sl}
 
 def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
@@ -289,7 +322,7 @@ def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
         elif mcap > 1000e7: score += 4
     return min(score, 100)
 
-# -------------------- STOCK ANALYSIS (AI + technicals) --------------------
+# -------------------- STOCK ANALYSIS --------------------
 def stock_ai_advisory(symbol: str) -> str:
     sym = symbol.upper().strip()
     try:
@@ -305,7 +338,7 @@ def stock_ai_advisory(symbol: str) -> str:
         prev = float(df['Close'].iloc[-2]) if len(df) > 1 else ltp
         fund = get_fundamental_info(sym)
         company = fund.get('company_name', sym)
-        # Technicals
+
         ema20 = ema(close,20).iloc[-1]
         ema50 = ema(close,50).iloc[-1]
         ema200 = ema(close,200).iloc[-1]
@@ -315,18 +348,15 @@ def stock_ai_advisory(symbol: str) -> str:
         atr_val = atr(df)
         piv = pivot_points(df)
         trend = "Bullish" if ltp > ema200 else "Bearish"
-        targets = calculate_targets(ltp, atr_val, trend)
+        targets = calculate_targets(ltp, atr_val, trend,
+                                    low_52w=fund.get('low_52w'),
+                                    high_52w=fund.get('high_52w'))
         quality = calculate_quality_score(df, fund)
 
-        # Build a prompt for AI sentiment (optional – you could also use actual_llm_call directly)
-        # But for now we just output technicals; AI sentiment is handled by separate call.
-        # In this version we combine both: technicals + AI commentary.
-
-        # AI sentiment part (call LLM)
+        # AI commentary (optional)
         ai_prompt = f"Provide a brief bullish/bearish sentiment analysis for {sym} (NSE) based on: RSI {rsi_val:.1f}, trend {trend}, P/E {fund.get('pe_ratio',0):.1f}, ROE {fund.get('roe',0):.1f}%."
         ai_comment = actual_llm_call(ai_prompt, max_tokens=200)
 
-        # Format final output
         output = f"""📊 DEEP ANALYSIS: {sym}
 ━━━━━━━━━━━━━━━━━━━━
 🏢 {company}
@@ -368,9 +398,8 @@ Long-term (6M/1Y/2Y): ₹{targets['long_term']['6M']:.2f} / ₹{targets['long_te
         logger.exception(f"Error in stock_ai_advisory for {symbol}")
         return f"❌ Analysis failed: {e}"
 
-# -------------------- MARKET BREADTH (real advances/declines) --------------------
+# -------------------- MARKET BREADTH --------------------
 def get_nifty_constituents():
-    """Hardcoded list of Nifty 50 symbols (as of early 2026). Update periodically."""
     return [
         "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC",
         "KOTAKBANK", "SBIN", "BHARTIARTL", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
@@ -451,7 +480,6 @@ def format_market_breadth():
         ratio = adv
     text += f"🔄 A/D Ratio: {ratio:.2f} (out of {adv+dec+unc} stocks)\n\n"
 
-    # Top 5 sectors by net advance
     text += "🏭 <b>Sector Snapshot</b>\n"
     sorted_sectors = sorted(sector_perf.items(), key=lambda x: x[1]['adv']-x[1]['dec'], reverse=True)[:5]
     for sector, data in sorted_sectors:
@@ -499,7 +527,7 @@ def get_market_news() -> str:
     news = get_tavily_news("Indian stock market OR NSE OR BSE", days=3)
     return format_news(news, "Market News")
 
-# -------------------- PORTFOLIO SUGGESTION (CFA-style) --------------------
+# -------------------- PORTFOLIO SUGGESTION --------------------
 def score_stock(symbol: str) -> dict:
     try:
         ticker = yf.Ticker(f"{symbol}.NS")
@@ -589,27 +617,16 @@ def format_portfolio(portfolio, risk_profile: str):
     text += "\n⚠️ Educational purpose only. Consult your advisor."
     return text
 
-# -------------------- PROMPT BUILDERS --------------------
-def build_stock_prompt(symbol: str) -> str:
-    # We'll use stock_ai_advisory which already calls LLM internally.
-    # For consistency, we return the symbol; the handler will call stock_ai_advisory directly.
-    # This function is kept for compatibility with the wrapper pattern.
-    return symbol
-
-def build_portfolio_prompt(risk: str) -> str:
-    # Portfolio is generated by suggest_portfolio, not by LLM.
-    # But to use the wrapper, we'll treat it as an LLM call anyway.
-    # Actually, we can just call suggest_portfolio directly and not use the wrapper.
-    # In the handler, we'll bypass the wrapper for portfolio.
-    # However, to keep the pattern, we'll create a prompt and let the LLM generate a narrative.
-    return f"Suggest a diversified portfolio for a {risk} risk investor using Indian stocks, with allocation percentages."
-
 # -------------------- TELEGRAM HANDLERS --------------------
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(m):
+    if not can_use_llm(m.from_user.id)[0]:
+        # Still show menu, but rate‑limited later
+        pass
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(KeyboardButton("🔍 Stock Analysis"), KeyboardButton("📊 Market Breadth"))
     kb.add(KeyboardButton("💼 Conservative"), KeyboardButton("💼 Moderate"), KeyboardButton("💼 Aggressive"))
+    kb.add(KeyboardButton("📈 Swing (Conservative)"), KeyboardButton("📈 Swing (Aggressive)"))
     kb.add(KeyboardButton("📰 Market News"), KeyboardButton("📋 History"), KeyboardButton("📊 Usage"))
     bot.send_message(
         m.chat.id,
@@ -617,7 +634,8 @@ def start_cmd(m):
         "• Stock Analysis: detailed tech+fundamental+AI\n"
         "• Market Breadth: Nifty indices, A/D ratio, sector snapshot\n"
         "• Portfolio: Choose risk profile (Conservative/Moderate/Aggressive)\n"
-        "• Market News: latest headlines\n"
+        "• Swing Trades: Conservative = strict 8/8, Aggressive = includes scores 6–7\n"
+        "• Market News: latest headlines via Tavily\n"
         "• History: reuse previous queries (saves quota)\n"
         "• Usage: check daily AI call usage\n\n"
         "Select an option below:",
@@ -626,6 +644,9 @@ def start_cmd(m):
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Stock Analysis")
 def ask_symbol(m):
+    if not can_use_llm(m.from_user.id)[0]:
+        bot.reply_to(m, "⏳ Rate limit exceeded. Please wait.")
+        return
     msg = bot.reply_to(m, "📝 Send NSE symbol (e.g. RELIANCE, TCS):")
     bot.register_next_step_handler(msg, process_symbol)
 
@@ -635,23 +656,13 @@ def process_symbol(m):
         bot.reply_to(m, "❌ Invalid symbol. Use letters only.")
         return
     bot.send_chat_action(m.chat.id, 'typing')
-    # Use the wrapper to track usage – stock_ai_advisory will call actual_llm_call internally.
-    # But stock_ai_advisory already calls actual_llm_call, which doesn't go through the wrapper.
-    # To correctly track, we need to wrap the entire stock_ai_advisory call.
-    # We'll call the wrapper with a prompt that triggers the analysis.
-    # Simpler: we'll create a new function that uses the wrapper.
-    prompt = f"Analyze stock {sym}"
-    response = call_llm_with_limits(m.from_user.id, prompt, item_type="stock")
-    # But response is just the LLM output, not the full technicals.
-    # To keep full technicals, we should have stock_ai_advisory call actual_llm_call and then combine.
-    # However, actual_llm_call is used inside stock_ai_advisory, so the usage is already counted.
-    # But the wrapper counts usage again. To avoid double counting, we can directly call stock_ai_advisory
-    # and then manually register usage and history.
-    # Let's do it manually to be safe.
+
+    # Check usage manually (already in wrapper, but we also need to check before heavy work)
     allowed, remaining, limit = can_use_llm(m.from_user.id)
     if not allowed:
         bot.reply_to(m, f"❌ You've used all {limit} AI analyses for today. Please try again tomorrow.")
         return
+
     analysis = stock_ai_advisory(sym)
     register_llm_usage(m.from_user.id)
     add_history_item(m.from_user.id, f"Stock analysis: {sym}", analysis, "stock")
@@ -669,11 +680,21 @@ def market_breadth_cmd(m):
 def portfolio_cmd(m):
     risk = m.text.split()[1].lower()
     bot.send_chat_action(m.chat.id, 'typing')
-    # Portfolio suggestion does not use LLM; it's rule-based. So no quota consumption.
     portfolio = suggest_portfolio(risk)
     text = format_portfolio(portfolio, risk)
-    # Optionally store in history as non‑LLM item
     add_history_item(m.from_user.id, f"Portfolio suggestion ({risk})", text, "portfolio")
+    bot.reply_to(m, text, parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "📈 Swing (Conservative)")
+def swing_conservative(m):
+    bot.send_chat_action(m.chat.id, 'typing')
+    text = get_swing_trades(risk_tolerance="conservative")
+    bot.reply_to(m, text, parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "📈 Swing (Aggressive)")
+def swing_aggressive(m):
+    bot.send_chat_action(m.chat.id, 'typing')
+    text = get_swing_trades(risk_tolerance="aggressive")
     bot.reply_to(m, text, parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "📰 Market News")
@@ -725,8 +746,6 @@ def history_callback(call):
         bot.answer_callback_query(call.id)
     else:
         bot.answer_callback_query(call.id, "Fetching fresh analysis...")
-        # If it's a stock analysis, we need to regenerate with new data.
-        # We'll call stock_ai_advisory again.
         if item["type"] == "stock":
             # Extract symbol from prompt (simple)
             symbol = item["prompt"].replace("Stock analysis:", "").strip()
@@ -735,14 +754,12 @@ def history_callback(call):
             add_history_item(user_id, item["prompt"], new_response, "stock")
             bot.send_message(user_id, new_response)
         elif item["type"] == "portfolio":
-            # Portfolio is rule-based, just regenerate
             risk = item["prompt"].replace("Portfolio suggestion (", "").replace(")", "").strip()
             portfolio = suggest_portfolio(risk)
             new_response = format_portfolio(portfolio, risk)
             add_history_item(user_id, item["prompt"], new_response, "portfolio")
             bot.send_message(user_id, new_response)
         else:
-            # Generic LLM – use wrapper
             new_response = call_llm_with_limits(user_id, item["prompt"], item["type"])
             bot.send_message(user_id, new_response)
 
