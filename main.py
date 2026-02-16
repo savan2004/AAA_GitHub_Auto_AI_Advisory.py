@@ -17,9 +17,7 @@ import google.generativeai as genai
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
-from swing_trades import get_daily_swing_trades  # Swing module
-
-# ========== 1. CONFIG ==========
+# ========= 1. CONFIG =========
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -28,9 +26,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)  # plain text, no parse_mode
+bot = telebot.TeleBot(TELEGRAM_TOKEN)  # text only
 
-# yfinance rate‑limit + cache for stock analysis ONLY
+# yfinance rate-limit + cache
 YF_WINDOW_SEC = 60
 YF_MAX_CALLS_PER_WINDOW = 10
 YF_CALL_TIMES = deque()
@@ -39,7 +37,7 @@ CACHE = {}
 CACHE_TTL = 900  # 15 min
 
 
-# ========== 2. CACHE & HISTORY HELPERS (STOCK ANALYSIS) ==========
+# ========= 2. CACHE & HISTORY =========
 
 def cache_get(key):
     data = CACHE.get(key)
@@ -63,7 +61,7 @@ def yf_register_call():
     YF_CALL_TIMES.append(time.time())
 
 def safe_history(ticker, period="1y", interval="1d") -> pd.DataFrame:
-    key = f"main:{ticker}:{period}:{interval}"
+    key = f"hist:{ticker}:{period}:{interval}"
     cached = cache_get(key)
     if cached is not None:
         return cached
@@ -87,7 +85,7 @@ def safe_history(ticker, period="1y", interval="1d") -> pd.DataFrame:
     return pd.DataFrame()
 
 
-# ========== 3. INDICATORS (STOCK ANALYSIS) ==========
+# ========= 3. INDICATORS =========
 
 def ema(series: pd.Series, span: int):
     return series.ewm(span=span, adjust=False).mean()
@@ -130,9 +128,10 @@ def adx(df: pd.DataFrame, period: int = 14):
     return adx_val
 
 
-# ========== 4. AI WRAPPER (STOCK ANALYSIS) ==========
+# ========= 4. OPTIONAL AI =========
 
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
+    # 1) Try Groq
     if GROQ_API_KEY:
         try:
             client = Groq(api_key=GROQ_API_KEY)
@@ -142,22 +141,24 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
                 max_tokens=max_tokens,
                 temperature=0.3,
             )
-            return resp.choices[0].message.content
-        except Exception:
-            pass
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            print("Groq error:", e)
 
+    # 2) Try Gemini
     if GEMINI_API_KEY:
         try:
             model = genai.GenerativeModel("gemini-1.5-flash")
             resp = model.generate_content(prompt)
-            return resp.text
-        except Exception:
-            pass
+            return (resp.text or "").strip()
+        except Exception as e:
+            print("Gemini error:", e)
 
-    return "AI explanation temporarily unavailable."
+    # 3) Fallback: simple rules-based text, no external API
+    return "AI explanation not available on server. Use the indicator snapshot above as primary view."
 
 
-# ========== 5. STOCK ANALYSIS (2 MESSAGES, SYMBOL ONLY) ==========
+# ========= 5. STOCK ANALYSIS =========
 
 def deep_stock_analysis(symbol: str):
     sym = symbol.upper().strip()
@@ -223,17 +224,92 @@ Write a SHORT, structured view:
 3) 3 key risks as bullet-style lines (starting with '-').
 4) End with: "Note: This is educational analysis only, not a recommendation."
 
-Total length under 250 words.
+Total length under 220 words.
 """
     explanation = ai_call(prompt, max_tokens=350)
     msg2 = f"ANALYST VIEW – {sym}\n\n{explanation}"
     return [msg1, msg2]
 
 
-# ========== 6. MARKET & OPTIONS PLACEHOLDERS ==========
+# ========= 6. SIMPLE SWING TRADES (NO AI) =========
+
+WATCHLIST = [
+    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK",
+    "SBIN", "INFY", "ITC", "LT", "AXISBANK", "KOTAKBANK",
+]
+
+def swing_signal(df: pd.DataFrame):
+    if df.empty or len(df) < 250:
+        return {"signal": "NONE"}
+
+    close = df["Close"]
+    ltp = float(close.iloc[-1])
+
+    ema20_val = ema(close, 20)
+    ema50_val = ema(close, 50)
+    ema200_val = ema(close, 200)
+    bb_mid, bb_up, bb_low = bollinger_bands(close, 20, 2)
+    adx_val = adx(df, 14)
+
+    e20 = float(ema20_val.iloc[-1])
+    e50 = float(ema50_val.iloc[-1])
+    e200 = float(ema200_val.iloc[-1])
+    bbm = float(bb_mid.iloc[-1])
+    bbu = float(bb_up.iloc[-1])
+    bbl = float(bb_low.iloc[-1])
+    adx_last = float(adx_val.iloc[-1])
+
+    long_trend_ok = (ltp > e200) and (e50 > e200)
+    long_pullback = (bbl <= ltp <= bbm)
+    long_adx = adx_last >= 25
+
+    if long_trend_ok and long_pullback and long_adx:
+        return {"signal": "LONG", "ltp": ltp, "ema20": e20, "ema50": e50,
+                "ema200": e200, "bb_mid": bbm, "bb_up": bbu,
+                "bb_low": bbl, "adx": adx_last}
+
+    short_trend_ok = (ltp < e200) and (e50 < e200)
+    short_pullback = (bbm <= ltp <= bbu)
+    short_adx = adx_last >= 25
+
+    if short_trend_ok and short_pullback and short_adx:
+        return {"signal": "SHORT", "ltp": ltp, "ema20": e20, "ema50": e50,
+                "ema200": e200, "bb_mid": bbm, "bb_up": bbu,
+                "bb_low": bbl, "adx": adx_last}
+
+    return {"signal": "NONE"}
+
+def get_daily_swing_trades() -> str:
+    lines = ["Swing Trades (Rules-based, Educational)\n"]
+    for sym in WATCHLIST:
+        t = f"{sym}.NS"
+        df = safe_history(t, period="6mo", interval="1d")
+        sig = swing_signal(df)
+        if sig["signal"] != "NONE":
+            side = sig["signal"]
+            ltp = sig["ltp"]
+            adx_val = sig["adx"]
+            lines.append(
+                f"{sym}: {side} bias, LTP ~ ₹{ltp:.2f}, ADX14 ~ {adx_val:.1f} "
+                f"(trend + pullback condition met)."
+            )
+
+    if len(lines) == 1:
+        return (
+            "Swing Trades\n"
+            "No high-confidence EMA20/50/200 + Bollinger + ADX setups today."
+        )
+
+    lines.append(
+        "\nNote: Educational technical analysis only, not trade advice."
+    )
+    return "\n".join(lines)
+
+
+# ========= 7. MARKET & OPTIONS =========
 
 def market_analysis() -> str:
-    return "Market View\n(Integrate your own market analysis here.)"
+    return "Market View\n(Plug your own Nifty / sector commentary here.)"
 
 def option_strategies_text() -> str:
     return (
@@ -246,7 +322,7 @@ def option_strategies_text() -> str:
     )
 
 
-# ========== 7. TELEGRAM HANDLERS ==========
+# ========= 8. TELEGRAM HANDLERS =========
 
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(m):
@@ -273,8 +349,7 @@ def start_cmd(m):
 
 @bot.message_handler(func=lambda m: m.text == "Market View")
 def handle_market(m):
-    txt = market_analysis()
-    bot.reply_to(m, txt)
+    bot.reply_to(m, market_analysis())
 
 @bot.message_handler(func=lambda m: m.text == "Stock Analysis")
 def ask_symbol(m):
@@ -286,13 +361,13 @@ def handle_symbol_analysis(m):
     if not sym:
         bot.reply_to(m, "Empty symbol. Try again.")
         return
-    # ensure only alphanumeric symbol goes to analysis
     if not sym.isalnum():
         bot.reply_to(m, "Please send a valid NSE symbol like RELIANCE.")
         return
     parts = deep_stock_analysis(sym)
     for p in parts:
         bot.reply_to(m, p)
+        time.sleep(0.5)
 
 @bot.message_handler(func=lambda m: m.text == "Swing Trades")
 def handle_swing(m):
@@ -305,14 +380,13 @@ def handle_options(m):
 
 @bot.message_handler(func=lambda m: True)
 def fallback(m):
-    # Do NOT treat arbitrary text as symbol here to avoid menu text as ticker
     bot.reply_to(
         m,
         "Use the menu: Market View, Stock Analysis, Swing Trades, Option Ideas."
     )
 
 
-# ========== 8. HEALTH SERVER & MAIN LOOP ==========
+# ========= 9. HEALTH SERVER & MAIN LOOP =========
 
 def run_health_server():
     port = int(os.environ.get("PORT", 10000))
@@ -330,7 +404,7 @@ def run_health_server():
 
 
 if __name__ == "__main__":
-    print("Bot starting with Stock Analysis + Swing Trades...")
+    print("Bot starting...")
     threading.Thread(target=run_health_server, daemon=True).start()
 
     while True:
