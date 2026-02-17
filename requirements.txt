@@ -1,6 +1,0 @@
-pyTelegramBotAPI
-nsetools
-yfinance
-groq
-google-generativeai
-pandas
