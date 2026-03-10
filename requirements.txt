@@ -1,7 +1,7 @@
-telebot
-yfinance
-pandas
-groq
-google-genai
-requests
-flask
+pyTelegramBotAPI==4.16.0
+yfinance==0.2.33
+pandas==2.1.4
+groq==0.5.0
+google-generativeai==0.4.0
+requests==2.31.0
+flask==3.0.0
