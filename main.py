@@ -2,7 +2,6 @@
 import os
 import time
 import logging
-import threading
 from datetime import datetime, date
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
@@ -11,10 +10,9 @@ import pandas as pd
 import yfinance as yf
 import requests
 import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 from groq import Groq
-import google.genai as genai
-from flask import Flask
+import google.generativeai as genai
 
 # Import swing trade module
 from swing_trades import get_swing_trades
@@ -45,17 +43,17 @@ if not TELEGRAM_TOKEN:
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 
-# Configure AI clients (with error handling)
+# Configure AI clients
 ai_configured = False
 if GEMINI_API_KEY:
     try:
-        genai_client = genai.Client(api_key=GEMINI_API_KEY)
+        genai.configure(api_key=GEMINI_API_KEY)
         ai_configured = True
         logger.info("Gemini configured successfully")
     except Exception as e:
         logger.error(f"Failed to configure Gemini: {e}")
 
-# -------------------- USAGE TRACKING (in-memory) --------------------
+# -------------------- USAGE TRACKING --------------------
 usage_store: Dict[int, Dict] = {}  # user_id -> {"date": str, "calls": int, "tier": str}
 
 def get_today_str() -> str:
@@ -89,7 +87,7 @@ def register_llm_usage(user_id: int) -> None:
     else:
         usage_store[user_id] = {"date": get_today_str(), "calls": 1, "tier": "free"}
 
-# -------------------- HISTORY TRACKING (in-memory) --------------------
+# -------------------- HISTORY TRACKING --------------------
 history_store: Dict[int, List[Dict]] = defaultdict(list)
 
 def add_history_item(user_id: int, prompt: str, response: str, item_type: str = "analysis") -> int:
@@ -121,7 +119,7 @@ def is_history_fresh(item: Dict, max_age: int = FRESHNESS_SECONDS) -> bool:
     age = now - item["timestamp"]
     return age < max_age
 
-# -------------------- SAFE LLM CALL (NEVER CRASHES) --------------------
+# -------------------- SAFE LLM CALL --------------------
 def safe_llm_call(prompt: str, max_tokens: int = 600) -> Tuple[bool, str]:
     """
     Returns (success: bool, response: str)
@@ -131,7 +129,6 @@ def safe_llm_call(prompt: str, max_tokens: int = 600) -> Tuple[bool, str]:
     if GROQ_API_KEY:
         try:
             client = Groq(api_key=GROQ_API_KEY)
-            # Try different models in order of reliability
             models_to_try = ["llama3-8b-8192", "mixtral-8x7b-32768", "gemma2-9b-it"]
             
             for model in models_to_try:
@@ -141,75 +138,45 @@ def safe_llm_call(prompt: str, max_tokens: int = 600) -> Tuple[bool, str]:
                         messages=[{"role": "user", "content": prompt}],
                         max_tokens=max_tokens,
                         temperature=0.35,
-                        timeout=10  # Add timeout to prevent hanging
+                        timeout=10
                     )
                     if resp and resp.choices:
                         return True, (resp.choices[0].message.content or "").strip()
                 except Exception as e:
                     logger.warning(f"Groq model {model} failed: {e}")
                     continue
-            
-            # If all models fail
-            logger.warning("All Groq models failed")
         except Exception as e:
             logger.error(f"Groq client error: {e}")
 
     # Try Gemini
-    if GEMINI_API_KEY:
+    if GEMINI_API_KEY and ai_configured:
         try:
-            # Try different model names
-            gemini_models = [
-                "models/gemini-1.5-pro",
-                "models/gemini-1.5-flash",
-                "gemini-1.5-pro",
-                "gemini-1.5-flash"
-            ]
-            
-            for model_name in gemini_models:
-                try:
-                    resp = genai_client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config={"max_output_tokens": max_tokens, "temperature": 0.35}
-                    )
-                    if resp and resp.text:
-                        return True, resp.text.strip()
-                except Exception as e:
-                    logger.warning(f"Gemini model {model_name} failed: {e}")
-                    continue
+            model = genai.GenerativeModel('gemini-pro')
+            resp = model.generate_content(prompt, generation_config={
+                "max_output_tokens": max_tokens,
+                "temperature": 0.35
+            })
+            if resp and resp.text:
+                return True, resp.text.strip()
         except Exception as e:
-            logger.error(f"Gemini client error: {e}")
+            logger.error(f"Gemini error: {e}")
 
-    # If all fail, return False with empty string
     return False, ""
 
 def call_llm_with_limits(user_id: int, prompt: str, item_type: str = "analysis") -> str:
     allowed, remaining, limit = can_use_llm(user_id)
 
     if not allowed:
-        return (
-            f"❌ You've used all {limit} AI analyses for today.\n\n"
-            f"Please try again tomorrow or upgrade to Pro (200 calls/day)."
-        )
+        return f"❌ You've used all {limit} AI analyses for today.\n\nPlease try again tomorrow or upgrade to Pro (200 calls/day)."
 
-    # Call LLM safely
     success, response = safe_llm_call(prompt)
 
     if not success:
-        # Don't register usage for failed calls
         if remaining - 1 <= 3:
-            return (
-                f"⚠️ AI service temporarily unavailable. Your quota was not used.\n\n"
-                f"You still have {remaining} AI calls left today.\n\n"
-                f"_Technical analysis is still provided below._"
-            )
+            return f"⚠️ AI service temporarily unavailable. Your quota was not used.\n\nYou still have {remaining} AI calls left today."
         else:
-            return (
-                f"⚠️ AI service temporarily unavailable. Your quota was not used.\n\n"
-                f"_Technical analysis is still provided below._"
-            )
+            return f"⚠️ AI service temporarily unavailable. Your quota was not used."
 
-    # Success - register usage and store history
     register_llm_usage(user_id)
     add_history_item(user_id, prompt, response, item_type)
 
@@ -332,59 +299,70 @@ def calculate_targets(price: float, atr_val: float, trend: str,
 def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
     close = df['Close']
     score = 0
+    
     # Trend (15)
-    ema20 = ema(close,20).iloc[-1]
-    ema50 = ema(close,50).iloc[-1]
-    ema200 = ema(close,200).iloc[-1]
+    ema20 = ema(close, 20).iloc[-1]
+    ema50 = ema(close, 50).iloc[-1]
+    ema200 = ema(close, 200).iloc[-1]
     if close.iloc[-1] > ema20: score += 4
     if close.iloc[-1] > ema50: score += 5
     if close.iloc[-1] > ema200: score += 6
+    
     # RSI (10)
-    rsi_val = rsi(close,14).iloc[-1]
+    rsi_val = rsi(close, 14).iloc[-1]
     if 40 <= rsi_val <= 60: score += 10
     elif 30 <= rsi_val <= 70: score += 5
+    
     # Volume (5)
     vol_avg = df['Volume'].rolling(20).mean().iloc[-1]
-    if df['Volume'].iloc[-1] > vol_avg*1.5: score += 5
+    if df['Volume'].iloc[-1] > vol_avg * 1.5: score += 5
     elif df['Volume'].iloc[-1] > vol_avg: score += 3
+    
     # ATR stability (10)
     atr_val = atr(df)
     atr_pct = (atr_val / close.iloc[-1]) * 100
     if atr_pct < 2: score += 10
     elif atr_pct < 4: score += 7
     elif atr_pct < 6: score += 4
+    
     # Fundamentals (60)
     if fund:
-        pe = fund.get('pe_ratio',0)
+        pe = fund.get('pe_ratio', 0)
         if pe and pe < 20: score += 15
         elif pe and pe < 30: score += 10
         elif pe and pe < 40: score += 5
-        roe = fund.get('roe',0)
+        
+        roe = fund.get('roe', 0)
         if roe > 20: score += 15
         elif roe > 15: score += 12
         elif roe > 10: score += 8
         elif roe > 5: score += 4
-        pb = fund.get('pb_ratio',0)
+        
+        pb = fund.get('pb_ratio', 0)
         if 1 < pb < 3: score += 10
         elif pb <= 1: score += 8
         elif pb < 5: score += 5
-        div = fund.get('dividend_yield',0)
+        
+        div = fund.get('dividend_yield', 0)
         if div > 3: score += 10
         elif div > 2: score += 7
         elif div > 1: score += 4
-        mcap = fund.get('market_cap',0)
+        
+        mcap = fund.get('market_cap', 0)
         if mcap > 50000e7: score += 10
         elif mcap > 10000e7: score += 7
         elif mcap > 1000e7: score += 4
+        
     return min(score, 100)
 
-# -------------------- STOCK ANALYSIS (NEVER FAILS) --------------------
+# -------------------- STOCK ANALYSIS --------------------
 def stock_ai_advisory(symbol: str) -> str:
     sym = symbol.upper().strip()
     try:
         logger.info(f"Analyzing {sym}...")
         ticker = yf.Ticker(f"{sym}.NS")
         df = ticker.history(period="1y", interval="1d")
+        
         if df.empty:
             return f"❌ No data found for {sym}. Please check the symbol and try again."
         
@@ -398,44 +376,46 @@ def stock_ai_advisory(symbol: str) -> str:
         company = fund.get('company_name', sym)
 
         # Calculate all technical indicators
-        ema20 = ema(close,20).iloc[-1]
-        ema50 = ema(close,50).iloc[-1]
-        ema200 = ema(close,200).iloc[-1]
-        rsi_val = rsi(close,14).iloc[-1]
+        ema20 = ema(close, 20).iloc[-1]
+        ema50 = ema(close, 50).iloc[-1]
+        ema200 = ema(close, 200).iloc[-1]
+        rsi_val = rsi(close, 14).iloc[-1]
         macd_val, sig_val = macd(close)
         bb_up, bb_mid, bb_lo = bollinger_bands(close)
         atr_val = atr(df)
         piv = pivot_points(df)
         trend = "Bullish" if ltp > ema200 else "Bearish"
         targets = calculate_targets(ltp, atr_val, trend,
-                                    low_52w=fund.get('low_52w'),
-                                    high_52w=fund.get('high_52w'))
+                                   low_52w=fund.get('low_52w'),
+                                   high_52w=fund.get('high_52w'))
         quality = calculate_quality_score(df, fund)
 
-        # Try to get AI commentary (but never fail if it doesn't work)
+        # Try to get AI commentary
         ai_comment = ""
         success, ai_response = safe_llm_call(
             f"Provide a brief bullish/bearish sentiment analysis for {sym} (NSE) based on: "
-            f"RSI {rsi_val:.1f}, trend {trend}, P/E {fund.get('pe_ratio',0):.1f}, ROE {fund.get('roe',0):.1f}%.",
+            f"RSI {rsi_val:.1f}, trend {trend}, P/E {fund.get('pe_ratio', 0):.1f}, ROE {fund.get('roe', 0):.1f}%.",
             max_tokens=200
         )
         if success:
             ai_comment = f"\n\n🤖 AI COMMENTARY\n{ai_response}"
 
-        # Build the response - always include technical analysis, optionally include AI
+        # Build the response
+        stars = '⭐' * (quality // 20) + '☆' * (5 - quality // 20)
+        
         output = f"""📊 DEEP ANALYSIS: {sym}
 ━━━━━━━━━━━━━━━━━━━━
 🏢 {company}
-🏭 Sector: {fund.get('sector','N/A')} | Industry: {fund.get('industry','N/A')}
+🏭 Sector: {fund.get('sector', 'N/A')} | Industry: {fund.get('industry', 'N/A')}
 💰 LTP: ₹{ltp:.2f} (Prev: ₹{prev:.2f})
-📈 52W Range: ₹{fund.get('low_52w',0):.2f} - ₹{fund.get('high_52w',0):.2f}
-📊 Volume: {fund.get('volume',0):,} | Avg: {fund.get('avg_volume',0):,}
+📈 52W Range: ₹{fund.get('low_52w', 0):.2f} - ₹{fund.get('high_52w', 0):.2f}
+📊 Volume: {fund.get('volume', 0):,} | Avg: {fund.get('avg_volume', 0):,}
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 FUNDAMENTALS
-🏦 MCap: ₹{fund.get('market_cap',0)/10000000:.1f} Cr
-📈 P/E: {fund.get('pe_ratio',0):.2f} | P/B: {fund.get('pb_ratio',0):.2f}
-📊 ROE: {fund.get('roe',0):.1f}% | Div Yield: {fund.get('dividend_yield',0):.2f}%
+🏦 MCap: ₹{fund.get('market_cap', 0) / 10000000:.1f} Cr
+📈 P/E: {fund.get('pe_ratio', 0):.2f} | P/B: {fund.get('pb_ratio', 0):.2f}
+📊 ROE: {fund.get('roe', 0):.1f}% | Div Yield: {fund.get('dividend_yield', 0):.2f}%
 
 ━━━━━━━━━━━━━━━━━━━━
 📌 TECHNICALS
@@ -451,10 +431,11 @@ Long-term (6M/1Y/2Y): ₹{targets['long_term']['6M']:.2f} / ₹{targets['long_te
 🛑 Stop Loss: ₹{targets['stop_loss']:.2f}
 
 ━━━━━━━━━━━━━━━━━━━━
-📊 QUALITY SCORE: {quality}/100 {'⭐' * (quality//20)}{'☆' * (5 - quality//20)}{ai_comment}
+📊 QUALITY SCORE: {quality}/100 {stars}{ai_comment}
 
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ Educational purpose only."""
+        
         return output
         
     except Exception as e:
@@ -477,16 +458,19 @@ def get_nifty_constituents():
 def get_advance_decline():
     constituents = get_nifty_constituents()
     advances = declines = unchanged = 0
-    sector_perf = defaultdict(lambda: {'adv':0, 'dec':0, 'total':0})
+    sector_perf = defaultdict(lambda: {'adv': 0, 'dec': 0, 'total': 0})
+    
     for sym in constituents:
         try:
             ticker = yf.Ticker(f"{sym}.NS")
             hist = ticker.history(period="2d")
             if len(hist) < 2:
                 continue
+                
             prev_close = hist['Close'].iloc[-2]
             last_price = hist['Close'].iloc[-1]
             change = last_price - prev_close
+            
             if change > 0:
                 advances += 1
             elif change < 0:
@@ -501,9 +485,11 @@ def get_advance_decline():
             elif change < 0:
                 sector_perf[sector]['dec'] += 1
             sector_perf[sector]['total'] += 1
+            
         except Exception as e:
             logger.error(f"Error processing {sym}: {e}")
             continue
+            
     return advances, declines, unchanged, sector_perf
 
 def format_market_breadth():
@@ -513,6 +499,7 @@ def format_market_breadth():
         "NIFTY IT": "^CNXIT",
         "NIFTY AUTO": "^CNXAUTO"
     }
+    
     ind_data = {}
     for name, sym in indices.items():
         try:
@@ -532,29 +519,32 @@ def format_market_breadth():
     timestamp = datetime.now().strftime("%d-%b-%Y %I:%M %p")
 
     text = f"📊 <b>Market Breadth (NSE)</b> – {timestamp}\n\n"
+    
     for name, (last, chg) in ind_data.items():
         arrow = "🟢" if chg > 0 else "🔴" if chg < 0 else "⚪"
         text += f"{arrow} {name}: {last:,.2f} ({chg:+.2f}%)\n"
 
     text += f"\n📈 Advances: {adv}\n📉 Declines: {dec}\n⚖️ Unchanged: {unc}\n"
-    if dec > 0:
-        ratio = adv / dec
-    else:
-        ratio = adv
+    ratio = adv / dec if dec > 0 else adv
     text += f"🔄 A/D Ratio: {ratio:.2f} (out of {adv+dec+unc} stocks)\n\n"
 
     text += "🏭 <b>Sector Snapshot</b>\n"
-    sorted_sectors = sorted(sector_perf.items(), key=lambda x: x[1]['adv']-x[1]['dec'], reverse=True)[:5]
+    sorted_sectors = sorted(sector_perf.items(), 
+                          key=lambda x: x[1]['adv'] - x[1]['dec'], 
+                          reverse=True)[:5]
+    
     for sector, data in sorted_sectors:
         net = data['adv'] - data['dec']
         arrow = "🟢" if net > 0 else "🔴" if net < 0 else "⚪"
         text += f"{arrow} {sector}: {data['adv']} up, {data['dec']} down\n"
+        
     return text
 
 # -------------------- TAVILY NEWS --------------------
 def get_tavily_news(query: str, days: int = 7) -> list:
     if not TAVILY_API_KEY:
         return []
+        
     try:
         url = "https://api.tavily.com/search"
         headers = {"Content-Type": "application/json"}
@@ -577,6 +567,7 @@ def get_tavily_news(query: str, days: int = 7) -> list:
 def format_news(news_list: list, title: str) -> str:
     if not news_list:
         return f"📰 No recent news found for {title}."
+        
     text = f"📰 <b>{title}</b>\n\n"
     for i, item in enumerate(news_list, 1):
         title = item.get("title", "No title")
@@ -584,6 +575,7 @@ def format_news(news_list: list, title: str) -> str:
         source = item.get("source", "Unknown")
         date = item.get("published_date", "")[:10]
         text += f"{i}. <a href='{url}'>{title}</a>\n   📌 {source} | {date}\n\n"
+        
     return text
 
 def get_market_news() -> str:
@@ -596,41 +588,52 @@ def score_stock(symbol: str) -> dict:
         ticker = yf.Ticker(f"{symbol}.NS")
         info = ticker.info
         hist = ticker.history(period="6mo")
+        
         if hist.empty:
             return None
+            
         close = hist['Close']
         latest = close.iloc[-1]
         ema200 = close.ewm(span=200).mean().iloc[-1]
+        
         score = 5.0
         if latest > ema200:
             score += 1.5
         else:
             score -= 1.0
+            
         pe = info.get('trailingPE', 25)
         if pe and pe < 20:
             score += 1.5
         elif pe and pe > 30:
             score -= 1.0
+            
         roe = info.get('returnOnEquity', 0.1) * 100
         if roe > 15:
             score += 1.5
         elif roe < 8:
             score -= 1.0
+            
         pb = info.get('priceToBook', 2)
         if pb < 2:
             score += 0.5
         elif pb > 4:
             score -= 0.5
+            
         mcap = info.get('marketCap', 0)
         if mcap > 50000e7:
             score += 0.5
         elif mcap < 1000e7:
             score -= 0.5
+            
         div = info.get('dividendYield', 0)
         if div and div > 0.02:
             score += 0.5
+            
         score = max(0, min(10, score))
+        
         rating = "Strong Buy" if score >= 8 else "Buy" if score >= 6 else "Hold" if score >= 4 else "Avoid"
+        
         return {
             "symbol": symbol,
             "score": round(score, 1),
@@ -648,11 +651,13 @@ def suggest_portfolio(risk_profile: str = "moderate"):
         "BHARTIARTL", "KOTAKBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
         "MARUTI", "TATAMOTORS", "TITAN", "SUNPHARMA", "ONGC"
     ]
+    
     scored = []
     for sym in candidates:
         data = score_stock(sym)
         if data and data["score"] >= 4:
             scored.append(data)
+            
     scored.sort(key=lambda x: x["score"], reverse=True)
 
     if risk_profile == "conservative":
@@ -664,19 +669,24 @@ def suggest_portfolio(risk_profile: str = "moderate"):
 
     if not filtered:
         return []
+        
     total_score = sum(s["score"] for s in filtered)
     for s in filtered:
         s["allocation"] = round((s["score"] / total_score) * 100, 1)
+        
     return filtered
 
 def format_portfolio(portfolio, risk_profile: str):
     if not portfolio:
         return "❌ No suitable stocks found for this risk profile."
+        
     text = f"💼 <b>AI-Powered Portfolio ({risk_profile.capitalize()} Risk)</b>\n"
     text += "Based on CFA-style scoring (technical + fundamental):\n\n"
+    
     for item in portfolio:
         text += f"• {item['symbol']} – <b>{item['score']}/10</b> ({item['rating']})\n"
-        text += f"  Allocation: {item['allocation']}% | {item.get('sector','N/A')}\n"
+        text += f"  Allocation: {item['allocation']}% | {item.get('sector', 'N/A')}\n"
+        
     text += "\n⚠️ Educational purpose only. Consult your advisor."
     return text
 
@@ -688,6 +698,7 @@ def start_cmd(m):
     kb.add(KeyboardButton("💼 Conservative"), KeyboardButton("💼 Moderate"), KeyboardButton("💼 Aggressive"))
     kb.add(KeyboardButton("📈 Swing (Conservative)"), KeyboardButton("📈 Swing (Aggressive)"))
     kb.add(KeyboardButton("📰 Market News"), KeyboardButton("📋 History"), KeyboardButton("📊 Usage"))
+    
     bot.send_message(
         m.chat.id,
         "🤖 <b>AI Stock Advisor Pro</b>\n\n"
@@ -718,15 +729,39 @@ def process_symbol(m):
     # Check usage
     allowed, remaining, limit = can_use_llm(m.from_user.id)
     
-    # Get analysis (always works, even if AI fails)
+    # Get analysis
     analysis = stock_ai_advisory(sym)
     
     # If AI was used successfully, register usage
-    # Note: The AI call inside stock_ai_advisory already handles its own registration
-    # We're just tracking the overall analysis request
     if allowed and "AI service temporarily unavailable" not in analysis:
         register_llm_usage(m.from_user.id)
         add_history_item(m.from_user.id, f"Stock analysis: {sym}", analysis, "stock")
     
     if remaining - 1 <= 3 and allowed:
-        analysis += f"\n\n⚠️ You have {remaining
+        analysis += f"\n\n⚠️ You have {remaining-1} AI calls left today."
+    
+    bot.send_message(m.chat.id, analysis)
+
+@bot.message_handler(func=lambda m: m.text == "📊 Market Breadth")
+def market_breadth_cmd(m):
+    bot.send_chat_action(m.chat.id, 'typing')
+    breadth = format_market_breadth()
+    bot.send_message(m.chat.id, breadth, parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "📰 Market News")
+def market_news_cmd(m):
+    bot.send_chat_action(m.chat.id, 'typing')
+    news = get_market_news()
+    bot.send_message(m.chat.id, news, parse_mode="HTML", disable_web_page_preview=True)
+
+@bot.message_handler(func=lambda m: m.text in ["💼 Conservative", "💼 Moderate", "💼 Aggressive"])
+def portfolio_cmd(m):
+    risk = m.text.replace("💼 ", "").lower()
+    bot.send_chat_action(m.chat.id, 'typing')
+    
+    portfolio = suggest_portfolio(risk)
+    response = format_portfolio(portfolio, risk)
+    bot.send_message(m.chat.id, response)
+
+@bot.message_handler(func=lambda m: m.text == "📈 Swing (Conservative)")
+def swing_con
