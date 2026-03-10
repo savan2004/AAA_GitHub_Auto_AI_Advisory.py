@@ -13,7 +13,7 @@ import requests
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from groq import Groq
-import google.generativeai as genai
+import google.genai as genai
 from flask import Flask
 
 # Import swing trade module
@@ -49,7 +49,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 ai_configured = False
 if GEMINI_API_KEY:
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
+        genai_client = genai.Client(api_key=GEMINI_API_KEY)
         ai_configured = True
         logger.info("Gemini configured successfully")
     except Exception as e:
@@ -167,13 +167,10 @@ def safe_llm_call(prompt: str, max_tokens: int = 600) -> Tuple[bool, str]:
             
             for model_name in gemini_models:
                 try:
-                    model = genai.GenerativeModel(model_name)
-                    resp = model.generate_content(
-                        prompt,
-                        generation_config={
-                            "max_output_tokens": max_tokens,
-                            "temperature": 0.35,
-                        }
+                    resp = genai_client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={"max_output_tokens": max_tokens, "temperature": 0.35}
                     )
                     if resp and resp.text:
                         return True, resp.text.strip()
@@ -520,7 +517,7 @@ def format_market_breadth():
     for name, sym in indices.items():
         try:
             ticker = yf.Ticker(sym)
-            hist = ticker.history(period="1d")
+            hist = ticker.history(period="5d")
             if not hist.empty:
                 last = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2] if len(hist) > 1 else last
@@ -712,7 +709,7 @@ def ask_symbol(m):
 
 def process_symbol(m):
     sym = m.text.strip().upper()
-    if not sym.isalnum():
+    if not all(c.isalnum() or c in '-&.' for c in sym):
         bot.reply_to(m, "❌ Invalid symbol. Use letters only.")
         return
     
