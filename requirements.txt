@@ -2,6 +2,6 @@ telebot
 yfinance
 pandas
 groq
-google-generativeai
+google-genai
 requests
 flask
