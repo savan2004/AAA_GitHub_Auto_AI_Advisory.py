@@ -295,7 +295,7 @@ def safe_history(symbol: str, period: str = "1y",
                     raise_errors=False,
                 )
                 if df is not None and not df.empty:
-                    df = df[df.index.normalize() <= pd.Timestamp(date.today())]
+                    df = df[df.index.normalize() <= pd.Timestamp(date.today(), tz=df.index.tz)]
                     logger.info(f"{symbol}: {len(df)} candles ({'BSE' if bse else 'NSE'})")
                     return df.copy()
             except Exception as e:
