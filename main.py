@@ -517,27 +517,64 @@ def compute_key_levels(df: pd.DataFrame, ltp: float) -> dict:
     }
 
 def get_fundamental_info(symbol: str) -> dict:
+    """Fetch fundamentals: tries NSE then BSE, supplements with fast_info."""
+    def _extract(info: dict, fi) -> dict:
+        """Build result dict from info + fast_info fallbacks."""
+        def _fi(attr, default=0):
+            try: v = getattr(fi, attr, None); return float(v) if v else default
+            except: return default
+        mc   = info.get("marketCap", 0) or _fi("market_cap")
+        h52  = info.get("fiftyTwoWeekHigh", 0) or _fi("year_high")
+        l52  = info.get("fiftyTwoWeekLow",  0) or _fi("year_low")
+        vol  = info.get("volume",        0) or _fi("three_month_average_volume")
+        avol = info.get("averageVolume", 0) or _fi("three_month_average_volume")
+        prev = info.get("regularMarketPreviousClose", 0) or _fi("previous_close")
+        return {
+            "sector":         info.get("sector",    "N/A"),
+            "industry":       info.get("industry",  "N/A"),
+            "company_name":   info.get("longName",  info.get("shortName", symbol)),
+            "market_cap":     mc   or 0,
+            "pe_ratio":       info.get("trailingPE",      0) or 0,
+            "pb_ratio":       info.get("priceToBook",     0) or 0,
+            "roe":           (info.get("returnOnEquity",  0) or 0) * 100,
+            "dividend_yield":(info.get("dividendYield",   0) or 0) * 100,
+            "high_52w":       h52  or 0,
+            "low_52w":        l52  or 0,
+            "prev_close":     prev or 0,
+            "volume":         int(vol)  if vol  else 0,
+            "avg_volume":     int(avol) if avol else 0,
+        }
     try:
         _yf_throttle()
-        info = _yf_ticker(symbol).info or {}
-        if "Invalid Crumb" in str(info):
-            _yahoo_session.invalidate()
-            return {}
-        return {
-            "sector":         info.get("sector", "N/A"),
-            "industry":       info.get("industry", "N/A"),
-            "company_name":   info.get("longName", info.get("shortName", symbol)),
-            "market_cap":     info.get("marketCap", 0) or 0,
-            "pe_ratio":       info.get("trailingPE", 0) or 0,
-            "pb_ratio":       info.get("priceToBook", 0) or 0,
-            "roe":            (info.get("returnOnEquity", 0) or 0) * 100,
-            "dividend_yield": (info.get("dividendYield", 0) or 0) * 100,
-            "high_52w":       info.get("fiftyTwoWeekHigh", 0) or 0,
-            "low_52w":        info.get("fiftyTwoWeekLow",  0) or 0,
-            "prev_close":     info.get("regularMarketPreviousClose", 0) or 0,
-            "volume":         info.get("volume", 0) or 0,
-            "avg_volume":     info.get("averageVolume", 0) or 0,
-        }
+        # ── Try NSE first, then BSE ──
+        for bse in [False, True]:
+            try:
+                t  = _yf_ticker(symbol, bse=bse)
+                fi = t.fast_info
+                info = t.info or {}
+                if "Invalid Crumb" in str(info):
+                    _yahoo_session.invalidate()
+                    continue
+                # Consider data "good" if we have company name or market cap
+                has_name = bool(info.get("longName") or info.get("shortName"))
+                has_mcap = bool(info.get("marketCap") or getattr(fi, "market_cap", 0))
+                if has_name or has_mcap:
+                    result = _extract(info, fi)
+                    logger.info(f"Fundamentals {symbol} via {'BSE' if bse else 'NSE'}: "
+                                f"MCap={result['market_cap']:,.0f} name={result['company_name']}")
+                    return result
+            except Exception as ex:
+                logger.warning(f"Fundamental {symbol} bse={bse}: {ex}")
+                continue
+        # ── Fallback: return what we have from fast_info even if info is thin ──
+        try:
+            t  = _yf_ticker(symbol, bse=False)
+            fi = t.fast_info
+            info = t.info or {}
+            return _extract(info, fi)
+        except Exception:
+            pass
+        return {}
     except Exception as e:
         logger.error(f"Fundamental error {symbol}: {e}")
         return {}
