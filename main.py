@@ -200,19 +200,29 @@ def _groq_call(prompt: str, max_tokens: int) -> Optional[str]:
     try:
         from groq import Groq
         client = Groq(api_key=GROQ_API_KEY)
-        for model in ["llama-3.3-70b-versatile", "llama3-70b-8192",
-                      "llama3-8b-8192", "gemma2-9b-it"]:
+        for model in [
+            "llama-3.3-70b-versatile",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "gemma2-9b-it",
+        ]:
             try:
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content":
-                         "You are a professional equity analyst for Indian NSE markets. "
-                         "Give concise, data-driven commentary for retail swing traders. "
-                         "Always end with: 'Note: Educational example, not a recommendation.'"},
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a professional equity analyst for Indian NSE markets. "
+                                "Give concise, data-driven commentary for retail swing traders. "
+                                "Always end with: 'Note: Educational example, not a recommendation.'"
+                            ),
+                        },
                         {"role": "user", "content": prompt},
                     ],
-                    max_tokens=max_tokens, temperature=0.35, timeout=15,
+                    max_tokens=max_tokens,
+                    temperature=0.35,
+                    timeout=15,
                 )
                 text = (resp.choices[0].message.content or "").strip()
                 if text:
@@ -223,6 +233,7 @@ def _groq_call(prompt: str, max_tokens: int) -> Optional[str]:
     except Exception as e:
         logger.error(f"Groq client error: {e}")
     return None
+
 
 def _gemini_call(prompt: str, max_tokens: int) -> Optional[str]:
     if not GEMINI_API_KEY:
