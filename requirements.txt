@@ -7,7 +7,7 @@ pyTelegramBotAPI==4.16.0
 
 # Finance / data
 yfinance==0.2.33
-pandas==2.1.4
+pandas==2.0.3   # <-- changed from 2.1.4
 
 # AI SDKs
 groq==0.5.0
