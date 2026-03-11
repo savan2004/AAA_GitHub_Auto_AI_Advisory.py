@@ -642,9 +642,8 @@ def rule_based_commentary(
 # ─────────────────────────────────────────
 # MAIN STOCK ANALYSIS
 # ─────────────────────────────────────────
-def stock_ai_advisory(symbol: str,
-                       user_id: Optional[int] = None) -> str:
-    sym = normalize_symbol(symbol)
+def stock_ai_advisory(symbol: str,                       user_id: Optional[int] = None,                       use_ai: bool = True) -> str:
+                                       sym = normalize_symbol(symbol)
     try:
         logger.info(f"── Analyzing {sym} ──")
 
@@ -718,7 +717,7 @@ def stock_ai_advisory(symbol: str,
             f"🔮 Outlook (7–14 days):\n<1 sentence>\n\n"
             f"⚠️ Note: Educational example, not a recommendation."
         )
-        ai_raw     = actual_llm_call(prompt, max_tokens=450)
+        ai_raw     = actual_llm_call(prompt, max_tokens=450) if use_ai else ""
         ai_comment = ai_raw if ai_raw else rule_based_commentary(
             sym, company, ltp, prev, rv, mv, sv,
             e20, e50, e200, bu, bm, bl,
@@ -1026,16 +1025,19 @@ def process_symbol(m):
     if not re.match(r"^[A-Z0-9\-\&\.]+$", sym):
         bot.reply_to(m, "❌ Invalid symbol. Use NSE code like RELIANCE or TCS.")
         return
+bot.send_chat_action(m.chat.id, "typing")
+    # ── Separate data fetch from AI advisory ──
+    # Stock data is ALWAYS fetched and returned.
+    # AI commentary is only attempted if quota allows.
     allowed, remaining, limit = can_use_llm(m.from_user.id)
-    if not allowed:
-        bot.reply_to(m, f"❌ Used all {limit} analyses today. Try again tomorrow.")
-        return
-    bot.send_chat_action(m.chat.id, "typing")
-    analysis = stock_ai_advisory(sym, user_id=m.from_user.id)
-    register_llm_usage(m.from_user.id)
+    analysis = stock_ai_advisory(sym, user_id=m.from_user.id, use_ai=allowed)
+    if allowed:
+        register_llm_usage(m.from_user.id)
+        if remaining - 1 <= 3:
+            analysis += f"\n\n⚠️ {remaining - 1} AI calls left today."
+    else:
+        analysis += f"\n\n💡 <i>AI quota used ({limit}/day). Showing rule-based commentary. Resets tomorrow.</i>"
     add_history_item(m.from_user.id, f"Stock analysis: {sym}", analysis, "stock")
-    if remaining - 1 <= 3:
-        analysis += f"\n\n⚠️ {remaining - 1} AI calls left today."
     bot.reply_to(m, analysis, parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "📊 Market Breadth")
