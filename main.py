@@ -976,6 +976,8 @@ def score_stock(symbol: str) -> Optional[dict]:
         return result
         
     except Exception as e:
+        if "Too Many Requests" in str(e) or "429" in str(e):
+            time.sleep(30)
         logger.error(f"Score error {symbol}: {e}")
         return None
 
