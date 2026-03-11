@@ -892,7 +892,15 @@ CANDIDATES = [
     "MARUTI","TATAMOTORS","TITAN","SUNPHARMA","ONGC",
 ]
 
+score_cache = {}
+SCORE_CACHE_TTL = 3600  # Cache for 1 hour
+
 def score_stock(symbol: str) -> Optional[dict]:
+    # 1. Check if valid cache exists
+    cached = score_cache.get(symbol)
+    if cached and (time.time() - cached['ts']) < SCORE_CACHE_TTL:
+        return cached['data']
+        
     try:
         _yf_throttle()
         t    = _yf_ticker(symbol)
@@ -921,10 +929,16 @@ def score_stock(symbol: str) -> Optional[dict]:
             "Buy"        if score >= 6 else
             "Hold"       if score >= 4 else "Avoid"
         )
-        return {
+        
+        result = {
             "symbol": symbol, "score": round(score, 1), "rating": rating,
             "mcap": mc, "sector": info.get("sector", "Other"),
         }
+        
+        # 2. Save the new result to the cache
+        score_cache[symbol] = {'data': result, 'ts': time.time()}
+        return result
+        
     except Exception as e:
         logger.error(f"Score error {symbol}: {e}")
         return None
