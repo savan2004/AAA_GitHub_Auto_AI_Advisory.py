@@ -1,15 +1,26 @@
-import logging
+# main.py – Advanced AI Stock Advisor with CMP verification + RAG
+
 import os
-from typing import Optional, Tuple
+import logging
+from datetime import date
+from typing import Optional, Tuple, Dict
 
+import requests
 import pandas as pd
-import telebot
 import yfinance as yf
-from telebot.types import KeyboardButton, ReplyKeyboardMarkup
+import telebot
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-from llm_wrapper import call_llm_with_limits
+from llm_wrapper import call_llm_with_limits  # Groq + Gemini with limits
 
+# -------------------- CONFIG --------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN not set")
 
@@ -22,29 +33,110 @@ logger = logging.getLogger(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 
 
-def ema(series: pd.Series, span: int) -> pd.Series:
-    return series.ewm(span=span, adjust=False).mean()
+# -------------------- CMP VERIFICATION (multi-source) --------------------
+def _fetch_price_yfinance(symbol: str) -> Optional[float]:
+    try:
+        t = yf.Ticker(f"{symbol}.NS")
+        info = t.info or {}
+        price = info.get("regularMarketPrice") or info.get("currentPrice")
+        if price and price > 0:
+            return float(price)
+    except Exception as e:
+        logger.warning(f"YFinance price error for {symbol}: {e}")
+    return None
 
 
-def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss
+def _fetch_price_alpha_vantage(symbol: str) -> Optional[float]:
+    if not ALPHA_VANTAGE_KEY:
+        return None
+    try:
+        params = {
+            "function": "GLOBAL_QUOTE",
+            "symbol": f"{symbol}.NS",
+            "apikey": ALPHA_VANTAGE_KEY,
+        }
+        r = requests.get("https://www.alphavantage.co/query", params=params, timeout=10)
+        data = r.json().get("Global Quote", {})
+        price_str = data.get("05. price")
+        if price_str:
+            price = float(price_str)
+            if price > 0:
+                return price
+    except Exception as e:
+        logger.warning(f"AlphaVantage price error for {symbol}: {e}")
+    return None
+
+
+def _fetch_price_finnhub(symbol: str) -> Optional[float]:
+    if not FINNHUB_API_KEY:
+        return None
+    try:
+        params = {"symbol": f"{symbol}.NS", "token": FINNHUB_API_KEY}
+        r = requests.get("https://finnhub.io/api/v1/quote", params=params, timeout=10)
+        data = r.json()
+        price = data.get("c")
+        if price and price > 0:
+            return float(price)
+    except Exception as e:
+        logger.warning(f"Finnhub price error for {symbol}: {e}")
+    return None
+
+
+def get_verified_price(symbol: str) -> Tuple[Optional[float], Dict[str, float]]:
+    """
+    Fetch CMP from multiple providers and return a consensus price + per-source map.
+    """
+    sources: Dict[str, float] = {}
+
+    yf_price = _fetch_price_yfinance(symbol)
+    if yf_price:
+        sources["yfinance"] = yf_price
+
+    av_price = _fetch_price_alpha_vantage(symbol)
+    if av_price:
+        sources["alpha_vantage"] = av_price
+
+    fh_price = _fetch_price_finnhub(symbol)
+    if fh_price:
+        sources["finnhub"] = fh_price
+
+    if not sources:
+        return None, {}
+
+    vals = sorted(sources.values())
+    n = len(vals)
+    if n % 2 == 1:
+        consensus = vals[n // 2]
+    else:
+        consensus = (vals[n // 2 - 1] + vals[n // 2]) / 2
+
+    return consensus, sources
+
+
+# -------------------- INDICATORS & FUNDAMENTALS --------------------
+def ema(s: pd.Series, span: int) -> pd.Series:
+    return s.ewm(span=span, adjust=False).mean()
+
+
+def rsi(s: pd.Series, period: int = 14) -> pd.Series:
+    d = s.diff()
+    up = d.clip(lower=0).rolling(period).mean()
+    down = (-d.clip(upper=0)).rolling(period).mean()
+    rs = up / down
     return 100 - (100 / (1 + rs))
 
 
-def macd(series: pd.Series) -> Tuple[float, float]:
-    exp1 = series.ewm(span=12, adjust=False).mean()
-    exp2 = series.ewm(span=26, adjust=False).mean()
+def macd(s: pd.Series) -> Tuple[float, float]:
+    exp1 = s.ewm(span=12, adjust=False).mean()
+    exp2 = s.ewm(span=26, adjust=False).mean()
     macd_line = exp1 - exp2
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     return float(macd_line.iloc[-1]), float(signal_line.iloc[-1])
 
 
-def bollinger_bands(series: pd.Series, period: int = 20) -> Tuple[float, float, float]:
-    sma = series.rolling(window=period).mean().iloc[-1]
-    std = series.rolling(window=period).std().iloc[-1]
+def bollinger_bands(s: pd.Series, period: int = 20) -> Tuple[float, float, float]:
+    sma = s.rolling(window=period).mean().iloc[-1]
+    std = s.rolling(window=period).std().iloc[-1]
     upper = sma + 2 * std
     lower = sma - 2 * std
     return float(upper), float(sma), float(lower)
@@ -85,29 +177,51 @@ def get_fundamental_info(symbol: str) -> dict:
         return {}
 
 
-def calculate_targets(price: float, atr_val: float, trend: str, low_52w=None, high_52w=None) -> dict:
+def calculate_targets(
+    price: float,
+    atr_val: float,
+    trend: str,
+    low_52w: Optional[float] = None,
+    high_52w: Optional[float] = None,
+) -> dict:
     if trend == "Bullish":
-        short = {"1W": price + atr_val * 1.2, "1M": price + atr_val * 3, "3M": price + atr_val * 6}
-        long = {"6M": price + atr_val * 12, "1Y": price + atr_val * 20, "2Y": price + atr_val * 35}
-        stop_loss = price - atr_val * 2
+        short = {
+            "1W": price + atr_val * 1.2,
+            "1M": price + atr_val * 3,
+            "3M": price + atr_val * 6,
+        }
+        long = {
+            "6M": price + atr_val * 12,
+            "1Y": price + atr_val * 20,
+            "2Y": price + atr_val * 35,
+        }
+        sl = price - atr_val * 2
         if high_52w:
             cap = high_52w * 2
-            for key in long:
-                long[key] = min(long[key], cap)
+            for k in long:
+                long[k] = min(long[k], cap)
     else:
-        short = {"1W": price - atr_val * 1.2, "1M": price - atr_val * 3, "3M": price - atr_val * 6}
-        long = {"6M": price - atr_val * 10, "1Y": price - atr_val * 15, "2Y": price - atr_val * 20}
-        stop_loss = price + atr_val * 2
+        short = {
+            "1W": price - atr_val * 1.2,
+            "1M": price - atr_val * 3,
+            "3M": price - atr_val * 6,
+        }
+        long = {
+            "6M": price - atr_val * 10,
+            "1Y": price - atr_val * 15,
+            "2Y": price - atr_val * 20,
+        }
+        sl = price + atr_val * 2
         floor = price * 0.1
-        for key in short:
-            short[key] = max(short[key], floor)
-        for key in long:
-            long[key] = max(long[key], floor)
+        for k in short:
+            short[k] = max(short[k], floor)
+        for k in long:
+            long[k] = max(long[k], floor)
         if low_52w:
-            for key in long:
-                long[key] = max(long[key], low_52w * 0.9)
+            for k in long:
+                long[k] = max(long[k], low_52w * 0.9)
 
-    return {"short_term": short, "long_term": long, "stop_loss": stop_loss}
+    return {"short_term": short, "long_term": long, "stop_loss": sl}
 
 
 def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
@@ -193,12 +307,132 @@ def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
     return min(score, 100)
 
 
+# -------------------- RAG CONTEXT + FALLBACK COMMENTARY --------------------
+def build_rag_context(
+    symbol: str,
+    company: str,
+    ltp_hist: float,
+    prev: float,
+    verified_price: Optional[float],
+    price_sources: Dict[str, float],
+    fund: dict,
+    ema20: float,
+    ema50: float,
+    ema200: float,
+    rsi_val: float,
+    macd_val: float,
+    sig_val: float,
+    bb_up: float,
+    bb_mid: float,
+    bb_lo: float,
+    atr_val: float,
+    trend: str,
+    targets: dict,
+    quality: int,
+) -> str:
+    lines = []
+    lines.append(f"SYMBOL: {symbol}.NS")
+    lines.append(f"COMPANY: {company}")
+    lines.append(f"LTP_HISTORY: {ltp_hist:.2f}")
+    if verified_price is not None:
+        lines.append(f"LTP_VERIFIED: {verified_price:.2f}")
+    if price_sources:
+        src_str = ", ".join(f"{k}={v:.2f}" for k, v in price_sources.items())
+        lines.append(f"PRICE_SOURCES: {src_str}")
+    lines.append(f"PREV_CLOSE: {prev:.2f}")
+    lines.append("")
+    lines.append("FUNDAMENTALS:")
+    lines.append(f"  Sector: {fund.get('sector','N/A')}")
+    lines.append(f"  Industry: {fund.get('industry','N/A')}")
+    lines.append(f"  MCap_Cr: {fund.get('market_cap',0)/1e7:.1f}")
+    lines.append(f"  PE: {fund.get('pe_ratio',0):.2f}")
+    lines.append(f"  PB: {fund.get('pb_ratio',0):.2f}")
+    lines.append(f"  ROE_pct: {fund.get('roe',0):.1f}")
+    lines.append(f"  DivYield_pct: {fund.get('dividend_yield',0):.2f}")
+    lines.append(f"  52W_low: {fund.get('low_52w',0):.2f}")
+    lines.append(f"  52W_high: {fund.get('high_52w',0):.2f}")
+    lines.append("")
+    lines.append("TECHNICALS:")
+    lines.append(f"  RSI14: {rsi_val:.1f}")
+    lines.append(f"  MACD: {macd_val:.2f}, Signal: {sig_val:.2f}")
+    lines.append(f"  EMA20: {ema20:.2f}, EMA50: {ema50:.2f}, EMA200: {ema200:.2f}")
+    lines.append(f"  BB: U{bb_up:.2f}, M{bb_mid:.2f}, L{bb_lo:.2f}")
+    lines.append(f"  ATR14: {atr_val:.2f}")
+    lines.append(f"  Trend_vs_200EMA: {trend}")
+    lines.append("")
+    lines.append("TARGETS:")
+    lines.append(
+        f"  ST_1W: {targets['short_term']['1W']:.2f}, "
+        f"1M: {targets['short_term']['1M']:.2f}, "
+        f"3M: {targets['short_term']['3M']:.2f}"
+    )
+    lines.append(
+        f"  LT_6M: {targets['long_term']['6M']:.2f}, "
+        f"1Y: {targets['long_term']['1Y']:.2f}, "
+        f"2Y: {targets['long_term']['2Y']:.2f}"
+    )
+    lines.append(f"  StopLoss: {targets['stop_loss']:.2f}")
+    lines.append("")
+    lines.append(f"QUALITY_SCORE: {quality}/100")
+    return "\n".join(lines)
+
+
+def rule_based_commentary(
+    symbol: str,
+    company: str,
+    ltp: float,
+    prev: float,
+    rsi_val: float,
+    macd_val: float,
+    sig_val: float,
+    ema20: float,
+    ema50: float,
+    ema200: float,
+    bb_up: float,
+    bb_mid: float,
+    bb_lo: float,
+    atr_val: float,
+    trend: str,
+    quality: int,
+) -> str:
+    direction = "up" if ltp > prev else "down" if ltp < prev else "flat"
+    rsi_note = (
+        "overbought" if rsi_val > 70 else
+        "oversold" if rsi_val < 30 else
+        "neutral"
+    )
+    macd_note = "bullish" if macd_val > sig_val else "bearish"
+    vol_note = "stable volatility"
+    if ltp > 0 and atr_val / ltp * 100 > 5:
+        vol_note = "high volatility"
+
+    lines = []
+    lines.append(
+        f"{company} ({symbol}.NS) is currently trading {direction} versus the previous close, "
+        f"with RSI in a {rsi_note} zone and MACD giving a {macd_note} signal around the current trend."
+    )
+    lines.append(
+        f"Price action relative to EMA20/50/200 suggests a {trend.lower()} bias, while Bollinger Bands "
+        f"(U{bb_up:.0f}, M{bb_mid:.0f}, L{bb_lo:.0f}) indicate {vol_note} near the current level."
+    )
+    lines.append(
+        f"The internal quality score of {quality}/100 reflects a blend of fundamentals and trend strength; "
+        f"treat this as a risk gauge, not a rating."
+    )
+    lines.append(
+        "For cautious swing traders, consider entries closer to support with a clear stop below recent "
+        "swing lows, and avoid oversizing positions around major news or results."
+    )
+    lines.append("Note: Educational example, not a recommendation.")
+    return "\n".join(lines)
+
+
+# -------------------- STOCK ANALYSIS + AI (RAG + ASI) --------------------
 def stock_ai_advisory(symbol: str, user_id: Optional[int] = None) -> str:
     sym = symbol.upper().strip()
     try:
         ticker = yf.Ticker(f"{sym}.NS")
         df = ticker.history(period="1y", interval="1d")
-
         if df.empty:
             return f"❌ No data found for {sym}. Please check the symbol and try again."
 
@@ -206,8 +440,8 @@ def stock_ai_advisory(symbol: str, user_id: Optional[int] = None) -> str:
         if len(close) < 60:
             return f"❌ Insufficient history for {sym}. Need at least 60 days of data."
 
-        ltp = float(close.iloc[-1])
-        prev = float(close.iloc[-2]) if len(df) > 1 else ltp
+        ltp_hist = float(close.iloc[-1])
+        prev = float(close.iloc[-2]) if len(df) > 1 else ltp_hist
 
         fund = get_fundamental_info(sym)
         company = fund.get("company_name", sym)
@@ -219,10 +453,10 @@ def stock_ai_advisory(symbol: str, user_id: Optional[int] = None) -> str:
         macd_val, sig_val = macd(close)
         bb_up, bb_mid, bb_lo = bollinger_bands(close)
         atr_val = atr(df)
-        trend = "Bullish" if ltp > ema200 else "Bearish"
+        trend = "Bullish" if ltp_hist > ema200 else "Bearish"
 
         targets = calculate_targets(
-            ltp,
+            ltp_hist,
             atr_val,
             trend,
             low_52w=fund.get("low_52w"),
@@ -230,39 +464,90 @@ def stock_ai_advisory(symbol: str, user_id: Optional[int] = None) -> str:
         )
         quality = calculate_quality_score(df, fund)
 
+        verified_price, price_sources = get_verified_price(sym)
+        ltp_for_display = verified_price if verified_price is not None else ltp_hist
+
+        context = build_rag_context(
+            sym,
+            company,
+            ltp_hist,
+            prev,
+            verified_price,
+            price_sources,
+            fund,
+            ema20,
+            ema50,
+            ema200,
+            rsi_val,
+            macd_val,
+            sig_val,
+            bb_up,
+            bb_mid,
+            bb_lo,
+            atr_val,
+            trend,
+            targets,
+            quality,
+        )
+
         ai_comment = "AI service not configured."
         if user_id is not None:
             prompt = (
-                f"You are an equity analyst for Indian markets. Write a brief max 180 words commentary "
-                f"for retail traders on {company} ({sym}, NSE).\n\n"
-                f"LTP: {ltp:.2f}, Prev Close: {prev:.2f}\n"
-                f"RSI(14): {rsi_val:.1f}\n"
-                f"MACD: {macd_val:.2f} vs Signal: {sig_val:.2f}\n"
-                f"EMA20: {ema20:.2f}, EMA50: {ema50:.2f}, EMA200: {ema200:.2f}\n"
-                f"Bollinger: U{bb_up:.2f}, M{bb_mid:.2f}, L{bb_lo:.2f}\n"
-                f"ATR(14): {atr_val:.2f}, Trend: {trend}\n"
-                f"P/E: {fund.get('pe_ratio', 0):.2f}, P/B: {fund.get('pb_ratio', 0):.2f}, "
-                f"ROE: {fund.get('roe', 0):.1f}%, Div Yield: {fund.get('dividend_yield', 0):.2f}%\n"
-                f"Quality score: {quality}/100\n\n"
-                f"Explain trend, momentum, risk, support/resistance, entry thinking, and stop loss."
+                "You are an equity analyst for Indian markets (NSE). "
+                "Use ONLY the structured data in the CONTEXT below. "
+                "Do NOT invent prices or ratios; base your view strictly on this data.\n\n"
+                "CONTEXT START\n"
+                f"{context}\n"
+                "CONTEXT END\n\n"
+                "Task: Write a concise (max 180 words) swing-trading oriented commentary for a retail trader. "
+                "Explain:\n"
+                "- Overall trend and momentum\n"
+                "- Key support/resistance zones\n"
+                "- Risk factors and volatility\n"
+                "- How a cautious swing trader can think about entries and stop loss\n"
+                "Finish with: 'Note: Educational example, not a recommendation.'"
             )
             ai_comment = call_llm_with_limits(user_id, prompt, item_type="stock_ai")
 
+            if (
+                "AI service temporarily unavailable" in ai_comment
+                or "AI engine" in ai_comment
+                or "not configured" in ai_comment
+            ):
+                ai_comment = rule_based_commentary(
+                    sym,
+                    company,
+                    ltp_for_display,
+                    prev,
+                    rsi_val,
+                    macd_val,
+                    sig_val,
+                    ema20,
+                    ema50,
+                    ema200,
+                    bb_up,
+                    bb_mid,
+                    bb_lo,
+                    atr_val,
+                    trend,
+                    quality,
+                )
+
         stars = "⭐" * (quality // 20) + "☆" * (5 - quality // 20)
 
-        return f"""📊 DEEP ANALYSIS: {sym}
+        output = f"""📊 DEEP ANALYSIS: {sym}
 ━━━━━━━━━━━━━━━━━━━━
 🏢 {company}
-🏭 Sector: {fund.get('sector', 'N/A')} | Industry: {fund.get('industry', 'N/A')}
-💰 LTP: ₹{ltp:.2f} (Prev: ₹{prev:.2f})
-📈 52W Range: ₹{fund.get('low_52w', 0):.2f} - ₹{fund.get('high_52w', 0):.2f}
-📊 Volume: {fund.get('volume', 0):,} | Avg: {fund.get('avg_volume', 0):,}
+🏭 Sector: {fund.get('sector','N/A')} | Industry: {fund.get('industry','N/A')}
+💰 LTP (verified): ₹{ltp_for_display:.2f} (Hist: ₹{ltp_hist:.2f}, Prev: ₹{prev:.2f})
+📈 52W Range: ₹{fund.get('low_52w',0):.2f} - ₹{fund.get('high_52w',0):.2f}
+📊 Volume: {fund.get('volume',0):,} | Avg: {fund.get('avg_volume',0):,}
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 FUNDAMENTALS
-🏦 MCap: ₹{fund.get('market_cap', 0) / 10000000:.1f} Cr
-📈 P/E: {fund.get('pe_ratio', 0):.2f} | P/B: {fund.get('pb_ratio', 0):.2f}
-📊 ROE: {fund.get('roe', 0):.1f}% | Div Yield: {fund.get('dividend_yield', 0):.2f}%
+🏦 MCap: ₹{fund.get('market_cap',0)/10000000:.1f} Cr
+📈 P/E: {fund.get('pe_ratio',0):.2f} | P/B: {fund.get('pb_ratio',0):.2f}
+📊 ROE: {fund.get('roe',0):.1f}% | Div Yield: {fund.get('dividend_yield',0):.2f}%
 
 ━━━━━━━━━━━━━━━━━━━━
 📌 TECHNICALS
@@ -286,11 +571,17 @@ Long-term (6M/1Y/2Y): ₹{targets['long_term']['6M']:.2f} / ₹{targets['long_te
 
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ Educational purpose only."""
+        return output
+
     except Exception as e:
         logger.exception(f"Critical error in stock_ai_advisory for {symbol}")
-        return f"❌ Unable to analyze {symbol} at this time. Please try again later.\n\nError: {str(e)}"
+        return (
+            f"❌ Unable to analyze {symbol} at this time. "
+            f"Please try again later.\n\nError: {str(e)}"
+        )
 
 
+# -------------------- TELEGRAM HANDLERS --------------------
 @bot.message_handler(commands=["start", "help"])
 def start_cmd(message):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
