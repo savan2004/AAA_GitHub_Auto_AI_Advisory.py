@@ -1,42 +1,31 @@
-# history.py
-
 import time
 from collections import defaultdict
 from typing import Dict, List, Optional
 
 history_store: Dict[int, List[Dict]] = defaultdict(list)
+FRESHNESS_SECONDS = 3600
 
-
-def add_history_item(user_id: int, prompt: str, response: str, item_type: str = "analysis") -> int:
-    item_id = int(time.time())
-    item = {
-        "id": item_id,
-        "timestamp": item_id,
+def add_history_item(uid: int, prompt: str, response: str, itype: str = "analysis") -> int:
+    iid = int(time.time())
+    history_store[uid].append({
+        "id": iid,
+        "timestamp": iid,
         "prompt": prompt,
         "response": response,
-        "type": item_type,
-    }
-    history_store[user_id].append(item)
-    if len(history_store[user_id]) > 20:
-        history_store[user_id] = history_store[user_id][-20:]
-    return item_id
+        "type": itype,
+    })
+    if len(history_store[uid]) > 20:
+        history_store[uid] = history_store[uid][-20:]
+    return iid
 
+def get_recent_history(uid: int, limit: int = 10) -> List[Dict]:
+    return history_store.get(uid, [])[-limit:][::-1]
 
-def get_recent_history(user_id: int, limit: int = 10) -> List[Dict]:
-    items = history_store.get(user_id, [])
-    return items[-limit:][::-1]
-
-
-def get_history_item(user_id: int, item_id: int) -> Optional[Dict]:
-    for item in history_store.get(user_id, []):
-        if item["id"] == item_id:
+def get_history_item(uid: int, iid: int) -> Optional[Dict]:
+    for item in history_store.get(uid, []):
+        if item["id"] == iid:
             return item
     return None
 
-
-def is_history_fresh(item: Dict, max_age_seconds: Optional[int] = None) -> bool:
-    from config import FRESHNESS_SECONDS
-
-    if max_age_seconds is None:
-        max_age_seconds = FRESHNESS_SECONDS
-    return (time.time() - item["timestamp"]) < max_age_seconds
+def is_history_fresh(item: Dict) -> bool:
+    return (time.time() - item["timestamp"]) < FRESHNESS_SECONDS
