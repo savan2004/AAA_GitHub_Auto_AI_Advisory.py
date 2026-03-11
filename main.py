@@ -1,8 +1,8 @@
-# main.py ─ AI Stock Advisor Pro  |  Production-ready for Render
-# Fixes: yfinance rate-limit, live CMP multi-source, .NS.NS bug,
-#        AI commentary always filled, Render port, structured output
+# main.py ─ AI Stock Advisor Pro | Production-ready for Render
+# ROOT FIX: Custom YahooSession with auto crumb-refresh via curl_cffi
+# Fixes: Invalid Crumb, 429 rate-limit, .NS.NS bug, AI fallback, Render port
 # ─────────────────────────────────────────────────────────────────
-import os, re, time, random, logging, threading
+import os, re, time, json, logging, threading
 from datetime import datetime, date
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
@@ -27,7 +27,6 @@ TAVILY_API_KEY    = os.getenv("TAVILY_API_KEY", "")
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
 FINNHUB_API_KEY   = os.getenv("FINNHUB_API_KEY", "")
 PORT              = int(os.getenv("PORT", 8080))
-
 TIER_LIMITS       = {"free": 50, "paid": 200}
 FRESHNESS_SECONDS = 3600
 
@@ -38,37 +37,114 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_TOKEN not set")
+    raise RuntimeError("TELEGRAM_TOKEN not set in environment variables")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 
 # ─────────────────────────────────────────
-# ROTATING USER-AGENTS  (bypass Yahoo rate-limit on Render)
+# YAHOO SESSION  — auto crumb-refresh (THE CORE FIX)
 # ─────────────────────────────────────────
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
-    "(KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
-    "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-]
+class YahooSession:
+    """
+    Manages Yahoo Finance cookies + crumb with auto-refresh.
+    Uses curl_cffi to impersonate Chrome at TLS level — bypasses
+    both the 429 rate-limit and the Invalid Crumb error.
+    Falls back to plain requests if curl_cffi is not installed.
+    """
+    CRUMB_URL   = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+    CONSENT_URL = "https://consent.yahoo.com/v2/collectConsent"
 
-def _random_ua() -> str:
-    return random.choice(USER_AGENTS)
+    def __init__(self):
+        self._session  = None
+        self._crumb    = None
+        self._crumb_ts = 0.0
+        self._lock     = threading.Lock()
+        self._crumb_ttl = 1800  # refresh crumb every 30 minutes
 
-def _yf_ticker(symbol: str) -> yf.Ticker:
-    """Create a yfinance Ticker with a random User-Agent to avoid rate limiting."""
-    t = yf.Ticker(f"{symbol}.NS")
-    try:
-        t.session = requests.Session()
-        t.session.headers.update({"User-Agent": _random_ua()})
-    except Exception:
-        pass
-    return t
+    def _make_session(self):
+        try:
+            from curl_cffi import requests as curl_requests
+            s = curl_requests.Session(impersonate="chrome110")
+            logger.info("YahooSession: using curl_cffi (Chrome impersonation)")
+            return s
+        except ImportError:
+            logger.warning("YahooSession: curl_cffi not found — using requests.Session")
+            s = requests.Session()
+            s.headers.update({"User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            )})
+            return s
+
+    def _refresh(self) -> bool:
+        """Fetch fresh cookies + crumb from Yahoo Finance."""
+        try:
+            self._session = self._make_session()
+            # Step 1: Hit Yahoo Finance to get cookies
+            r = self._session.get(
+                "https://finance.yahoo.com",
+                timeout=15,
+                headers={"Accept-Language": "en-US,en;q=0.9"},
+            )
+            # Step 2: Fetch crumb using valid cookie
+            r2 = self._session.get(
+                self.CRUMB_URL,
+                timeout=10,
+                headers={
+                    "Accept": "*/*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://finance.yahoo.com",
+                },
+            )
+            crumb = r2.text.strip()
+            if crumb and len(crumb) > 3 and "Unauthorized" not in crumb:
+                self._crumb    = crumb
+                self._crumb_ts = time.time()
+                logger.info(f"YahooSession: crumb refreshed OK ({crumb[:8]}…)")
+                return True
+            logger.warning(f"YahooSession: bad crumb response: {crumb[:80]}")
+        except Exception as e:
+            logger.error(f"YahooSession._refresh error: {e}")
+        return False
+
+    def get(self) -> Tuple[object, Optional[str]]:
+        """
+        Returns (session, crumb).
+        Auto-refreshes if crumb is stale or missing.
+        """
+        with self._lock:
+            age = time.time() - self._crumb_ts
+            if self._crumb is None or age > self._crumb_ttl:
+                for attempt in range(3):
+                    if self._refresh():
+                        break
+                    time.sleep(2 ** attempt)
+        return self._session, self._crumb
+
+    def invalidate(self):
+        """Force a crumb refresh on next call (use after Invalid Crumb error)."""
+        with self._lock:
+            self._crumb    = None
+            self._crumb_ts = 0.0
+        logger.info("YahooSession: crumb invalidated — will refresh on next call")
+
+
+_yahoo_session = YahooSession()
+
+# ─────────────────────────────────────────
+# GLOBAL THROTTLE  (prevents rapid-fire 429)
+# ─────────────────────────────────────────
+_last_yf_call = 0.0
+_YF_MIN_GAP   = 1.2
+
+def _yf_throttle() -> None:
+    global _last_yf_call
+    now = time.time()
+    gap = now - _last_yf_call
+    if gap < _YF_MIN_GAP:
+        time.sleep(_YF_MIN_GAP - gap)
+    _last_yf_call = time.time()
 
 # ─────────────────────────────────────────
 # SYMBOL NORMALIZER  (prevents TCS.NS.NS)
@@ -81,66 +157,77 @@ def normalize_symbol(raw: str) -> str:
     return sym
 
 # ─────────────────────────────────────────
-# LIVE CMP  (5-method waterfall, never returns 0)
+# YFINANCE TICKER  (injects refreshed session)
+# ─────────────────────────────────────────
+def _yf_ticker(symbol: str, bse: bool = False) -> yf.Ticker:
+    suffix = ".BO" if bse else ".NS"
+    t = yf.Ticker(f"{symbol}{suffix}")
+    session, _ = _yahoo_session.get()
+    if session:
+        try:
+            t.session = session
+        except Exception:
+            pass
+    return t
+
+# ─────────────────────────────────────────
+# LIVE CMP  (yfinance waterfall → AV → Finnhub)
 # ─────────────────────────────────────────
 def _yf_price(symbol: str) -> Optional[float]:
-    """yfinance: fast_info → info → history(5d) → history(1mo)"""
-    for attempt in range(2):
-        try:
-            t = _yf_ticker(symbol)
-            if attempt > 0:
-                time.sleep(1.5)
-
-            # Method A: fast_info.last_price
+    _yf_throttle()
+    for bse in [False, True]:
+        for attempt in range(3):
             try:
-                p = getattr(t.fast_info, "last_price", None)
-                if p and float(p) > 0:
-                    return round(float(p), 2)
-            except Exception:
-                pass
+                if attempt > 0:
+                    wait = 2 ** attempt
+                    logger.info(f"Price retry {attempt} {symbol} bse={bse}, wait {wait}s")
+                    time.sleep(wait)
+                t = _yf_ticker(symbol, bse=bse)
 
-            # Method B: regularMarketPrice from info
-            try:
-                info = t.info or {}
-                p = info.get("regularMarketPrice") or info.get("currentPrice")
-                if p and float(p) > 0:
-                    return round(float(p), 2)
-            except Exception:
-                pass
+                # Method A: fast_info.last_price
+                try:
+                    p = getattr(t.fast_info, "last_price", None)
+                    if p and float(p) > 0:
+                        return round(float(p), 2)
+                except Exception:
+                    pass
 
-            # Method C: history 5d (different Yahoo endpoint — most reliable)
-            try:
-                df = t.history(
-                    period="5d", interval="1d",
-                    auto_adjust=True, actions=False,
-                )
-                if df is not None and not df.empty:
-                    p = float(df["Close"].iloc[-1])
-                    if p > 0:
-                        logger.info(f"{symbol}: yfinance history fallback ₹{p}")
-                        return round(p, 2)
-            except Exception:
-                pass
+                # Method B: regularMarketPrice from info
+                try:
+                    info = t.info or {}
+                    if "Invalid Crumb" in str(info):
+                        _yahoo_session.invalidate()
+                        continue
+                    p = info.get("regularMarketPrice") or info.get("currentPrice")
+                    if p and float(p) > 0:
+                        return round(float(p), 2)
+                except Exception:
+                    pass
 
-        except Exception as e:
-            logger.warning(f"YF attempt {attempt+1} error {symbol}: {e}")
+                # Method C: history 5d (different endpoint — most reliable)
+                try:
+                    df = t.history(
+                        period="5d", interval="1d",
+                        auto_adjust=True, actions=False,
+                    )
+                    if df is not None and not df.empty:
+                        p = float(df["Close"].iloc[-1])
+                        if p > 0:
+                            logger.info(f"{symbol}: history price ₹{p}")
+                            return round(p, 2)
+                except Exception as e:
+                    if "Invalid Crumb" in str(e) or "Unauthorized" in str(e):
+                        _yahoo_session.invalidate()
+                    pass
 
-    # Method D: try BSE suffix
-    try:
-        df = yf.Ticker(f"{symbol}.BO").history(period="5d", auto_adjust=True)
-        if df is not None and not df.empty:
-            p = float(df["Close"].iloc[-1])
-            if p > 0:
-                logger.info(f"{symbol}: BSE fallback ₹{p}")
-                return round(p, 2)
-    except Exception as e:
-        logger.warning(f"BSE fallback error {symbol}: {e}")
-
+            except Exception as e:
+                if "Invalid Crumb" in str(e) or "Unauthorized" in str(e):
+                    _yahoo_session.invalidate()
+                logger.warning(f"_yf_price {symbol} attempt {attempt}: {e}")
     return None
 
 
 def _av_price(symbol: str) -> Optional[float]:
-    """AlphaVantage GLOBAL_QUOTE"""
     if not ALPHA_VANTAGE_KEY:
         return None
     for suffix in [f"{symbol}.BSE", f"{symbol}.NS", symbol]:
@@ -150,7 +237,7 @@ def _av_price(symbol: str) -> Optional[float]:
                 params={"function": "GLOBAL_QUOTE",
                         "symbol": suffix,
                         "apikey": ALPHA_VANTAGE_KEY},
-                timeout=10, headers={"User-Agent": _random_ua()},
+                timeout=10,
             )
             ps = r.json().get("Global Quote", {}).get("05. price")
             if ps and float(ps) > 0:
@@ -161,7 +248,6 @@ def _av_price(symbol: str) -> Optional[float]:
 
 
 def _finnhub_price(symbol: str) -> Optional[float]:
-    """Finnhub quote — NSE:SYMBOL format"""
     if not FINNHUB_API_KEY:
         return None
     for fmt in [f"NSE:{symbol}", f"BSE:{symbol}"]:
@@ -169,70 +255,53 @@ def _finnhub_price(symbol: str) -> Optional[float]:
             r = requests.get(
                 "https://finnhub.io/api/v1/quote",
                 params={"symbol": fmt, "token": FINNHUB_API_KEY},
-                timeout=10, headers={"User-Agent": _random_ua()},
+                timeout=10,
             )
             p = r.json().get("c")
             if p and float(p) > 0:
                 return round(float(p), 2)
         except Exception as e:
-            logger.warning(f"Finnhub price error {fmt}: {e}")
+            logger.warning(f"Finnhub error {fmt}: {e}")
     return None
 
 
 def get_live_price(symbol: str) -> Tuple[float, str]:
-    """
-    Waterfall: yfinance(fast_info→info→history→BSE) → AlphaVantage → Finnhub
-    Returns (price, source_label). Never returns 0.0 if any method works.
-    """
     p = _yf_price(symbol)
     if p:
         return p, "yfinance ✅"
-
     p = _av_price(symbol)
     if p:
         return p, "AlphaVantage ✅"
-
     p = _finnhub_price(symbol)
     if p:
         return p, "Finnhub ✅"
-
     return 0.0, "unavailable"
 
 # ─────────────────────────────────────────
-# SAFE HISTORY  (fresh, no cache, completed candles only)
+# SAFE HISTORY  (fresh candles, auto crumb-refresh)
 # ─────────────────────────────────────────
 def safe_history(symbol: str, period: str = "1y",
                  interval: str = "1d") -> pd.DataFrame:
-    for attempt in range(2):
-        try:
-            if attempt > 0:
-                time.sleep(2)
-            logger.info(f"Fetching history: {symbol}.NS (attempt {attempt+1})")
-            t  = _yf_ticker(symbol)
-            df = t.history(
-                period=period, interval=interval,
-                auto_adjust=True, actions=False,
-                raise_errors=False,
-            )
-            if df is not None and not df.empty:
-                df = df[df.index.normalize() <= pd.Timestamp(date.today())]
-                return df.copy()
-            logger.warning(f"{symbol}.NS: empty dataframe attempt {attempt+1}")
-        except Exception as e:
-            logger.warning(f"safe_history error {symbol} attempt {attempt+1}: {e}")
-
-    # BSE fallback
-    try:
-        df = yf.Ticker(f"{symbol}.BO").history(
-            period=period, interval=interval,
-            auto_adjust=True, actions=False,
-        )
-        if df is not None and not df.empty:
-            logger.info(f"{symbol}: using BSE history")
-            return df.copy()
-    except Exception as e:
-        logger.warning(f"BSE history error {symbol}: {e}")
-
+    _yf_throttle()
+    for bse in [False, True]:
+        for attempt in range(3):
+            try:
+                if attempt > 0:
+                    time.sleep(2 ** attempt)
+                t  = _yf_ticker(symbol, bse=bse)
+                df = t.history(
+                    period=period, interval=interval,
+                    auto_adjust=True, actions=False,
+                    raise_errors=False,
+                )
+                if df is not None and not df.empty:
+                    df = df[df.index.normalize() <= pd.Timestamp(date.today())]
+                    logger.info(f"{symbol}: {len(df)} candles ({'BSE' if bse else 'NSE'})")
+                    return df.copy()
+            except Exception as e:
+                if "Invalid Crumb" in str(e) or "Unauthorized" in str(e):
+                    _yahoo_session.invalidate()
+                logger.warning(f"safe_history {symbol} bse={bse} attempt {attempt}: {e}")
     return pd.DataFrame()
 
 # ─────────────────────────────────────────
@@ -317,7 +386,7 @@ def _groq_call(prompt: str, max_tokens: int) -> Optional[str]:
                                 "You are a professional equity analyst for Indian NSE markets. "
                                 "Give concise, data-driven swing trade commentary. "
                                 "Always end with: "
-                                "'Note: Educational example, not a recommendation.'"
+                                "Note: Educational example, not a recommendation."
                             ),
                         },
                         {"role": "user", "content": prompt},
@@ -365,14 +434,13 @@ def _gemini_call(prompt: str, max_tokens: int) -> Optional[str]:
 
 
 def actual_llm_call(prompt: str, max_tokens: int = 450) -> str:
-    """Groq → Gemini → empty string (triggers rule-based fallback in caller)."""
     text = _groq_call(prompt, max_tokens)
     if text:
         return text
     text = _gemini_call(prompt, max_tokens)
     if text:
         return text
-    logger.warning("All LLM providers failed — rule-based fallback will be used.")
+    logger.warning("All LLM providers failed — rule-based fallback active")
     return ""
 
 
@@ -425,7 +493,6 @@ def atr(df: pd.DataFrame, period: int = 14) -> float:
     return float(tr.rolling(period).mean().iloc[-1])
 
 def compute_key_levels(df: pd.DataFrame, ltp: float) -> dict:
-    """Compute fresh S/R from rolling 20D high/low + EMAs + pivot."""
     h, l, c = df["High"], df["Low"], df["Close"]
     lh = float(h.iloc[-1])
     ll = float(l.iloc[-1])
@@ -437,10 +504,10 @@ def compute_key_levels(df: pd.DataFrame, ltp: float) -> dict:
     l20  = float(l.rolling(20).min().iloc[-1])
     e50  = float(c.ewm(span=50,  adjust=False).mean().iloc[-1])
     e200 = float(c.ewm(span=200, adjust=False).mean().iloc[-1])
-    candidates_sup = [v for v in [s1, s2, l20, e50, e200] if v < ltp]
-    candidates_res = [v for v in [r1, r2, r20, e50, e200] if v > ltp]
-    sup = max(candidates_sup) if candidates_sup else round(ltp * 0.97, 2)
-    res = min(candidates_res) if candidates_res else round(ltp * 1.03, 2)
+    sup = max([v for v in [s1, s2, l20, e50, e200] if v < ltp],
+              default=round(ltp * 0.97, 2))
+    res = min([v for v in [r1, r2, r20, e50, e200] if v > ltp],
+              default=round(ltp * 1.03, 2))
     return {
         "PP": round(pp, 2),
         "R1": round(r1, 2), "R2": round(r2, 2),
@@ -451,12 +518,15 @@ def compute_key_levels(df: pd.DataFrame, ltp: float) -> dict:
 
 def get_fundamental_info(symbol: str) -> dict:
     try:
+        _yf_throttle()
         info = _yf_ticker(symbol).info or {}
+        if "Invalid Crumb" in str(info):
+            _yahoo_session.invalidate()
+            return {}
         return {
             "sector":         info.get("sector", "N/A"),
             "industry":       info.get("industry", "N/A"),
-            "company_name":   info.get("longName",
-                              info.get("shortName", symbol)),
+            "company_name":   info.get("longName", info.get("shortName", symbol)),
             "market_cap":     info.get("marketCap", 0) or 0,
             "pe_ratio":       info.get("trailingPE", 0) or 0,
             "pb_ratio":       info.get("priceToBook", 0) or 0,
@@ -513,19 +583,19 @@ def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
     score += 10 if ap < 2 else (7 if ap < 4 else (4 if ap < 6 else 0))
     if fund:
         pe  = fund.get("pe_ratio", 0)
-        score += 15 if pe and pe<20 else (10 if pe and pe<30
-                 else (5 if pe and pe<40 else 0))
+        score += 15 if pe and pe < 20 else (10 if pe and pe < 30
+                 else (5 if pe and pe < 40 else 0))
         roe = fund.get("roe", 0)
-        score += 15 if roe>20 else (12 if roe>15
-                 else (8 if roe>10 else (4 if roe>5 else 0)))
+        score += 15 if roe > 20 else (12 if roe > 15
+                 else (8 if roe > 10 else (4 if roe > 5 else 0)))
         pb  = fund.get("pb_ratio", 0)
-        score += 10 if 1<pb<3 else (8 if 0<pb<=1
-                 else (5 if pb<5 and pb>0 else 0))
+        score += 10 if 1 < pb < 3 else (8 if 0 < pb <= 1
+                 else (5 if 0 < pb < 5 else 0))
         div = fund.get("dividend_yield", 0)
-        score += 10 if div>3 else (7 if div>2 else (4 if div>1 else 0))
+        score += 10 if div > 3 else (7 if div > 2 else (4 if div > 1 else 0))
         mc  = fund.get("market_cap", 0)
-        score += 10 if mc>50000e7 else (7 if mc>10000e7
-                 else (4 if mc>1000e7 else 0))
+        score += 10 if mc > 50000e7 else (7 if mc > 10000e7
+                 else (4 if mc > 1000e7 else 0))
     return min(score, 100)
 
 # ─────────────────────────────────────────
@@ -551,8 +621,8 @@ def rule_based_commentary(
     )
     return (
         f"📌 Trend & Momentum:\n"
-        f"{company} is trading {direction} vs prev close in a {trend.lower()} "
-        f"trend. MACD shows a {macd_note} confirming momentum.\n\n"
+        f"{company} is trading {direction} vs prev close in a {trend.lower()} trend. "
+        f"MACD shows a {macd_note} confirming momentum.\n\n"
         f"🎯 Key Levels:\n"
         f"• Support:    ₹{levels['Support']:.2f}\n"
         f"• Resistance: ₹{levels['Resistance']:.2f}\n"
@@ -576,52 +646,43 @@ def stock_ai_advisory(symbol: str,
                        user_id: Optional[int] = None) -> str:
     sym = normalize_symbol(symbol)
     try:
-        logger.info(f"── Analyzing {sym}.NS ──")
+        logger.info(f"── Analyzing {sym} ──")
 
-        # 1. Live CMP (multi-source waterfall)
         ltp, price_source = get_live_price(sym)
         if ltp == 0.0:
             return (
                 f"❌ <b>Cannot fetch price for {sym}</b>\n\n"
                 f"Possible reasons:\n"
-                f"• Symbol not on NSE/BSE (check exact NSE code)\n"
-                f"• Data provider temporarily unavailable\n"
-                f"• Market holiday or after-hours\n\n"
-                f"Valid examples: RELIANCE, TCS, HDFCBANK, SBIN, "
-                f"INFY, M&M, BAJAJ-AUTO\n"
-                f"For SCI → use <b>SCI</b> (Shipping Corp of India ✅)"
+                f"• Symbol not listed on NSE/BSE\n"
+                f"• Yahoo Finance crumb/cookie expired\n"
+                f"• All data providers unavailable\n\n"
+                f"Please try again in 30 seconds.\n"
+                f"Valid examples: RELIANCE, TCS, HDFCBANK, SBIN, INFY, M&M"
             )
 
-        # 2. History (1y daily for indicators)
         df = safe_history(sym)
         if df.empty:
-            return (
-                f"❌ No historical data for <b>{sym}</b>.\n"
-                f"Symbol may be delisted or unavailable."
-            )
+            return f"❌ No historical data for <b>{sym}</b>."
         if len(df) < 60:
-            return f"❌ Insufficient history for {sym} (need ≥60 days)."
+            return f"❌ Insufficient history for {sym} (got {len(df)} days, need ≥60)."
 
-        # 3. Inject live price into last candle for accurate indicators
-        close        = df["Close"].copy()
+        close          = df["Close"].copy()
         close.iloc[-1] = ltp
-        prev         = float(df["Close"].iloc[-2]) if len(df) > 1 else ltp
+        prev           = float(df["Close"].iloc[-2]) if len(df) > 1 else ltp
 
-        # 4. Fundamentals
         fund    = get_fundamental_info(sym)
         company = fund.get("company_name", sym)
 
-        # 5. Technical indicators
-        e20    = float(ema(close, 20).iloc[-1])
-        e50    = float(ema(close, 50).iloc[-1])
-        e200   = float(ema(close, 200).iloc[-1])
-        rv     = float(rsi(close, 14).iloc[-1])
-        mv, sv = macd(close)
-        bu, bm, bl  = bollinger_bands(close)
-        av_val = atr(df)
-        levels = compute_key_levels(df, ltp)
-        trend  = "Bullish" if ltp > e200 else "Bearish"
-        targets = calculate_targets(
+        e20        = float(ema(close, 20).iloc[-1])
+        e50        = float(ema(close, 50).iloc[-1])
+        e200       = float(ema(close, 200).iloc[-1])
+        rv         = float(rsi(close, 14).iloc[-1])
+        mv, sv     = macd(close)
+        bu, bm, bl = bollinger_bands(close)
+        av_val     = atr(df)
+        levels     = compute_key_levels(df, ltp)
+        trend      = "Bullish" if ltp > e200 else "Bearish"
+        targets    = calculate_targets(
             ltp, av_val, trend,
             low_52w=fund.get("low_52w"),
             high_52w=fund.get("high_52w"),
@@ -629,28 +690,20 @@ def stock_ai_advisory(symbol: str,
         quality = calculate_quality_score(df, fund)
         stars   = "⭐" * (quality // 20) + "☆" * (5 - quality // 20)
 
-        # 6. AI Commentary (LLM with structured prompt → rule-based fallback)
         prompt = (
             f"You are a SEBI-registered equity analyst for Indian NSE markets.\n"
             f"Analyze {company} ({sym}.NS) for a retail swing trader.\n"
-            f"Use ONLY the exact data below. Do NOT invent or change any number.\n\n"
+            f"Use ONLY the exact data below.\n\n"
             f"── LIVE DATA ({date.today().strftime('%d-%b-%Y')}) ──\n"
-            f"LTP: ₹{ltp:.2f} | Prev Close: ₹{prev:.2f} | "
-            f"Trend vs 200EMA: {trend}\n"
+            f"LTP: ₹{ltp:.2f} | Prev Close: ₹{prev:.2f} | Trend: {trend}\n"
             f"RSI(14): {rv:.1f} | MACD: {mv:.2f} vs Signal: {sv:.2f}\n"
             f"EMA20: {e20:.2f} | EMA50: {e50:.2f} | EMA200: {e200:.2f}\n"
             f"BB Upper: {bu:.2f} | Mid: {bm:.2f} | Lower: {bl:.2f}\n"
             f"ATR(14): {av_val:.2f}\n"
-            f"Nearest Support: ₹{levels['Support']:.2f} | "
-            f"Resistance: ₹{levels['Resistance']:.2f}\n"
-            f"Pivot PP: {levels['PP']:.2f} | "
-            f"R1: {levels['R1']:.2f} | S1: {levels['S1']:.2f}\n"
-            f"20D High: ₹{levels['High_20D']:.2f} | "
-            f"20D Low: ₹{levels['Low_20D']:.2f}\n"
-            f"P/E: {fund.get('pe_ratio',0):.2f} | "
-            f"P/B: {fund.get('pb_ratio',0):.2f} | "
-            f"ROE: {fund.get('roe',0):.1f}% | "
-            f"Div: {fund.get('dividend_yield',0):.2f}%\n"
+            f"Support: ₹{levels['Support']:.2f} | Resistance: ₹{levels['Resistance']:.2f}\n"
+            f"PP: {levels['PP']:.2f} | R1: {levels['R1']:.2f} | S1: {levels['S1']:.2f}\n"
+            f"P/E: {fund.get('pe_ratio',0):.2f} | P/B: {fund.get('pb_ratio',0):.2f} | "
+            f"ROE: {fund.get('roe',0):.1f}% | Div: {fund.get('dividend_yield',0):.2f}%\n"
             f"Quality Score: {quality}/100\n\n"
             f"── REPLY IN EXACTLY THIS FORMAT ──\n"
             f"📌 Trend & Momentum:\n<2 sentences>\n\n"
@@ -661,7 +714,7 @@ def stock_ai_advisory(symbol: str,
             f"⚡ Entry Strategy:\n<1-2 sentences>\n\n"
             f"🛑 Risk Management:\n"
             f"• Stop Loss:   ₹{targets['stop_loss']:.2f}\n"
-            f"• Risk Factor: <High/Medium/Low based on ATR>\n\n"
+            f"• Risk Factor: <High/Medium/Low>\n\n"
             f"🔮 Outlook (7–14 days):\n<1 sentence>\n\n"
             f"⚠️ Note: Educational example, not a recommendation."
         )
@@ -676,54 +729,39 @@ def stock_ai_advisory(symbol: str,
             f"📊 <b>DEEP ANALYSIS: {sym}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🏢 {company}\n"
-            f"🏭 Sector: {fund.get('sector','N/A')} | "
-            f"{fund.get('industry','N/A')}\n"
-            f"💰 LTP: ₹{ltp:.2f}  ✅ {price_source}\n"
-            f"📉 Prev Close: ₹{prev:.2f}\n"
-            f"📈 52W: ₹{fund.get('low_52w',0):.2f} – "
-            f"₹{fund.get('high_52w',0):.2f}\n"
-            f"📊 Vol: {fund.get('volume',0):,} | "
-            f"Avg: {fund.get('avg_volume',0):,}\n"
-            f"📅 As of: {date.today().strftime('%d-%b-%Y')}\n\n"
+            f"🏭 {fund.get('sector','N/A')} | {fund.get('industry','N/A')}\n"
+            f"💰 LTP: ₹{ltp:.2f}  {price_source}\n"
+            f"📉 Prev: ₹{prev:.2f} | "
+            f"52W: ₹{fund.get('low_52w',0):.0f}–₹{fund.get('high_52w',0):.0f}\n"
+            f"📊 Vol: {fund.get('volume',0):,} | Avg: {fund.get('avg_volume',0):,}\n"
+            f"📅 {date.today().strftime('%d-%b-%Y')}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 <b>FUNDAMENTALS</b>\n"
-            f"🏦 MCap: ₹{fund.get('market_cap',0)/10_000_000:.1f} Cr\n"
-            f"📈 P/E: {fund.get('pe_ratio',0):.2f} | "
-            f"P/B: {fund.get('pb_ratio',0):.2f}\n"
-            f"📊 ROE: {fund.get('roe',0):.1f}% | "
-            f"Div Yield: {fund.get('dividend_yield',0):.2f}%\n\n"
+            f"MCap: ₹{fund.get('market_cap',0)/10_000_000:.0f} Cr | "
+            f"P/E: {fund.get('pe_ratio',0):.1f} | P/B: {fund.get('pb_ratio',0):.1f}\n"
+            f"ROE: {fund.get('roe',0):.1f}% | Div: {fund.get('dividend_yield',0):.2f}%\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 <b>TECHNICALS</b>\n"
-            f"RSI(14): {rv:.1f} | MACD: {mv:.2f} vs Sig: {sv:.2f}\n"
-            f"BB: U{bu} | M{bm} | L{bl}\n"
+            f"RSI: {rv:.1f} | MACD: {mv:.2f} vs {sv:.2f} | Trend: {trend}\n"
             f"EMA20: {e20:.2f} | EMA50: {e50:.2f} | EMA200: {e200:.2f}\n"
-            f"ATR(14): {av_val:.2f} | Trend: {trend}\n"
-            f"🟢 Support: ₹{levels['Support']:.2f}   "
-            f"🔴 Resistance: ₹{levels['Resistance']:.2f}\n"
-            f"Pivot PP: ₹{levels['PP']:.2f} | "
-            f"R1: ₹{levels['R1']:.2f} | S1: ₹{levels['S1']:.2f}\n"
-            f"20D High: ₹{levels['High_20D']:.2f} | "
-            f"20D Low: ₹{levels['Low_20D']:.2f}\n\n"
+            f"BB: U{bu} M{bm} L{bl} | ATR: {av_val:.2f}\n"
+            f"🟢 Sup: ₹{levels['Support']:.2f} | 🔴 Res: ₹{levels['Resistance']:.2f}\n"
+            f"PP: ₹{levels['PP']:.2f} | R1: ₹{levels['R1']:.2f} | S1: ₹{levels['S1']:.2f}\n"
+            f"20D H/L: ₹{levels['High_20D']:.2f} / ₹{levels['Low_20D']:.2f}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 <b>PRICE TARGETS</b>\n"
-            f"Short (1W/1M/3M): "
-            f"₹{targets['short_term']['1W']} / "
-            f"₹{targets['short_term']['1M']} / "
-            f"₹{targets['short_term']['3M']}\n"
-            f"Long  (6M/1Y/2Y): "
-            f"₹{targets['long_term']['6M']} / "
-            f"₹{targets['long_term']['1Y']} / "
-            f"₹{targets['long_term']['2Y']}\n"
+            f"Short 1W/1M/3M: ₹{targets['short_term']['1W']} / "
+            f"₹{targets['short_term']['1M']} / ₹{targets['short_term']['3M']}\n"
+            f"Long  6M/1Y/2Y: ₹{targets['long_term']['6M']} / "
+            f"₹{targets['long_term']['1Y']} / ₹{targets['long_term']['2Y']}\n"
             f"🛑 Stop Loss: ₹{targets['stop_loss']}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 <b>QUALITY SCORE: {quality}/100</b> {stars}\n\n"
+            f"📊 <b>Quality: {quality}/100</b> {stars}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🤖 <b>AI COMMENTARY</b>\n"
-            f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+            f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
             f"{ai_comment}\n"
-            f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n"
-            f"⚠️ <i>Educational purpose only. "
-            f"Not SEBI investment advice.</i>"
+            f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+            f"⚠️ <i>Educational only. Not SEBI advice.</i>"
         )
 
     except Exception as e:
@@ -749,6 +787,7 @@ def get_advance_decline():
     sp  = defaultdict(lambda: {"adv": 0, "dec": 0})
     for sym in NIFTY50:
         try:
+            _yf_throttle()
             t    = _yf_ticker(sym)
             hist = t.history(period="2d", auto_adjust=True)
             if hist is None or len(hist) < 2:
@@ -787,25 +826,24 @@ def format_market_breadth() -> str:
                 ind_data[name] = (0, 0)
         except Exception:
             ind_data[name] = (0, 0)
-
     adv, dec, unc, sp = get_advance_decline()
     ts    = datetime.now().strftime("%d-%b-%Y %I:%M %p")
-    lines = [f"📊 <b>Market Breadth (NSE)</b> – {ts}\n"]
+    lines = [f"📊 <b>Market Breadth</b> – {ts}\n"]
     for name, (last, chg) in ind_data.items():
         arrow = "🟢" if chg > 0 else "🔴" if chg < 0 else "⚪"
         lines.append(f"{arrow} {name}: {last:,.2f} ({chg:+.2f}%)")
-    lines.append(
-        f"\n📈 Advances: {adv} | 📉 Declines: {dec} | ⚖️ Unchanged: {unc}"
-    )
     ratio = adv / dec if dec else adv
-    lines.append(f"🔄 A/D Ratio: {ratio:.2f}\n\n🏭 <b>Sector Snapshot</b>")
+    lines.append(
+        f"\n📈 Adv: {adv} | 📉 Dec: {dec} | ⚖️ Unch: {unc} | "
+        f"A/D: {ratio:.2f}\n\n🏭 <b>Top Sectors</b>"
+    )
     top5 = sorted(sp.items(),
                   key=lambda x: x[1]["adv"] - x[1]["dec"],
                   reverse=True)[:5]
     for sector, d in top5:
         net   = d["adv"] - d["dec"]
         arrow = "🟢" if net > 0 else "🔴" if net < 0 else "⚪"
-        lines.append(f"{arrow} {sector}: {d['adv']} up, {d['dec']} down")
+        lines.append(f"{arrow} {sector}: {d['adv']}↑ {d['dec']}↓")
     return "\n".join(lines)
 
 # ─────────────────────────────────────────
@@ -842,7 +880,7 @@ def format_news(news_list: list, title: str) -> str:
 
 def get_market_news() -> str:
     return format_news(
-        get_tavily_news("Indian stock market NSE BSE"), "Market News"
+        get_tavily_news("Indian stock market NSE BSE news today"), "Market News"
     )
 
 # ─────────────────────────────────────────
@@ -856,6 +894,7 @@ CANDIDATES = [
 
 def score_stock(symbol: str) -> Optional[dict]:
     try:
+        _yf_throttle()
         t    = _yf_ticker(symbol)
         info = t.info or {}
         hist = t.history(period="6mo", auto_adjust=True)
@@ -879,12 +918,13 @@ def score_stock(symbol: str) -> Optional[dict]:
         score  = max(0, min(10, score))
         rating = (
             "Strong Buy" if score >= 8 else
-            "Buy" if score >= 6 else
-            "Hold" if score >= 4 else "Avoid"
+            "Buy"        if score >= 6 else
+            "Hold"       if score >= 4 else "Avoid"
         )
-        return {"symbol": symbol, "score": round(score, 1),
-                "rating": rating, "mcap": mc,
-                "sector": info.get("sector", "Other")}
+        return {
+            "symbol": symbol, "score": round(score, 1), "rating": rating,
+            "mcap": mc, "sector": info.get("sector", "Other"),
+        }
     except Exception as e:
         logger.error(f"Score error {symbol}: {e}")
         return None
@@ -912,15 +952,12 @@ def format_portfolio(portfolio: list, risk_profile: str) -> str:
     if not portfolio:
         return "❌ No suitable stocks found for this risk profile."
     lines = [
-        f"💼 <b>AI Portfolio ({risk_profile.capitalize()} Risk)</b>",
-        "CFA-style scoring (technical + fundamental):\n",
+        f"💼 <b>AI Portfolio ({risk_profile.capitalize()} Risk)</b>\n",
     ]
     for item in portfolio:
         lines.append(
-            f"• {item['symbol']} – <b>{item['score']}/10</b> "
-            f"({item['rating']})\n"
-            f"  Allocation: {item['allocation']}% | "
-            f"{item.get('sector','N/A')}"
+            f"• {item['symbol']} – <b>{item['score']}/10</b> ({item['rating']})\n"
+            f"  Allocation: {item['allocation']}% | {item.get('sector','N/A')}"
         )
     lines.append("\n⚠️ Educational purpose only. Consult your advisor.")
     return "\n".join(lines)
@@ -967,60 +1004,43 @@ def start_cmd(m):
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Stock Analysis")
 def ask_symbol(m):
-    msg = bot.reply_to(
-        m, "📝 Send NSE symbol (e.g. RELIANCE, TCS, SBIN, M&M):"
-    )
+    msg = bot.reply_to(m, "📝 Send NSE symbol (e.g. RELIANCE, TCS, SBIN, M&M):")
     bot.register_next_step_handler(msg, process_symbol)
 
 def process_symbol(m):
     sym = normalize_symbol(m.text.strip())
     if not re.match(r"^[A-Z0-9\-\&\.]+$", sym):
-        bot.reply_to(
-            m, "❌ Invalid symbol. Use NSE code like RELIANCE or TCS."
-        )
+        bot.reply_to(m, "❌ Invalid symbol. Use NSE code like RELIANCE or TCS.")
         return
     allowed, remaining, limit = can_use_llm(m.from_user.id)
     if not allowed:
-        bot.reply_to(
-            m,
-            f"❌ You've used all {limit} analyses today. "
-            f"Try again tomorrow.",
-        )
+        bot.reply_to(m, f"❌ Used all {limit} analyses today. Try again tomorrow.")
         return
     bot.send_chat_action(m.chat.id, "typing")
     analysis = stock_ai_advisory(sym, user_id=m.from_user.id)
     register_llm_usage(m.from_user.id)
-    add_history_item(m.from_user.id, f"Stock analysis: {sym}",
-                     analysis, "stock")
+    add_history_item(m.from_user.id, f"Stock analysis: {sym}", analysis, "stock")
     if remaining - 1 <= 3:
         analysis += f"\n\n⚠️ {remaining - 1} AI calls left today."
     bot.reply_to(m, analysis, parse_mode="HTML")
 
-@bot.message_handler(
-    func=lambda m: m.text == "📊 Market Breadth"
-)
+@bot.message_handler(func=lambda m: m.text == "📊 Market Breadth")
 def market_breadth_cmd(m):
     bot.send_chat_action(m.chat.id, "typing")
     bot.reply_to(m, format_market_breadth(), parse_mode="HTML")
 
 @bot.message_handler(
-    func=lambda m: m.text in [
-        "💼 Conservative", "💼 Moderate", "💼 Aggressive"
-    ]
+    func=lambda m: m.text in ["💼 Conservative", "💼 Moderate", "💼 Aggressive"]
 )
 def portfolio_cmd(m):
     risk = m.text.split()[1].lower()
     bot.send_chat_action(m.chat.id, "typing")
     portfolio = suggest_portfolio(risk)
     text = format_portfolio(portfolio, risk)
-    add_history_item(
-        m.from_user.id, f"Portfolio suggestion ({risk})", text, "portfolio"
-    )
+    add_history_item(m.from_user.id, f"Portfolio suggestion ({risk})", text, "portfolio")
     bot.reply_to(m, text, parse_mode="HTML")
 
-@bot.message_handler(
-    func=lambda m: m.text == "📈 Swing (Conservative)"
-)
+@bot.message_handler(func=lambda m: m.text == "📈 Swing (Conservative)")
 def swing_conservative(m):
     if not SWING_AVAILABLE:
         bot.reply_to(m, "⚠️ swing_trades.py not found.")
@@ -1028,9 +1048,7 @@ def swing_conservative(m):
     bot.send_chat_action(m.chat.id, "typing")
     bot.reply_to(m, get_swing_trades("conservative"))
 
-@bot.message_handler(
-    func=lambda m: m.text == "📈 Swing (Aggressive)"
-)
+@bot.message_handler(func=lambda m: m.text == "📈 Swing (Aggressive)")
 def swing_aggressive(m):
     if not SWING_AVAILABLE:
         bot.reply_to(m, "⚠️ swing_trades.py not found.")
@@ -1053,8 +1071,10 @@ def usage_cmd(m):
     used = limit - remaining
     bot.reply_to(
         m,
-        f"📊 AI Calls Used: {used}/{limit}\n"
-        f"Remaining today: {remaining}",
+        f"📊 <b>AI Usage Today</b>\n"
+        f"Used:      {used}/{limit}\n"
+        f"Remaining: {remaining}",
+        parse_mode="HTML",
     )
 
 @bot.message_handler(commands=["history"])
@@ -1066,20 +1086,11 @@ def show_history(m):
         return
     markup = InlineKeyboardMarkup()
     for item in items:
-        preview = (
-            item["prompt"][:32]
-            + ("…" if len(item["prompt"]) > 32 else "")
-        )
-        markup.add(
-            InlineKeyboardButton(
-                preview, callback_data=f"hist_{item['id']}"
-            )
-        )
+        preview = item["prompt"][:32] + ("…" if len(item["prompt"]) > 32 else "")
+        markup.add(InlineKeyboardButton(preview, callback_data=f"hist_{item['id']}"))
     bot.send_message(m.chat.id, "📋 Recent queries:", reply_markup=markup)
 
-@bot.callback_query_handler(
-    func=lambda c: c.data.startswith("hist_")
-)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("hist_"))
 def history_callback(call):
     uid  = call.from_user.id
     iid  = int(call.data.split("_")[1])
@@ -1090,36 +1101,29 @@ def history_callback(call):
     if is_history_fresh(item):
         bot.send_message(
             uid,
-            f"📎 [CACHED]\n\n{item['response']}\n\n"
-            f"<i>Saved your quota!</i>",
+            f"📎 [CACHED]\n\n{item['response']}\n\n<i>Saved your quota!</i>",
             parse_mode="HTML",
         )
         bot.answer_callback_query(call.id)
     else:
         bot.answer_callback_query(call.id, "Fetching fresh data...")
         if item["type"] == "stock":
-            sym  = normalize_symbol(
-                item["prompt"].replace("Stock analysis:", "").strip()
-            )
+            sym  = normalize_symbol(item["prompt"].replace("Stock analysis:", "").strip())
             resp = stock_ai_advisory(sym, user_id=uid)
             register_llm_usage(uid)
             add_history_item(uid, item["prompt"], resp, "stock")
         elif item["type"] == "portfolio":
             risk = (
-                item["prompt"]
-                .replace("Portfolio suggestion (", "")
-                .replace(")", "")
-                .strip()
+                item["prompt"].replace("Portfolio suggestion (", "").replace(")", "").strip()
             )
             resp = format_portfolio(suggest_portfolio(risk), risk)
             add_history_item(uid, item["prompt"], resp, "portfolio")
         else:
-            resp = call_llm_with_limits(uid, item["prompt"],
-                                        item["type"])
+            resp = call_llm_with_limits(uid, item["prompt"], item["type"])
         bot.send_message(uid, resp, parse_mode="HTML")
 
 # ─────────────────────────────────────────
-# FLASK HEALTH  (Render port binding fix)
+# FLASK HEALTH SERVER  (Render port binding)
 # ─────────────────────────────────────────
 flask_app = Flask(__name__)
 
@@ -1132,16 +1136,16 @@ def health():
     return {"status": "healthy", "time": datetime.now().isoformat()}, 200
 
 def run_flask():
-    flask_app.run(
-        host="0.0.0.0", port=PORT,
-        debug=False, use_reloader=False,
-    )
+    flask_app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
 # ─────────────────────────────────────────
 # MAIN ENTRY POINT
 # ─────────────────────────────────────────
 if __name__ == "__main__":
     logger.info(f"Starting AI Stock Advisor Pro on port {PORT}")
+    # Pre-warm Yahoo session on startup
+    logger.info("Pre-warming Yahoo Finance session...")
+    _yahoo_session.get()
     bot.remove_webhook()
     time.sleep(1)
     threading.Thread(target=run_flask, daemon=True).start()
@@ -1149,9 +1153,7 @@ if __name__ == "__main__":
     while True:
         try:
             bot.infinity_polling(
-                skip_pending=True,
-                timeout=30,
-                long_polling_timeout=20,
+                skip_pending=True, timeout=30, long_polling_timeout=20,
             )
         except Exception as e:
             logger.error(f"Polling crashed: {e}. Restarting in 5s...")
