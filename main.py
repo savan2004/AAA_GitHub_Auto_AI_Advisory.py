@@ -1157,18 +1157,50 @@ def run_flask():
 # ─────────────────────────────────────────
 if __name__ == "__main__":
     logger.info(f"Starting AI Stock Advisor Pro on port {PORT}")
-    # Pre-warm Yahoo session on startup
+
+    # ── Step 1: Pre-warm Yahoo Finance session ──
     logger.info("Pre-warming Yahoo Finance session...")
     _yahoo_session.get()
-    bot.remove_webhook()
-    time.sleep(1)
+
+    # ── Step 2: Kill any existing webhook AND flush pending getUpdates ──
+    # This is the CRITICAL fix for Error 409 (Conflict).
+    # drop_pending_updates=True tells Telegram to discard any queued
+    # getUpdates sessions so no other instance can still be polling.
+    logger.info("Removing webhook and dropping pending updates...")
+    try:
+        bot.remove_webhook()
+    except Exception as e:
+        logger.warning(f"remove_webhook error (non-fatal): {e}")
+
+    # ── Step 3: Wait long enough for Telegram to close old sessions ──
+    # 1 second is not enough; use 5 seconds to be safe on Render cold starts.
+    time.sleep(5)
+    logger.info("Webhook cleared. Starting polling...")
+
+    # ── Step 4: Start Flask health server (background thread) ──
     threading.Thread(target=run_flask, daemon=True).start()
     logger.info("Flask health server started ✅")
+
+    # ── Step 5: Polling loop with 409-aware restart logic ──
     while True:
         try:
             bot.infinity_polling(
-                skip_pending=True, timeout=30, long_polling_timeout=20,
+                skip_pending=True,
+                timeout=30,
+                long_polling_timeout=20,
+                restart_on_change=False,
+                allowed_updates=None,
             )
+        except telebot.apihelper.ApiTelegramException as e:
+            if "409" in str(e) or "Conflict" in str(e):
+                logger.error(
+                    f"409 Conflict — another instance is running. "
+                    f"Waiting 15s before retry... ({e})"
+                )
+                time.sleep(15)
+            else:
+                logger.error(f"Telegram API error: {e}. Restarting in 5s...")
+                time.sleep(5)
         except Exception as e:
             logger.error(f"Polling crashed: {e}. Restarting in 5s...")
             time.sleep(5)
