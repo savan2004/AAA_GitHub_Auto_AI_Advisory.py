@@ -245,10 +245,29 @@ def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
         "recent_low": recent_low,
     }
 
-
 # --- AI explanation (optional) ---
 def _ai_call(prompt: str, max_tokens: int = 600) -> str:
     if GROQ_API_KEY:
         try:
             client = Groq(api_key=GROQ_API_KEY)
             resp = client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                temperature=0.35,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.warning(f"Groq swing error: {e}")
+
+    if GEMINI_API_KEY:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            resp  = model.generate_content(prompt)
+            return (getattr(resp, "text", "") or "").strip()
+        except Exception as e:
+            logger.warning(f"Gemini swing error: {e}")
+
+    return ""
