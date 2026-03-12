@@ -1319,8 +1319,8 @@ if __name__ == "__main__":
                     f"409 Conflict — another instance is running. "
                     f"60s 15s before retry... ({e})"
                 )
-                time.sleep(60)            else:
-                logger.error(f"Telegram API error: {e}. Restarting in 5s...")
+                time.sleep(60)
+            else:                logger.error(f"Telegram API error: {e}. Restarting in 5s...")
                 time.sleep(5)
         except Exception as e:
             logger.error(f"Polling crashed: {e}. Restarting in 5s...")
