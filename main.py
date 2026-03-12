@@ -2,7 +2,7 @@
 # ROOT FIX: Custom YahooSession with auto crumb-refresh via curl_cffi
 # Fixes: Invalid Crumb, 429 rate-limit, .NS.NS bug, AI fallback, Render port
 # ─────────────────────────────────────────────────────────────────
-import os, re, time, json, logging, threading
+import os, re, time, json, logging, threading, random
 from datetime import datetime, date
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
@@ -1010,6 +1010,13 @@ SMALLCAP_STOCKS = [
     "APOLLOHOSP","AUROPHARMA","SANOFI","GMRINFRA","ADANIGREEN",
     "ADANIPOWER","ADANITRANS","LICHSGFIN"
 ]
+
+    # Random candidate selection from all pools
+CANDIDATES = (
+    random.sample(NIFTY50_LARGE, min(15, len(NIFTY50_LARGE))) +
+    random.sample(MIDCAP_STOCKS, min(10, len(MIDCAP_STOCKS))) +
+    random.sample(SMALLCAP_STOCKS, min(10, len(SMALLCAP_STOCKS)))
+)
 score_cache = {}
 SCORE_CACHE_TTL = 3600  # Cache for 1 hour
 
