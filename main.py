@@ -408,7 +408,7 @@ def _gemini_call(prompt: str, max_tokens: int) -> Optional[str]:
     try:
         import google.generativeai as genai
         genai.configure(api_key=GEMINI_API_KEY)
-        for mname in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
+                for mname in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
             try:
                 model = genai.GenerativeModel(
                     model_name=mname,
@@ -428,16 +428,18 @@ def _gemini_call(prompt: str, max_tokens: int) -> Optional[str]:
         logger.error(f"Gemini client error: {e}")
     return None
 
-def actual_llm_call(prompt: str, max_tokens: int = 450) -> str:
-    text = _groq_call(prompt, max_tokens)
-    if text:
-        return text
-    text = _gemini_call(prompt, max_tokens)
-    if text:
-        return text
+def actual_llm_call(prompt: str, max_tokens: int = 800) -> str:
+    # Try Gemini first (primary when GROQ_API_KEY is empty)
+    if GEMINI_API_KEY:
+        text = _gemini_call(prompt, max_tokens)
+        if text:
+            return text
+    if GROQ_API_KEY:
+        text = _groq_call(prompt, max_tokens)
+        if text:
+            return text
     logger.warning("All LLM providers failed — rule-based fallback active")
     return ""
-
 def call_llm_with_limits(uid: int, prompt: str,
                           itype: str = "analysis") -> str:
     allowed, remaining, limit = can_use_llm(uid)
