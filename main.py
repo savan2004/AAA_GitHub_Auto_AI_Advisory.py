@@ -3,7 +3,7 @@
 # Fixes: Invalid Crumb, 429 rate-limit, .NS.NS bug, AI fallback, Render port
 # ─────────────────────────────────────────────────────────────────
 import os, re, time, json, logging, threading, random
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
@@ -18,8 +18,7 @@ from telebot.types import (
 from flask import Flask
 
 # ─────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────
+IST = timezone(timedelta(hours=5, minutes=30))  # India Standard Time (UTC+5:30)
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
@@ -292,7 +291,7 @@ def safe_history(symbol: str, period: str = "1y",
                     raise_errors=False,
                 )
                 if df is not None and not df.empty:
-                    df = df[df.index.normalize() <= pd.Timestamp(date.today(), tz=df.index.tz)]
+                    df = df[df.index.normalize() <= pd.Timestamp(datetime.now(IST).date(), tz=df.index.tz)]
                     logger.info(f"{symbol}: {len(df)} candles ({'BSE' if bse else 'NSE'})")
                     return df.copy()
             except Exception as e:
@@ -307,7 +306,7 @@ def safe_history(symbol: str, period: str = "1y",
 usage_store: Dict[int, Dict] = {}
 
 def get_today_str() -> str:
-    return date.today().isoformat()
+    return datetime.now(IST).date().isoformat()
 
 def can_use_llm(user_id: int) -> Tuple[bool, int, int]:
     rec   = usage_store.get(user_id)
@@ -798,7 +797,7 @@ def stock_ai_advisory(symbol: str,
             f"You are a SEBI-registered equity analyst for Indian NSE markets.\n"
             f"Analyze {company} ({sym}.NS) for a retail swing trader.\n"
             f"Use ONLY the exact data below.\n\n"
-            f"── LIVE DATA ({date.today().strftime('%d-%b-%Y')}) ──\n"
+            f"── LIVE DATA ({datetime.now(IST).date().strftime('%d-%b-%Y')}) ──\n"
             f"LTP: ₹{ltp:.2f} | Prev Close: ₹{prev:.2f} | Trend: {trend}\n"
             f"RSI(14): {rv:.1f} | MACD: {mv:.2f} vs Signal: {sv:.2f}\n"
             f"EMA20: {e20:.2f} | EMA50: {e50:.2f} | EMA200: {e200:.2f}\n"
@@ -838,7 +837,7 @@ def stock_ai_advisory(symbol: str,
             f"📉 Prev: ₹{prev:.2f} | "
             f"52W: ₹{fund.get('low_52w',0):.0f}–₹{fund.get('high_52w',0):.0f}\n"
             f"📊 Vol: {fund.get('volume',0):,} | Avg: {fund.get('avg_volume',0):,}\n"
-            f"📅 {date.today().strftime('%d-%b-%Y')}\n\n"
+            f"📅 {datetime.now(IST).date().strftime('%d-%b-%Y')}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 <b>FUNDAMENTALS</b>\n"
             f"MCap: ₹{fund.get('market_cap',0)/10_000_000:.0f} Cr | "
@@ -937,7 +936,7 @@ def format_market_breadth() -> str:
         except Exception:
             ind_data[name] = (0, 0)
     adv, dec, unc, sp = get_advance_decline()
-    ts    = datetime.now().strftime("%d-%b-%Y %I:%M %p")
+    ts    = datetime.now(IST).strftime("%d-%b-%Y %I:%M %p")
     lines = [f"📊 <b>Market Breadth</b> – {ts}\n"]
     for name, (last, chg) in ind_data.items():
         arrow = "🟢" if chg > 0 else "🔴" if chg < 0 else "⚪"
@@ -1284,7 +1283,7 @@ def index():
 
 @flask_app.get("/health")
 def health():
-    return {"status": "healthy", "time": datetime.now().isoformat()}, 200
+    return {"status": "healthy", "time": datetime.now(IST).isoformat()}, 200
 
 def run_flask():
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
