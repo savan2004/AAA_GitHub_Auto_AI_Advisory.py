@@ -407,7 +407,7 @@ def _gemini_call(prompt: str, max_tokens: int) -> Optional[str]:
     try:
         import google.generativeai as genai
         genai.configure(api_key=GEMINI_API_KEY)
-        for mname in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
+        for mname in ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b", "gemini-2.0-flash-exp"]:
             try:
                 model = genai.GenerativeModel(
                     model_name=mname,
