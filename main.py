@@ -1297,8 +1297,7 @@ if __name__ == "__main__":
 
     # ── Step 3: Wait long enough for Telegram to close old sessions ──
     # 1 second is not enough; use 5 seconds to be safe on Render cold starts.
-    time.sleep(5)
-    logger.info("Webhook cleared. Starting polling...")
+    time.sleep(30)    logger.info("Webhook cleared. Starting polling...")
 
     # ── Step 4: Start Flask health server (background thread) ──
     threading.Thread(target=run_flask, daemon=True).start()
@@ -1318,10 +1317,9 @@ if __name__ == "__main__":
             if "409" in str(e) or "Conflict" in str(e):
                 logger.error(
                     f"409 Conflict — another instance is running. "
-                    f"Waiting 15s before retry... ({e})"
+                    f"60s 15s before retry... ({e})"
                 )
-                time.sleep(15)
-            else:
+                time.sleep(60)            else:
                 logger.error(f"Telegram API error: {e}. Restarting in 5s...")
                 time.sleep(5)
         except Exception as e:
