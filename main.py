@@ -82,7 +82,7 @@ class YahooSession:
         try:
             self._session = self._make_session()
             # Step 1: Hit Yahoo Finance to get cookies
-            r = self._session.get(
+            _ = self._session.get(
                 "https://finance.yahoo.com",
                 timeout=15,
                 headers={"Accept-Language": "en-US,en;q=0.9"},
@@ -327,7 +327,7 @@ def register_llm_usage(user_id: int) -> None:
     rec = usage_store.get(user_id)
     if rec:
         rec["calls"] += 1
-    
+    else:
         usage_store[user_id] = {"date": get_today_str(), "calls": 1, "tier": "free"}
 
 # ─────────────────────────────────────────
@@ -440,6 +440,7 @@ def actual_llm_call(prompt: str, max_tokens: int = 800) -> str:
             return text
     logger.warning("All LLM providers failed — rule-based fallback active")
     return ""
+
 def call_llm_with_limits(uid: int, prompt: str,
                           itype: str = "analysis") -> str:
     allowed, remaining, limit = can_use_llm(uid)
@@ -643,21 +644,26 @@ def calculate_targets(price: float, av: float, trend: str,
                        low_52w: float = None,
                        high_52w: float = None) -> dict:
     if trend == "Bullish":
-        short = {"1W": price+av*1.2, "1M": price+av*3,  "3M": price+av*6}
-        long_ = {"6M": price+av*12,  "1Y": price+av*20, "2Y": price+av*35}
+        short = {"1W": price + av*1.2, "1M": price + av*3,  "3M": price + av*6}
+        long_ = {"6M": price + av*12,  "1Y": price + av*20, "2Y": price + av*35}
         sl    = price - av * 2
+
         if high_52w:
             cap   = high_52w * 2
             long_ = {k: min(v, cap) for k, v in long_.items()}
-    
-        short = {"1W": price-av*1.2, "1M": price-av*3,  "3M": price-av*6}
-        long_ = {"6M": price-av*10,  "1Y": price-av*15, "2Y": price-av*20}
+
+    else:  # Bearish / non-bullish
+        short = {"1W": price - av*1.2, "1M": price - av*3,  "3M": price - av*6}
+        long_ = {"6M": price - av*10,  "1Y": price - av*15, "2Y": price - av*20}
         sl    = price + av * 2
+
         floor = price * 0.1
         short = {k: max(v, floor) for k, v in short.items()}
         long_ = {k: max(v, floor) for k, v in long_.items()}
+
         if low_52w:
             long_ = {k: max(v, low_52w * 0.9) for k, v in long_.items()}
+
     return {
         "short_term": {k: round(v, 2) for k, v in short.items()},
         "long_term":  {k: round(v, 2) for k, v in long_.items()},
@@ -865,7 +871,6 @@ def stock_ai_advisory(symbol: str,
     except Exception as e:
         logger.exception(f"stock_ai_advisory crashed for {symbol}")
         return f"❌ Analysis failed for {symbol}: {e}"
-
 # ─────────────────────────────────────────
 # MARKET BREADTH
 # ─────────────────────────────────────────
@@ -891,15 +896,22 @@ def get_advance_decline():
             if hist is None or len(hist) < 2:
                 continue
             chg = hist["Close"].iloc[-1] - hist["Close"].iloc[-2]
-            if chg > 0:   adv += 1
-            elif chg < 0: dec += 1
-                            else:
-                    unc += 1
-                    try:                sector = (t.info or {}).get("sector", "Other")
+            if chg > 0:
+                adv += 1
+            elif chg < 0:
+                dec += 1
+            else:
+                unc += 1
+
+            try:
+                sector = (t.info or {}).get("sector", "Other")
             except Exception:
                 sector = "Other"
-            if chg > 0:   sp[sector]["adv"] += 1
-            elif chg < 0: sp[sector]["dec"] += 1
+
+            if chg > 0:
+                sp[sector]["adv"] += 1
+            elif chg < 0:
+                sp[sector]["dec"] += 1
         except Exception:
             continue
     return adv, dec, unc, sp
@@ -984,7 +996,6 @@ def get_market_news() -> str:
 # ─────────────────────────────────────────
 # PORTFOLIO SUGGESTION
 # ─────────────────────────────────────────
-# Index pools for portfolio generation
 NIFTY50_LARGE = [
     "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC",
     "KOTAKBANK","SBIN","BHARTIARTL","LT","WIPRO","HCLTECH","ASIANPAINT",
@@ -1011,17 +1022,17 @@ SMALLCAP_STOCKS = [
     "ADANIPOWER","ADANITRANS","LICHSGFIN"
 ]
 
-    # Random candidate selection from all pools
+# Random candidate selection from all pools
 CANDIDATES = (
     random.sample(NIFTY50_LARGE, min(15, len(NIFTY50_LARGE))) +
     random.sample(MIDCAP_STOCKS, min(10, len(MIDCAP_STOCKS))) +
     random.sample(SMALLCAP_STOCKS, min(10, len(SMALLCAP_STOCKS)))
 )
+
 score_cache = {}
 SCORE_CACHE_TTL = 3600  # Cache for 1 hour
 
 def score_stock(symbol: str) -> Optional[dict]:
-    # 1. Check if valid cache exists
     cached = score_cache.get(symbol)
     if cached and (time.time() - cached['ts']) < SCORE_CACHE_TTL:
         return cached['data']
@@ -1057,7 +1068,6 @@ def score_stock(symbol: str) -> Optional[dict]:
             "symbol": symbol, "score": round(score, 1), "rating": rating,
             "mcap": mc, "sector": info.get("sector", "Other"),
         }
-        # 2. Save the new result to the cache
         score_cache[symbol] = {'data': result, 'ts': time.time()}
         return result
     except Exception as e:
@@ -1151,9 +1161,6 @@ def process_symbol(m):
         return
 
     bot.send_chat_action(m.chat.id, "typing")
-    # ── Separate data fetch from AI advisory ──
-    # Stock data is ALWAYS fetched and returned.
-    # AI commentary is only attempted if quota allows.
     allowed, remaining, limit = can_use_llm(m.from_user.id)
     analysis = stock_ai_advisory(sym, user_id=m.from_user.id, use_ai=allowed)
     if allowed:
@@ -1288,29 +1295,26 @@ def run_flask():
 if __name__ == "__main__":
     logger.info(f"Starting AI Stock Advisor Pro on port {PORT}")
 
-    # ── Step 1: Pre-warm Yahoo Finance session ──
+    # Step 1: Pre-warm Yahoo Finance session
     logger.info("Pre-warming Yahoo Finance session...")
     _yahoo_session.get()
 
-    # ── Step 2: Kill any existing webhook AND flush pending getUpdates ──
-    # This is the CRITICAL fix for Error 409 (Conflict).
-    # drop_pending_updates=True tells Telegram to discard any queued
-    # getUpdates sessions so no other instance can still be polling.
+    # Step 2: Remove webhook
     logger.info("Removing webhook and dropping pending updates...")
     try:
         bot.remove_webhook()
     except Exception as e:
         logger.warning(f"remove_webhook error (non-fatal): {e}")
 
-    # ── Step 3: Wait long enough for Telegram to close old sessions ──
-    # 1 second is not enough; use 5 seconds to be safe on Render cold starts.
+    # Step 3: Wait so Telegram closes old sessions
     time.sleep(30)
     logger.info("Webhook cleared. Starting polling...")
-    # ── Step 4: Start Flask health server (background thread) ──
+
+    # Step 4: Start Flask health server (background thread)
     threading.Thread(target=run_flask, daemon=True).start()
     logger.info("Flask health server started ✅")
 
-    # ── Step 5: Polling loop with 409-aware restart logic ──
+    # Step 5: Polling loop with 409-aware restart logic
     while True:
         try:
             bot.infinity_polling(
@@ -1324,11 +1328,12 @@ if __name__ == "__main__":
             if "409" in str(e) or "Conflict" in str(e):
                 logger.error(
                     f"409 Conflict — another instance is running. "
-                    f"60s 15s before retry... ({e})"
+                    f"Waiting 60s before retry... ({e})"
                 )
                 time.sleep(60)
-            else:                logger.error(f"Telegram API error: {e}. Restarting in 5s...")
+            else:
                 logger.error(f"Telegram API error: {e}. Restarting in 5s...")
-                time.sleep(5)        except Exception as e:
+                time.sleep(5)
+        except Exception as e:
             logger.error(f"Polling crashed: {e}. Restarting in 5s...")
             time.sleep(5)
