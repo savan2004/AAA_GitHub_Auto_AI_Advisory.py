@@ -511,7 +511,7 @@ def compute_key_levels(df: pd.DataFrame, ltp: float) -> dict:
     }
 
 def get_fundamental_info(symbol: str) -> dict:
-    """Fetch fundamentals: tries NSE then BSE, supplements with fast_info."""
+    """Fetch fundamentals: yfinance first, then Finnhub fallback."""
     def _extract(info: dict, fi) -> dict:
         """Build result dict from info + fast_info fallbacks."""
         def _fi(attr, default=0):
@@ -520,12 +520,14 @@ def get_fundamental_info(symbol: str) -> dict:
                 return float(v) if v else default
             except:
                 return default
+
         mc   = info.get("marketCap", 0) or _fi("market_cap")
         h52  = info.get("fiftyTwoWeekHigh", 0) or _fi("year_high")
         l52  = info.get("fiftyTwoWeekLow",  0) or _fi("year_low")
         vol  = info.get("volume",        0) or _fi("three_month_average_volume")
         avol = info.get("averageVolume", 0) or _fi("three_month_average_volume")
         prev = info.get("regularMarketPreviousClose", 0) or _fi("previous_close")
+
         return {
             "sector":         info.get("sector",    "N/A"),
             "industry":       info.get("industry",  "N/A"),
@@ -541,9 +543,22 @@ def get_fundamental_info(symbol: str) -> dict:
             "volume":         int(vol)  if vol  else 0,
             "avg_volume":     int(avol) if avol else 0,
         }
+
+    def _has_any_fundamentals(f: dict) -> bool:
+        """Check if there is at least one non-zero fundamental."""
+        if not f:
+            return False
+        return any([
+            f.get("market_cap", 0),
+            f.get("pe_ratio", 0),
+            f.get("pb_ratio", 0),
+            f.get("roe", 0),
+            f.get("dividend_yield", 0),
+        ])
+
+    # ── 1) yfinance (NSE → BSE) ─────────────────────────
     try:
         _yf_throttle()
-        # ── Try NSE first, then BSE ──
         for bse in [False, True]:
             try:
                 t  = _yf_ticker(symbol, bse=bse)
@@ -552,29 +567,75 @@ def get_fundamental_info(symbol: str) -> dict:
                 if "Invalid Crumb" in str(info):
                     _yahoo_session.invalidate()
                     continue
-                # Consider data "good" if we have company name or market cap
+
                 has_name = bool(info.get("longName") or info.get("shortName"))
                 has_mcap = bool(info.get("marketCap") or getattr(fi, "market_cap", 0))
+
                 if has_name or has_mcap:
                     result = _extract(info, fi)
-                    logger.info(f"Fundamentals {symbol} via {'BSE' if bse else 'NSE'}: "
-                                f"MCap={result['market_cap']:,.0f} name={result['company_name']}")
-                    return result
+                    logger.info(
+                        f"Fundamentals {symbol} via {'BSE' if bse else 'NSE'} "
+                        f"(yfinance): MCap={result['market_cap']:,.0f}"
+                    )
+                    if _has_any_fundamentals(result):
+                        return result
             except Exception as ex:
-                logger.warning(f"Fundamental {symbol} bse={bse}: {ex}")
+                logger.warning(f"Fundamental {symbol} bse={bse} (yfinance): {ex}")
                 continue
-        # ── Fallback: return what we have from fast_info even if info is thin ──
-        try:
-            t  = _yf_ticker(symbol, bse=False)
-            fi = t.fast_info
-            info = t.info or {}
-            return _extract(info, fi)
-        except Exception:
-            pass
-        return {}
     except Exception as e:
-        logger.error(f"Fundamental error {symbol}: {e}")
-        return {}
+        logger.error(f"Fundamental error {symbol} (yfinance): {e}")
+
+    # ── 2) Finnhub fallback (only if key set) ────────────
+    if FINNHUB_API_KEY:
+        try:
+            # Use NSE:SYMBOL first, then BSE:SYMBOL
+            for fmt in [f"NSE:{symbol}", f"BSE:{symbol}"]:
+                try:
+                    r = requests.get(
+                        "https://finnhub.io/api/v1/stock/metric",
+                        params={
+                            "symbol": fmt,
+                            "metric": "all",
+                            "token": FINNHUB_API_KEY,
+                        },
+                        timeout=10,
+                    )
+                    data = r.json() or {}
+                    metric = (data.get("metric") or {})
+                    if not metric:
+                        continue
+
+                    mc   = metric.get("marketCapitalization", 0) * 1e7 if metric.get("marketCapitalization") else 0
+                    pe   = metric.get("peTTM", 0) or 0
+                    pb   = metric.get("pbAnnual", 0) or 0
+                    roe  = metric.get("roeTTM", 0) or 0   # already in %
+                    divy = (metric.get("dividendYieldIndicatedAnnual", 0) or 0) * 100
+
+                    result = {
+                        "sector":         metric.get("sector",    "N/A"),
+                        "industry":       metric.get("industry",  "N/A"),
+                        "company_name":   metric.get("name", symbol),
+                        "market_cap":     mc,
+                        "pe_ratio":       pe,
+                        "pb_ratio":       pb,
+                        "roe":            roe,
+                        "dividend_yield": divy,
+                        "high_52w":       metric.get("52WeekHigh", 0) or 0,
+                        "low_52w":        metric.get("52WeekLow",  0) or 0,
+                        "prev_close":     0,
+                        "volume":         0,
+                        "avg_volume":     0,
+                    }
+                    if _has_any_fundamentals(result):
+                        logger.info(f"Fundamentals {symbol} via Finnhub {fmt}: MCap={result['market_cap']:,.0f}")
+                        return result
+                except Exception as ex:
+                    logger.warning(f"Fundamental {symbol} via Finnhub {fmt}: {ex}")
+        except Exception as e:
+            logger.error(f"Fundamental error {symbol} (Finnhub): {e}")
+
+    logger.warning(f"No usable fundamental data found for {symbol}")
+    return {}
 
 def calculate_targets(price: float, av: float, trend: str,
                        low_52w: float = None,
