@@ -698,7 +698,9 @@ def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
         mc  = fund.get("market_cap", 0)
         score += 10 if mc > 50000e7 else (7 if mc > 10000e7
                  else (4 if mc > 1000e7 else 0))
-    return min(score, 100)
+                return min(score, 100)
+        # No fundamentals: normalize technical score (max 40) to /100
+    return min(int(score * 2.5), 100)
 
 # ─────────────────────────────────────────
 # RULE-BASED COMMENTARY  (guaranteed fallback)
