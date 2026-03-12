@@ -217,3 +217,99 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
             logger.warning(f"Gemini swing error: {e}")
             
     return ""
+
+# ─────────────────────────────────────────
+# SWING TRADE SCANNER
+# ─────────────────────────────────────────
+CANDIDATES = [
+    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "ITC", "SBIN",
+    "BHARTIARTL", "KOTAKBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
+    "MARUTI", "TATAMOTORS", "TITAN", "SUNPHARMA", "ONGC", "NTPC",
+    "M&M", "BAJFINANCE", "AXISBANK", "TECHM", "DRREDDY", "DIVISLAB",
+    "HINDALCO", "JSWSTEEL", "TATASTEEL", "BPCL", "EICHERMOT",
+]
+
+def get_swing_trades(mode: str = "conservative") -> str:
+    """
+    Scan CANDIDATES for swing trade setups.
+    mode="conservative" -> requires score >= 6/8
+    mode="aggressive"   -> requires score >= 5/8
+    Returns a formatted Telegram message string.
+    """
+    # threshold: conservative=6, aggressive=5
+    threshold = 6 if mode == "conservative" else 5
+    today = date.today().strftime("%d-%b-%Y")
+
+    long_picks = []
+    short_picks = []
+
+    for sym in CANDIDATES:
+        try:
+            df = safe_history(sym, period="1y", interval="1d")
+            if df.empty or len(df) < 200:
+                continue
+            for side in ["LONG", "SHORT"]:
+                result = swing_score(df, side)
+                if result["score"] >= threshold:
+                    result["symbol"] = sym
+                    result["side"] = side
+                    if side == "LONG":
+                        long_picks.append(result)
+                    else:
+                        short_picks.append(result)
+        except Exception:
+            continue
+
+    # Sort by score descending
+    long_picks.sort(key=lambda x: x["score"], reverse=True)
+    short_picks.sort(key=lambda x: x["score"], reverse=True)
+
+    label = "Conservative (6+/8)" if mode == "conservative" else "Aggressive (5+/8)"
+    lines = [
+        f"📈 <b>Swing Trades – {label}</b>",
+        f"📅 {today}  |  Threshold: {threshold}/8 conditions\n",
+    ]
+
+    if not long_picks and not short_picks:
+        lines.append("😔 No swing setups found right now. Try again later.")
+        return "\n".join(lines)
+
+    if long_picks:
+        lines.append("🟢 <b>LONG Setups</b>")
+        for p in long_picks[:5]:
+            sym = p["symbol"]
+            ltp = p["ltp"]
+            score = p["score"]
+            details = ", ".join(p["details"][:3])
+            # Basic target/SL using ATR approximation
+            atr_approx = ltp * 0.02
+            sl = round(ltp - 2 * atr_approx, 2)
+            tgt1 = round(ltp + 2 * atr_approx, 2)
+            tgt2 = round(ltp + 4 * atr_approx, 2)
+            lines.append(
+                f"  • <b>{sym}</b> | Score: {score}/8 | LTP: ₹{ltp:.2f}\n"
+                f"    🎯 T1: ₹{tgt1} | T2: ₹{tgt2} | 🛑 SL: ₹{sl}\n"
+                f"    ✅ {details}"
+            )
+        lines.append("")
+
+    if short_picks:
+        lines.append("🔴 <b>SHORT Setups</b>")
+        for p in short_picks[:5]:
+            sym = p["symbol"]
+            ltp = p["ltp"]
+            score = p["score"]
+            details = ", ".join(p["details"][:3])
+            atr_approx = ltp * 0.02
+            sl = round(ltp + 2 * atr_approx, 2)
+            tgt1 = round(ltp - 2 * atr_approx, 2)
+            tgt2 = round(ltp - 4 * atr_approx, 2)
+            lines.append(
+                f"  • <b>{sym}</b> | Score: {score}/8 | LTP: ₹{ltp:.2f}\n"
+                f"    🎯 T1: ₹{tgt1} | T2: ₹{tgt2} | 🛑 SL: ₹{sl}\n"
+                f"    ✅ {details}"
+            )
+        lines.append("")
+
+    lines.append("⚠️ Educational only. Not SEBI-registered advice.")
+    return "\n".join(lines)
