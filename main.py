@@ -327,7 +327,7 @@ def register_llm_usage(user_id: int) -> None:
     rec = usage_store.get(user_id)
     if rec:
         rec["calls"] += 1
-    else:
+    
         usage_store[user_id] = {"date": get_today_str(), "calls": 1, "tier": "free"}
 
 # ─────────────────────────────────────────
@@ -649,7 +649,7 @@ def calculate_targets(price: float, av: float, trend: str,
         if high_52w:
             cap   = high_52w * 2
             long_ = {k: min(v, cap) for k, v in long_.items()}
-    else:
+    
         short = {"1W": price-av*1.2, "1M": price-av*3,  "3M": price-av*6}
         long_ = {"6M": price-av*10,  "1Y": price-av*15, "2Y": price-av*20}
         sl    = price + av * 2
@@ -893,7 +893,7 @@ def get_advance_decline():
             chg = hist["Close"].iloc[-1] - hist["Close"].iloc[-2]
             if chg > 0:   adv += 1
             elif chg < 0: dec += 1
-            else:         unc += 1
+                     unc += 1
             try:
                 sector = (t.info or {}).get("sector", "Other")
             except Exception:
@@ -1321,7 +1321,7 @@ if __name__ == "__main__":
                 )
                 time.sleep(60)
             else:                logger.error(f"Telegram API error: {e}. Restarting in 5s...")
-                time.sleep(5)
-        except Exception as e:
+                logger.error(f"Telegram API error: {e}. Restarting in 5s...")
+                time.sleep(5)        except Exception as e:
             logger.error(f"Polling crashed: {e}. Restarting in 5s...")
             time.sleep(5)
