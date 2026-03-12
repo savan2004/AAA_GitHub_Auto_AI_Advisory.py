@@ -894,8 +894,8 @@ def get_advance_decline():
             if chg > 0:   adv += 1
             elif chg < 0: dec += 1
                 else:
-                    unc += 1            try:
-                sector = (t.info or {}).get("sector", "Other")
+                    unc += 1
+                    try:                sector = (t.info or {}).get("sector", "Other")
             except Exception:
                 sector = "Other"
             if chg > 0:   sp[sector]["adv"] += 1
