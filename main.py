@@ -226,7 +226,6 @@ def _yf_price(symbol: str) -> Optional[float]:
                 logger.warning(f"_yf_price {symbol} attempt {attempt}: {e}")
     return None
 
-
 def _av_price(symbol: str) -> Optional[float]:
     if not ALPHA_VANTAGE_KEY:
         return None
@@ -246,7 +245,6 @@ def _av_price(symbol: str) -> Optional[float]:
             logger.warning(f"AV price error {suffix}: {e}")
     return None
 
-
 def _finnhub_price(symbol: str) -> Optional[float]:
     if not FINNHUB_API_KEY:
         return None
@@ -263,7 +261,6 @@ def _finnhub_price(symbol: str) -> Optional[float]:
         except Exception as e:
             logger.warning(f"Finnhub error {fmt}: {e}")
     return None
-
 
 def get_live_price(symbol: str) -> Tuple[float, str]:
     p = _yf_price(symbol)
@@ -405,7 +402,6 @@ def _groq_call(prompt: str, max_tokens: int) -> Optional[str]:
         logger.error(f"Groq client error: {e}")
     return None
 
-
 def _gemini_call(prompt: str, max_tokens: int) -> Optional[str]:
     if not GEMINI_API_KEY:
         return None
@@ -432,7 +428,6 @@ def _gemini_call(prompt: str, max_tokens: int) -> Optional[str]:
         logger.error(f"Gemini client error: {e}")
     return None
 
-
 def actual_llm_call(prompt: str, max_tokens: int = 450) -> str:
     text = _groq_call(prompt, max_tokens)
     if text:
@@ -442,7 +437,6 @@ def actual_llm_call(prompt: str, max_tokens: int = 450) -> str:
         return text
     logger.warning("All LLM providers failed — rule-based fallback active")
     return ""
-
 
 def call_llm_with_limits(uid: int, prompt: str,
                           itype: str = "analysis") -> str:
@@ -521,8 +515,11 @@ def get_fundamental_info(symbol: str) -> dict:
     def _extract(info: dict, fi) -> dict:
         """Build result dict from info + fast_info fallbacks."""
         def _fi(attr, default=0):
-            try: v = getattr(fi, attr, None); return float(v) if v else default
-            except: return default
+            try:
+                v = getattr(fi, attr, None)
+                return float(v) if v else default
+            except:
+                return default
         mc   = info.get("marketCap", 0) or _fi("market_cap")
         h52  = info.get("fiftyTwoWeekHigh", 0) or _fi("year_high")
         l52  = info.get("fiftyTwoWeekLow",  0) or _fi("year_low")
@@ -679,8 +676,10 @@ def rule_based_commentary(
 # ─────────────────────────────────────────
 # MAIN STOCK ANALYSIS
 # ─────────────────────────────────────────
-def stock_ai_advisory(symbol: str,                       user_id: Optional[int] = None,                       use_ai: bool = True) -> str:
-                                       sym = normalize_symbol(symbol)
+def stock_ai_advisory(symbol: str,
+                      user_id: Optional[int] = None,
+                      use_ai: bool = True) -> str:
+    sym = normalize_symbol(symbol)
     try:
         logger.info(f"── Analyzing {sym} ──")
 
@@ -936,7 +935,6 @@ def score_stock(symbol: str) -> Optional[dict]:
     cached = score_cache.get(symbol)
     if cached and (time.time() - cached['ts']) < SCORE_CACHE_TTL:
         return cached['data']
-        
     try:
         _yf_throttle()
         t    = _yf_ticker(symbol)
@@ -965,16 +963,13 @@ def score_stock(symbol: str) -> Optional[dict]:
             "Buy"        if score >= 6 else
             "Hold"       if score >= 4 else "Avoid"
         )
-        
         result = {
             "symbol": symbol, "score": round(score, 1), "rating": rating,
             "mcap": mc, "sector": info.get("sector", "Other"),
         }
-        
         # 2. Save the new result to the cache
         score_cache[symbol] = {'data': result, 'ts': time.time()}
         return result
-        
     except Exception as e:
         if "Too Many Requests" in str(e) or "429" in str(e):
             time.sleep(30)
@@ -1061,10 +1056,11 @@ def ask_symbol(m):
 
 def process_symbol(m):
     sym = normalize_symbol(m.text.strip())
-    if not re.match(r"^[A-Z0-9\-\&\.]+$", sym):
+    if not re.match(r"^[A-Z0-9\-\\&\.]+$", sym):
         bot.reply_to(m, "❌ Invalid symbol. Use NSE code like RELIANCE or TCS.")
         return
-bot.send_chat_action(m.chat.id, "typing")
+
+    bot.send_chat_action(m.chat.id, "typing")
     # ── Separate data fetch from AI advisory ──
     # Stock data is ALWAYS fetched and returned.
     # AI commentary is only attempted if quota allows.
@@ -1075,7 +1071,10 @@ bot.send_chat_action(m.chat.id, "typing")
         if remaining - 1 <= 3:
             analysis += f"\n\n⚠️ {remaining - 1} AI calls left today."
     else:
-        analysis += f"\n\n💡 <i>AI quota used ({limit}/day). Showing rule-based commentary. Resets tomorrow.</i>"
+        analysis += (
+            f"\n\n💡 <i>AI quota used ({limit}/day). "
+            f"Showing rule-based commentary. Resets tomorrow.</i>"
+        )
     add_history_item(m.from_user.id, f"Stock analysis: {sym}", analysis, "stock")
     bot.reply_to(m, analysis, parse_mode="HTML")
 
