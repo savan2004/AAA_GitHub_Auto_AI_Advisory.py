@@ -893,8 +893,8 @@ def get_advance_decline():
             chg = hist["Close"].iloc[-1] - hist["Close"].iloc[-2]
             if chg > 0:   adv += 1
             elif chg < 0: dec += 1
-                     unc += 1
-            try:
+                else:
+                    unc += 1            try:
                 sector = (t.info or {}).get("sector", "Other")
             except Exception:
                 sector = "Other"
