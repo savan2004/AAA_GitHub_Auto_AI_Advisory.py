@@ -1,12 +1,27 @@
 import os
 import time
+import logging
 from datetime import date
 from collections import deque
 import pandas as pd
 import yfinance as yf
-from yfinance.exceptions import YFRateLimitError
-from groq import Groq
-import google.generativeai as genai
+
+logger = logging.getLogger(__name__)
+
+try:
+    from yfinance.exceptions import YFRateLimitError
+except ImportError:
+    class YFRateLimitError(Exception): pass  # fallback if not available
+
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None  # fallback
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -125,13 +140,14 @@ def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
     - details: list of met conditions
     - price, indicators for display
     """
-    if df.empty or len(df) < 200:
+    if df.empty or len(df) < 100:
         return {"score": 0, "details": [], "ltp": None}
 
     close = df['Close']
     ltp = float(close.iloc[-1])
-    ema50 = ema(close, 50).iloc[-1]
-    ema200 = ema(close, 200).iloc[-1]
+    n = len(close)
+    ema50  = ema(close, min(50,  n-1)).iloc[-1]
+    ema200 = ema(close, min(200, n-1)).iloc[-1]
     bb_mid, bb_upper, bb_lower = bollinger_bands(close, 20, 2)
     bb_mid = bb_mid.iloc[-1]
     bb_upper = bb_upper.iloc[-1]
@@ -172,6 +188,11 @@ def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
         if ltp < recent_low * 1.03: conditions.append("Near recent 20-day low"); score += 1
         if abs(ltp - ema50)/ema50 < 0.03: conditions.append("Price near 50EMA resistance"); score += 1
 
+    # Real ATR calculation
+    h, l, c = df["High"], df["Low"], df["Close"]
+    tr = pd.concat([(h-l), (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
+    atr_val = float(tr.rolling(14).mean().iloc[-1])
+
     return {
         "score": score,
         "details": conditions,
@@ -189,33 +210,36 @@ def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
         "bb_lower": bb_lower,
         "recent_high": recent_high,
         "recent_low": recent_low,
+        "atr_val": atr_val,
     }
 
 # --- AI explanation (optional) ---
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
-    if GROQ_API_KEY:
+    if GROQ_API_KEY and Groq:
         try:
             client = Groq(api_key=GROQ_API_KEY)
             resp = client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role":"system","content":"You are an Indian equity analyst. Be concise."},
+                    {"role": "user", "content": prompt}
+                ],
                 max_tokens=max_tokens,
                 temperature=0.35,
             )
-            return resp.choices[0].message.content or "".strip()
+            return (resp.choices[0].message.content or "").strip()
         except Exception as e:
             logger.warning(f"Groq swing error: {e}")
-            
-    if GEMINI_API_KEY:
+
+    if GEMINI_API_KEY and genai:
         try:
-            import google.generativeai as genai
             genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel("gemini-2.0-flash")
             resp = model.generate_content(prompt)
-            return getattr(resp, "text", "") or "".strip()
+            return (getattr(resp, "text", "") or "").strip()
         except Exception as e:
             logger.warning(f"Gemini swing error: {e}")
-            
+
     return ""
 
 # ─────────────────────────────────────────
@@ -271,7 +295,28 @@ def get_swing_trades(mode: str = "conservative") -> str:
     ]
 
     if not long_picks and not short_picks:
-        lines.append("😔 No swing setups found right now. Try again later.")
+        # Show closest-to-qualifying stocks instead of empty message
+        all_results = []
+        for sym in CANDIDATES:
+            try:
+                df = safe_history(sym, period="1y", interval="1d")
+                if df.empty or len(df) < 100: continue
+                for side in ["LONG", "SHORT"]:
+                    r = swing_score(df, side)
+                    if r["ltp"]:
+                        r["symbol"] = sym
+                        r["side"] = side
+                        all_results.append(r)
+            except Exception:
+                continue
+        all_results.sort(key=lambda x: x["score"], reverse=True)
+        lines.append(f"⚠️ No setups met threshold ({threshold}/8) today.\n")
+        lines.append("📊 <b>Closest setups (informational):</b>")
+        for p in all_results[:3]:
+            lines.append(
+                f"  • {p['symbol']} ({p['side']}) — Score: {p['score']}/8 | ₹{p['ltp']:.2f}"
+            )
+        lines.append("\n⚠️ Educational only.")
         return "\n".join(lines)
 
     if long_picks:
@@ -282,10 +327,11 @@ def get_swing_trades(mode: str = "conservative") -> str:
             score = p["score"]
             details = ", ".join(p["details"][:3])
             # Basic target/SL using ATR approximation
-            atr_approx = ltp * 0.02
-            sl = round(ltp - 2 * atr_approx, 2)
-            tgt1 = round(ltp + 2 * atr_approx, 2)
-            tgt2 = round(ltp + 4 * atr_approx, 2)
+            # Use real ATR from price data
+            atr_val = p.get("atr_val") or ltp * 0.02
+            sl   = round(ltp - 2 * atr_val, 2)
+            tgt1 = round(ltp + 2 * atr_val, 2)
+            tgt2 = round(ltp + 4 * atr_val, 2)
             lines.append(
                 f"  • <b>{sym}</b> | Score: {score}/8 | LTP: ₹{ltp:.2f}\n"
                 f"    🎯 T1: ₹{tgt1} | T2: ₹{tgt2} | 🛑 SL: ₹{sl}\n"
@@ -300,10 +346,10 @@ def get_swing_trades(mode: str = "conservative") -> str:
             ltp = p["ltp"]
             score = p["score"]
             details = ", ".join(p["details"][:3])
-            atr_approx = ltp * 0.02
-            sl = round(ltp + 2 * atr_approx, 2)
-            tgt1 = round(ltp - 2 * atr_approx, 2)
-            tgt2 = round(ltp - 4 * atr_approx, 2)
+            atr_val = p.get("atr_val") or ltp * 0.02
+            sl   = round(ltp + 2 * atr_val, 2)
+            tgt1 = round(ltp - 2 * atr_val, 2)
+            tgt2 = round(ltp - 4 * atr_val, 2)
             lines.append(
                 f"  • <b>{sym}</b> | Score: {score}/8 | LTP: ₹{ltp:.2f}\n"
                 f"    🎯 T1: ₹{tgt1} | T2: ₹{tgt2} | 🛑 SL: ₹{sl}\n"
