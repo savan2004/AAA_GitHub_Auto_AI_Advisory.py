@@ -513,133 +513,198 @@ def compute_key_levels(df: pd.DataFrame, ltp: float) -> dict:
     }
 
 def get_fundamental_info(symbol: str) -> dict:
-    """Fetch fundamentals: yfinance first, then Finnhub fallback."""
-    def _extract(info: dict, fi) -> dict:
-        """Build result dict from info + fast_info fallbacks."""
-        def _fi(attr, default=0):
+    """
+    Robust 4-method fundamental fetcher.
+    Method 1: Yahoo v8 chart API  (PE, EPS, 52w — fast, no crumb)
+    Method 2: Yahoo v10 quoteSummary (ROE, PB, MCap, Sector)
+    Method 3: yfinance fast_info  (52w fallback)
+    Method 4: Finnhub             (if key set)
+    Always returns populated dict — NEVER empty {}.
+    """
+    result = {
+        "sector": "N/A", "industry": "N/A", "company_name": symbol,
+        "market_cap": 0, "pe_ratio": 0, "pb_ratio": 0, "roe": 0,
+        "dividend_yield": 0, "eps": 0, "high_52w": 0, "low_52w": 0,
+        "prev_close": 0, "volume": 0, "avg_volume": 0,
+    }
+
+    def _safe(v):
+        try:
+            return float(v) if v is not None else 0.0
+        except Exception:
+            return 0.0
+
+    # ── METHOD 1: Yahoo Finance v8 chart API ────────────────────────────────
+    # Fastest, no crumb needed, always returns PE + EPS + 52w for Indian stocks
+    for suffix in [".NS", ".BO"]:
+        try:
+            p2  = int(time.time())
+            p1  = p2 - 86400
+            url = (
+                f"https://query2.finance.yahoo.com/v8/finance/chart/"
+                f"{symbol}{suffix}?interval=1d&period1={p1}&period2={p2}"
+            )
+            session, _ = _yahoo_session.get()
+            r = session.get(url, timeout=12, headers={
+                "Accept": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/122.0 Safari/537.36"
+                ),
+            })
+            if r.status_code != 200:
+                continue
+            meta = (r.json().get("chart") or {}).get("result") or [{}]
+            meta = meta[0].get("meta") or {}
+            if not meta.get("regularMarketPrice"):
+                continue
+
+            result.update({
+                "company_name": meta.get("longName") or meta.get("shortName") or symbol,
+                "pe_ratio":     _safe(meta.get("trailingPE")),
+                "eps":          _safe(meta.get("epsTrailingTwelveMonths")),
+                "high_52w":     _safe(meta.get("fiftyTwoWeekHigh")),
+                "low_52w":      _safe(meta.get("fiftyTwoWeekLow")),
+                "prev_close":   _safe(meta.get("chartPreviousClose") or meta.get("previousClose")),
+            })
+            logger.info(
+                f"[Fund v8] {symbol}{suffix} OK — "
+                f"PE={result['pe_ratio']:.1f} "
+                f"52w={result['low_52w']:.0f}-{result['high_52w']:.0f}"
+            )
+            break
+        except Exception as e:
+            logger.warning(f"[Fund v8] {symbol}{suffix}: {e}")
+
+    # ── METHOD 2: Yahoo Finance v10 quoteSummary ─────────────────────────────
+    # Gets ROE, P/B, Market Cap, Sector, Dividend yield
+    for suffix in [".NS", ".BO"]:
+        try:
+            url = (
+                f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/"
+                f"{symbol}{suffix}"
+                f"?modules=summaryDetail,defaultKeyStatistics,financialData,assetProfile"
+            )
+            session, _ = _yahoo_session.get()
+            r = session.get(url, timeout=12, headers={
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0",
+            })
+            if r.status_code != 200:
+                continue
+            qr = ((r.json().get("quoteSummary") or {}).get("result") or [{}])[0]
+            if not qr:
+                continue
+
+            sd = qr.get("summaryDetail") or {}
+            ks = qr.get("defaultKeyStatistics") or {}
+            fd = qr.get("financialData") or {}
+            ap = qr.get("assetProfile") or {}
+
+            def _rv(d, k):
+                v = d.get(k)
+                if isinstance(v, dict):
+                    v = v.get("raw")
+                return _safe(v)
+
+            pb   = _rv(ks, "priceToBook")
+            roe  = _rv(fd, "returnOnEquity") * 100
+            mc   = _rv(sd, "marketCap") or _rv(ks, "enterpriseValue")
+            divy = _rv(sd, "dividendYield") * 100
+            vol  = _rv(sd, "volume") or _rv(sd, "averageVolume")
+            avol = _rv(sd, "averageVolume") or _rv(sd, "averageVolume10days")
+            pe_v10 = _rv(sd, "trailingPE")
+
+            if pb or roe or mc or pe_v10:
+                result.update({
+                    "sector":         ap.get("sector") or "N/A",
+                    "industry":       ap.get("industry") or "N/A",
+                    "market_cap":     mc,
+                    "pb_ratio":       pb,
+                    "roe":            roe,
+                    "dividend_yield": divy,
+                    "volume":         int(vol),
+                    "avg_volume":     int(avol),
+                })
+                if not result["pe_ratio"] and pe_v10:
+                    result["pe_ratio"] = pe_v10
+                if ap.get("longName"):
+                    result["company_name"] = ap["longName"]
+                logger.info(
+                    f"[Fund v10] {symbol}{suffix} OK — "
+                    f"PB={pb:.1f} ROE={roe:.1f}% MCap={mc:,.0f}"
+                )
+            break
+        except Exception as e:
+            logger.warning(f"[Fund v10] {symbol}{suffix}: {e}")
+
+    # ── METHOD 3: yfinance fast_info — 52w range + price fallback ────────────
+    if not result["high_52w"] or not result["prev_close"]:
+        try:
+            _yf_throttle()
+            t  = _yf_ticker(symbol, bse=False)
+            fi = t.fast_info
+
+            def _fi(attr):
+                try:
+                    v = getattr(fi, attr, None)
+                    return float(v) if v else 0.0
+                except Exception:
+                    return 0.0
+
+            if not result["high_52w"]:
+                result["high_52w"] = _fi("year_high")
+                result["low_52w"]  = _fi("year_low")
+            if not result["prev_close"]:
+                result["prev_close"] = _fi("previous_close")
+            if not result["market_cap"]:
+                result["market_cap"] = _fi("market_cap")
+            if not result["volume"]:
+                result["volume"] = int(_fi("three_month_average_volume"))
+            logger.info(f"[Fund fast_info] {symbol} — 52w={result['low_52w']:.0f}-{result['high_52w']:.0f}")
+        except Exception as e:
+            logger.warning(f"[Fund fast_info] {symbol}: {e}")
+
+    # ── METHOD 4: Finnhub final fallback ─────────────────────────────────────
+    if FINNHUB_API_KEY and not result["pe_ratio"] and not result["pb_ratio"]:
+        for fmt in [f"NSE:{symbol}", f"BSE:{symbol}"]:
             try:
-                v = getattr(fi, attr, None)
-                return float(v) if v else default
-            except:
-                return default
-
-        mc   = info.get("marketCap", 0) or _fi("market_cap")
-        h52  = info.get("fiftyTwoWeekHigh", 0) or _fi("year_high")
-        l52  = info.get("fiftyTwoWeekLow",  0) or _fi("year_low")
-        vol  = info.get("volume",        0) or _fi("three_month_average_volume")
-        avol = info.get("averageVolume", 0) or _fi("three_month_average_volume")
-        prev = info.get("regularMarketPreviousClose", 0) or _fi("previous_close")
-
-        eps  = info.get("trailingEps", 0) or getattr(fi, "eps_trailing_twelve_months", 0) or 0
-        return {
-            "sector":         info.get("sector",    "N/A"),
-            "industry":       info.get("industry",  "N/A"),
-            "company_name":   info.get("longName",  info.get("shortName", symbol)),
-            "market_cap":     mc   or 0,
-            "pe_ratio":       info.get("trailingPE",      0) or 0,
-            "pb_ratio":       info.get("priceToBook",     0) or 0,
-            "roe":           (info.get("returnOnEquity",  0) or 0) * 100,
-            "dividend_yield":(info.get("dividendYield",   0) or 0) * 100,
-            "eps":            round(float(eps), 2) if eps else 0,
-            "high_52w":       h52  or 0,
-            "low_52w":        l52  or 0,
-            "prev_close":     prev or 0,
-            "volume":         int(vol)  if vol  else 0,
-            "avg_volume":     int(avol) if avol else 0,
-        }
-
-    def _has_any_fundamentals(f: dict) -> bool:
-        """Check if there is at least one non-zero fundamental."""
-        if not f:
-            return False
-        return any([
-            f.get("market_cap", 0),
-            f.get("pe_ratio", 0),
-            f.get("pb_ratio", 0),
-            f.get("roe", 0),
-            f.get("dividend_yield", 0),
-        ])
-
-    # ── 1) yfinance (NSE → BSE) ─────────────────────────
-    try:
-        _yf_throttle()
-        for bse in [False, True]:
-            try:
-                t  = _yf_ticker(symbol, bse=bse)
-                fi = t.fast_info
-                info = t.info or {}
-                if "Invalid Crumb" in str(info):
-                    _yahoo_session.invalidate()
+                r = requests.get(
+                    "https://finnhub.io/api/v1/stock/metric",
+                    params={"symbol": fmt, "metric": "all", "token": FINNHUB_API_KEY},
+                    timeout=10,
+                )
+                metric = (r.json() or {}).get("metric") or {}
+                if not metric:
                     continue
 
-                has_name = bool(info.get("longName") or info.get("shortName"))
-                has_mcap = bool(info.get("marketCap") or getattr(fi, "market_cap", 0))
+                def _m(k):
+                    return _safe(metric.get(k))
 
-                if has_name or has_mcap:
-                    result = _extract(info, fi)
-                    logger.info(
-                        f"Fundamentals {symbol} via {'BSE' if bse else 'NSE'} "
-                        f"(yfinance): MCap={result['market_cap']:,.0f}"
-                    )
-                    if _has_any_fundamentals(result):
-                        return result
-            except Exception as ex:
-                logger.warning(f"Fundamental {symbol} bse={bse} (yfinance): {ex}")
-                continue
-    except Exception as e:
-        logger.error(f"Fundamental error {symbol} (yfinance): {e}")
+                if _m("peTTM") or _m("pbAnnual") or _m("roeTTM"):
+                    result.update({
+                        "pe_ratio":       _m("peTTM"),
+                        "pb_ratio":       _m("pbAnnual"),
+                        "roe":            _m("roeTTM"),
+                        "dividend_yield": _m("dividendYieldIndicatedAnnual") * 100,
+                    })
+                    if _m("52WeekHigh"):
+                        result["high_52w"] = _m("52WeekHigh")
+                        result["low_52w"]  = _m("52WeekLow")
+                    if _m("marketCapitalization"):
+                        result["market_cap"] = _m("marketCapitalization") * 1e7
+                    logger.info(f"[Fund Finnhub] {symbol} via {fmt} OK")
+                    break
+            except Exception as e:
+                logger.warning(f"[Fund Finnhub] {symbol} {fmt}: {e}")
 
-    # ── 2) Finnhub fallback (only if key set) ────────────
-    if FINNHUB_API_KEY:
-        try:
-            # Use NSE:SYMBOL first, then BSE:SYMBOL
-            for fmt in [f"NSE:{symbol}", f"BSE:{symbol}"]:
-                try:
-                    r = requests.get(
-                        "https://finnhub.io/api/v1/stock/metric",
-                        params={
-                            "symbol": fmt,
-                            "metric": "all",
-                            "token": FINNHUB_API_KEY,
-                        },
-                        timeout=10,
-                    )
-                    data = r.json() or {}
-                    metric = (data.get("metric") or {})
-                    if not metric:
-                        continue
-
-                    mc   = metric.get("marketCapitalization", 0) * 1e7 if metric.get("marketCapitalization") else 0
-                    pe   = metric.get("peTTM", 0) or 0
-                    pb   = metric.get("pbAnnual", 0) or 0
-                    roe  = metric.get("roeTTM", 0) or 0   # already in %
-                    divy = (metric.get("dividendYieldIndicatedAnnual", 0) or 0) * 100
-
-                    result = {
-                        "sector":         metric.get("sector",    "N/A"),
-                        "industry":       metric.get("industry",  "N/A"),
-                        "company_name":   metric.get("name", symbol),
-                        "market_cap":     mc,
-                        "pe_ratio":       pe,
-                        "pb_ratio":       pb,
-                        "roe":            roe,
-                        "dividend_yield": divy,
-                        "high_52w":       metric.get("52WeekHigh", 0) or 0,
-                        "low_52w":        metric.get("52WeekLow",  0) or 0,
-                        "prev_close":     0,
-                        "volume":         0,
-                        "avg_volume":     0,
-                    }
-                    if _has_any_fundamentals(result):
-                        logger.info(f"Fundamentals {symbol} via Finnhub {fmt}: MCap={result['market_cap']:,.0f}")
-                        return result
-                except Exception as ex:
-                    logger.warning(f"Fundamental {symbol} via Finnhub {fmt}: {ex}")
-        except Exception as e:
-            logger.error(f"Fundamental error {symbol} (Finnhub): {e}")
-
-    logger.warning(f"No usable fundamental data found for {symbol}")
-    return {}
+    logger.info(
+        f"[Fund FINAL] {symbol}: "
+        f"PE={result['pe_ratio']:.1f} PB={result['pb_ratio']:.1f} "
+        f"ROE={result['roe']:.1f}% MCap={result['market_cap']:,.0f} "
+        f"52w={result['low_52w']:.0f}-{result['high_52w']:.0f}"
+    )
+    return result
 
 def calculate_targets(price: float, av: float, trend: str,
                        low_52w: float = None,
