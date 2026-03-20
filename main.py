@@ -583,7 +583,7 @@ def get_fundamental_info(symbol: str) -> dict:
             url = (
                 f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/"
                 f"{symbol}{suffix}"
-                f"?modules=summaryDetail,defaultKeyStatistics,financialData,assetProfile"
+                f"?modules=summaryDetail,defaultKeyStatistics,financialData,assetProfile,price"
             )
             session, _ = _yahoo_session.get()
             r = session.get(url, timeout=12, headers={
@@ -607,33 +607,42 @@ def get_fundamental_info(symbol: str) -> dict:
                     v = v.get("raw")
                 return _safe(v)
 
-            pb   = _rv(ks, "priceToBook")
-            roe  = _rv(fd, "returnOnEquity") * 100
-            mc   = _rv(sd, "marketCap") or _rv(ks, "enterpriseValue")
-            divy = _rv(sd, "dividendYield") * 100
-            vol  = _rv(sd, "volume") or _rv(sd, "averageVolume")
-            avol = _rv(sd, "averageVolume") or _rv(sd, "averageVolume10days")
-            pe_v10 = _rv(sd, "trailingPE")
+            pb     = _rv(ks, "priceToBook")
+            roe    = _rv(fd, "returnOnEquity") * 100
+            divy   = _rv(sd, "dividendYield") * 100
+            vol    = _rv(sd, "volume") or _rv(sd, "averageVolume")
+            avol   = _rv(sd, "averageVolume") or _rv(sd, "averageVolume10days")
+            pe_v10 = _rv(sd, "trailingPE") or _rv(fd, "forwardPE")
 
-            if pb or roe or mc or pe_v10:
-                result.update({
-                    "sector":         ap.get("sector") or "N/A",
-                    "industry":       ap.get("industry") or "N/A",
-                    "market_cap":     mc,
-                    "pb_ratio":       pb,
-                    "roe":            roe,
-                    "dividend_yield": divy,
-                    "volume":         int(vol),
-                    "avg_volume":     int(avol),
-                })
-                if not result["pe_ratio"] and pe_v10:
-                    result["pe_ratio"] = pe_v10
-                if ap.get("longName"):
-                    result["company_name"] = ap["longName"]
-                logger.info(
-                    f"[Fund v10] {symbol}{suffix} OK — "
-                    f"PB={pb:.1f} ROE={roe:.1f}% MCap={mc:,.0f}"
-                )
+            # marketCap — try multiple modules (varies by stock type)
+            pr  = qr.get("price") or {}
+            mc  = (_rv(pr, "marketCap")
+                   or _rv(sd, "marketCap")
+                   or _rv(ks, "enterpriseValue")
+                   or _rv(fd, "totalCash"))
+
+            # Always update what we have — don't gate on all fields present
+            if ap.get("sector"): result["sector"]   = ap["sector"]
+            if ap.get("industry"): result["industry"] = ap["industry"]
+            if ap.get("longName"): result["company_name"] = ap["longName"]
+            if mc:    result["market_cap"]     = mc
+            if pb:    result["pb_ratio"]       = pb
+            if roe:   result["roe"]            = roe
+            if divy:  result["dividend_yield"] = divy
+            if vol:   result["volume"]         = int(vol)
+            if avol:  result["avg_volume"]     = int(avol)
+            if pe_v10 and not result["pe_ratio"]:
+                result["pe_ratio"] = pe_v10
+
+            # EPS from financialData if missing
+            if not result["eps"]:
+                eps_fd = _rv(fd, "trailingEps") or _rv(ks, "trailingEps")
+                if eps_fd: result["eps"] = eps_fd
+
+            logger.info(
+                f"[Fund v10] {symbol}{suffix} — "
+                f"MCap={mc:,.0f} PB={pb:.1f} ROE={roe:.1f}% PE={pe_v10:.1f}"
+            )
             break
         except Exception as e:
             logger.warning(f"[Fund v10] {symbol}{suffix}: {e}")
@@ -909,12 +918,12 @@ def stock_ai_advisory(symbol: str,
             f"📅 {datetime.now(IST).date().strftime('%d-%b-%Y')}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 <b>FUNDAMENTALS</b>\n"
-            f"MCap: {('₹' + str(round(fund['market_cap']/10_000_000)) + ' Cr') if fund.get('market_cap') else 'N/A'} | "
-            f"P/E: {round(fund['pe_ratio'],1) if fund.get('pe_ratio') else 'N/A'} | "
-            f"P/B: {round(fund['pb_ratio'],1) if fund.get('pb_ratio') else 'N/A'}\n"
-            f"ROE: {(str(round(fund['roe'],1)) + '%') if fund.get('roe') else 'N/A'} | "
-            f"Div Yield: {(str(round(fund['dividend_yield'],2)) + '%') if fund.get('dividend_yield') else 'N/A'}\n"
-            f"EPS: {fund.get('eps', 'N/A')} | "
+            f"MCap: {('₹' + str(round(fund['market_cap']/10_000_000)) + ' Cr') if (fund.get('market_cap') or 0) > 0 else 'N/A'} | "
+            f"P/E: {round(fund['pe_ratio'],1) if (fund.get('pe_ratio') or 0) > 0 else 'N/A'} | "
+            f"P/B: {round(fund['pb_ratio'],1) if (fund.get('pb_ratio') or 0) > 0 else 'N/A'}\n"
+            f"ROE: {str(round(fund['roe'],1)) + '%' if (fund.get('roe') or 0) > 0 else 'N/A'} | "
+            f"Div Yield: {str(round(fund['dividend_yield'],2)) + '%' if (fund.get('dividend_yield') or 0) > 0 else '0% (growth stock)'}\n"
+            f"EPS: {('₹' + str(round(fund['eps'],2))) if (fund.get('eps') or 0) > 0 else 'N/A'} | "
             f"52W: ₹{fund.get('low_52w',0):.0f}–₹{fund.get('high_52w',0):.0f}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 <b>TECHNICALS</b>\n"
@@ -932,7 +941,7 @@ def stock_ai_advisory(symbol: str,
             f"₹{targets['long_term']['1Y']} / ₹{targets['long_term']['2Y']}\n"
             f"🛑 Stop Loss: ₹{targets['stop_loss']}\n\n"
             f"📊 <b>Quality Score: {quality}/100</b> {stars}\n"
-            f"{'🟢 Strong fundamentals' if fund.get('pe_ratio') and fund.get('roe') and fund.get('roe',0) > 10 else '🟡 Partial fundamentals' if fund else '🔴 No fundamental data — technical only'}\n\n"
+            f"{'🟢 Strong fundamentals' if (fund.get('pe_ratio') or 0) > 0 and (fund.get('roe') or 0) > 10 else '🟡 Technical only (fundamentals loading)' if (fund.get('pe_ratio') or 0) == 0 else '🟡 Partial data'}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"✅ <b>FUNDAMENTAL CHECKLIST</b>\n"
             + (f"  PE Ratio:     {fund.get('pe_ratio',0):.1f} → {'✅ Good (<20)' if 0 < fund.get('pe_ratio',0) < 20 else '⚠️ High' if fund.get('pe_ratio',0) >= 20 else '❓ N/A'}\n"
@@ -940,7 +949,7 @@ def stock_ai_advisory(symbol: str,
                f"  ROE:          {fund.get('roe',0):.1f}% → {'✅ Excellent (>20%)' if fund.get('roe',0) > 20 else '🟢 Good' if fund.get('roe',0) > 12 else '🟡 Average' if fund.get('roe',0) > 5 else '❓ N/A'}\n"
                f"  Div Yield:    {fund.get('dividend_yield',0):.2f}% → {'✅ Income stock' if fund.get('dividend_yield',0) > 2 else '🟡 Low dividend' if fund.get('dividend_yield',0) > 0 else '⚪ No dividend'}\n"
                f"  Market Cap:   ₹{fund.get('market_cap',0)/10_000_000:.0f} Cr → {'✅ Large Cap' if fund.get('market_cap',0) > 200_000_000_000 else '🟡 Mid Cap' if fund.get('market_cap',0) > 20_000_000_000 else '🔴 Small Cap' if fund.get('market_cap',0) > 0 else '❓ N/A'}\n\n"
-               if fund else "  ⚠️ Fundamental data unavailable for this symbol\n  Try again during market hours or check NSE website\n\n") +
+               if fund else "  ⚠️ Checking fundamental data...\n  If this shows repeatedly, data may be unavailable for this symbol.\n\n") +
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🤖 <b>AI COMMENTARY</b>\n"
             f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
@@ -966,157 +975,75 @@ NIFTY50 = [
     "AXISBANK","BAJAJ-AUTO","NESTLE","TATASTEEL",
 ]
 
-# Pre-defined sector map — avoids slow t.info calls for sector data
-NIFTY50_SECTORS = {
-    "RELIANCE":"Energy","TCS":"IT","HDFCBANK":"Banking","INFY":"IT",
-    "ICICIBANK":"Banking","HINDUNILVR":"FMCG","ITC":"FMCG","KOTAKBANK":"Banking",
-    "SBIN":"Banking","BHARTIARTL":"Telecom","LT":"Engineering","WIPRO":"IT",
-    "HCLTECH":"IT","ASIANPAINT":"Chemicals","MARUTI":"Auto","TATAMOTORS":"Auto",
-    "TITAN":"Consumer","SUNPHARMA":"Pharma","ONGC":"Oil & Gas","NTPC":"Power",
-    "M&M":"Auto","POWERGRID":"Power","ULTRACEMCO":"Cement","BAJFINANCE":"Finance",
-    "BAJAJFINSV":"Finance","TATACONSUM":"FMCG","HDFCLIFE":"Insurance",
-    "SBILIFE":"Insurance","BRITANNIA":"FMCG","INDUSINDBK":"Banking","CIPLA":"Pharma",
-    "DRREDDY":"Pharma","DIVISLAB":"Pharma","GRASIM":"Cement","HINDALCO":"Metals",
-    "JSWSTEEL":"Metals","TECHM":"IT","BPCL":"Oil & Gas","IOC":"Oil & Gas",
-    "HEROMOTOCO":"Auto","EICHERMOT":"Auto","COALINDIA":"Mining","SHREECEM":"Cement",
-    "UPL":"Chemicals","ADANIPORTS":"Infrastructure","AXISBANK":"Banking",
-    "BAJAJ-AUTO":"Auto","NESTLE":"FMCG","TATASTEEL":"Metals",
-}
-
-def _fetch_single_breadth(sym: str) -> dict:
-    """Fetch 2-day close for one stock — used in thread pool."""
-    try:
-        p2 = int(time.time())
-        p1 = p2 - 7 * 86400  # 7 days back to ensure 2 trading days
-        url = (
-            f"https://query2.finance.yahoo.com/v8/finance/chart/"
-            f"{sym}.NS?interval=1d&period1={p1}&period2={p2}"
-        )
-        session, _ = _yahoo_session.get()
-        r = session.get(url, timeout=8, headers={"Accept":"application/json","User-Agent":"Mozilla/5.0"})
-        if r.status_code != 200:
-            return {"sym": sym, "chg": 0, "ok": False}
-        closes = (r.json().get("chart") or {}).get("result") or [{}]
-        closes = (closes[0].get("indicators") or {}).get("quote") or [{}]
-        closes = (closes[0].get("close") or [])
-        closes = [c for c in closes if c is not None]
-        if len(closes) < 2:
-            return {"sym": sym, "chg": 0, "ok": False}
-        chg = closes[-1] - closes[-2]
-        return {"sym": sym, "chg": chg, "ok": True}
-    except Exception:
-        return {"sym": sym, "chg": 0, "ok": False}
-
 def get_advance_decline():
-    """Concurrent fetch — all 50 stocks in parallel, ~5-8 seconds total."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     adv = dec = unc = 0
     sp  = defaultdict(lambda: {"adv": 0, "dec": 0})
-
-    with ThreadPoolExecutor(max_workers=15) as ex:
-        futures = {ex.submit(_fetch_single_breadth, sym): sym for sym in NIFTY50}
-        for future in as_completed(futures, timeout=20):
-            try:
-                res = future.result()
-                if not res["ok"]:
-                    unc += 1
-                    continue
-                sym    = res["sym"]
-                chg    = res["chg"]
-                sector = NIFTY50_SECTORS.get(sym, "Other")
-                if chg > 0:
-                    adv += 1
-                    sp[sector]["adv"] += 1
-                elif chg < 0:
-                    dec += 1
-                    sp[sector]["dec"] += 1
-                else:
-                    unc += 1
-            except Exception:
+    for sym in NIFTY50:
+        try:
+            _yf_throttle()
+            t    = _yf_ticker(sym)
+            hist = t.history(period="2d", auto_adjust=True)
+            if hist is None or len(hist) < 2:
+                continue
+            chg = hist["Close"].iloc[-1] - hist["Close"].iloc[-2]
+            if chg > 0:
+                adv += 1
+            elif chg < 0:
+                dec += 1
+            else:
                 unc += 1
+
+            try:
+                sector = (t.info or {}).get("sector", "Other")
+            except Exception:
+                sector = "Other"
+
+            if chg > 0:
+                sp[sector]["adv"] += 1
+            elif chg < 0:
+                sp[sector]["dec"] += 1
+        except Exception:
+            continue
     return adv, dec, unc, sp
 
-def _fetch_index_quote(sym: str) -> tuple:
-    """Fetch index quote via v8 chart — fast, no yfinance overhead."""
-    try:
-        p2 = int(time.time())
-        p1 = p2 - 7 * 86400
-        url = (
-            f"https://query2.finance.yahoo.com/v8/finance/chart/"
-            f"{sym}?interval=1d&period1={p1}&period2={p2}"
-        )
-        session, _ = _yahoo_session.get()
-        r = session.get(url, timeout=8, headers={"Accept":"application/json","User-Agent":"Mozilla/5.0"})
-        if r.status_code != 200:
-            return (0, 0)
-        closes = (r.json().get("chart") or {}).get("result") or [{}]
-        meta   = closes[0].get("meta") or {}
-        qt     = (closes[0].get("indicators") or {}).get("quote") or [{}]
-        cs     = [c for c in (qt[0].get("close") or []) if c is not None]
-        if len(cs) < 2:
-            last = float(meta.get("regularMarketPrice") or 0)
-            prev = float(meta.get("chartPreviousClose") or 0)
-        else:
-            last, prev = cs[-1], cs[-2]
-        chg = ((last - prev) / prev * 100) if prev else 0
-        return (last, chg)
-    except Exception:
-        return (0, 0)
-
 def format_market_breadth() -> str:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    ts = datetime.now(IST).strftime("%d-%b-%Y %I:%M %p")
-
-    # Fetch indices and breadth concurrently
-    INDEX_MAP = {
-        "NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK",
-        "NIFTY IT": "^CNXIT", "NIFTY AUTO": "^CNXAUTO",
+    indices = {
+        "NIFTY 50":   "^NSEI",
+        "BANK NIFTY": "^NSEBANK",
+        "NIFTY IT":   "^CNXIT",
+        "NIFTY AUTO": "^CNXAUTO",
     }
     ind_data = {}
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        idx_futures = {ex.submit(_fetch_index_quote, sym): name
-                       for name, sym in INDEX_MAP.items()}
-        for fut in as_completed(idx_futures, timeout=12):
-            name = idx_futures[fut]
-            try: ind_data[name] = fut.result()
-            except: ind_data[name] = (0, 0)
-
+    for name, sym in indices.items():
+        try:
+            h = yf.Ticker(sym).history(period="2d", auto_adjust=True)
+            if h is not None and len(h) >= 2:
+                last = float(h["Close"].iloc[-1])
+                prev = float(h["Close"].iloc[-2])
+                chg  = ((last - prev) / prev * 100) if prev else 0
+                ind_data[name] = (last, chg)
+            else:
+                ind_data[name] = (0, 0)
+        except Exception:
+            ind_data[name] = (0, 0)
     adv, dec, unc, sp = get_advance_decline()
-    ratio = round(adv / dec, 2) if dec else adv
-
-    # Breadth signal
-    if adv > dec * 1.5:
-        breadth_signal = "🟢 Broad-based rally"
-    elif dec > adv * 1.5:
-        breadth_signal = "🔴 Broad-based decline"
-    else:
-        breadth_signal = "🟡 Mixed market"
-
+    ts    = datetime.now(IST).strftime("%d-%b-%Y %I:%M %p")
     lines = [f"📊 <b>Market Breadth</b> – {ts}\n"]
-    for name in ["NIFTY 50","BANK NIFTY","NIFTY IT","NIFTY AUTO"]:
-        last, chg = ind_data.get(name, (0, 0))
-        if last == 0: continue
+    for name, (last, chg) in ind_data.items():
         arrow = "🟢" if chg > 0 else "🔴" if chg < 0 else "⚪"
         lines.append(f"{arrow} {name}: {last:,.2f} ({chg:+.2f}%)")
-
+    ratio = adv / dec if dec else adv
     lines.append(
-        f"\n📈 Advancing: {adv} | 📉 Declining: {dec} | ➡️ Unchanged: {unc}\n"
-        f"A/D Ratio: {ratio} — {breadth_signal}\n"
+        f"\n📈 Adv: {adv} | 📉 Dec: {dec} | ⚖️ Unch: {unc} | "
+        f"A/D: {ratio:.2f}\n\n🏭 <b>Top Sectors</b>"
     )
-
-    # Sector heatmap with emoji bars
-    lines.append("🌡️ <b>Sector Heatmap</b>")
-    sorted_sectors = sorted(sp.items(), key=lambda x: x[1]["adv"] - x[1]["dec"], reverse=True)
-    for sector, d in sorted_sectors[:8]:
-        total = d["adv"] + d["dec"]
-        if total == 0: continue
-        net  = d["adv"] - d["dec"]
-        pct  = d["adv"] / total
-        bar  = ("🟩" * round(pct * 4)) + ("🟥" * (4 - round(pct * 4)))
+    top5 = sorted(sp.items(),
+                  key=lambda x: x[1]["adv"] - x[1]["dec"],
+                  reverse=True)[:5]
+    for sector, d in top5:
+        net   = d["adv"] - d["dec"]
         arrow = "🟢" if net > 0 else "🔴" if net < 0 else "⚪"
-        lines.append(f"{bar} {sector}: {d['adv']}↑ {d['dec']}↓")
-
-    lines.append("\n⚠️ Educational only.")
+        lines.append(f"{arrow} {sector}: {d['adv']}↑ {d['dec']}↓")
     return "\n".join(lines)
 
 # ─────────────────────────────────────────
@@ -1196,147 +1123,80 @@ score_cache = {}
 SCORE_CACHE_TTL = 3600  # Cache for 1 hour
 
 def score_stock(symbol: str) -> Optional[dict]:
-    """Score stock using v8 chart API — no t.info rate-limiting."""
     cached = score_cache.get(symbol)
     if cached and (time.time() - cached['ts']) < SCORE_CACHE_TTL:
         return cached['data']
     try:
-        # Use v8 chart for live data — no rate limiting
-        p2  = int(time.time())
-        p1  = p2 - 365 * 86400  # 1 year
-        url = (
-            f"https://query2.finance.yahoo.com/v8/finance/chart/"
-            f"{symbol}.NS?interval=1d&period1={p1}&period2={p2}"
-        )
-        session, _ = _yahoo_session.get()
-        r = session.get(url, timeout=10, headers={
-            "Accept":"application/json","User-Agent":"Mozilla/5.0"
-        })
-        if r.status_code != 200:
+        _yf_throttle()
+        t    = _yf_ticker(symbol)
+        info = t.info or {}
+        hist = t.history(period="6mo", auto_adjust=True)
+        if hist is None or hist.empty:
             return None
-
-        result_data = (r.json().get("chart") or {}).get("result") or [{}]
-        meta   = result_data[0].get("meta") or {}
-        qt     = (result_data[0].get("indicators") or {}).get("quote") or [{}]
-        closes = [c for c in (qt[0].get("close") or []) if c is not None]
-
-        if len(closes) < 60:
-            return None
-
-        import pandas as pd
-        close_s = pd.Series(closes)
-        ltp     = closes[-1]
-        e200    = float(close_s.ewm(span=min(200, len(closes)-1)).mean().iloc[-1])
-
-        # Get fundamentals from meta (always present, no rate limit)
-        pe  = float(meta.get("trailingPE") or 0) or 25
-        eps = float(meta.get("epsTrailingTwelveMonths") or 0)
-
-        score = 5.0
+        close  = hist["Close"]
+        ltp    = float(close.iloc[-1])
+        e200   = float(close.ewm(span=200).mean().iloc[-1])
+        score  = 5.0
         score += 1.5 if ltp > e200 else -1.0
-        score += 1.5 if 0 < pe < 20 else (0.5 if pe < 30 else -1.0)
-        # RSI check
-        delta = close_s.diff()
-        gain  = delta.clip(lower=0).rolling(14).mean()
-        loss  = (-delta.clip(upper=0)).rolling(14).mean()
-        rsi_v = float(100 - (100 / (1 + gain.iloc[-1] / loss.iloc[-1]))) if loss.iloc[-1] else 50
-        score += 1.0 if 40 < rsi_v < 70 else (-0.5 if rsi_v > 75 or rsi_v < 25 else 0)
-        # EPS positive = good
-        score += 0.5 if eps > 0 else -0.5
-        # Large cap bonus
-        mc = float(meta.get("marketCap") or 0)
-        score += 0.5 if mc > 50_000_000_000 else 0
-        score = max(0, min(10, score))
-
+        pe     = info.get("trailingPE", 25) or 25
+        score += 1.5 if pe < 20 else (-1.0 if pe > 30 else 0)
+        roe    = (info.get("returnOnEquity", 0.1) or 0.1) * 100
+        score += 1.5 if roe > 15 else (-1.0 if roe < 8 else 0)
+        pb     = info.get("priceToBook", 2) or 2
+        score += 0.5 if pb < 2 else (-0.5 if pb > 4 else 0)
+        mc     = info.get("marketCap", 0) or 0
+        score += 0.5 if mc > 50000e7 else (-0.5 if mc < 1000e7 else 0)
+        div    = info.get("dividendYield", 0) or 0
+        score += 0.5 if div > 0.02 else 0
+        score  = max(0, min(10, score))
         rating = (
             "Strong Buy" if score >= 8 else
             "Buy"        if score >= 6 else
             "Hold"       if score >= 4 else "Avoid"
         )
-        sector = NIFTY50_SECTORS.get(symbol, "NSE")
-        res = {
+        result = {
             "symbol": symbol, "score": round(score, 1), "rating": rating,
-            "mcap": mc, "sector": sector, "pe": pe, "ltp": ltp,
+            "mcap": mc, "sector": info.get("sector", "Other"),
         }
-        score_cache[symbol] = {'data': res, 'ts': time.time()}
-        return res
+        score_cache[symbol] = {'data': result, 'ts': time.time()}
+        return result
     except Exception as e:
-        if "429" in str(e) or "Too Many" in str(e):
-            time.sleep(5)
-        logger.warning(f"score_stock {symbol}: {e}")
+        if "Too Many Requests" in str(e) or "429" in str(e):
+            time.sleep(30)
+        logger.error(f"Score error {symbol}: {e}")
         return None
 
-# Fixed priority candidate list — no random sampling on restart
-PORTFOLIO_CANDIDATES = [
-    "HDFCBANK","TCS","RELIANCE","INFY","ICICIBANK","SBIN","KOTAKBANK",
-    "BHARTIARTL","LT","HINDUNILVR","ITC","TITAN","ASIANPAINT","MARUTI",
-    "BAJFINANCE","SUNPHARMA","HCLTECH","WIPRO","NTPC","POWERGRID",
-    "ADANIPORTS","AXISBANK","TATAMOTORS","DRREDDY","CIPLA","DIVISLAB",
-    "ULTRACEMCO","GRASIM","TECHM","INDUSINDBK","APOLLOHOSP","HAL",
-    "PIDILITIND","POLYCAB","HAVELLS","PERSISTENT","LTIM",
-]
-
 def suggest_portfolio(risk_profile: str = "moderate") -> list:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    # Fetch scores concurrently
-    scored = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = {ex.submit(score_stock, sym): sym for sym in PORTFOLIO_CANDIDATES}
-        for fut in as_completed(futures, timeout=60):
-            try:
-                res = fut.result()
-                if res:
-                    scored.append(res)
-            except Exception:
-                pass
-
+    scored = [
+        d for sym in CANDIDATES
+        if (d := score_stock(sym)) and d["score"] >= 4
+    ]
     scored.sort(key=lambda x: x["score"], reverse=True)
-
-    # Dynamic threshold — always show results
-    for threshold in [6.0, 5.5, 5.0, 4.5, 4.0]:
-        if risk_profile == "conservative":
-            filtered = [s for s in scored if s["score"] >= threshold and s["mcap"] > 20_000_000_000][:6]
-        elif risk_profile == "aggressive":
-            filtered = [s for s in scored if s["score"] >= threshold][:8]
-        else:
-            filtered = [s for s in scored if s["score"] >= threshold][:7]
-        if len(filtered) >= 3:
-            break
-
-    # Last resort — just take top N regardless of score
-    if not filtered:
-        filtered = scored[:6]
-
+    if risk_profile == "conservative":
+        filtered = [s for s in scored if s["mcap"] > 10000e7][:6]
+    elif risk_profile == "aggressive":
+        filtered = [s for s in scored if s["score"] >= 6][:8]
+    else:
+        filtered = [s for s in scored if s["score"] >= 5][:7]
     if not filtered:
         return []
-
     total = sum(s["score"] for s in filtered)
     for s in filtered:
         s["allocation"] = round((s["score"] / total) * 100, 1)
     return filtered
 
 def format_portfolio(portfolio: list, risk_profile: str) -> str:
-    from datetime import datetime
     if not portfolio:
-        return "❌ No suitable stocks found. Market data may be unavailable — try again in a moment."
-    ts = datetime.now(IST).strftime("%d-%b-%Y %I:%M %p")
+        return "❌ No suitable stocks found for this risk profile."
     lines = [
-        f"💼 <b>AI Portfolio — {risk_profile.capitalize()} Risk</b>",
-        f"📅 {ts} | {len(portfolio)} stocks selected\n",
+        f"💼 <b>AI Portfolio ({risk_profile.capitalize()} Risk)</b>\n",
     ]
-    for i, item in enumerate(portfolio, 1):
-        ltp_str = f"₹{item['ltp']:.0f}" if item.get("ltp") else "N/A"
-        pe_str  = f"PE:{item['pe']:.0f}" if item.get("pe") else ""
+    for item in portfolio:
         lines.append(
-            f"{i}. <b>{item['symbol']}</b> — {item['score']}/10 ({item['rating']})\n"
-            f"   Alloc: <b>{item['allocation']}%</b> | {item.get('sector','N/A')} | {ltp_str} {pe_str}"
+            f"• {item['symbol']} – <b>{item['score']}/10</b> ({item['rating']})\n"
+            f"  Allocation: {item['allocation']}% | {item.get('sector','N/A')}"
         )
-    lines.append(
-        f"\n━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ AI-generated portfolio. Not SEBI registered.\n"
-        f"Educational only. Consult a registered advisor."
-    )
+    lines.append("\n⚠️ Educational purpose only. Consult your advisor.")
     return "\n".join(lines)
 
 # ─────────────────────────────────────────
