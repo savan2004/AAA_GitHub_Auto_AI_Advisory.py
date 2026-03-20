@@ -530,6 +530,7 @@ def get_fundamental_info(symbol: str) -> dict:
         avol = info.get("averageVolume", 0) or _fi("three_month_average_volume")
         prev = info.get("regularMarketPreviousClose", 0) or _fi("previous_close")
 
+        eps  = info.get("trailingEps", 0) or getattr(fi, "eps_trailing_twelve_months", 0) or 0
         return {
             "sector":         info.get("sector",    "N/A"),
             "industry":       info.get("industry",  "N/A"),
@@ -539,6 +540,7 @@ def get_fundamental_info(symbol: str) -> dict:
             "pb_ratio":       info.get("priceToBook",     0) or 0,
             "roe":           (info.get("returnOnEquity",  0) or 0) * 100,
             "dividend_yield":(info.get("dividendYield",   0) or 0) * 100,
+            "eps":            round(float(eps), 2) if eps else 0,
             "high_52w":       h52  or 0,
             "low_52w":        l52  or 0,
             "prev_close":     prev or 0,
@@ -698,8 +700,8 @@ def calculate_quality_score(df: pd.DataFrame, fund: dict) -> int:
         mc  = fund.get("market_cap", 0)
         score += 10 if mc > 50000e7 else (7 if mc > 10000e7
                  else (4 if mc > 1000e7 else 0))
-                return min(score, 100)
-        # No fundamentals: normalize technical score (max 40) to /100
+        return min(score, 100)  # with fundamentals — max 100
+    # No fundamentals: normalize technical score (max 40 pts) to 0-100
     return min(int(score * 2.5), 100)
 
 # ─────────────────────────────────────────
@@ -842,9 +844,13 @@ def stock_ai_advisory(symbol: str,
             f"📅 {datetime.now(IST).date().strftime('%d-%b-%Y')}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 <b>FUNDAMENTALS</b>\n"
-            f"MCap: ₹{fund.get('market_cap',0)/10_000_000:.0f} Cr | "
-            f"P/E: {fund.get('pe_ratio',0):.1f} | P/B: {fund.get('pb_ratio',0):.1f}\n"
-            f"ROE: {fund.get('roe',0):.1f}% | Div: {fund.get('dividend_yield',0):.2f}%\n\n"
+            f"MCap: {('₹' + str(round(fund['market_cap']/10_000_000)) + ' Cr') if fund.get('market_cap') else 'N/A'} | "
+            f"P/E: {round(fund['pe_ratio'],1) if fund.get('pe_ratio') else 'N/A'} | "
+            f"P/B: {round(fund['pb_ratio'],1) if fund.get('pb_ratio') else 'N/A'}\n"
+            f"ROE: {(str(round(fund['roe'],1)) + '%') if fund.get('roe') else 'N/A'} | "
+            f"Div Yield: {(str(round(fund['dividend_yield'],2)) + '%') if fund.get('dividend_yield') else 'N/A'}\n"
+            f"EPS: {fund.get('eps', 'N/A')} | "
+            f"52W: ₹{fund.get('low_52w',0):.0f}–₹{fund.get('high_52w',0):.0f}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 <b>TECHNICALS</b>\n"
             f"RSI: {rv:.1f} | MACD: {mv:.2f} vs {sv:.2f} | Trend: {trend}\n"
@@ -860,7 +866,16 @@ def stock_ai_advisory(symbol: str,
             f"Long  6M/1Y/2Y: ₹{targets['long_term']['6M']} / "
             f"₹{targets['long_term']['1Y']} / ₹{targets['long_term']['2Y']}\n"
             f"🛑 Stop Loss: ₹{targets['stop_loss']}\n\n"
-            f"📊 <b>Quality: {quality}/100</b> {stars}\n\n"
+            f"📊 <b>Quality Score: {quality}/100</b> {stars}\n"
+            f"{'🟢 Strong fundamentals' if fund.get('pe_ratio') and fund.get('roe') and fund.get('roe',0) > 10 else '🟡 Partial fundamentals' if fund else '🔴 No fundamental data — technical only'}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>FUNDAMENTAL CHECKLIST</b>\n"
+            + (f"  PE Ratio:     {fund.get('pe_ratio',0):.1f} → {'✅ Good (<20)' if 0 < fund.get('pe_ratio',0) < 20 else '⚠️ High' if fund.get('pe_ratio',0) >= 20 else '❓ N/A'}\n"
+               f"  PB Ratio:     {fund.get('pb_ratio',0):.1f} → {'✅ Attractive (<2)' if 0 < fund.get('pb_ratio',0) < 2 else '🟡 Fair' if fund.get('pb_ratio',0) < 4 else '❓ N/A'}\n"
+               f"  ROE:          {fund.get('roe',0):.1f}% → {'✅ Excellent (>20%)' if fund.get('roe',0) > 20 else '🟢 Good' if fund.get('roe',0) > 12 else '🟡 Average' if fund.get('roe',0) > 5 else '❓ N/A'}\n"
+               f"  Div Yield:    {fund.get('dividend_yield',0):.2f}% → {'✅ Income stock' if fund.get('dividend_yield',0) > 2 else '🟡 Low dividend' if fund.get('dividend_yield',0) > 0 else '⚪ No dividend'}\n"
+               f"  Market Cap:   ₹{fund.get('market_cap',0)/10_000_000:.0f} Cr → {'✅ Large Cap' if fund.get('market_cap',0) > 200_000_000_000 else '🟡 Mid Cap' if fund.get('market_cap',0) > 20_000_000_000 else '🔴 Small Cap' if fund.get('market_cap',0) > 0 else '❓ N/A'}\n\n"
+               if fund else "  ⚠️ Fundamental data unavailable for this symbol\n  Try again during market hours or check NSE website\n\n") +
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🤖 <b>AI COMMENTARY</b>\n"
             f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
