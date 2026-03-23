@@ -1,26 +1,15 @@
 """
-main.py  —  Telegram Bot + Flask Webhook Server
-================================================
-Data fetching, technical/fundamental analysis, portfolio scanning,
-market breadth, all Telegram handlers, and Flask routes.
-
-AI logic is fully separated into ai_engine.py:
-  ai_engine.py → GROQ/Gemini/OpenAI clients, ai_insights(),
-                 ai_chat_respond(), fetch_news(), live market context.
-
-Start command : gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
-Env vars      : TELEGRAM_TOKEN, WEBHOOK_URL, GROQ_API_KEY, GEMINI_API_KEY,
-                OPENAI_KEY, ALPHA_VANTAGE_KEY, FINNHUB_API_KEY, TAVILY_API_KEY, PORT
+main.py  —  AI Stock Advisory Telegram Bot (single-file deployment)
+====================================================================
+Start : gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+Env   : TELEGRAM_TOKEN, WEBHOOK_URL, GROQ_API_KEY, GEMINI_API_KEY,
+        OPENAI_KEY, ALPHA_VANTAGE_KEY, FINNHUB_API_KEY, TAVILY_API_KEY, PORT
 """
 
-import os
-import time
-import logging
-import threading
+import os, time, logging, threading, requests
 from collections import deque
 from datetime import datetime
 
-import requests
 import pandas as pd
 import yfinance as yf
 from flask import Flask, request, jsonify
@@ -33,32 +22,37 @@ except ImportError:
     class YFRateLimitError(Exception):
         pass
 
-# ── AI engine (inline — ai_engine.py merged for single-file deployment) ────────
-# To separate: create ai_engine.py with this block and restore the import above.
-
-import os
-import logging
-import time
-import requests
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
-# ── API keys (read from environment) ──────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────────
+TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
+WEBHOOK_URL       = os.getenv("WEBHOOK_URL", "").rstrip("/")
+PORT              = int(os.getenv("PORT", 10000))
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
 OPENAI_API_KEY    = os.getenv("OPENAI_KEY", "")
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
+FINNHUB_API_KEY   = os.getenv("FINNHUB_API_KEY", "")
 TAVILY_API_KEY    = os.getenv("TAVILY_API_KEY", "")
 
-# ══════════════════════════════════════════════════════════════════════════════
-# LAZY CLIENT INIT
-# Clients created on first use so env vars are definitely loaded by then.
-# ══════════════════════════════════════════════════════════════════════════════
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN is not set")
 
-_groq_client  = None
-_gemini_model = None
+WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+
+app = Flask(__name__)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
+
+# ══ AI ENGINE ══════════════════════════════════════════════════════════════
+
+# ── AI client globals (declared here, assigned lazily on first use) ───────────
+_groq_client   = None
+_gemini_model  = None
 _openai_client = None
-
 
 def _get_groq():
     global _groq_client
@@ -614,28 +608,8 @@ def debug_ai_status() -> dict:
         "note": "Visit /test_ai to actually call each provider",
     }
 
-# ── end ai_engine ─────────────────────────────────────────────────────────────
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
-
-TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
-WEBHOOK_URL       = os.getenv("WEBHOOK_URL", "").rstrip("/")
-PORT              = int(os.getenv("PORT", 10000))
-ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
-FINNHUB_API_KEY   = os.getenv("FINNHUB_API_KEY", "")
-
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_TOKEN is not set")
-
-WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
-
-app = Flask(__name__)
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
-
+# ══ PORTFOLIOS / WATCHLISTS ════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
 # PORTFOLIOS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -692,6 +666,8 @@ AI_CHAT_TOPICS = {
 
 AI_CHAT_TOPIC_KEYS = set(AI_CHAT_TOPICS.keys())
 
+
+# ══ IN-MEMORY STATE ════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
 # IN-MEMORY STATE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -699,7 +675,6 @@ _rate:         dict = {}
 _user_state:   dict = {}
 _user_history: dict = {}
 _usage_stats:  dict = {}
-_chat_history: dict = {}
 _cache:        dict = {}
 
 CACHE_TTL = 900  # 15 min
@@ -768,6 +743,8 @@ def build_usage(uid: int) -> str:
 # DATA FETCHING — FIXED
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ DATA FETCHING ═══════════════════════════════════════════════════════════
 def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
     """Fetch OHLCV with retry. Uses .NS suffix for NSE stocks."""
     key    = f"hist_{symbol}_{period}"
@@ -935,6 +912,8 @@ def fetch_ltp_fallback(symbol: str):
 # TECHNICAL INDICATORS
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ TECHNICAL INDICATORS ════════════════════════════════════════════════════
 def compute_rsi(close: pd.Series, period: int = 14) -> float:
     if len(close) < period + 1:
         return 50.0
@@ -977,6 +956,8 @@ def compute_pivots(df: pd.DataFrame):
 # FUNDAMENTALS — FIXED
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ FUNDAMENTALS ════════════════════════════════════════════════════════════
 def _safe(info: dict, *keys, mult: float = 1.0):
     """
     FIX: Returns first non-None, non-zero value across all keys.
@@ -1036,6 +1017,8 @@ def crore(v) -> str:
 # QUALITY SCORE — FIXED (technical-only path when no fundamentals)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ QUALITY SCORE ═══════════════════════════════════════════════════════════
 def quality_score(f: dict, rsi: float, trend: str) -> tuple:
     fund_pts = 0
     tech_pts = 0
@@ -1081,6 +1064,8 @@ def quality_score(f: dict, rsi: float, trend: str) -> tuple:
 # STOCK ADVISORY BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ ADVISORY BUILDER ════════════════════════════════════════════════════════
 def build_advisory(symbol: str) -> str:
     symbol = symbol.upper().replace(".NS", "")
     df     = fetch_history(symbol)
@@ -1201,6 +1186,8 @@ def build_advisory(symbol: str) -> str:
 # PORTFOLIO SCANNER
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ PORTFOLIO / BREADTH / NEWS BUILDERS ═════════════════════════════════════
 def build_portfolio(profile: str) -> str:
     p     = PORTFOLIOS[profile]
     lines = [
@@ -1328,6 +1315,8 @@ def build_market_news() -> str:
 # KEYBOARDS
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ KEYBOARDS + SEND ════════════════════════════════════════════════════════
 def main_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add(
@@ -1383,6 +1372,8 @@ def send(chat_id, text, parse_mode="HTML", reply_markup=None):
 # because pyTelegramBotAPI matches in registration order.
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ BOT HANDLERS ════════════════════════════════════════════════════════════
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
     clear_chat(msg.from_user.id)
@@ -1635,6 +1626,8 @@ def handle_text(msg):
 # FLASK ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ══ FLASK ROUTES ════════════════════════════════════════════════════════════
 @app.route("/", methods=["GET"])
 def index():
     return jsonify({
@@ -1734,6 +1727,7 @@ def _auto_register():
 threading.Thread(target=_auto_register, daemon=True).start()
 
 # ── entry point ────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     logger.info(f"Starting on port {PORT}")
     app.run(host="0.0.0.0", port=PORT, debug=False)
