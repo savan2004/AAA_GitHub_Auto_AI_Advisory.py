@@ -1,7 +1,7 @@
 """
 main.py  —  AI Stock Advisory Telegram Bot (single-file deployment)
 ====================================================================
-Start : gunicorn main:app --workers 1 --timeout 120
+Start : gunicorn main:app --bind 0.0.0.0:8000 --workers 1 --timeout 120
 Env   : TELEGRAM_TOKEN, WEBHOOK_URL, GROQ_API_KEY, GEMINI_API_KEY,
         OPENAI_KEY, ALPHA_VANTAGE_KEY, FINNHUB_API_KEY, TAVILY_API_KEY, PORT
 """
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ── Config ─────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
 WEBHOOK_URL       = os.getenv("WEBHOOK_URL", "").rstrip("/")
-PORT              = int(os.getenv("PORT", 8000))   # 8000 = gunicorn default
+PORT              = int(os.getenv("PORT", 8000))
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
 OPENAI_API_KEY    = os.getenv("OPENAI_KEY", "")
@@ -699,6 +699,18 @@ def is_rate_limited(uid: int, max_calls: int = 6, window: int = 60) -> bool:
     _rate[uid].append(now)
     return False
 
+# Portfolio-specific rate limiter — 1 scan per 3 minutes per user
+_portfolio_last: dict = {}
+
+def is_portfolio_rate_limited(uid: int) -> bool:
+    """Prevent duplicate portfolio scans — minimum 180s between scans per user."""
+    last = _portfolio_last.get(uid, 0)
+    if time.time() - last < 180:
+        remaining = int(180 - (time.time() - last))
+        return remaining
+    _portfolio_last[uid] = time.time()
+    return 0
+
 # ── user state ─────────────────────────────────────────────────────────────────
 def set_state(uid: int, state):
     if state is None:
@@ -1235,7 +1247,7 @@ def build_portfolio(profile: str) -> str:
         if i > 0:
             time.sleep(1.2)
         try:
-            df = fetch_history(sym, period="5d")
+            df = fetch_history(sym, period="1mo")
             if df.empty or len(df) < 2:
                 lines.append(f"  • <b>{sym}</b>: ⚠️ No data")
                 continue
@@ -1300,7 +1312,7 @@ def build_market_breadth() -> str:
     overbought, oversold = [], []
     for sym in BREADTH_STOCKS:
         try:
-            df = fetch_history(sym, period="5d")
+            df = fetch_history(sym, period="1mo")
             if df.empty or len(df) < 2:
                 unch += 1; continue
             close = df["Close"]
@@ -1468,9 +1480,10 @@ def btn_breadth(msg):
 
 @bot.message_handler(func=lambda m: m.text == "🏦 Conservative")
 def btn_conservative(msg):
-    if is_rate_limited(msg.from_user.id):
-        send(msg.chat.id, "⏳ Too many requests. Please wait."); return
-    send(msg.chat.id, "⏳ Scanning Conservative portfolio…")
+    wait = is_portfolio_rate_limited(msg.from_user.id)
+    if wait:
+        send(msg.chat.id, f"⏳ Portfolio scan cooling down. Try again in {wait}s."); return
+    send(msg.chat.id, "⏳ Scanning Conservative portfolio…\n⚠️ Takes ~30s — please wait, don't tap again.")
     try:
         send(msg.chat.id, build_portfolio("conservative"), reply_markup=main_kb())
     except Exception as e:
@@ -1479,9 +1492,10 @@ def btn_conservative(msg):
 
 @bot.message_handler(func=lambda m: m.text == "⚖️ Moderate")
 def btn_moderate(msg):
-    if is_rate_limited(msg.from_user.id):
-        send(msg.chat.id, "⏳ Too many requests. Please wait."); return
-    send(msg.chat.id, "⏳ Scanning Moderate portfolio…")
+    wait = is_portfolio_rate_limited(msg.from_user.id)
+    if wait:
+        send(msg.chat.id, f"⏳ Portfolio scan cooling down. Try again in {wait}s."); return
+    send(msg.chat.id, "⏳ Scanning Moderate portfolio…\n⚠️ Takes ~30s — please wait, don't tap again.")
     try:
         send(msg.chat.id, build_portfolio("moderate"), reply_markup=main_kb())
     except Exception as e:
@@ -1490,9 +1504,10 @@ def btn_moderate(msg):
 
 @bot.message_handler(func=lambda m: m.text == "🚀 Aggressive")
 def btn_aggressive(msg):
-    if is_rate_limited(msg.from_user.id):
-        send(msg.chat.id, "⏳ Too many requests. Please wait."); return
-    send(msg.chat.id, "⏳ Scanning Aggressive portfolio…")
+    wait = is_portfolio_rate_limited(msg.from_user.id)
+    if wait:
+        send(msg.chat.id, f"⏳ Portfolio scan cooling down. Try again in {wait}s."); return
+    send(msg.chat.id, "⏳ Scanning Aggressive portfolio…\n⚠️ Takes ~30s — please wait, don't tap again.")
     try:
         send(msg.chat.id, build_portfolio("aggressive"), reply_markup=main_kb())
     except Exception as e:
@@ -1766,5 +1781,6 @@ threading.Thread(target=_auto_register, daemon=True).start()
 # ── entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    logger.info(f"Starting on port {PORT}")
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    port = int(os.getenv("PORT", 8000))
+    logger.info(f"Starting on port {port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
