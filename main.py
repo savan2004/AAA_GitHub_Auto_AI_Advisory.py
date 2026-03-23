@@ -287,8 +287,10 @@ def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
 
 def fetch_info(symbol: str) -> dict:
     """
-    FIX: Use fast_info first (much more reliable for NSE), then fall back
-    to .info. Merges both dicts so we get maximum coverage.
+    3-layer fundamental data fetch:
+    1. yfinance fast_info  — price/52W/mcap (always works)
+    2. yfinance .info      — PE/ROE/div (unreliable for NSE, try anyway)
+    3. Alpha Vantage OVERVIEW — reliable PE/ROE fallback when .info fails
     """
     key    = f"info_{symbol}"
     cached = _cget(key)
@@ -296,38 +298,86 @@ def fetch_info(symbol: str) -> dict:
         return cached
 
     ticker_str = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
-    t = yf.Ticker(ticker_str)
-
+    t      = yf.Ticker(ticker_str)
     merged: dict = {}
 
-    # 1. fast_info — reliable, fast, always returns something
+    # Layer 1: fast_info — always reliable for price/mcap/52W
     try:
         fi = t.fast_info
-        if fi:
-            mapping = {
-                "marketCap":                  getattr(fi, "market_cap",         None),
-                "fiftyTwoWeekHigh":           getattr(fi, "year_high",           None),
-                "fiftyTwoWeekLow":            getattr(fi, "year_low",            None),
-                "regularMarketPreviousClose": getattr(fi, "previous_close",      None),
-                "regularMarketVolume":        getattr(fi, "three_month_average_volume", None),
-                "averageVolume":              getattr(fi, "three_month_average_volume", None),
-            }
-            merged.update({k: v for k, v in mapping.items() if v is not None})
+        mapping = {
+            "marketCap":                  getattr(fi, "market_cap",                 None),
+            "fiftyTwoWeekHigh":           getattr(fi, "year_high",                  None),
+            "fiftyTwoWeekLow":            getattr(fi, "year_low",                   None),
+            "regularMarketPreviousClose": getattr(fi, "previous_close",             None),
+            "regularMarketVolume":        getattr(fi, "three_month_average_volume", None),
+            "averageVolume":              getattr(fi, "three_month_average_volume", None),
+        }
+        merged.update({k: v for k, v in mapping.items() if v is not None})
+        logger.info(f"fast_info OK {symbol}: mcap={merged.get('marketCap')}")
     except Exception as e:
-        logger.debug(f"fast_info {ticker_str}: {e}")
+        logger.warning(f"fast_info {ticker_str}: {e}")
 
-    # 2. .info — slower but has PE, ROE, dividends etc.
+    # Layer 2: .info — has PE/ROE but unreliable for NSE stocks
     for attempt in range(2):
         try:
             info = t.info or {}
             if info and len(info) > 5:
-                # .info wins for fundamental fields
                 merged.update(info)
-                break
+                has_pe = info.get("trailingPE") or info.get("forwardPE")
+                logger.info(f".info OK {symbol}: {len(info)} keys, PE={info.get('trailingPE')}, ROE={info.get('returnOnEquity')}")
+                if has_pe:
+                    break
+            else:
+                logger.warning(f".info {symbol} attempt {attempt+1}: only {len(info)} keys")
+            if attempt == 0:
+                time.sleep(1.5)
         except Exception as e:
-            logger.warning(f"info {ticker_str} attempt {attempt+1}: {e}")
+            logger.warning(f".info {ticker_str} attempt {attempt+1}: {e}")
             if attempt == 0:
                 time.sleep(2)
+
+    # Layer 3: Alpha Vantage OVERVIEW — fills PE/ROE when .info fails
+    pe_missing = not (merged.get("trailingPE") or merged.get("forwardPE"))
+    if pe_missing and ALPHA_VANTAGE_KEY:
+        try:
+            r = requests.get(
+                "https://www.alphavantage.co/query",
+                params={"function": "OVERVIEW", "symbol": f"NSE:{symbol}",
+                        "apikey": ALPHA_VANTAGE_KEY},
+                timeout=8,
+            ).json()
+
+            def _av(val, mult=1.0):
+                try:
+                    v = float(val)
+                    return round(v * mult, 2) if v != 0 else None
+                except (TypeError, ValueError):
+                    return None
+
+            if r.get("PERatio") and r["PERatio"] not in ("None", "0", "", None):
+                av_data = {
+                    "longName":         r.get("Name"),
+                    "sector":           r.get("Sector"),
+                    "industry":         r.get("Industry"),
+                    "trailingPE":       _av(r.get("PERatio")),
+                    "priceToBook":      _av(r.get("PriceToBookRatio")),
+                    # AV returns ROE as % already (e.g. 0.18 = 18%) — store raw, _safe multiplies by 100
+                    "returnOnEquity":   _av(r.get("ReturnOnEquityTTM")),
+                    "trailingEps":      _av(r.get("EPS")),
+                    "dividendYield":    _av(r.get("DividendYield")),
+                    "marketCap":        _av(r.get("MarketCapitalization")),
+                    "fiftyTwoWeekHigh": _av(r.get("52WeekHigh")),
+                    "fiftyTwoWeekLow":  _av(r.get("52WeekLow")),
+                    "debtToEquity":     _av(r.get("DebtToEquityRatio")),
+                }
+                for k, v in av_data.items():
+                    if v is not None and not merged.get(k):
+                        merged[k] = v
+                logger.info(f"Alpha Vantage OK {symbol}: PE={av_data.get('trailingPE')}, ROE={av_data.get('returnOnEquity')}")
+            else:
+                logger.warning(f"Alpha Vantage {symbol}: no PE in response (symbol format may need BSE: prefix)")
+        except Exception as e:
+            logger.warning(f"Alpha Vantage overview {symbol}: {e}")
 
     if merged:
         _cset(key, merged)
@@ -1499,6 +1549,73 @@ def test_ai():
         },
         "fix": "Update keys in Render Dashboard > Environment, then redeploy" if not any_ok else "OK",
     })
+
+
+@app.route("/debug_info/<symbol>", methods=["GET"])
+def debug_info(symbol):
+    """
+    Debug endpoint: shows exactly what yfinance returns for a symbol.
+    Usage: /debug_info/SBIN  or  /debug_info/TCS
+    """
+    symbol = symbol.upper().replace(".NS", "")
+    ticker_str = f"{symbol}.NS"
+    t = yf.Ticker(ticker_str)
+    result = {"symbol": symbol, "ticker": ticker_str}
+
+    # fast_info
+    try:
+        fi = t.fast_info
+        result["fast_info"] = {
+            "market_cap":   getattr(fi, "market_cap",   None),
+            "year_high":    getattr(fi, "year_high",    None),
+            "year_low":     getattr(fi, "year_low",     None),
+            "prev_close":   getattr(fi, "previous_close", None),
+        }
+    except Exception as e:
+        result["fast_info_error"] = str(e)
+
+    # .info fundamentals
+    try:
+        info = t.info or {}
+        result["info_key_count"] = len(info)
+        result["info_fundamentals"] = {
+            "longName":       info.get("longName"),
+            "sector":         info.get("sector"),
+            "trailingPE":     info.get("trailingPE"),
+            "forwardPE":      info.get("forwardPE"),
+            "priceToBook":    info.get("priceToBook"),
+            "returnOnEquity": info.get("returnOnEquity"),
+            "dividendYield":  info.get("dividendYield"),
+            "trailingEps":    info.get("trailingEps"),
+            "marketCap":      info.get("marketCap"),
+        }
+    except Exception as e:
+        result["info_error"] = str(e)
+
+    # Alpha Vantage
+    if ALPHA_VANTAGE_KEY:
+        try:
+            r = requests.get(
+                "https://www.alphavantage.co/query",
+                params={"function": "OVERVIEW", "symbol": f"NSE:{symbol}",
+                        "apikey": ALPHA_VANTAGE_KEY},
+                timeout=8,
+            ).json()
+            result["alpha_vantage"] = {
+                "Name":     r.get("Name"),
+                "Sector":   r.get("Sector"),
+                "PERatio":  r.get("PERatio"),
+                "ROE":      r.get("ReturnOnEquityTTM"),
+                "EPS":      r.get("EPS"),
+                "DivYield": r.get("DividendYield"),
+                "raw_keys": list(r.keys())[:10],
+            }
+        except Exception as e:
+            result["alpha_vantage_error"] = str(e)
+    else:
+        result["alpha_vantage"] = "ALPHA_VANTAGE_KEY not set"
+
+    return jsonify(result)
 
 # ── auto-register webhook on startup ──────────────────────────────────────────
 def _auto_register():
