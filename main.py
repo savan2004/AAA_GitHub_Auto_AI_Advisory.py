@@ -1,14 +1,10 @@
 # test_ai_advisory.py
 # Complete simulation to test AI Advisory functionality
 
-import os
-import sys
-import json
 import time
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-from unittest.mock import Mock, patch, MagicMock
+from typing import Dict, List, Tuple
 
 # Configure logging
 logging.basicConfig(
@@ -131,6 +127,15 @@ class MockDataProvider:
                 "atr": 28.0, "volume": 8000000, "support": 1630.00, "resistance": 1730.00,
                 "pivot": 1680.00, "trend": "Bullish",
             },
+            # FIX: INFY was missing — it fell back to the Rs.1000 default despite
+            # get_mock_price() returning Rs.1550, causing ATR/support/resistance to
+            # be computed against the wrong price base in risk and target tests.
+            "INFY": {
+                "price": 1550.00, "sma20": 1530.00, "sma50": 1500.00, "sma200": 1420.00,
+                "rsi": 54.0, "macd_line": 14.0, "macd_signal": 11.5, "macd_hist": 2.5,
+                "atr": 26.0, "volume": 3500000, "support": 1500.00, "resistance": 1600.00,
+                "pivot": 1550.00, "trend": "Bullish",
+            },
         }
         # Default for unknown symbols
         default = {
@@ -150,12 +155,12 @@ class MockDataProvider:
         current_date = datetime.now()
         
         for i in range(days):
-            date = current_date - timedelta(days=days - i)
+            day = current_date - timedelta(days=days - i)
             change = random.uniform(-0.03, 0.03)
             base_price = base_price * (1 + change)
             
             data.append({
-                "date": date.strftime("%Y-%m-%d"),
+                "date": day.strftime("%Y-%m-%d"),
                 "open": base_price * 0.99,
                 "high": base_price * 1.01,
                 "low": base_price * 0.98,
@@ -514,11 +519,14 @@ WARNING: This is an AI-generated educational advisory. Not SEBI-registered advic
             for section in required_sections:
                 status = "OK" if section in advisory else "MISSING"
                 print(f"[{status}] {section}")
-                    
+
+        # FIX: Derive status from actual section checks instead of always hardcoding PASS
+        all_sections_present = all(section in advisory for section in required_sections)
         self.test_results.append({
             "test": "Full Advisory Generation",
-            "status": "PASS",
+            "status": "PASS" if all_sections_present else "FAIL",
             "details": "Complete advisory generated with all required sections"
+                       if all_sections_present else "One or more required sections missing",
         })
         
     def print_summary(self):
