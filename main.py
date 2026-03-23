@@ -1420,66 +1420,6 @@ def debug():
 
 @app.route("/test_ai", methods=["GET"])
 def test_ai():
-    """Live AI test — calls all providers and shows exactly what happens."""
-    results = {}
-    
-    # Test GROQ
-    if GROQ_API_KEY:
-        try:
-            g = _get_groq()
-            if g:
-                r = g.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": "Say: GROQ OK"}],
-                    max_tokens=10,
-                )
-                results["GROQ"] = f"✅ Working — {r.choices[0].message.content.strip()}"
-            else:
-                results["GROQ"] = "❌ Client not initialized"
-        except Exception as e:
-            results["GROQ"] = f"❌ FAILED: {str(e)[:200]}"
-    else:
-        results["GROQ"] = "⚠️ Key not set"
-    
-    # Test Gemini
-    if GEMINI_API_KEY:
-        try:
-            g = _get_gemini()
-            if g:
-                r = g.generate_content("Say: GEMINI OK")
-                results["Gemini"] = f"✅ Working — {getattr(r, 'text', 'no text')[:30].strip()}"
-            else:
-                results["Gemini"] = "❌ Client not initialized"
-        except Exception as e:
-            results["Gemini"] = f"❌ FAILED: {str(e)[:200]}"
-    else:
-        results["Gemini"] = "⚠️ Key not set"
-    
-    # Test OpenAI
-    if OPENAI_API_KEY:
-        try:
-            o = _get_openai()
-            if o:
-                r = o.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": "Say: OPENAI OK"}],
-                    max_tokens=10,
-                )
-                results["OpenAI"] = f"✅ Working — {r.choices[0].message.content.strip()}"
-            else:
-                results["OpenAI"] = "❌ Client not initialized"
-        except Exception as e:
-            results["OpenAI"] = f"❌ FAILED: {str(e)[:200]}"
-    else:
-        results["OpenAI"] = "⚠️ Key not set"
-    
-    any_working = any("✅" in v for v in results.values())
-    results["overall"] = "✅ AT LEAST ONE AI WORKING" if any_working else "❌ ALL AI FAILED — fix keys in Render"
-    return jsonify(results)
-
-
-@app.route("/test_ai", methods=["GET"])
-def test_ai():
     """
     Test all AI providers with a simple prompt.
     Visit: https://your-app.onrender.com/test_ai
