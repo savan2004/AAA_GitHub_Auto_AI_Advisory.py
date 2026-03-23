@@ -745,14 +745,27 @@ def build_usage(uid: int) -> str:
 
 
 # ══ DATA FETCHING ═══════════════════════════════════════════════════════════
+# Global rate-limit cooldown — shared across all fetch_history calls
+_yf_rate_limited_until: float = 0.0
+
 def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
-    """Fetch OHLCV with retry. Uses .NS suffix for NSE stocks."""
+    """Fetch OHLCV with exponential backoff and global rate-limit cooldown."""
+    global _yf_rate_limited_until
     key    = f"hist_{symbol}_{period}"
     cached = _cget(key)
     if cached is not None:
         return cached
 
-    ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
+    # Honour global cooldown set by any previous rate-limited call
+    now = time.time()
+    if now < _yf_rate_limited_until:
+        wait = _yf_rate_limited_until - now
+        logger.info(f"yfinance cooldown: sleeping {wait:.1f}s before {symbol}")
+        time.sleep(wait)
+
+    ticker   = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
+    backoffs = [3, 12, 35]   # seconds between attempts (exponential)
+
     for attempt in range(3):
         try:
             df = yf.Ticker(ticker).history(
@@ -760,7 +773,7 @@ def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
             )
             if df.empty:
                 if attempt < 2:
-                    time.sleep(2)
+                    time.sleep(backoffs[attempt])
                     continue
                 return pd.DataFrame()
             if float(df["Close"].iloc[-1]) < 0.5:
@@ -768,12 +781,21 @@ def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
             _cset(key, df)
             return df
         except YFRateLimitError:
-            logger.warning(f"Rate limited: {ticker}, waiting 10s")
-            time.sleep(10)
+            cooldown = backoffs[attempt] * 4
+            logger.warning(f"Rate limited: {ticker}, cooling down {cooldown}s")
+            _yf_rate_limited_until = time.time() + cooldown
+            time.sleep(cooldown)
         except Exception as e:
-            logger.error(f"History {ticker} attempt {attempt+1}: {e}")
-            if attempt < 2:
-                time.sleep(2)
+            err = str(e)
+            if "too many requests" in err.lower() or "rate limit" in err.lower():
+                cooldown = backoffs[attempt] * 4
+                logger.warning(f"Rate limited (str): {ticker}, cooling {cooldown}s")
+                _yf_rate_limited_until = time.time() + cooldown
+                time.sleep(cooldown)
+            else:
+                logger.error(f"History {ticker} attempt {attempt+1}: {e}")
+                if attempt < 2:
+                    time.sleep(backoffs[attempt])
     return pd.DataFrame()
 
 
@@ -829,47 +851,57 @@ def fetch_info(symbol: str) -> dict:
                 time.sleep(2)
 
     # Layer 3: Alpha Vantage OVERVIEW — fills PE/ROE when .info fails
+    # Symbol formats tried in order: BSE:{sym}, {sym}.BSE, {sym}
     pe_missing = not (merged.get("trailingPE") or merged.get("forwardPE"))
     if pe_missing and ALPHA_VANTAGE_KEY:
-        try:
-            r = requests.get(
-                "https://www.alphavantage.co/query",
-                params={"function": "OVERVIEW", "symbol": f"NSE:{symbol}",
-                        "apikey": ALPHA_VANTAGE_KEY},
-                timeout=8,
-            ).json()
+        def _av(val, mult=1.0):
+            try:
+                v = float(val)
+                return round(v * mult, 2) if v != 0 else None
+            except (TypeError, ValueError):
+                return None
 
-            def _av(val, mult=1.0):
-                try:
-                    v = float(val)
-                    return round(v * mult, 2) if v != 0 else None
-                except (TypeError, ValueError):
-                    return None
+        def _av_parse(r: dict) -> dict | None:
+            if not r.get("PERatio") or r["PERatio"] in ("None", "0", "", None):
+                return None
+            return {
+                "longName":         r.get("Name"),
+                "sector":           r.get("Sector"),
+                "industry":         r.get("Industry"),
+                "trailingPE":       _av(r.get("PERatio")),
+                "priceToBook":      _av(r.get("PriceToBookRatio")),
+                "returnOnEquity":   _av(r.get("ReturnOnEquityTTM")),
+                "trailingEps":      _av(r.get("EPS")),
+                "dividendYield":    _av(r.get("DividendYield")),
+                "marketCap":        _av(r.get("MarketCapitalization")),
+                "fiftyTwoWeekHigh": _av(r.get("52WeekHigh")),
+                "fiftyTwoWeekLow":  _av(r.get("52WeekLow")),
+                "debtToEquity":     _av(r.get("DebtToEquityRatio")),
+            }
 
-            if r.get("PERatio") and r["PERatio"] not in ("None", "0", "", None):
-                av_data = {
-                    "longName":         r.get("Name"),
-                    "sector":           r.get("Sector"),
-                    "industry":         r.get("Industry"),
-                    "trailingPE":       _av(r.get("PERatio")),
-                    "priceToBook":      _av(r.get("PriceToBookRatio")),
-                    # AV returns ROE as % already (e.g. 0.18 = 18%) — store raw, _safe multiplies by 100
-                    "returnOnEquity":   _av(r.get("ReturnOnEquityTTM")),
-                    "trailingEps":      _av(r.get("EPS")),
-                    "dividendYield":    _av(r.get("DividendYield")),
-                    "marketCap":        _av(r.get("MarketCapitalization")),
-                    "fiftyTwoWeekHigh": _av(r.get("52WeekHigh")),
-                    "fiftyTwoWeekLow":  _av(r.get("52WeekLow")),
-                    "debtToEquity":     _av(r.get("DebtToEquityRatio")),
-                }
-                for k, v in av_data.items():
-                    if v is not None and not merged.get(k):
-                        merged[k] = v
-                logger.info(f"Alpha Vantage OK {symbol}: PE={av_data.get('trailingPE')}, ROE={av_data.get('returnOnEquity')}")
-            else:
-                logger.warning(f"Alpha Vantage {symbol}: no PE in response (symbol format may need BSE: prefix)")
-        except Exception as e:
-            logger.warning(f"Alpha Vantage overview {symbol}: {e}")
+        # Try multiple symbol formats — AV is inconsistent with NSE stocks
+        av_symbol_formats = [f"BSE:{symbol}", f"{symbol}.BSE", symbol]
+        for av_sym in av_symbol_formats:
+            try:
+                r = requests.get(
+                    "https://www.alphavantage.co/query",
+                    params={"function": "OVERVIEW", "symbol": av_sym,
+                            "apikey": ALPHA_VANTAGE_KEY},
+                    timeout=8,
+                ).json()
+                av_data = _av_parse(r)
+                if av_data:
+                    for k, v in av_data.items():
+                        if v is not None and not merged.get(k):
+                            merged[k] = v
+                    logger.info(f"Alpha Vantage OK {symbol} (fmt={av_sym}): "
+                                f"PE={av_data.get('trailingPE')}")
+                    break
+                else:
+                    logger.debug(f"Alpha Vantage {symbol} fmt={av_sym}: no PE")
+            except Exception as e:
+                logger.warning(f"Alpha Vantage overview {symbol} fmt={av_sym}: {e}")
+                break  # network error — don't retry other formats
 
     if merged:
         _cset(key, merged)
@@ -1198,10 +1230,12 @@ def build_portfolio(profile: str) -> str:
     ]
     total_score = 0
     count = 0
-    for sym in p["stocks"]:
+    for i, sym in enumerate(p["stocks"]):
+        # Small delay between stocks to avoid yfinance rate limiting
+        if i > 0:
+            time.sleep(1.2)
         try:
-            df   = fetch_history(sym, period="5d")
-            info = fetch_info(sym)
+            df = fetch_history(sym, period="5d")
             if df.empty or len(df) < 2:
                 lines.append(f"  • <b>{sym}</b>: ⚠️ No data")
                 continue
@@ -1210,10 +1244,13 @@ def build_portfolio(profile: str) -> str:
             prev   = round(float(close.iloc[-2]), 2)
             chg    = round(((ltp - prev) / prev) * 100, 2)
             rsi_v  = compute_rsi(close)
-            f_data = extract_fundamentals(info)
+            # For portfolio we skip fetch_info to avoid extra rate limit hits.
+            # Quality score from technicals only.
             trend  = ("BULLISH" if len(close) >= 3 and
                       float(close.iloc[-1]) > float(close.iloc[-3]) else "NEUTRAL")
-            score_num, _ = quality_score(f_data, rsi_v, trend)
+            score_num, _ = quality_score({
+                "pe": None, "pb": None, "roe": None, "div": None, "de": None
+            }, rsi_v, trend)
             total_score += score_num
             count       += 1
             chg_em = "🟢" if chg >= 0 else "🔴"
@@ -1572,16 +1609,15 @@ def btn_ai_topic(msg):
 
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_text(msg):
-    text = msg.text.strip()
-    uid  = msg.from_user.id
+    text  = msg.text.strip()
+    uid   = msg.from_user.id
+    state = get_state(uid)   # read state FIRST before any other logic
 
-    # Skip already-handled menu labels
+    # ── 1. Skip menu button labels already handled by specific handlers ────────
     if text.upper() in MENU_LABELS or text.upper() in AI_MENU_LABELS:
         return
 
-    state = get_state(uid)
-
-    # ── AI Chat mode: ALL free text goes to AI ────────────────────────────────
+    # ── 2. AI Chat mode: ALL free text → AI, regardless of content ────────────
     if state == "in_ai_chat":
         if is_rate_limited(uid):
             send(msg.chat.id, "⏳ Too many requests. Please wait.",
@@ -1597,7 +1633,7 @@ def handle_text(msg):
                  reply_markup=ai_chat_kb())
         return
 
-    # ── Symbol lookup ──────────────────────────────────────────────────────────
+    # ── 3. Validate as NSE symbol ──────────────────────────────────────────────
     clean = text.upper().replace(" ", "").replace(".NS", "").replace("&", "A")
 
     if not (2 <= len(clean) <= 15 and clean.replace("-", "").isalnum()):
@@ -1611,8 +1647,9 @@ def handle_text(msg):
 
     record_usage(uid)
     record_history(uid, clean)
-    set_state(uid, None)
+    set_state(uid, None)   # clear state after use
 
+    # ── 4. Run stock analysis (always — state was analysis or default) ─────────
     send(msg.chat.id, f"🔍 Analysing <b>{clean}</b>… ⏳")
     try:
         send(msg.chat.id, build_advisory(clean), reply_markup=main_kb())
