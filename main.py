@@ -3,7 +3,16 @@ main.py  —  AI Stock Advisory Telegram Bot
 Flask webhook server for Render deployment.
 
 Start command : gunicorn main:app --bind 0.0.0.0:$PORT
-Environment   : TELEGRAM_TOKEN, GROQ_API_KEY, NEWS_API_KEY, WEBHOOK_URL
+Environment variables (set in Render dashboard):
+  TELEGRAM_TOKEN     — bot token from BotFather
+  WEBHOOK_URL        — your Render URL e.g. https://xxx.onrender.com
+  GROQ_API_KEY       — primary AI (Llama 3.3 70B, fastest)
+  GEMINI_API_KEY     — fallback AI (Gemini 2.0 Flash)
+  OPENAI_KEY         — fallback AI (GPT-4o-mini)
+  ALPHA_VANTAGE_KEY  — fallback price/fundamental data
+  FINNHUB_API_KEY    — fallback price data
+  TAVILY_API_KEY     — AI-powered news search
+  PORT               — default 10000
 """
 
 import os
@@ -19,13 +28,7 @@ from flask import Flask, request, jsonify
 import telebot
 from telebot import types
 
-# ── optional AI ───────────────────────────────────────────────────────────────
-try:
-    from groq import Groq
-    GROQ_CLIENT = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
-except Exception:
-    GROQ_CLIENT = None
-
+# ── yfinance rate-limit exception ─────────────────────────────────────────────
 try:
     from yfinance.exceptions import YFRateLimitError
 except ImportError:
@@ -39,16 +42,51 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── config (from environment — never hard-code secrets) ───────────────────────
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-WEBHOOK_URL    = os.getenv("WEBHOOK_URL", "").rstrip("/")
-NEWS_API_KEY   = os.getenv("NEWS_API_KEY", "")
-PORT           = int(os.getenv("PORT", 10000))
+# ── config — all values from environment, never hard-coded ───────────────────
+TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
+WEBHOOK_URL       = os.getenv("WEBHOOK_URL", "").rstrip("/")
+PORT              = int(os.getenv("PORT", 10000))
+
+GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
+OPENAI_API_KEY    = os.getenv("OPENAI_KEY", "")
+ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
+FINNHUB_API_KEY   = os.getenv("FINNHUB_API_KEY", "")
+TAVILY_API_KEY    = os.getenv("TAVILY_API_KEY", "")
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN environment variable is not set")
 
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+
+# ── AI clients (initialised once, used in fallback order) ────────────────────
+GROQ_CLIENT = None
+try:
+    if GROQ_API_KEY:
+        from groq import Groq
+        GROQ_CLIENT = Groq(api_key=GROQ_API_KEY)
+        logger.info("AI: GROQ client ready")
+except Exception as e:
+    logger.warning(f"GROQ init failed: {e}")
+
+GEMINI_MODEL = None
+try:
+    if GEMINI_API_KEY:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_MODEL = genai.GenerativeModel("gemini-2.0-flash")
+        logger.info("AI: Gemini client ready")
+except Exception as e:
+    logger.warning(f"Gemini init failed: {e}")
+
+OPENAI_CLIENT = None
+try:
+    if OPENAI_API_KEY:
+        from openai import OpenAI
+        OPENAI_CLIENT = OpenAI(api_key=OPENAI_API_KEY)
+        logger.info("AI: OpenAI client ready")
+except Exception as e:
+    logger.warning(f"OpenAI init failed: {e}")
 
 WATCHLIST = {
     "LARGE_CAP": ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ITC",
@@ -207,42 +245,142 @@ def quality_score(f: dict, rsi: float, trend: str):
                "HOLD"       if s >= 45 else "CAUTION" if s >= 30 else "AVOID")
     return s, f"{s}/100 {stars}  {verdict}"
 
-# ── AI ────────────────────────────────────────────────────────────────────────
+# ── AI with full fallback chain: GROQ → Gemini → OpenAI ──────────────────────
 def ai_insights(symbol, ltp, rsi, macd_line, trend, pe, roe) -> str:
-    if not GROQ_CLIENT:
-        return "⚠️ AI unavailable — set GROQ_API_KEY"
     prompt = (
         f"3-bullet bullish factors and 2-bullet risks for {symbol} (NSE India). "
         f"LTP ₹{ltp}, RSI {rsi}, MACD {'bullish' if macd_line>0 else 'bearish'}, "
         f"Trend {trend}, PE {pe}, ROE {roe}%. "
-        f"Format: BULLISH:\\n• ...\\nRISKS:\\n• ..."
+        f"Format exactly:\nBULLISH:\n• ...\n• ...\n• ...\nRISKS:\n• ...\n• ..."
     )
-    try:
-        resp = GROQ_CLIENT.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": "Concise Indian equity analyst."},
-                      {"role": "user",   "content": prompt}],
-            max_tokens=300, temperature=0.4,
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        logger.warning(f"AI error: {e}")
-        return "⚠️ AI analysis unavailable"
+    system = "You are a concise Indian equity analyst."
 
+    # 1. GROQ (fastest — Llama 3.3 70B)
+    if GROQ_CLIENT:
+        try:
+            resp = GROQ_CLIENT.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "system", "content": system},
+                          {"role": "user",   "content": prompt}],
+                max_tokens=300, temperature=0.4,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            if text:
+                logger.info(f"AI: GROQ used for {symbol}")
+                return text
+        except Exception as e:
+            logger.warning(f"GROQ failed for {symbol}: {e}")
+
+    # 2. Gemini (fallback)
+    if GEMINI_MODEL:
+        try:
+            resp = GEMINI_MODEL.generate_content(f"{system}\n\n{prompt}")
+            text = (getattr(resp, "text", "") or "").strip()
+            if text:
+                logger.info(f"AI: Gemini used for {symbol}")
+                return text
+        except Exception as e:
+            logger.warning(f"Gemini failed for {symbol}: {e}")
+
+    # 3. OpenAI (last resort)
+    if OPENAI_CLIENT:
+        try:
+            resp = OPENAI_CLIENT.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "system", "content": system},
+                          {"role": "user",   "content": prompt}],
+                max_tokens=300, temperature=0.4,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            if text:
+                logger.info(f"AI: OpenAI used for {symbol}")
+                return text
+        except Exception as e:
+            logger.warning(f"OpenAI failed for {symbol}: {e}")
+
+    return "⚠️ AI analysis unavailable — all providers failed or keys not set"
+
+
+# ── news: Tavily (AI search) → Alpha Vantage news ────────────────────────────
 def fetch_news(symbol: str) -> str:
-    if not NEWS_API_KEY:
-        return ""
-    try:
-        r = requests.get(
-            "https://newsapi.org/v2/everything",
-            params={"q": f"{symbol} NSE India", "sortBy": "publishedAt",
-                    "pageSize": 2, "apiKey": NEWS_API_KEY},
-            timeout=5,
-        ).json()
-        return "\n".join(f"📰 {a['title'][:80]}"
-                         for a in r.get("articles", [])[:2] if a.get("title"))
-    except Exception:
-        return ""
+    # 1. Tavily — AI-powered, highest quality
+    if TAVILY_API_KEY:
+        try:
+            resp = requests.post(
+                "https://api.tavily.com/search",
+                json={"api_key": TAVILY_API_KEY,
+                      "query": f"{symbol} NSE India stock news",
+                      "max_results": 3,
+                      "search_depth": "basic"},
+                timeout=6,
+            ).json()
+            results = resp.get("results", [])
+            if results:
+                lines = [f"📰 {r['title'][:80]}" for r in results[:2] if r.get("title")]
+                if lines:
+                    logger.info(f"News: Tavily used for {symbol}")
+                    return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"Tavily news failed: {e}")
+
+    # 2. Alpha Vantage news sentiment
+    if ALPHA_VANTAGE_KEY:
+        try:
+            resp = requests.get(
+                "https://www.alphavantage.co/query",
+                params={"function": "NEWS_SENTIMENT", "tickers": f"NSE:{symbol}",
+                        "limit": 3, "apikey": ALPHA_VANTAGE_KEY},
+                timeout=6,
+            ).json()
+            feed = resp.get("feed", [])
+            if feed:
+                lines = [f"📰 {a['title'][:80]}" for a in feed[:2] if a.get("title")]
+                if lines:
+                    logger.info(f"News: Alpha Vantage used for {symbol}")
+                    return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"Alpha Vantage news failed: {e}")
+
+    return ""
+
+
+# ── price fallback: yfinance → Finnhub → Alpha Vantage ───────────────────────
+def fetch_ltp_fallback(symbol: str) -> float | None:
+    """Try alternative sources when yfinance returns empty."""
+
+    # Finnhub
+    if FINNHUB_API_KEY:
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/quote",
+                params={"symbol": f"NSE:{symbol}", "token": FINNHUB_API_KEY},
+                timeout=5,
+            ).json()
+            price = float(resp.get("c", 0))
+            if price > 0:
+                logger.info(f"Price: Finnhub used for {symbol}")
+                return round(price, 2)
+        except Exception as e:
+            logger.warning(f"Finnhub price failed {symbol}: {e}")
+
+    # Alpha Vantage
+    if ALPHA_VANTAGE_KEY:
+        try:
+            resp = requests.get(
+                "https://www.alphavantage.co/query",
+                params={"function": "GLOBAL_QUOTE",
+                        "symbol": f"NSE:{symbol}",
+                        "apikey": ALPHA_VANTAGE_KEY},
+                timeout=6,
+            ).json()
+            price = float(resp.get("Global Quote", {}).get("05. price", 0))
+            if price > 0:
+                logger.info(f"Price: Alpha Vantage used for {symbol}")
+                return round(price, 2)
+        except Exception as e:
+            logger.warning(f"Alpha Vantage price failed {symbol}: {e}")
+
+    return None
 
 # ── advisory builder ──────────────────────────────────────────────────────────
 def build_advisory(symbol: str) -> str:
@@ -251,6 +389,15 @@ def build_advisory(symbol: str) -> str:
     info   = fetch_info(symbol)
 
     if df.empty or len(df) < 20:
+        # Try alternative price sources before giving up
+        fallback_price = fetch_ltp_fallback(symbol)
+        if fallback_price:
+            return (
+                f"⚠️ <b>{symbol}</b> — limited historical data available.\n"
+                f"💵 LTP: ₹{fallback_price} (via Finnhub/AlphaVantage)\n\n"
+                f"Full technical analysis requires at least 20 days of history.\n"
+                f"Try again later when yfinance data is available."
+            )
         return f"❌ No data for <b>{symbol}</b>. Check the symbol and try again."
 
     close              = df["Close"]
