@@ -1,7 +1,7 @@
 """
 main.py  —  AI Stock Advisory Telegram Bot (single-file deployment)
 ====================================================================
-Start : gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+Start : gunicorn main:app --workers 1 --timeout 120
 Env   : TELEGRAM_TOKEN, WEBHOOK_URL, GROQ_API_KEY, GEMINI_API_KEY,
         OPENAI_KEY, ALPHA_VANTAGE_KEY, FINNHUB_API_KEY, TAVILY_API_KEY, PORT
 """
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ── Config ─────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
 WEBHOOK_URL       = os.getenv("WEBHOOK_URL", "").rstrip("/")
-PORT              = int(os.getenv("PORT", 10000))
+PORT              = int(os.getenv("PORT", 8000))   # 8000 = gunicorn default
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
 OPENAI_API_KEY    = os.getenv("OPENAI_KEY", "")
