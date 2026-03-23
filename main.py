@@ -386,16 +386,7 @@ def get_live_market_context() -> str:
     Build a real-time snapshot of Nifty + top stocks to inject into AI prompts.
     Runs fast — uses cached yfinance data where possible.
     """
-    import yfinance as yf
-
-    # Import compute functions from main only if available, else skip
-    try:
-        from data_engine import fetch_history, compute_rsi
-    except ImportError:
-        fetch_history = None
-        compute_rsi   = None
-
-    from datetime import datetime
+    # yfinance, pandas, datetime already imported at module top
     lines = [f"=== LIVE DATA {datetime.now().strftime('%d-%b-%Y %H:%M IST')} ==="]
 
     # Nifty 50
@@ -1233,6 +1224,11 @@ def build_advisory(symbol: str) -> str:
 
 # ══ PORTFOLIO / BREADTH / NEWS BUILDERS ═════════════════════════════════════
 def build_portfolio(profile: str) -> str:
+    """
+    Portfolio scanner using yf.download() batch API.
+    Downloads ALL stocks in ONE request instead of N separate requests,
+    eliminating the per-stock rate limiting that caused repeated 429 errors.
+    """
     p     = PORTFOLIOS[profile]
     lines = [
         f"{p['label']} <b>PORTFOLIO</b>",
@@ -1241,45 +1237,78 @@ def build_portfolio(profile: str) -> str:
         "━━━━━━━━━━━━━━━━━━━━",
     ]
     total_score = 0
-    count = 0
-    for i, sym in enumerate(p["stocks"]):
-        # Small delay between stocks to avoid yfinance rate limiting
-        if i > 0:
-            time.sleep(1.2)
+    count       = 0
+
+    # Build .NS tickers list
+    tickers_ns = [f"{s}.NS" for s in p["stocks"]]
+
+    # ── Single batch download — 1 request instead of 10 ──────────────────────
+    try:
+        raw = yf.download(
+            tickers   = tickers_ns,
+            period    = "1mo",
+            interval  = "1d",
+            auto_adjust = True,
+            group_by  = "ticker",
+            progress  = False,
+            threads   = False,   # serial to avoid rate limits
+        )
+    except Exception as e:
+        logger.error(f"Portfolio batch download failed: {e}")
+        raw = None
+
+    for sym, ticker in zip(p["stocks"], tickers_ns):
         try:
-            df = fetch_history(sym, period="1mo")
+            # Extract this stock's data from the batch result
+            if raw is not None and not raw.empty:
+                if len(tickers_ns) == 1:
+                    df = raw
+                else:
+                    try:
+                        df = raw[ticker].dropna(how="all")
+                    except (KeyError, TypeError):
+                        df = pd.DataFrame()
+            else:
+                df = pd.DataFrame()
+
+            # Fallback to individual fetch if batch missed this stock
+            if df.empty or len(df) < 5:
+                df = fetch_history(sym, period="1mo")
+
             if df.empty or len(df) < 2:
                 lines.append(f"  • <b>{sym}</b>: ⚠️ No data")
                 continue
+
             close  = df["Close"]
             ltp    = round(float(close.iloc[-1]), 2)
             prev   = round(float(close.iloc[-2]), 2)
             chg    = round(((ltp - prev) / prev) * 100, 2)
             rsi_v  = compute_rsi(close)
-            # For portfolio we skip fetch_info to avoid extra rate limit hits.
-            # Quality score from technicals only.
             trend  = ("BULLISH" if len(close) >= 3 and
                       float(close.iloc[-1]) > float(close.iloc[-3]) else "NEUTRAL")
-            score_num, _ = quality_score({
-                "pe": None, "pb": None, "roe": None, "div": None, "de": None
-            }, rsi_v, trend)
+            score_num, _ = quality_score(
+                {"pe": None, "pb": None, "roe": None, "div": None, "de": None},
+                rsi_v, trend
+            )
             total_score += score_num
             count       += 1
             chg_em = "🟢" if chg >= 0 else "🔴"
             rsi_em = "🟢" if rsi_v < 40 else ("🔴" if rsi_v > 65 else "⚪")
             lines.append(
                 f"  {chg_em} <b>{sym}</b>: ₹{ltp} "
-                f"({'+' if chg>=0 else ''}{chg}%)"
+                f"({'+' if chg >= 0 else ''}{chg}%)"
                 f"  RSI:{rsi_v}{rsi_em}  Score:{score_num}"
             )
         except Exception as e:
             logger.error(f"Portfolio {sym}: {e}")
             lines.append(f"  • <b>{sym}</b>: ⚠️ Error")
+
     avg = round(total_score / count, 1) if count else 0
     lines += [
         "━━━━━━━━━━━━━━━━━━━━",
         f"📊 Avg Score: {avg}  |  {count}/{len(p['stocks'])} loaded",
-        "", "⚠️ Educational only. Not SEBI-registered advice.",
+        "",
+        "⚠️ Educational only. Not SEBI-registered advice.",
     ]
     return "\n".join(lines)
 
@@ -1310,9 +1339,30 @@ def build_market_breadth() -> str:
 
     adv = dec = unch = 0
     overbought, oversold = [], []
+
+    # Batch download all breadth stocks in ONE request — eliminates per-stock rate limiting
+    try:
+        b_tickers = [f"{s}.NS" for s in BREADTH_STOCKS]
+        raw_b = yf.download(
+            tickers=b_tickers, period="1mo", interval="1d",
+            auto_adjust=True, group_by="ticker",
+            progress=False, threads=False,
+        )
+    except Exception as e:
+        logger.warning(f"Breadth batch download failed: {e}")
+        raw_b = None
+
     for sym in BREADTH_STOCKS:
         try:
-            df = fetch_history(sym, period="1mo")
+            ticker = f"{sym}.NS"
+            df = pd.DataFrame()
+            if raw_b is not None and not raw_b.empty:
+                try:
+                    df = raw_b[ticker].dropna(how="all") if len(b_tickers) > 1 else raw_b
+                except (KeyError, TypeError):
+                    df = pd.DataFrame()
+            if df.empty or len(df) < 2:
+                df = fetch_history(sym, period="1mo")   # fallback
             if df.empty or len(df) < 2:
                 unch += 1; continue
             close = df["Close"]
