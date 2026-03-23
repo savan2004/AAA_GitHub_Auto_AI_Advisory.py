@@ -144,17 +144,23 @@ def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
     if cached is not None:
         return cached
     ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
-    try:
-        df = yf.Ticker(ticker).history(period=period, interval="1d")
-        if not df.empty and float(df["Close"].iloc[-1]) > 1:
-            _cache_set(key, df)
-        return df
-    except YFRateLimitError:
-        logger.warning(f"Rate limited: {ticker}")
-        return pd.DataFrame()
-    except Exception as e:
-        logger.error(f"History error {ticker}: {e}")
-        return pd.DataFrame()
+    for attempt in range(2):                         # retry once on empty
+        try:
+            t  = yf.Ticker(ticker)
+            df = t.history(period=period, interval="1d", auto_adjust=True)
+            if df.empty and attempt == 0:            # first attempt empty → retry
+                time.sleep(1.5)
+                continue
+            if not df.empty and float(df["Close"].iloc[-1]) > 0.5:
+                _cache_set(key, df)
+                return df
+        except YFRateLimitError:
+            logger.warning(f"Rate limited: {ticker}")
+            time.sleep(5)
+        except Exception as e:
+            logger.error(f"History error {ticker} attempt {attempt+1}: {e}")
+            if attempt == 0: time.sleep(1)
+    return pd.DataFrame()
 
 def fetch_info(symbol: str) -> dict:
     key    = f"info_{symbol}"
@@ -401,7 +407,7 @@ def build_advisory(symbol: str) -> str:
     df     = fetch_history(symbol)
     info   = fetch_info(symbol)
 
-    if df.empty or len(df) < 20:
+    if df.empty or len(df) < 5:
         # Try alternative price sources before giving up
         fallback_price = fetch_ltp_fallback(symbol)
         if fallback_price:
@@ -551,7 +557,7 @@ def build_ai_advisory(symbol: str) -> str:
     info   = fetch_info(symbol)
     price_line = None
 
-    if df.empty or len(df) < 20:
+    if df.empty or len(df) < 5:
         fallback = fetch_ltp_fallback(symbol)
         if not fallback:
             return f"\u274c No data found for <b>{symbol}</b>. Check the symbol and try again."
@@ -888,12 +894,195 @@ def build_market_news() -> str:
     lines += ["", "⚠️ Educational only. Not SEBI-registered advice."]
     return "\n".join(lines)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AI CHAT — Live Market Q&A
+# People ask questions; AI responds with real-time market data context
+# Topics: Nifty valuation, fundamental picks, Nifty update,
+#         technical swing trade, option trade ideas
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# AI Chat conversation history per user (last 6 messages for context)
+_chat_history: dict = {}   # uid -> list of {"role": ..., "content": ...}
+
+def get_chat_history(uid: int) -> list:
+    return _chat_history.get(uid, [])
+
+def add_to_chat(uid: int, role: str, content: str):
+    if uid not in _chat_history:
+        _chat_history[uid] = []
+    _chat_history[uid].append({"role": role, "content": content})
+    _chat_history[uid] = _chat_history[uid][-12:]  # keep last 6 exchanges
+
+def clear_chat(uid: int):
+    _chat_history.pop(uid, None)
+
+# ── live market context builder ───────────────────────────────────────────────
+def get_live_market_context() -> str:
+    """Fetch real-time Nifty + top stocks context for AI to use."""
+    ctx_lines = [f"LIVE MARKET DATA ({datetime.now().strftime('%d-%b-%Y %H:%M' + ' IST')})"]
+
+    # Nifty 50
+    try:
+        df = yf.Ticker("^NSEI").history(period="5d", interval="1d")
+        if not df.empty and len(df) >= 2:
+            ltp  = round(float(df["Close"].iloc[-1]), 2)
+            prev = round(float(df["Close"].iloc[-2]), 2)
+            chg  = round(((ltp - prev) / prev) * 100, 2)
+            high = round(float(df["High"].iloc[-1]), 2)
+            low  = round(float(df["Low"].iloc[-1]),  2)
+            ctx_lines.append(f"NIFTY 50: {ltp} ({chg:+.2f}%) | Day H/L: {high}/{low}")
+    except Exception:
+        pass
+
+    # Bank Nifty
+    try:
+        df = yf.Ticker("^NSEBANK").history(period="2d", interval="1d")
+        if not df.empty and len(df) >= 2:
+            ltp  = round(float(df["Close"].iloc[-1]), 2)
+            prev = round(float(df["Close"].iloc[-2]), 2)
+            chg  = round(((ltp - prev) / prev) * 100, 2)
+            ctx_lines.append(f"BANK NIFTY: {ltp} ({chg:+.2f}%)")
+    except Exception:
+        pass
+
+    # Top 5 Nifty stocks quick snapshot
+    top5 = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
+    stock_lines = []
+    for sym in top5:
+        try:
+            df = fetch_history(sym, period="5d")
+            if df.empty or len(df) < 2: continue
+            ltp  = round(float(df["Close"].iloc[-1]), 2)
+            prev = round(float(df["Close"].iloc[-2]), 2)
+            chg  = round(((ltp - prev) / prev) * 100, 2)
+            rsi_v = compute_rsi(df["Close"]) if len(df["Close"]) >= 14 else 50.0
+            stock_lines.append(f"{sym}: ₹{ltp} ({chg:+.2f}%) RSI:{rsi_v}")
+        except Exception:
+            pass
+    if stock_lines:
+        ctx_lines.append("TOP STOCKS: " + " | ".join(stock_lines))
+
+    # Nifty PE from info
+    try:
+        info = yf.Ticker("^NSEI").info
+        pe   = info.get("trailingPE") or info.get("forwardPE")
+        if pe: ctx_lines.append(f"NIFTY PE: {round(float(pe),1)}")
+    except Exception:
+        pass
+
+    return "\n".join(ctx_lines)
+
+# ── AI chat responder ─────────────────────────────────────────────────────────
+CHAT_SYSTEM_PROMPT = """You are an expert Indian stock market AI assistant with access to live market data.
+You specialize in:
+1. NIFTY VALUATION — PE ratio analysis, fair value, over/undervalued assessment
+2. FUNDAMENTAL PICKS — Stocks with strong ROE, low PE, solid balance sheet
+3. NIFTY UPDATE — Index levels, trend, support/resistance, outlook
+4. TECHNICAL SWING TRADES — Entry, target, stop-loss setups using RSI/MACD/EMA
+5. OPTION TRADES — Call/Put strategies, strikes, expiry for Nifty/BankNifty
+
+Rules:
+- Always use the live market data provided in the context
+- Give specific, actionable insights with numbers
+- For option trades: specify strike price, expiry, entry, target, SL
+- For swing trades: specify entry zone, target 1, target 2, stop loss
+- Keep responses concise (under 300 words)
+- End every response with: ⚠️ Educational only. Not SEBI-registered advice.
+- Never give vague answers — always include specific levels/prices"""
+
+def ai_chat_respond(uid: int, user_message: str) -> str:
+    """Generate AI response with live market context."""
+    # Get live data
+    market_ctx = get_live_market_context()
+
+    # Build messages
+    system_with_ctx = CHAT_SYSTEM_PROMPT + f"\n\nLIVE CONTEXT:\n{market_ctx}"
+    history = get_chat_history(uid)
+
+    messages = [{"role": "system", "content": system_with_ctx}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    response_text = ""
+
+    # GROQ first
+    if GROQ_CLIENT:
+        try:
+            resp = GROQ_CLIENT.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages,
+                max_tokens=500,
+                temperature=0.4,
+            )
+            response_text = (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.warning(f"GROQ chat error: {e}")
+
+    # Gemini fallback
+    if not response_text and GEMINI_MODEL:
+        try:
+            full_prompt = system_with_ctx + "\n\n"
+            for m in history:
+                full_prompt += f"{m['role'].upper()}: {m['content']}\n"
+            full_prompt += f"USER: {user_message}"
+            resp = GEMINI_MODEL.generate_content(full_prompt)
+            response_text = (getattr(resp, "text", "") or "").strip()
+        except Exception as e:
+            logger.warning(f"Gemini chat error: {e}")
+
+    # OpenAI fallback
+    if not response_text and OPENAI_CLIENT:
+        try:
+            resp = OPENAI_CLIENT.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=500,
+                temperature=0.4,
+            )
+            response_text = (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.warning(f"OpenAI chat error: {e}")
+
+    if not response_text:
+        return "⚠️ AI unavailable right now. Check your API keys in Render."
+
+    # Save to history
+    add_to_chat(uid, "user", user_message)
+    add_to_chat(uid, "assistant", response_text)
+
+    return response_text
+
+# ── AI chat topic quick-buttons ───────────────────────────────────────────────
+def ai_chat_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add(
+        types.KeyboardButton("📊 Nifty Valuation"),
+        types.KeyboardButton("💎 Fundamental Picks"),
+        types.KeyboardButton("📈 Nifty Update"),
+        types.KeyboardButton("🎯 Technical Swing Trade"),
+        types.KeyboardButton("⚡ Option Trade"),
+        types.KeyboardButton("🔙 Main Menu"),
+    )
+    return kb
+
+AI_CHAT_TOPICS = {
+    "📊 Nifty Valuation":       "What is the current Nifty 50 valuation? Is it overvalued or undervalued based on PE ratio? Give me your analysis.",
+    "💎 Fundamental Picks":     "Give me 3 fundamentally strong NSE stocks right now with low PE, high ROE, and low debt. Include entry price and targets.",
+    "📈 Nifty Update":          "Give me the latest Nifty 50 update. What is the trend, key support and resistance levels, and outlook for this week?",
+    "🎯 Technical Swing Trade": "Give me 2 technical swing trade setups for NSE stocks right now. Include entry, target 1, target 2, and stop loss.",
+    "⚡ Option Trade":           "Give me an option trade idea for Nifty or BankNifty for this week. Include call or put, strike price, expiry, entry, target, and stop loss.",
+}
+
+AI_CHAT_BUTTON_LABELS = set(AI_CHAT_TOPICS.keys()) | {"🤖 AI Chat", "🔙 Main Menu"}
+
 # ── keyboard ──────────────────────────────────────────────────────────────────
 def main_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add(
         types.KeyboardButton("🔍 Stock Analysis"),
         types.KeyboardButton("📊 Market Breadth"),
+        types.KeyboardButton("🤖 AI Chat"),
         types.KeyboardButton("🏦 Conservative"),
         types.KeyboardButton("⚖️ Moderate"),
         types.KeyboardButton("🚀 Aggressive"),
@@ -1061,7 +1250,9 @@ def btn_help(msg):
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Main Menu")
 def btn_back(msg):
-    send(msg.chat.id, "🏠 Main menu", reply_markup=main_kb())
+    clear_chat(msg.from_user.id)   # clear AI chat history on back
+    set_state(msg.from_user.id, None)
+    send(msg.chat.id, "🏠 Main Menu", reply_markup=main_kb())
 
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_text(msg):
@@ -1071,6 +1262,26 @@ def handle_text(msg):
 
     if text.upper() in MENU_LABELS:
         return
+
+    # ── AI Chat mode: any free text goes to AI ───────────────────────────────
+    uid_state = get_state(uid)
+    if uid_state == "in_ai_chat":
+        # Topic quick-buttons handled above; free text = custom question
+        if text.upper() not in AI_CHAT_BUTTON_LABELS:
+            if is_rate_limited(uid):
+                send(msg.chat.id, "⏳ Too many requests. Please wait.",
+                     reply_markup=ai_chat_kb())
+                return
+            send(msg.chat.id, "🤖 Thinking… ⏳")
+            record_usage(uid)
+            try:
+                response = ai_chat_respond(uid, text)
+                send(msg.chat.id, response, reply_markup=ai_chat_kb())
+            except Exception as e:
+                logger.error(f"AI chat free text error: {e}")
+                send(msg.chat.id, "❌ AI response failed. Try again.",
+                     reply_markup=ai_chat_kb())
+            return
 
     if not (2 <= len(clean) <= 15 and clean.replace("-", "").isalnum()):
         set_state(uid, None)
@@ -1101,6 +1312,44 @@ def handle_text(msg):
             logger.error(f"Advisory error {clean}: {e}")
             send(msg.chat.id, f"❌ Could not analyse {clean}. Try again.",
                  reply_markup=main_kb())
+
+
+@bot.message_handler(func=lambda m: m.text == "🤖 AI Chat")
+def btn_ai_chat(msg):
+    uid = msg.from_user.id
+    set_state(uid, "in_ai_chat")
+    send(msg.chat.id,
+         "🤖 <b>AI CHAT — Live Market Assistant</b>\n\n"
+         "Ask me anything about the Indian stock market.\n\n"
+         "💬 <b>Examples:</b>\n"
+         "• <i>Is Nifty overvalued right now?</i>\n"
+         "• <i>Give me a swing trade for today</i>\n"
+         "• <i>Best stocks to buy fundamentally</i>\n"
+         "• <i>Nifty option trade for this week</i>\n\n"
+         "Or tap a quick topic below 👇",
+         reply_markup=ai_chat_kb())
+
+@bot.message_handler(func=lambda m: m.text in (
+    "📊 Nifty Valuation", "💎 Fundamental Picks",
+    "📈 Nifty Update", "🎯 Technical Swing Trade", "⚡ Option Trade"
+))
+def btn_ai_topic(msg):
+    uid   = msg.from_user.id
+    topic = msg.text
+    query = AI_CHAT_TOPICS.get(topic, topic)
+    if is_rate_limited(uid):
+        send(msg.chat.id, "⏳ Too many requests. Please wait.", reply_markup=ai_chat_kb())
+        return
+    send(msg.chat.id, f"🤖 Fetching live data & analysing… ⏳")
+    record_usage(uid)
+    try:
+        response = ai_chat_respond(uid, query)
+        send(msg.chat.id,
+             f"<b>{topic}</b>\n━━━━━━━━━━━━━━━━━━━━\n{response}",
+             reply_markup=ai_chat_kb())
+    except Exception as e:
+        logger.error(f"AI topic error: {e}")
+        send(msg.chat.id, "❌ AI response failed. Try again.", reply_markup=ai_chat_kb())
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
