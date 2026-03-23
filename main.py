@@ -57,6 +57,7 @@ def _yf_request(callable, *args, **kwargs):
     Serialises all yfinance requests via a lock.
     Raises YFRateLimitError if a rate limit is hit after waiting.
     """
+    global _yf_cooldown_until   # <--- CRITICAL: declare as global to modify
     with _yf_lock:
         now = time.time()
         if now < _yf_cooldown_until:
