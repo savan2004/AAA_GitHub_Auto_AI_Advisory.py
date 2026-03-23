@@ -47,6 +47,60 @@ WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 app = Flask(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 
+# ══ GLOBAL YFINANCE WRAPPER (thread-safe, rate-limit aware) ═══════════════════
+_yf_lock = threading.Lock()
+_yf_cooldown_until = 0.0
+
+def _yf_request(callable, *args, **kwargs):
+    """
+    Execute a yfinance call with global rate-limit cooldown.
+    Serialises all yfinance requests via a lock.
+    Raises YFRateLimitError if a rate limit is hit after waiting.
+    """
+    with _yf_lock:
+        now = time.time()
+        if now < _yf_cooldown_until:
+            wait = _yf_cooldown_until - now
+            logger.info(f"yfinance global cooldown: sleeping {wait:.1f}s")
+            time.sleep(wait)
+
+        try:
+            return callable(*args, **kwargs)
+        except YFRateLimitError as e:
+            # Set a cooldown (base 60s) and re-raise
+            _yf_cooldown_until = time.time() + 60
+            logger.warning(f"yfinance rate limit hit, global cooldown set to {_yf_cooldown_until}")
+            raise
+        except Exception as e:
+            # For any other exception, let it propagate
+            raise
+
+def _safe_yf_history(ticker_symbol, period="1d", interval="1d"):
+    """Fetch history for a single ticker using the global wrapper."""
+    def _fetch():
+        return yf.Ticker(ticker_symbol).history(period=period, interval=interval)
+    return _yf_request(_fetch)
+
+def _safe_yf_download(tickers, period="1d", interval="1d", **kwargs):
+    """Batch download using the global wrapper."""
+    def _download():
+        return yf.download(tickers=tickers, period=period, interval=interval,
+                           auto_adjust=True, group_by='ticker', progress=False,
+                           **kwargs)
+    return _yf_request(_download)
+
+def _safe_yf_ticker_info(ticker_symbol):
+    """Fetch info for a single ticker using the wrapper."""
+    def _fetch_info():
+        return yf.Ticker(ticker_symbol).info
+    return _yf_request(_fetch_info)
+
+def _safe_yf_ticker_fast_info(ticker_symbol):
+    """Fetch fast_info for a single ticker using the wrapper."""
+    def _fetch_fast_info():
+        return yf.Ticker(ticker_symbol).fast_info
+    return _yf_request(_fetch_fast_info)
+
 # ══ AI ENGINE ══════════════════════════════════════════════════════════════
 
 # ── AI client globals (declared here, assigned lazily on first use) ───────────
@@ -96,10 +150,6 @@ def ai_available() -> bool:
     return bool(GROQ_API_KEY or GEMINI_API_KEY or OPENAI_API_KEY)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CORE AI CALL — GROQ → Gemini → OpenAI fallback
-# ══════════════════════════════════════════════════════════════════════════════
-
 def _call_ai(messages: list, max_tokens: int = 500,
              system: str = "") -> tuple[str, str]:
     """
@@ -112,7 +162,7 @@ def _call_ai(messages: list, max_tokens: int = 500,
     """
     errors = []
 
-    # ── 1. GROQ (Llama 3.3 70B — fastest, free) ───────────────────────────────
+    # ── 1. GROQ ───────────────────────────────────────────────
     groq = _get_groq()
     if not GROQ_API_KEY:
         errors.append("GROQ: key not set — add GROQ_API_KEY in Render env vars")
@@ -143,7 +193,7 @@ def _call_ai(messages: list, max_tokens: int = 500,
             else:
                 errors.append(f"GROQ: {msg[:120]}")
 
-    # ── 2. Gemini (2.0 Flash — fast, free) ────────────────────────────────────
+    # ── 2. Gemini ────────────────────────────────────────────
     gemini = _get_gemini()
     if not GEMINI_API_KEY:
         errors.append("Gemini: key not set — add GEMINI_API_KEY in Render env vars")
@@ -172,7 +222,7 @@ def _call_ai(messages: list, max_tokens: int = 500,
             else:
                 errors.append(f"Gemini: {msg[:120]}")
 
-    # ── 3. OpenAI (GPT-4o-mini — paid fallback) ───────────────────────────────
+    # ── 3. OpenAI ────────────────────────────────────────────
     openai_client = _get_openai()
     if not OPENAI_API_KEY:
         errors.append("OpenAI: key not set — add OPENAI_KEY in Render env vars")
@@ -206,16 +256,8 @@ def _call_ai(messages: list, max_tokens: int = 500,
     return "", "\n".join(errors)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STOCK INSIGHTS  (brief snippet used in advisory card)
-# ══════════════════════════════════════════════════════════════════════════════
-
 def ai_insights(symbol: str, ltp: float, rsi: float, macd_line: float,
                 trend: str, pe: str, roe: str) -> str:
-    """
-    3-bullet bullish + 2-bullet risk snippet for the stock analysis card.
-    Called by build_advisory() in main.py.
-    """
     if not ai_available():
         return "⚠️ No AI keys set — add GROQ_API_KEY in Render environment"
 
@@ -237,12 +279,7 @@ def ai_insights(symbol: str, ltp: float, rsi: float, macd_line: float,
     return "⚠️ AI analysis temporarily unavailable"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# NEWS FETCH  (Tavily → Alpha Vantage)
-# ══════════════════════════════════════════════════════════════════════════════
-
 def fetch_news(symbol: str) -> str:
-    """Fetch 2 recent headlines for a stock symbol."""
     if TAVILY_API_KEY:
         try:
             r = requests.post(
@@ -274,14 +311,11 @@ def fetch_news(symbol: str) -> str:
                 return "\n".join(lines)
         except Exception as e:
             logger.warning(f"ai_engine AV news {symbol}: {e}")
-
     return ""
 
 
 def fetch_market_news() -> str:
-    """Fetch general Indian market headlines."""
     headlines = []
-
     if TAVILY_API_KEY:
         try:
             r = requests.post(
@@ -313,28 +347,18 @@ def fetch_market_news() -> str:
     return "\n".join(headlines) if headlines else ""
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# AI CHAT — Live Market Q&A
-# ══════════════════════════════════════════════════════════════════════════════
-
-# Conversation history per user (last 12 messages = 6 exchanges)
 _chat_history: dict = {}
-
-
 def add_to_chat(uid: int, role: str, content: str):
     if uid not in _chat_history:
         _chat_history[uid] = []
     _chat_history[uid].append({"role": role, "content": content})
     _chat_history[uid] = _chat_history[uid][-12:]
 
-
 def get_chat_history(uid: int) -> list:
     return _chat_history.get(uid, [])
 
-
 def clear_chat(uid: int):
     _chat_history.pop(uid, None)
-
 
 CHAT_SYSTEM = """You are an expert Indian stock market AI assistant with access to LIVE market data.
 You specialize in:
@@ -380,19 +404,21 @@ AI_CHAT_TOPICS: dict[str, str] = {
 
 AI_CHAT_TOPIC_KEYS: set = set(AI_CHAT_TOPICS.keys())
 
+# Cache for live market context (30s TTL)
+_live_market_cache = {"data": "", "ts": 0}
 
 def get_live_market_context() -> str:
-    """
-    Build a real-time snapshot of Nifty + top stocks to inject into AI prompts.
-    Runs fast — uses cached yfinance data where possible.
-    """
-    # yfinance, pandas, datetime already imported at module top
+    """Build real-time snapshot of Nifty + top stocks, cached for 30s."""
+    now = time.time()
+    if now - _live_market_cache["ts"] < 30:
+        return _live_market_cache["data"]
+
     lines = [f"=== LIVE DATA {datetime.now().strftime('%d-%b-%Y %H:%M IST')} ==="]
 
     # Nifty 50
     try:
-        df = yf.Ticker("^NSEI").history(period="5d", interval="1d")
-        if len(df) >= 2:
+        df = _safe_yf_history("^NSEI", period="5d", interval="1d")
+        if df is not None and len(df) >= 2:
             ltp  = round(float(df["Close"].iloc[-1]), 2)
             prev = round(float(df["Close"].iloc[-2]), 2)
             chg  = round((ltp - prev) / prev * 100, 2)
@@ -402,13 +428,14 @@ def get_live_market_context() -> str:
             w_l  = round(float(df["Low"].min()),  2)
             lines.append(f"NIFTY 50: {ltp:,.2f} ({chg:+.2f}%) | Day H/L: {h}/{l}")
             lines.append(f"NIFTY 5D Range: {w_l} – {w_h}")
-    except Exception:
+    except Exception as e:
         lines.append("NIFTY 50: data unavailable")
+        logger.warning(f"Live context NIFTY: {e}")
 
     # Bank Nifty
     try:
-        df = yf.Ticker("^NSEBANK").history(period="2d", interval="1d")
-        if len(df) >= 2:
+        df = _safe_yf_history("^NSEBANK", period="2d", interval="1d")
+        if df is not None and len(df) >= 2:
             ltp  = round(float(df["Close"].iloc[-1]), 2)
             prev = round(float(df["Close"].iloc[-2]), 2)
             chg  = round((ltp - prev) / prev * 100, 2)
@@ -418,11 +445,12 @@ def get_live_market_context() -> str:
 
     # Nifty PE
     try:
-        info = yf.Ticker("^NSEI").info
-        pe   = info.get("trailingPE") or info.get("forwardPE")
-        if pe:
-            lines.append(f"NIFTY PE: {round(float(pe), 1)} "
-                         f"(10yr avg ~20 | expensive >22 | cheap <18)")
+        info = _safe_yf_ticker_info("^NSEI")
+        if info:
+            pe = info.get("trailingPE") or info.get("forwardPE")
+            if pe:
+                lines.append(f"NIFTY PE: {round(float(pe), 1)} "
+                             f"(10yr avg ~20 | expensive >22 | cheap <18)")
     except Exception:
         pass
 
@@ -430,17 +458,15 @@ def get_live_market_context() -> str:
     snap = []
     top8 = ["RELIANCE","TCS","HDFCBANK","INFY",
             "ICICIBANK","SBIN","BAJFINANCE","TATAMOTORS"]
-
     for sym in top8:
         try:
             ticker = f"{sym}.NS"
-            df = yf.Ticker(ticker).history(period="5d", interval="1d")
-            if df.empty or len(df) < 2:
+            df = _safe_yf_history(ticker, period="5d", interval="1d")
+            if df is None or df.empty or len(df) < 2:
                 continue
             ltp  = round(float(df["Close"].iloc[-1]), 2)
             prev = round(float(df["Close"].iloc[-2]), 2)
             chg  = round((ltp - prev) / prev * 100, 2)
-            # Simple RSI without importing data_engine
             close = df["Close"]
             if len(close) >= 15:
                 delta = close.diff()
@@ -451,20 +477,20 @@ def get_live_market_context() -> str:
             else:
                 rsi_v = 50.0
             snap.append(f"{sym}:₹{ltp}({chg:+.1f}%)RSI:{rsi_v}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Live context top stock {sym}: {e}")
+            continue
 
     if snap:
         lines.append("TOP STOCKS: " + "  ".join(snap))
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    _live_market_cache["data"] = result
+    _live_market_cache["ts"] = now
+    return result
 
 
 def ai_chat_respond(uid: int, user_message: str) -> str:
-    """
-    Respond to a user's chat message with live market context.
-    Maintains per-user conversation history for follow-up questions.
-    """
     if not ai_available():
         return (
             "⚠️ <b>No AI keys configured.</b>\n\n"
@@ -485,7 +511,6 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
         add_to_chat(uid, "assistant", text)
         return text
 
-    # Detailed error message so user knows exactly what to fix
     return (
         "❌ <b>All AI providers failed.</b>\n\n"
         f"<b>Details:</b>\n{err}\n\n"
@@ -496,17 +521,8 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# DIAGNOSTIC HELPERS  (used by Flask /test_ai and /debug_ai routes)
-# ══════════════════════════════════════════════════════════════════════════════
-
 def test_ai_providers() -> dict:
-    """
-    Live test all AI providers with a trivial prompt.
-    Returns a dict suitable for jsonify().
-    """
     results = {}
-
     # GROQ
     if not GROQ_API_KEY:
         results["GROQ"] = "SKIP — GROQ_API_KEY not set (free at console.groq.com)"
@@ -581,7 +597,6 @@ def test_ai_providers() -> dict:
 
 
 def debug_ai_status() -> dict:
-    """Returns current key presence and client init status without making API calls."""
     return {
         "keys_configured": {
             "GROQ_API_KEY":   "set" if GROQ_API_KEY   else "MISSING",
@@ -601,9 +616,6 @@ def debug_ai_status() -> dict:
 
 
 # ══ PORTFOLIOS / WATCHLISTS ════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════════════
-# PORTFOLIOS
-# ══════════════════════════════════════════════════════════════════════════════
 PORTFOLIOS = {
     "conservative": {
         "label":  "🏦 Conservative",
@@ -641,27 +653,7 @@ BREADTH_STOCKS = [
     "SUNPHARMA","ONGC","NTPC","BAJFINANCE","AXISBANK",
 ]
 
-# ── AI Chat quick topics ───────────────────────────────────────────────────────
-AI_CHAT_TOPICS = {
-    "📊 Nifty Valuation":
-        "What is the current Nifty 50 PE ratio valuation? Is it overvalued or undervalued historically? Provide specific numbers and your assessment.",
-    "💎 Fundamental Picks":
-        "Based on current market data, give me 3 fundamentally strong NSE stocks with low PE (<25), ROE >15%, low debt. Include current price range and why each is attractive.",
-    "📈 Nifty Update":
-        "Give me a complete Nifty 50 technical update. Include current level, trend direction, key support and resistance levels, and your outlook for the next 5-7 trading days.",
-    "🎯 Technical Swing Trade":
-        "Give me 2 specific technical swing trade setups for NSE stocks right now. For each: stock name, current price, entry zone, target 1, target 2, stop loss, and reason.",
-    "⚡ Option Trade":
-        "Give me a specific option trade for Nifty or BankNifty for current week expiry. Include: index, CE or PE, specific strike price, current premium estimate, target premium, stop loss premium, and max risk.",
-}
-
-AI_CHAT_TOPIC_KEYS = set(AI_CHAT_TOPICS.keys())
-
-
 # ══ IN-MEMORY STATE ════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════════════
-# IN-MEMORY STATE
-# ══════════════════════════════════════════════════════════════════════════════
 _rate:         dict = {}
 _user_state:   dict = {}
 _user_history: dict = {}
@@ -670,7 +662,6 @@ _cache:        dict = {}
 
 CACHE_TTL = 900  # 15 min
 
-# ── cache ──────────────────────────────────────────────────────────────────────
 def _cget(key):
     d = _cache.get(key)
     if not d or time.time() - d["ts"] > CACHE_TTL:
@@ -680,7 +671,6 @@ def _cget(key):
 def _cset(key, val):
     _cache[key] = {"val": val, "ts": time.time()}
 
-# ── rate limiter ───────────────────────────────────────────────────────────────
 def is_rate_limited(uid: int, max_calls: int = 6, window: int = 60) -> bool:
     now = time.time()
     calls = [t for t in _rate.get(uid, []) if now - t < window]
@@ -690,11 +680,8 @@ def is_rate_limited(uid: int, max_calls: int = 6, window: int = 60) -> bool:
     _rate[uid].append(now)
     return False
 
-# Portfolio-specific rate limiter — 1 scan per 3 minutes per user
 _portfolio_last: dict = {}
-
-def is_portfolio_rate_limited(uid: int) -> bool:
-    """Prevent duplicate portfolio scans — minimum 180s between scans per user."""
+def is_portfolio_rate_limited(uid: int) -> int:
     last = _portfolio_last.get(uid, 0)
     if time.time() - last < 180:
         remaining = int(180 - (time.time() - last))
@@ -702,7 +689,6 @@ def is_portfolio_rate_limited(uid: int) -> bool:
     _portfolio_last[uid] = time.time()
     return 0
 
-# ── user state ─────────────────────────────────────────────────────────────────
 def set_state(uid: int, state):
     if state is None:
         _user_state.pop(uid, None)
@@ -712,7 +698,6 @@ def set_state(uid: int, state):
 def get_state(uid: int):
     return _user_state.get(uid)
 
-# ── history & usage ────────────────────────────────────────────────────────────
 def record_history(uid: int, sym: str):
     if uid not in _user_history:
         _user_history[uid] = deque(maxlen=5)
@@ -742,85 +727,43 @@ def build_usage(uid: int) -> str:
     lines += ["", "⚠️ Stats reset on server restart (free tier)."]
     return "\n".join(lines)
 
-# ── AI chat history ────────────────────────────────────────────────────────────
-# DATA FETCHING — FIXED
-# ══════════════════════════════════════════════════════════════════════════════
-
 
 # ══ DATA FETCHING ═══════════════════════════════════════════════════════════
-# Global rate-limit cooldown — shared across all fetch_history calls
-_yf_rate_limited_until: float = 0.0
-
 def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
-    """Fetch OHLCV with exponential backoff and global rate-limit cooldown."""
-    global _yf_rate_limited_until
     key    = f"hist_{symbol}_{period}"
     cached = _cget(key)
     if cached is not None:
         return cached
 
-    # Honour global cooldown set by any previous rate-limited call
-    now = time.time()
-    if now < _yf_rate_limited_until:
-        wait = _yf_rate_limited_until - now
-        logger.info(f"yfinance cooldown: sleeping {wait:.1f}s before {symbol}")
-        time.sleep(wait)
-
-    ticker   = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
-    backoffs = [3, 12, 35]   # seconds between attempts (exponential)
-
-    for attempt in range(3):
-        try:
-            df = yf.Ticker(ticker).history(
-                period=period, interval="1d", auto_adjust=True
-            )
-            if df.empty:
-                if attempt < 2:
-                    time.sleep(backoffs[attempt])
-                    continue
-                return pd.DataFrame()
-            if float(df["Close"].iloc[-1]) < 0.5:
-                return pd.DataFrame()
-            _cset(key, df)
-            return df
-        except YFRateLimitError:
-            cooldown = backoffs[attempt] * 4
-            logger.warning(f"Rate limited: {ticker}, cooling down {cooldown}s")
-            _yf_rate_limited_until = time.time() + cooldown
-            time.sleep(cooldown)
-        except Exception as e:
-            err = str(e)
-            if "too many requests" in err.lower() or "rate limit" in err.lower():
-                cooldown = backoffs[attempt] * 4
-                logger.warning(f"Rate limited (str): {ticker}, cooling {cooldown}s")
-                _yf_rate_limited_until = time.time() + cooldown
-                time.sleep(cooldown)
-            else:
-                logger.error(f"History {ticker} attempt {attempt+1}: {e}")
-                if attempt < 2:
-                    time.sleep(backoffs[attempt])
-    return pd.DataFrame()
+    ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
+    try:
+        df = _safe_yf_history(ticker, period=period, interval="1d")
+        if df is None or df.empty:
+            return pd.DataFrame()
+        if float(df["Close"].iloc[-1]) < 0.5:
+            return pd.DataFrame()
+        _cset(key, df)
+        return df
+    except YFRateLimitError:
+        # Re-raise to let caller know it's a rate limit
+        raise
+    except Exception as e:
+        logger.error(f"fetch_history {ticker}: {e}")
+        return pd.DataFrame()
 
 
 def fetch_info(symbol: str) -> dict:
-    """
-    3-layer fundamental data fetch:
-    1. yfinance fast_info  — price/52W/mcap (always works)
-    2. yfinance .info      — PE/ROE/div (unreliable for NSE, try anyway)
-    3. Alpha Vantage OVERVIEW — reliable PE/ROE fallback when .info fails
-    """
     key    = f"info_{symbol}"
     cached = _cget(key)
     if cached is not None:
         return cached
 
     ticker_str = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
-    t      = yf.Ticker(ticker_str)
     merged: dict = {}
 
-    # Layer 1: fast_info — always reliable for price/mcap/52W
+    # Layer 1: fast_info
     try:
-        fi = t.fast_info
+        fi = _safe_yf_ticker_fast_info(ticker_str)
         mapping = {
             "marketCap":                  getattr(fi, "market_cap",                 None),
             "fiftyTwoWeekHigh":           getattr(fi, "year_high",                  None),
@@ -834,10 +777,10 @@ def fetch_info(symbol: str) -> dict:
     except Exception as e:
         logger.warning(f"fast_info {ticker_str}: {e}")
 
-    # Layer 2: .info — has PE/ROE but unreliable for NSE stocks
+    # Layer 2: .info
     for attempt in range(2):
         try:
-            info = t.info or {}
+            info = _safe_yf_ticker_info(ticker_str)
             if info and len(info) > 5:
                 merged.update(info)
                 has_pe = info.get("trailingPE") or info.get("forwardPE")
@@ -848,13 +791,15 @@ def fetch_info(symbol: str) -> dict:
                 logger.warning(f".info {symbol} attempt {attempt+1}: only {len(info)} keys")
             if attempt == 0:
                 time.sleep(1.5)
+        except YFRateLimitError:
+            logger.warning(f".info {symbol} rate limited, skipping")
+            break
         except Exception as e:
             logger.warning(f".info {ticker_str} attempt {attempt+1}: {e}")
             if attempt == 0:
                 time.sleep(2)
 
-    # Layer 3: Alpha Vantage OVERVIEW — fills PE/ROE when .info fails
-    # Symbol formats tried in order: BSE:{sym}, {sym}.BSE, {sym}
+    # Layer 3: Alpha Vantage OVERVIEW
     pe_missing = not (merged.get("trailingPE") or merged.get("forwardPE"))
     if pe_missing and ALPHA_VANTAGE_KEY:
         def _av(val, mult=1.0):
@@ -882,7 +827,6 @@ def fetch_info(symbol: str) -> dict:
                 "debtToEquity":     _av(r.get("DebtToEquityRatio")),
             }
 
-        # Try multiple symbol formats — AV is inconsistent with NSE stocks
         av_symbol_formats = [f"BSE:{symbol}", f"{symbol}.BSE", symbol]
         for av_sym in av_symbol_formats:
             try:
@@ -904,7 +848,7 @@ def fetch_info(symbol: str) -> dict:
                     logger.debug(f"Alpha Vantage {symbol} fmt={av_sym}: no PE")
             except Exception as e:
                 logger.warning(f"Alpha Vantage overview {symbol} fmt={av_sym}: {e}")
-                break  # network error — don't retry other formats
+                break
 
     if merged:
         _cset(key, merged)
@@ -912,7 +856,6 @@ def fetch_info(symbol: str) -> dict:
 
 
 def fetch_ltp_fallback(symbol: str):
-    """Try Finnhub → Alpha Vantage when yfinance returns empty."""
     if FINNHUB_API_KEY:
         try:
             r = requests.get(
@@ -942,10 +885,6 @@ def fetch_ltp_fallback(symbol: str):
             logger.warning(f"AlphaVantage {symbol}: {e}")
 
     return None
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TECHNICAL INDICATORS
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ══ TECHNICAL INDICATORS ════════════════════════════════════════════════════
@@ -987,17 +926,9 @@ def compute_pivots(df: pd.DataFrame):
     pp = (p["High"] + p["Low"] + p["Close"]) / 3
     return round(pp, 2), round(2*pp - p["Low"], 2), round(2*pp - p["High"], 2)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FUNDAMENTALS — FIXED
-# ══════════════════════════════════════════════════════════════════════════════
-
 
 # ══ FUNDAMENTALS ════════════════════════════════════════════════════════════
 def _safe(info: dict, *keys, mult: float = 1.0):
-    """
-    FIX: Returns first non-None, non-zero value across all keys.
-    Multiplies by mult (use 100 for decimal → percentage conversion).
-    """
     for k in keys:
         v = info.get(k)
         if v is None:
@@ -1005,7 +936,7 @@ def _safe(info: dict, *keys, mult: float = 1.0):
         try:
             f = float(v)
             if f == 0.0:
-                continue          # 0 = missing sentinel in yfinance
+                continue
             return round(f * mult, 2)
         except (TypeError, ValueError):
             continue
@@ -1016,26 +947,16 @@ def extract_fundamentals(info: dict) -> dict:
         "company":  (info.get("longName") or info.get("shortName") or "N/A"),
         "sector":   (info.get("sector")   or info.get("quoteType") or "N/A"),
         "industry": (info.get("industry") or "N/A"),
-        # P/E — try trailing first, then forward
         "pe":       _safe(info, "trailingPE", "forwardPE"),
-        # P/B
         "pb":       _safe(info, "priceToBook"),
-        # ROE is a decimal in yfinance (0.23 = 23%)
         "roe":      _safe(info, "returnOnEquity", mult=100),
-        # Debt/Equity
         "de":       _safe(info, "debtToEquity"),
-        # Dividend yield is a decimal (0.015 = 1.5%)
         "div":      _safe(info, "dividendYield", "trailingAnnualDividendYield", mult=100),
-        # EPS
         "eps":      _safe(info, "trailingEps", "forwardEps"),
-        # Market cap — fallback to enterprise value
         "mcap":     _safe(info, "marketCap", "enterpriseValue"),
-        # 52-week range
         "high_52w": _safe(info, "fiftyTwoWeekHigh"),
         "low_52w":  _safe(info, "fiftyTwoWeekLow"),
-        # Previous close for % change
         "prev":     _safe(info, "regularMarketPreviousClose", "previousClose"),
-        # Volume — NSE uses regularMarketVolume
         "volume":   _safe(info, "regularMarketVolume", "volume"),
     }
 
@@ -1048,17 +969,12 @@ def crore(v) -> str:
     c = v / 1e7
     return f"₹{c/1e5:.2f}L Cr" if c >= 1e5 else f"₹{c:,.0f} Cr"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# QUALITY SCORE — FIXED (technical-only path when no fundamentals)
-# ══════════════════════════════════════════════════════════════════════════════
-
 
 # ══ QUALITY SCORE ═══════════════════════════════════════════════════════════
 def quality_score(f: dict, rsi: float, trend: str) -> tuple:
     fund_pts = 0
     tech_pts = 0
 
-    # Fundamentals (max 60)
     has_fundamentals = any(f[k] is not None for k in ["pe", "pb", "roe", "div", "de"])
 
     if has_fundamentals:
@@ -1068,7 +984,6 @@ def quality_score(f: dict, rsi: float, trend: str) -> tuple:
         if f["div"] is not None: fund_pts += 10 if f["div"] > 1  else 5
         if f["de"]  is not None: fund_pts += 10 if f["de"]  < 1  else (5  if f["de"]  < 2  else 0)
 
-    # Technicals (max 40)
     if 40 < rsi < 60:    tech_pts += 20
     elif 30 < rsi < 70:  tech_pts += 10
     if trend == "BULLISH":  tech_pts += 20
@@ -1084,20 +999,11 @@ def quality_score(f: dict, rsi: float, trend: str) -> tuple:
         else:             verdict = "AVOID"
         return total, f"{total}/100 {stars}  {verdict}"
     else:
-        # Technical-only scoring out of 40
         stars = "★" * (tech_pts // 8) + "☆" * (5 - tech_pts // 8)
         if tech_pts >= 30:  verdict = "Technically BULLISH"
         elif tech_pts >= 20: verdict = "Technically NEUTRAL"
         else:               verdict = "Technically BEARISH"
         return tech_pts, f"{tech_pts}/40 {stars}  {verdict}  ⚠️ Fundamentals loading"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# AI CALLS — with proper fallback chain
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STOCK ADVISORY BUILDER
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ══ ADVISORY BUILDER ════════════════════════════════════════════════════════
@@ -1217,18 +1123,9 @@ def build_advisory(symbol: str) -> str:
     ]
     return "\n".join(lines)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PORTFOLIO SCANNER
-# ══════════════════════════════════════════════════════════════════════════════
 
-
-# ══ PORTFOLIO / BREADTH / NEWS BUILDERS ═════════════════════════════════════
+# ══ PORTFOLIO SCANNER (NO FALLBACK) ═══════════════════════════════════════════
 def build_portfolio(profile: str) -> str:
-    """
-    Portfolio scanner using yf.download() batch API.
-    Downloads ALL stocks in ONE request instead of N separate requests,
-    eliminating the per-stock rate limiting that caused repeated 429 errors.
-    """
     p     = PORTFOLIOS[profile]
     lines = [
         f"{p['label']} <b>PORTFOLIO</b>",
@@ -1239,43 +1136,29 @@ def build_portfolio(profile: str) -> str:
     total_score = 0
     count       = 0
 
-    # Build .NS tickers list
     tickers_ns = [f"{s}.NS" for s in p["stocks"]]
 
-    # ── Single batch download — 1 request instead of 10 ──────────────────────
     try:
-        raw = yf.download(
-            tickers   = tickers_ns,
-            period    = "1mo",
-            interval  = "1d",
-            auto_adjust = True,
-            group_by  = "ticker",
-            progress  = False,
-            threads   = False,   # serial to avoid rate limits
-        )
+        raw = _safe_yf_download(tickers=tickers_ns, period="1mo", interval="1d")
+        if raw is None or raw.empty:
+            raise Exception("Empty batch download")
+    except YFRateLimitError:
+        return f"⚠️ Yahoo Finance is rate‑limited. Please wait 60 seconds and try again.\n\n{p['label']} scan aborted."
     except Exception as e:
         logger.error(f"Portfolio batch download failed: {e}")
-        raw = None
+        return f"❌ Portfolio scan failed due to data provider error. Try again later.\n\n{p['label']} scan aborted."
 
     for sym, ticker in zip(p["stocks"], tickers_ns):
         try:
-            # Extract this stock's data from the batch result
-            if raw is not None and not raw.empty:
-                if len(tickers_ns) == 1:
-                    df = raw
-                else:
-                    try:
-                        df = raw[ticker].dropna(how="all")
-                    except (KeyError, TypeError):
-                        df = pd.DataFrame()
+            if len(tickers_ns) == 1:
+                df = raw
             else:
-                df = pd.DataFrame()
+                try:
+                    df = raw[ticker].dropna(how="all")
+                except (KeyError, TypeError):
+                    df = pd.DataFrame()
 
-            # Fallback to individual fetch if batch missed this stock
             if df.empty or len(df) < 5:
-                df = fetch_history(sym, period="1mo")
-
-            if df.empty or len(df) < 2:
                 lines.append(f"  • <b>{sym}</b>: ⚠️ No data")
                 continue
 
@@ -1312,10 +1195,8 @@ def build_portfolio(profile: str) -> str:
     ]
     return "\n".join(lines)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MARKET BREADTH
-# ══════════════════════════════════════════════════════════════════════════════
 
+# ══ MARKET BREADTH ═══════════════════════════════════════════════════════════
 def build_market_breadth() -> str:
     lines = [
         "📊 <b>MARKET BREADTH</b>",
@@ -1325,8 +1206,8 @@ def build_market_breadth() -> str:
     ]
     for name, ticker in NIFTY_INDICES.items():
         try:
-            df = yf.Ticker(ticker).history(period="2d", interval="1d")
-            if len(df) < 2:
+            df = _safe_yf_history(ticker, period="2d", interval="1d")
+            if df is None or len(df) < 2:
                 lines.append(f"  • {name}: N/A")
                 continue
             ltp  = round(float(df["Close"].iloc[-1]), 2)
@@ -1340,17 +1221,16 @@ def build_market_breadth() -> str:
     adv = dec = unch = 0
     overbought, oversold = [], []
 
-    # Batch download all breadth stocks in ONE request — eliminates per-stock rate limiting
     try:
         b_tickers = [f"{s}.NS" for s in BREADTH_STOCKS]
-        raw_b = yf.download(
-            tickers=b_tickers, period="1mo", interval="1d",
-            auto_adjust=True, group_by="ticker",
-            progress=False, threads=False,
-        )
+        raw_b = _safe_yf_download(tickers=b_tickers, period="1mo", interval="1d")
+        if raw_b is None or raw_b.empty:
+            raise Exception("Empty batch download")
+    except YFRateLimitError:
+        return "⚠️ Yahoo Finance is rate‑limited. Please wait 60 seconds and try again."
     except Exception as e:
-        logger.warning(f"Breadth batch download failed: {e}")
-        raw_b = None
+        logger.error(f"Breadth batch download failed: {e}")
+        return "❌ Market breadth data unavailable. Try again later."
 
     for sym in BREADTH_STOCKS:
         try:
@@ -1362,9 +1242,8 @@ def build_market_breadth() -> str:
                 except (KeyError, TypeError):
                     df = pd.DataFrame()
             if df.empty or len(df) < 2:
-                df = fetch_history(sym, period="1mo")   # fallback
-            if df.empty or len(df) < 2:
-                unch += 1; continue
+                unch += 1
+                continue
             close = df["Close"]
             chg   = (float(close.iloc[-1]) - float(close.iloc[-2])) / float(close.iloc[-2]) * 100
             rsi_v = compute_rsi(close)
@@ -1393,7 +1272,6 @@ def build_market_breadth() -> str:
 
 
 def build_market_news() -> str:
-    """Fetch and format market news using ai_engine.fetch_market_news()."""
     headlines_text = fetch_market_news()
     if not headlines_text:
         return (
@@ -1409,10 +1287,6 @@ def build_market_news() -> str:
     lines.extend(headlines_text.split("\n"))
     lines += ["", "⚠️ Educational only. Not SEBI-registered advice."]
     return "\n".join(lines)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# KEYBOARDS
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ══ KEYBOARDS + SEND ════════════════════════════════════════════════════════
@@ -1445,7 +1319,6 @@ def ai_chat_kb():
     )
     return kb
 
-# All top-level menu labels (uppercase for comparison)
 MENU_LABELS = {
     "🔍 STOCK ANALYSIS", "📊 MARKET BREADTH", "🤖 AI CHAT",
     "🏦 CONSERVATIVE", "⚖️ MODERATE", "🚀 AGGRESSIVE",
@@ -1453,7 +1326,6 @@ MENU_LABELS = {
     "📰 MARKET NEWS", "🕐 HISTORY", "📋 USAGE", "ℹ️ HELP",
 }
 
-# AI Chat sub-menu labels (do NOT treat as symbols)
 AI_MENU_LABELS = {
     "📊 NIFTY VALUATION", "💎 FUNDAMENTAL PICKS",
     "📈 NIFTY UPDATE", "🎯 TECHNICAL SWING TRADE", "⚡ OPTION TRADE",
@@ -1464,12 +1336,6 @@ def send(chat_id, text, parse_mode="HTML", reply_markup=None):
     for chunk in [text[i:i+4000] for i in range(0, len(text), 4000)]:
         bot.send_message(chat_id, chunk, parse_mode=parse_mode,
                          reply_markup=reply_markup)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# BOT HANDLERS
-# IMPORTANT: All specific handlers MUST be registered BEFORE handle_text
-# because pyTelegramBotAPI matches in registration order.
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ══ BOT HANDLERS ════════════════════════════════════════════════════════════
@@ -1507,8 +1373,6 @@ def cmd_help(msg):
          "• 📋 <b>Usage</b> — query stats\n\n"
          "⚠️ Educational only. Not SEBI-registered advice.",
          reply_markup=main_kb())
-
-# ── Main menu buttons ──────────────────────────────────────────────────────────
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Stock Analysis")
 def btn_analysis(msg):
@@ -1635,7 +1499,6 @@ def btn_back(msg):
     send(msg.chat.id, "🏠 Main Menu", reply_markup=main_kb())
 
 # ── AI Chat handlers ───────────────────────────────────────────────────────────
-
 @bot.message_handler(func=lambda m: m.text == "🤖 AI Chat")
 def btn_ai_chat(msg):
     set_state(msg.from_user.id, "in_ai_chat")
@@ -1654,7 +1517,7 @@ def btn_ai_chat(msg):
 def btn_ai_topic(msg):
     uid   = msg.from_user.id
     topic = msg.text
-    set_state(uid, "in_ai_chat")   # keep in AI chat mode after topic click
+    set_state(uid, "in_ai_chat")
     query = AI_CHAT_TOPICS[topic]
     if is_rate_limited(uid):
         send(msg.chat.id, "⏳ Too many requests. Please wait.", reply_markup=ai_chat_kb())
@@ -1671,18 +1534,15 @@ def btn_ai_topic(msg):
         send(msg.chat.id, "❌ AI response failed. Try again.", reply_markup=ai_chat_kb())
 
 # ── Catch-all text handler (MUST be last) ─────────────────────────────────────
-
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_text(msg):
     text  = msg.text.strip()
     uid   = msg.from_user.id
-    state = get_state(uid)   # read state FIRST before any other logic
+    state = get_state(uid)
 
-    # ── 1. Skip menu button labels already handled by specific handlers ────────
     if text.upper() in MENU_LABELS or text.upper() in AI_MENU_LABELS:
         return
 
-    # ── 2. AI Chat mode: ALL free text → AI, regardless of content ────────────
     if state == "in_ai_chat":
         if is_rate_limited(uid):
             send(msg.chat.id, "⏳ Too many requests. Please wait.",
@@ -1698,7 +1558,6 @@ def handle_text(msg):
                  reply_markup=ai_chat_kb())
         return
 
-    # ── 3. Validate as NSE symbol ──────────────────────────────────────────────
     clean = text.upper().replace(" ", "").replace(".NS", "").replace("&", "A")
 
     if not (2 <= len(clean) <= 15 and clean.replace("-", "").isalnum()):
@@ -1712,9 +1571,8 @@ def handle_text(msg):
 
     record_usage(uid)
     record_history(uid, clean)
-    set_state(uid, None)   # clear state after use
+    set_state(uid, None)
 
-    # ── 4. Run stock analysis (always — state was analysis or default) ─────────
     send(msg.chat.id, f"🔍 Analysing <b>{clean}</b>… ⏳")
     try:
         send(msg.chat.id, build_advisory(clean), reply_markup=main_kb())
@@ -1722,11 +1580,6 @@ def handle_text(msg):
         logger.error(f"Advisory {clean}: {e}")
         send(msg.chat.id, f"❌ Could not analyse {clean}. Try again.",
              reply_markup=main_kb())
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FLASK ROUTES
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ══ FLASK ROUTES ════════════════════════════════════════════════════════════
@@ -1769,17 +1622,14 @@ def set_webhook():
 
 @app.route("/debug", methods=["GET"])
 def debug():
-    """Check which AI keys and clients are ready (no API calls)."""
     return jsonify(debug_ai_status())
 
 @app.route("/test_ai", methods=["GET"])
 def test_ai():
-    """Live test all AI providers — visit in browser to diagnose key issues."""
     return jsonify(test_ai_providers())
 
 @app.route("/debug_info/<symbol>", methods=["GET"])
 def debug_info(symbol):
-    """Show raw yfinance data for a symbol. Usage: /debug_info/SBIN"""
     symbol = symbol.upper().replace(".NS", "")
     ticker_str = f"{symbol}.NS"
     t = yf.Ticker(ticker_str)
@@ -1827,8 +1677,6 @@ def _auto_register():
         logger.error(f"Auto webhook: {e}")
 
 threading.Thread(target=_auto_register, daemon=True).start()
-
-# ── entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
