@@ -78,7 +78,6 @@ def safe_history(ticker: str, period: str = "6mo", interval: str = "1d") -> pd.D
         return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
-    return pd.DataFrame()
 
 # --- indicators ---
 def ema(series: pd.Series, span: int) -> pd.Series:
@@ -246,12 +245,17 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
 # SWING TRADE SCANNER
 # ─────────────────────────────────────────
 CANDIDATES = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "ITC", "SBIN",
-    "BHARTIARTL", "KOTAKBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
-    "MARUTI", "TATAMOTORS", "TITAN", "SUNPHARMA", "ONGC", "NTPC",
-    "M&M", "BAJFINANCE", "AXISBANK", "TECHM", "DRREDDY", "DIVISLAB",
-    "HINDALCO", "JSWSTEEL", "TATASTEEL", "BPCL", "EICHERMOT",
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+    "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS", "LT.NS",
+    "WIPRO.NS", "HCLTECH.NS", "ASIANPAINT.NS", "MARUTI.NS", "TATAMOTORS.NS",
+    "TITAN.NS", "SUNPHARMA.NS", "ONGC.NS", "NTPC.NS", "M&M.NS",
+    "BAJFINANCE.NS", "AXISBANK.NS", "TECHM.NS", "DRREDDY.NS", "DIVISLAB.NS",
+    "HINDALCO.NS", "JSWSTEEL.NS", "TATASTEEL.NS", "BPCL.NS", "EICHERMOT.NS",
 ]
+
+def _display_sym(sym: str) -> str:
+    """Strip .NS suffix for clean display in messages."""
+    return sym.replace(".NS", "")
 
 def get_swing_trades(mode: str = "conservative") -> str:
     """
@@ -314,7 +318,7 @@ def get_swing_trades(mode: str = "conservative") -> str:
         lines.append("📊 <b>Closest setups (informational):</b>")
         for p in all_results[:3]:
             lines.append(
-                f"  • {p['symbol']} ({p['side']}) — Score: {p['score']}/8 | ₹{p['ltp']:.2f}"
+                f"  • {_display_sym(p['symbol'])} ({p['side']}) — Score: {p['score']}/8 | ₹{p['ltp']:.2f}"
             )
         lines.append("\n⚠️ Educational only.")
         return "\n".join(lines)
@@ -322,12 +326,10 @@ def get_swing_trades(mode: str = "conservative") -> str:
     if long_picks:
         lines.append("🟢 <b>LONG Setups</b>")
         for p in long_picks[:5]:
-            sym = p["symbol"]
+            sym = _display_sym(p["symbol"])
             ltp = p["ltp"]
             score = p["score"]
             details = ", ".join(p["details"][:3])
-            # Basic target/SL using ATR approximation
-            # Use real ATR from price data
             atr_val = p.get("atr_val") or ltp * 0.02
             sl   = round(ltp - 2 * atr_val, 2)
             tgt1 = round(ltp + 2 * atr_val, 2)
@@ -342,7 +344,7 @@ def get_swing_trades(mode: str = "conservative") -> str:
     if short_picks:
         lines.append("🔴 <b>SHORT Setups</b>")
         for p in short_picks[:5]:
-            sym = p["symbol"]
+            sym = _display_sym(p["symbol"])
             ltp = p["ltp"]
             score = p["score"]
             details = ", ".join(p["details"][:3])
