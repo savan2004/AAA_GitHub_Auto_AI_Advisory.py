@@ -512,61 +512,98 @@ def quality_score(f: dict, rsi: float, trend: str) -> tuple:
 # AI CALLS — with proper fallback chain
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> str:
-    """Call GROQ → Gemini → OpenAI in order. Returns empty string if all fail."""
+def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
+    """
+    Call GROQ -> Gemini -> OpenAI in order.
+    Returns (text, error_summary).
+    text = response if success, "" if all failed.
+    error_summary = human-readable failures string.
+    """
+    errors = []
 
-    # GROQ
+    # 1. GROQ
     groq = _get_groq()
-    if groq:
+    if not GROQ_API_KEY:
+        errors.append("GROQ: key not set in Render env vars")
+    elif not groq:
+        errors.append("GROQ: client failed to initialize (check key format)")
+    else:
         try:
             msgs = ([{"role": "system", "content": system}] if system else []) + messages
             r = groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=msgs,
-                max_tokens=max_tokens,
-                temperature=0.4,
+                messages=msgs, max_tokens=max_tokens, temperature=0.4,
             )
             text = (r.choices[0].message.content or "").strip()
             if text:
-                logger.info("AI: GROQ")
-                return text
+                logger.info("AI: GROQ success")
+                return text, ""
+            errors.append("GROQ: empty response")
         except Exception as e:
-            logger.warning(f"GROQ: {e}")
+            msg = str(e)
+            logger.error(f"GROQ FAILED (check GROQ_API_KEY in Render): {e}")
+            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
+                errors.append("GROQ: INVALID KEY - regenerate at console.groq.com")
+            elif "429" in msg or "rate" in msg.lower():
+                errors.append("GROQ: rate limited - try again in 60s")
+            else:
+                errors.append(f"GROQ: {msg[:100]}")
 
-    # Gemini
+    # 2. Gemini
     gemini = _get_gemini()
-    if gemini:
+    if not GEMINI_API_KEY:
+        errors.append("Gemini: key not set in Render env vars")
+    elif not gemini:
+        errors.append("Gemini: client failed to initialize")
+    else:
         try:
-            full = (system + "\n\n" if system else "") + \
-                   "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
-            r    = gemini.generate_content(full)
+            full = (system + "\n\n" if system else "") + "\n".join(
+                f"{m['role'].upper()}: {m['content']}" for m in messages)
+            r = gemini.generate_content(full)
             text = (getattr(r, "text", "") or "").strip()
             if text:
-                logger.info("AI: Gemini")
-                return text
+                logger.info("AI: Gemini success")
+                return text, ""
+            errors.append("Gemini: empty response")
         except Exception as e:
-            logger.warning(f"Gemini: {e}")
+            msg = str(e)
+            logger.error(f"GEMINI FAILED (check GEMINI_API_KEY in Render): {e}")
+            if "API_KEY_INVALID" in msg or "401" in msg:
+                errors.append("Gemini: INVALID KEY - check aistudio.google.com")
+            elif "429" in msg or "quota" in msg.lower():
+                errors.append("Gemini: quota/rate limit exceeded")
+            else:
+                errors.append(f"Gemini: {msg[:100]}")
 
-    # OpenAI
-    openai = _get_openai()
-    if openai:
+    # 3. OpenAI
+    openai_client = _get_openai()
+    if not OPENAI_API_KEY:
+        errors.append("OpenAI: key not set in Render env vars")
+    elif not openai_client:
+        errors.append("OpenAI: client failed to initialize")
+    else:
         try:
             msgs = ([{"role": "system", "content": system}] if system else []) + messages
-            r = openai.chat.completions.create(
+            r = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=msgs,
-                max_tokens=max_tokens,
-                temperature=0.4,
+                messages=msgs, max_tokens=max_tokens, temperature=0.4,
             )
             text = (r.choices[0].message.content or "").strip()
             if text:
-                logger.info("AI: OpenAI")
-                return text
+                logger.info("AI: OpenAI success")
+                return text, ""
+            errors.append("OpenAI: empty response")
         except Exception as e:
-            logger.warning(f"OpenAI: {e}")
+            msg = str(e)
+            logger.warning(f"OpenAI failed: {e}")
+            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
+                errors.append("OpenAI: INVALID KEY - regenerate at platform.openai.com/api-keys")
+            elif "429" in msg or "quota" in msg.lower():
+                errors.append("OpenAI: rate/quota limit")
+            else:
+                errors.append(f"OpenAI: {msg[:100]}")
 
-    return ""
-
+    return "", "\n".join(errors)
 
 def ai_insights(symbol, ltp, rsi, macd_line, trend, pe, roe) -> str:
     """Brief 3-bullet bullish + 2-bullet risk snippet for stock analysis card."""
@@ -579,12 +616,16 @@ def ai_insights(symbol, ltp, rsi, macd_line, trend, pe, roe) -> str:
         f"Trend {trend}, PE {pe}, ROE {roe}%.\n"
         f"Format:\nBULLISH:\n• ...\n• ...\n• ...\nRISKS:\n• ...\n• ..."
     )
-    result = _call_ai(
+    result, err = _call_ai(
         [{"role": "user", "content": prompt}],
         max_tokens=300,
         system="You are a concise Indian equity analyst. Give specific, data-driven points.",
     )
-    return result or "⚠️ AI analysis temporarily unavailable"
+    if result:
+        return result
+    if err:
+        return f"⚠️ AI unavailable:\n{err}"
+    return "⚠️ AI analysis temporarily unavailable"
 
 
 def fetch_news(symbol: str) -> str:
@@ -837,14 +878,26 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
 
     messages = list(history) + [{"role": "user", "content": user_message}]
 
-    result = _call_ai(messages, max_tokens=550, system=system)
+    result, err = _call_ai(messages, max_tokens=550, system=system)
 
     if result:
         add_to_chat(uid, "user", user_message)
         add_to_chat(uid, "assistant", result)
         return result
 
-    return "⚠️ AI response failed. Check Render logs for API errors."
+    # Build a helpful error message showing exactly what failed
+    error_msg = (
+        "❌ <b>All AI providers failed.</b>\n\n"
+        "<b>Diagnosis:</b>\n"
+        f"{err}\n\n"
+        "<b>Fix:</b>\n"
+        "1. Go to Render Dashboard → Environment\n"
+        "2. Verify GROQ_API_KEY is correct\n"
+        "3. Get a free key at console.groq.com\n"
+        "4. Redeploy after updating"
+    )
+    logger.error(f"All AI providers failed for uid {uid}: {err}")
+    return error_msg
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PORTFOLIO SCANNER
@@ -1346,19 +1399,165 @@ def set_webhook():
 
 @app.route("/debug", methods=["GET"])
 def debug():
-    """Quick diagnostic endpoint — check which AI keys are loaded."""
+    """Quick diagnostic — check which AI keys are loaded."""
+    groq_ok   = _get_groq()   is not None
+    gemini_ok = _get_gemini() is not None
+    openai_ok = _get_openai() is not None
     return jsonify({
-        "TELEGRAM_TOKEN":    "✅" if TELEGRAM_TOKEN else "❌ missing",
-        "WEBHOOK_URL":       WEBHOOK_URL or "❌ missing",
-        "GROQ_API_KEY":      "✅" if GROQ_API_KEY else "❌ missing",
-        "GEMINI_API_KEY":    "✅" if GEMINI_API_KEY else "❌ missing",
-        "OPENAI_KEY":        "✅" if OPENAI_API_KEY else "❌ missing",
-        "ALPHA_VANTAGE_KEY": "✅" if ALPHA_VANTAGE_KEY else "❌ missing",
-        "FINNHUB_API_KEY":   "✅" if FINNHUB_API_KEY else "❌ missing",
-        "TAVILY_API_KEY":    "✅" if TAVILY_API_KEY else "❌ missing",
-        "groq_client":       "✅ ready" if _get_groq() else "❌ not initialized",
-        "gemini_model":      "✅ ready" if _get_gemini() else "❌ not initialized",
-        "openai_client":     "✅ ready" if _get_openai() else "❌ not initialized",
+        "TELEGRAM_TOKEN":    "✅ set"    if TELEGRAM_TOKEN    else "❌ MISSING",
+        "WEBHOOK_URL":        WEBHOOK_URL or "❌ MISSING",
+        "GROQ_API_KEY":      "✅ set"    if GROQ_API_KEY      else "❌ MISSING — get free key at console.groq.com",
+        "GEMINI_API_KEY":    "✅ set"    if GEMINI_API_KEY    else "❌ MISSING — get free key at aistudio.google.com",
+        "OPENAI_KEY":        "✅ set"    if OPENAI_API_KEY    else "❌ MISSING",
+        "ALPHA_VANTAGE_KEY": "✅ set"    if ALPHA_VANTAGE_KEY else "❌ MISSING",
+        "FINNHUB_API_KEY":   "✅ set"    if FINNHUB_API_KEY   else "❌ MISSING",
+        "TAVILY_API_KEY":    "✅ set"    if TAVILY_API_KEY    else "❌ MISSING",
+        "groq_client":       "✅ initialized" if groq_ok   else "❌ FAILED — check key at console.groq.com",
+        "gemini_model":      "✅ initialized" if gemini_ok else "❌ FAILED — check key at aistudio.google.com",
+        "openai_client":     "✅ initialized" if openai_ok else "❌ FAILED — invalid key (401)",
+        "ai_ready":          "✅ YES" if (groq_ok or gemini_ok or openai_ok) else "❌ NO — all AI providers failed",
+    })
+
+@app.route("/test_ai", methods=["GET"])
+def test_ai():
+    """Live AI test — calls all providers and shows exactly what happens."""
+    results = {}
+    
+    # Test GROQ
+    if GROQ_API_KEY:
+        try:
+            g = _get_groq()
+            if g:
+                r = g.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": "Say: GROQ OK"}],
+                    max_tokens=10,
+                )
+                results["GROQ"] = f"✅ Working — {r.choices[0].message.content.strip()}"
+            else:
+                results["GROQ"] = "❌ Client not initialized"
+        except Exception as e:
+            results["GROQ"] = f"❌ FAILED: {str(e)[:200]}"
+    else:
+        results["GROQ"] = "⚠️ Key not set"
+    
+    # Test Gemini
+    if GEMINI_API_KEY:
+        try:
+            g = _get_gemini()
+            if g:
+                r = g.generate_content("Say: GEMINI OK")
+                results["Gemini"] = f"✅ Working — {getattr(r, 'text', 'no text')[:30].strip()}"
+            else:
+                results["Gemini"] = "❌ Client not initialized"
+        except Exception as e:
+            results["Gemini"] = f"❌ FAILED: {str(e)[:200]}"
+    else:
+        results["Gemini"] = "⚠️ Key not set"
+    
+    # Test OpenAI
+    if OPENAI_API_KEY:
+        try:
+            o = _get_openai()
+            if o:
+                r = o.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": "Say: OPENAI OK"}],
+                    max_tokens=10,
+                )
+                results["OpenAI"] = f"✅ Working — {r.choices[0].message.content.strip()}"
+            else:
+                results["OpenAI"] = "❌ Client not initialized"
+        except Exception as e:
+            results["OpenAI"] = f"❌ FAILED: {str(e)[:200]}"
+    else:
+        results["OpenAI"] = "⚠️ Key not set"
+    
+    any_working = any("✅" in v for v in results.values())
+    results["overall"] = "✅ AT LEAST ONE AI WORKING" if any_working else "❌ ALL AI FAILED — fix keys in Render"
+    return jsonify(results)
+
+
+@app.route("/test_ai", methods=["GET"])
+def test_ai():
+    """
+    Test all AI providers with a simple prompt.
+    Visit: https://your-app.onrender.com/test_ai
+    """
+    results = {}
+
+    # Test GROQ
+    if not GROQ_API_KEY:
+        results["GROQ"] = "SKIP - GROQ_API_KEY not set"
+    else:
+        try:
+            g = _get_groq()
+            if not g:
+                results["GROQ"] = "FAIL - client init failed"
+            else:
+                r = g.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": "Say OK in one word."}],
+                    max_tokens=5,
+                )
+                results["GROQ"] = f"OK - {r.choices[0].message.content.strip()}"
+        except Exception as e:
+            msg = str(e)
+            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
+                results["GROQ"] = "FAIL - Invalid API key. Regenerate at console.groq.com"
+            else:
+                results["GROQ"] = f"FAIL - {msg[:200]}"
+
+    # Test Gemini
+    if not GEMINI_API_KEY:
+        results["Gemini"] = "SKIP - GEMINI_API_KEY not set"
+    else:
+        try:
+            gm = _get_gemini()
+            if not gm:
+                results["Gemini"] = "FAIL - client init failed"
+            else:
+                r = gm.generate_content("Say OK in one word.")
+                results["Gemini"] = f"OK - {(getattr(r, 'text', '') or '').strip()}"
+        except Exception as e:
+            msg = str(e)
+            if "API_KEY_INVALID" in msg or "401" in msg:
+                results["Gemini"] = "FAIL - Invalid API key. Check aistudio.google.com"
+            else:
+                results["Gemini"] = f"FAIL - {msg[:200]}"
+
+    # Test OpenAI
+    if not OPENAI_API_KEY:
+        results["OpenAI"] = "SKIP - OPENAI_KEY not set"
+    else:
+        try:
+            oc = _get_openai()
+            if not oc:
+                results["OpenAI"] = "FAIL - client init failed"
+            else:
+                r = oc.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": "Say OK in one word."}],
+                    max_tokens=5,
+                )
+                results["OpenAI"] = f"OK - {r.choices[0].message.content.strip()}"
+        except Exception as e:
+            msg = str(e)
+            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
+                results["OpenAI"] = "FAIL - Invalid API key. Regenerate at platform.openai.com/api-keys"
+            else:
+                results["OpenAI"] = f"FAIL - {msg[:200]}"
+
+    any_ok = any("OK" in v for v in results.values())
+    return jsonify({
+        "status": "AI working" if any_ok else "ALL PROVIDERS FAILED",
+        "providers": results,
+        "keys_set": {
+            "GROQ_API_KEY":   bool(GROQ_API_KEY),
+            "GEMINI_API_KEY": bool(GEMINI_API_KEY),
+            "OPENAI_KEY":     bool(OPENAI_API_KEY),
+        },
+        "fix": "Update keys in Render Dashboard > Environment, then redeploy" if not any_ok else "OK",
     })
 
 # ── auto-register webhook on startup ──────────────────────────────────────────
