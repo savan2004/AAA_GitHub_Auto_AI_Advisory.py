@@ -1,24 +1,16 @@
 """
-main.py  —  AI Stock Advisory Telegram Bot
-Flask webhook server for Render deployment.
+main.py  —  Telegram Bot + Flask Webhook Server
+================================================
+Data fetching, technical/fundamental analysis, portfolio scanning,
+market breadth, all Telegram handlers, and Flask routes.
 
-Start command : gunicorn main:app --bind 0.0.0.0:$PORT
-Env vars      : TELEGRAM_TOKEN, WEBHOOK_URL, GROQ_API_KEY,
-                GEMINI_API_KEY, OPENAI_KEY, ALPHA_VANTAGE_KEY,
-                FINNHUB_API_KEY, TAVILY_API_KEY, PORT
+AI logic is fully separated into ai_engine.py:
+  ai_engine.py → GROQ/Gemini/OpenAI clients, ai_insights(),
+                 ai_chat_respond(), fetch_news(), live market context.
 
-FIXES IN THIS VERSION
-─────────────────────
-1. Fundamentals N/A  — fetch_info() now uses fast_info + fallback to .info
-   and retries; _safe() treats 0 and None equally as missing.
-2. AI Chat routing   — btn_ai_chat REGISTERED BEFORE handle_text so Telegram
-   routes it correctly (pyTelegramBotAPI matches handlers in order).
-3. AI key detection  — lazy init; ai_available() checks keys at call time so
-   Render env vars are read after server starts, not at import time.
-4. Quality score     — technical-only path when fundamentals missing.
-5. AI Chat "same output" — each topic sends a distinct, data-rich prompt.
-6. AI Chat "❓ symbol" bug — in_ai_chat state check happens BEFORE symbol
-   validation so free text goes to AI, not the symbol parser.
+Start command : gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+Env vars      : TELEGRAM_TOKEN, WEBHOOK_URL, GROQ_API_KEY, GEMINI_API_KEY,
+                OPENAI_KEY, ALPHA_VANTAGE_KEY, FINNHUB_API_KEY, TAVILY_API_KEY, PORT
 """
 
 import os
@@ -35,76 +27,36 @@ from flask import Flask, request, jsonify
 import telebot
 from telebot import types
 
-# ── yfinance rate-limit exception ──────────────────────────────────────────────
 try:
     from yfinance.exceptions import YFRateLimitError
 except ImportError:
     class YFRateLimitError(Exception):
         pass
 
-# ── logging ────────────────────────────────────────────────────────────────────
+# ── AI engine (all AI logic lives in ai_engine.py) ────────────────────────────
+from ai_engine import (
+    ai_insights, ai_chat_respond, fetch_news, fetch_market_news,
+    ai_available, AI_CHAT_TOPICS, AI_CHAT_TOPIC_KEYS,
+    add_to_chat, clear_chat, test_ai_providers, debug_ai_status,
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# ── config (all from env — never hard-code secrets) ───────────────────────────
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
 WEBHOOK_URL       = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT              = int(os.getenv("PORT", 10000))
-GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
-GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
-OPENAI_API_KEY    = os.getenv("OPENAI_KEY", "")
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
 FINNHUB_API_KEY   = os.getenv("FINNHUB_API_KEY", "")
-TAVILY_API_KEY    = os.getenv("TAVILY_API_KEY", "")
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN is not set")
 
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 
-# ── AI clients — lazy init so env vars are read after server starts ────────────
-_groq_client   = None
-_gemini_model  = None
-_openai_client = None
-
-def _get_groq():
-    global _groq_client
-    if _groq_client is None and GROQ_API_KEY:
-        try:
-            from groq import Groq
-            _groq_client = Groq(api_key=GROQ_API_KEY)
-        except Exception as e:
-            logger.warning(f"GROQ init: {e}")
-    return _groq_client
-
-def _get_gemini():
-    global _gemini_model
-    if _gemini_model is None and GEMINI_API_KEY:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            _gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-        except Exception as e:
-            logger.warning(f"Gemini init: {e}")
-    return _gemini_model
-
-def _get_openai():
-    global _openai_client
-    if _openai_client is None and OPENAI_API_KEY:
-        try:
-            from openai import OpenAI
-            _openai_client = OpenAI(api_key=OPENAI_API_KEY)
-        except Exception as e:
-            logger.warning(f"OpenAI init: {e}")
-    return _openai_client
-
-def ai_available() -> bool:
-    return bool(GROQ_API_KEY or GEMINI_API_KEY or OPENAI_API_KEY)
-
-# ── Flask + bot ────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 
@@ -237,19 +189,6 @@ def build_usage(uid: int) -> str:
     return "\n".join(lines)
 
 # ── AI chat history ────────────────────────────────────────────────────────────
-def add_to_chat(uid: int, role: str, content: str):
-    if uid not in _chat_history:
-        _chat_history[uid] = []
-    _chat_history[uid].append({"role": role, "content": content})
-    _chat_history[uid] = _chat_history[uid][-12:]
-
-def get_chat_history(uid: int) -> list:
-    return _chat_history.get(uid, [])
-
-def clear_chat(uid: int):
-    _chat_history.pop(uid, None)
-
-# ══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING — FIXED
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -562,158 +501,6 @@ def quality_score(f: dict, rsi: float, trend: str) -> tuple:
 # AI CALLS — with proper fallback chain
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
-    """
-    Call GROQ -> Gemini -> OpenAI in order.
-    Returns (text, error_summary).
-    text = response if success, "" if all failed.
-    error_summary = human-readable failures string.
-    """
-    errors = []
-
-    # 1. GROQ
-    groq = _get_groq()
-    if not GROQ_API_KEY:
-        errors.append("GROQ: key not set in Render env vars")
-    elif not groq:
-        errors.append("GROQ: client failed to initialize (check key format)")
-    else:
-        try:
-            msgs = ([{"role": "system", "content": system}] if system else []) + messages
-            r = groq.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=msgs, max_tokens=max_tokens, temperature=0.4,
-            )
-            text = (r.choices[0].message.content or "").strip()
-            if text:
-                logger.info("AI: GROQ success")
-                return text, ""
-            errors.append("GROQ: empty response")
-        except Exception as e:
-            msg = str(e)
-            logger.error(f"GROQ FAILED (check GROQ_API_KEY in Render): {e}")
-            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
-                errors.append("GROQ: INVALID KEY - regenerate at console.groq.com")
-            elif "429" in msg or "rate" in msg.lower():
-                errors.append("GROQ: rate limited - try again in 60s")
-            else:
-                errors.append(f"GROQ: {msg[:100]}")
-
-    # 2. Gemini
-    gemini = _get_gemini()
-    if not GEMINI_API_KEY:
-        errors.append("Gemini: key not set in Render env vars")
-    elif not gemini:
-        errors.append("Gemini: client failed to initialize")
-    else:
-        try:
-            full = (system + "\n\n" if system else "") + "\n".join(
-                f"{m['role'].upper()}: {m['content']}" for m in messages)
-            r = gemini.generate_content(full)
-            text = (getattr(r, "text", "") or "").strip()
-            if text:
-                logger.info("AI: Gemini success")
-                return text, ""
-            errors.append("Gemini: empty response")
-        except Exception as e:
-            msg = str(e)
-            logger.error(f"GEMINI FAILED (check GEMINI_API_KEY in Render): {e}")
-            if "API_KEY_INVALID" in msg or "401" in msg:
-                errors.append("Gemini: INVALID KEY - check aistudio.google.com")
-            elif "429" in msg or "quota" in msg.lower():
-                errors.append("Gemini: quota/rate limit exceeded")
-            else:
-                errors.append(f"Gemini: {msg[:100]}")
-
-    # 3. OpenAI
-    openai_client = _get_openai()
-    if not OPENAI_API_KEY:
-        errors.append("OpenAI: key not set in Render env vars")
-    elif not openai_client:
-        errors.append("OpenAI: client failed to initialize")
-    else:
-        try:
-            msgs = ([{"role": "system", "content": system}] if system else []) + messages
-            r = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=msgs, max_tokens=max_tokens, temperature=0.4,
-            )
-            text = (r.choices[0].message.content or "").strip()
-            if text:
-                logger.info("AI: OpenAI success")
-                return text, ""
-            errors.append("OpenAI: empty response")
-        except Exception as e:
-            msg = str(e)
-            logger.warning(f"OpenAI failed: {e}")
-            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
-                errors.append("OpenAI: INVALID KEY - regenerate at platform.openai.com/api-keys")
-            elif "429" in msg or "quota" in msg.lower():
-                errors.append("OpenAI: rate/quota limit")
-            else:
-                errors.append(f"OpenAI: {msg[:100]}")
-
-    return "", "\n".join(errors)
-
-def ai_insights(symbol, ltp, rsi, macd_line, trend, pe, roe) -> str:
-    """Brief 3-bullet bullish + 2-bullet risk snippet for stock analysis card."""
-    if not ai_available():
-        return "⚠️ No AI keys set (GROQ_API_KEY / GEMINI_API_KEY / OPENAI_KEY)"
-
-    prompt = (
-        f"3-bullet BULLISH factors and 2-bullet RISKS for {symbol} NSE India. "
-        f"LTP ₹{ltp}, RSI {rsi}, MACD {'bullish' if macd_line > 0 else 'bearish'}, "
-        f"Trend {trend}, PE {pe}, ROE {roe}%.\n"
-        f"Format:\nBULLISH:\n• ...\n• ...\n• ...\nRISKS:\n• ...\n• ..."
-    )
-    result, err = _call_ai(
-        [{"role": "user", "content": prompt}],
-        max_tokens=300,
-        system="You are a concise Indian equity analyst. Give specific, data-driven points.",
-    )
-    if result:
-        return result
-    if err:
-        return f"⚠️ AI unavailable:\n{err}"
-    return "⚠️ AI analysis temporarily unavailable"
-
-
-def fetch_news(symbol: str) -> str:
-    """Fetch news via Tavily → Alpha Vantage."""
-    # Tavily
-    if TAVILY_API_KEY:
-        try:
-            r = requests.post(
-                "https://api.tavily.com/search",
-                json={"api_key": TAVILY_API_KEY,
-                      "query": f"{symbol} NSE India stock news",
-                      "max_results": 3, "search_depth": "basic"},
-                timeout=6,
-            ).json()
-            lines = [f"📰 {x['title'][:85]}" for x in r.get("results", [])[:2] if x.get("title")]
-            if lines:
-                return "\n".join(lines)
-        except Exception as e:
-            logger.warning(f"Tavily news {symbol}: {e}")
-
-    # Alpha Vantage
-    if ALPHA_VANTAGE_KEY:
-        try:
-            r = requests.get(
-                "https://www.alphavantage.co/query",
-                params={"function": "NEWS_SENTIMENT",
-                        "tickers": f"NSE:{symbol}",
-                        "limit": 3, "apikey": ALPHA_VANTAGE_KEY},
-                timeout=6,
-            ).json()
-            lines = [f"📰 {a['title'][:85]}" for a in r.get("feed", [])[:2] if a.get("title")]
-            if lines:
-                return "\n".join(lines)
-        except Exception as e:
-            logger.warning(f"AV news {symbol}: {e}")
-
-    return ""
-
 # ══════════════════════════════════════════════════════════════════════════════
 # STOCK ADVISORY BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
@@ -835,121 +622,6 @@ def build_advisory(symbol: str) -> str:
     return "\n".join(lines)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AI CHAT — Live Market Q&A
-# ══════════════════════════════════════════════════════════════════════════════
-
-CHAT_SYSTEM = """You are an expert Indian stock market AI assistant with access to LIVE market data.
-You specialize in:
-1. NIFTY VALUATION — PE analysis, fair value, over/undervalued assessment  
-2. FUNDAMENTAL PICKS — stocks with strong ROE, low PE, solid balance sheet
-3. NIFTY UPDATE — index levels, trend, support/resistance, weekly outlook
-4. TECHNICAL SWING TRADES — entry zone, target 1, target 2, stop loss
-5. OPTION TRADES — strike, expiry, entry premium, target, SL for Nifty/BankNifty
-
-RULES:
-- Always reference the live data provided. Quote specific numbers.
-- For swing trades: stock, entry zone, T1, T2, SL, timeframe.
-- For options: index, CE/PE, strike, expiry, entry premium, target, SL.
-- Be specific. No vague answers.
-- End with: ⚠️ Educational only. Not SEBI-registered advice."""
-
-
-def get_live_market_context() -> str:
-    """Build a real-time market snapshot to inject into AI prompts."""
-    lines = [f"=== LIVE DATA {datetime.now().strftime('%d-%b-%Y %H:%M IST')} ==="]
-
-    # Nifty 50
-    try:
-        df = yf.Ticker("^NSEI").history(period="5d", interval="1d")
-        if len(df) >= 2:
-            ltp  = round(float(df["Close"].iloc[-1]), 2)
-            prev = round(float(df["Close"].iloc[-2]), 2)
-            chg  = round((ltp - prev) / prev * 100, 2)
-            h    = round(float(df["High"].iloc[-1]), 2)
-            l    = round(float(df["Low"].iloc[-1]),  2)
-            lines.append(f"NIFTY 50: {ltp:,.2f} ({chg:+.2f}%) | High:{h} Low:{l}")
-            # 5-day range
-            w_high = round(float(df["High"].max()), 2)
-            w_low  = round(float(df["Low"].min()),  2)
-            lines.append(f"NIFTY 5D Range: {w_low} – {w_high}")
-    except Exception:
-        lines.append("NIFTY 50: unavailable")
-
-    # Bank Nifty
-    try:
-        df = yf.Ticker("^NSEBANK").history(period="2d", interval="1d")
-        if len(df) >= 2:
-            ltp  = round(float(df["Close"].iloc[-1]), 2)
-            prev = round(float(df["Close"].iloc[-2]), 2)
-            chg  = round((ltp - prev) / prev * 100, 2)
-            lines.append(f"BANK NIFTY: {ltp:,.2f} ({chg:+.2f}%)")
-    except Exception:
-        pass
-
-    # Nifty PE
-    try:
-        info = yf.Ticker("^NSEI").info
-        pe   = info.get("trailingPE") or info.get("forwardPE")
-        if pe:
-            lines.append(f"NIFTY PE: {round(float(pe),1)} (10yr avg ~20, expensive >22, cheap <18)")
-    except Exception:
-        pass
-
-    # Top 8 stocks snapshot
-    snap = []
-    for sym in ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","SBIN","BAJFINANCE","TATAMOTORS"]:
-        try:
-            df = fetch_history(sym, period="5d")
-            if df.empty or len(df) < 2:
-                continue
-            ltp  = round(float(df["Close"].iloc[-1]), 2)
-            prev = round(float(df["Close"].iloc[-2]), 2)
-            chg  = round((ltp - prev) / prev * 100, 2)
-            rsi_v = compute_rsi(df["Close"])
-            snap.append(f"{sym}:₹{ltp}({chg:+.1f}%)RSI:{rsi_v}")
-        except Exception:
-            pass
-    if snap:
-        lines.append("TOP STOCKS: " + "  ".join(snap))
-
-    return "\n".join(lines)
-
-
-def ai_chat_respond(uid: int, user_message: str) -> str:
-    """Respond to a chat message using live market context + conversation history."""
-    if not ai_available():
-        return ("⚠️ No AI keys configured.\n\n"
-                "Please set GROQ_API_KEY (or GEMINI_API_KEY / OPENAI_KEY) "
-                "in your Render environment variables.")
-
-    market_ctx = get_live_market_context()
-    system     = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}"
-    history    = get_chat_history(uid)
-
-    messages = list(history) + [{"role": "user", "content": user_message}]
-
-    result, err = _call_ai(messages, max_tokens=550, system=system)
-
-    if result:
-        add_to_chat(uid, "user", user_message)
-        add_to_chat(uid, "assistant", result)
-        return result
-
-    # Build a helpful error message showing exactly what failed
-    error_msg = (
-        "❌ <b>All AI providers failed.</b>\n\n"
-        "<b>Diagnosis:</b>\n"
-        f"{err}\n\n"
-        "<b>Fix:</b>\n"
-        "1. Go to Render Dashboard → Environment\n"
-        "2. Verify GROQ_API_KEY is correct\n"
-        "3. Get a free key at console.groq.com\n"
-        "4. Redeploy after updating"
-    )
-    logger.error(f"All AI providers failed for uid {uid}: {err}")
-    return error_msg
-
-# ══════════════════════════════════════════════════════════════════════════════
 # PORTFOLIO SCANNER
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1057,48 +729,22 @@ def build_market_breadth() -> str:
     lines += ["", "⚠️ Educational only. Not SEBI-registered advice."]
     return "\n".join(lines)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MARKET NEWS
-# ══════════════════════════════════════════════════════════════════════════════
 
 def build_market_news() -> str:
-    headlines = []
-    if TAVILY_API_KEY:
-        try:
-            r = requests.post(
-                "https://api.tavily.com/search",
-                json={"api_key": TAVILY_API_KEY,
-                      "query": "Indian stock market NSE Nifty news today",
-                      "max_results": 5, "search_depth": "basic"},
-                timeout=8,
-            ).json()
-            headlines = [f"📰 {x['title'][:90]}"
-                         for x in r.get("results", [])[:5] if x.get("title")]
-        except Exception as e:
-            logger.warning(f"Tavily market news: {e}")
-
-    if not headlines and ALPHA_VANTAGE_KEY:
-        try:
-            r = requests.get(
-                "https://www.alphavantage.co/query",
-                params={"function": "NEWS_SENTIMENT",
-                        "topics": "financial_markets",
-                        "limit": 5, "apikey": ALPHA_VANTAGE_KEY},
-                timeout=8,
-            ).json()
-            headlines = [f"📰 {a['title'][:90]}"
-                         for a in r.get("feed", [])[:5] if a.get("title")]
-        except Exception as e:
-            logger.warning(f"AV market news: {e}")
-
-    if not headlines:
-        return ("📰 <b>MARKET NEWS</b>\n\n"
-                "⚠️ No news available. Set TAVILY_API_KEY or ALPHA_VANTAGE_KEY.")
-
-    lines = ["📰 <b>MARKET NEWS</b>",
-             f"📅 {datetime.now().strftime('%d-%b-%Y %H:%M')}",
-             "━━━━━━━━━━━━━━━━━━━━", ""]
-    lines.extend(headlines)
+    """Fetch and format market news using ai_engine.fetch_market_news()."""
+    headlines_text = fetch_market_news()
+    if not headlines_text:
+        return (
+            "📰 <b>MARKET NEWS</b>\n\n"
+            "⚠️ No news available. Set TAVILY_API_KEY or ALPHA_VANTAGE_KEY in Render env vars."
+        )
+    lines = [
+        "📰 <b>MARKET NEWS</b>",
+        f"📅 {datetime.now().strftime('%d-%b-%Y %H:%M')}",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    lines.extend(headlines_text.split("\n"))
     lines += ["", "⚠️ Educational only. Not SEBI-registered advice."]
     return "\n".join(lines)
 
@@ -1408,14 +1054,17 @@ def handle_text(msg):
         send(msg.chat.id, f"❌ Could not analyse {clean}. Try again.",
              reply_markup=main_kb())
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FLASK ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ok", "service": "AI Stock Advisory Bot",
-                    "time": datetime.utcnow().isoformat() + "Z"})
+    return jsonify({
+        "status": "ok", "service": "AI Stock Advisory Bot",
+        "time": datetime.utcnow().isoformat() + "Z"
+    })
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -1449,132 +1098,31 @@ def set_webhook():
 
 @app.route("/debug", methods=["GET"])
 def debug():
-    """Quick diagnostic — check which AI keys are loaded."""
-    groq_ok   = _get_groq()   is not None
-    gemini_ok = _get_gemini() is not None
-    openai_ok = _get_openai() is not None
-    return jsonify({
-        "TELEGRAM_TOKEN":    "✅ set"    if TELEGRAM_TOKEN    else "❌ MISSING",
-        "WEBHOOK_URL":        WEBHOOK_URL or "❌ MISSING",
-        "GROQ_API_KEY":      "✅ set"    if GROQ_API_KEY      else "❌ MISSING — get free key at console.groq.com",
-        "GEMINI_API_KEY":    "✅ set"    if GEMINI_API_KEY    else "❌ MISSING — get free key at aistudio.google.com",
-        "OPENAI_KEY":        "✅ set"    if OPENAI_API_KEY    else "❌ MISSING",
-        "ALPHA_VANTAGE_KEY": "✅ set"    if ALPHA_VANTAGE_KEY else "❌ MISSING",
-        "FINNHUB_API_KEY":   "✅ set"    if FINNHUB_API_KEY   else "❌ MISSING",
-        "TAVILY_API_KEY":    "✅ set"    if TAVILY_API_KEY    else "❌ MISSING",
-        "groq_client":       "✅ initialized" if groq_ok   else "❌ FAILED — check key at console.groq.com",
-        "gemini_model":      "✅ initialized" if gemini_ok else "❌ FAILED — check key at aistudio.google.com",
-        "openai_client":     "✅ initialized" if openai_ok else "❌ FAILED — invalid key (401)",
-        "ai_ready":          "✅ YES" if (groq_ok or gemini_ok or openai_ok) else "❌ NO — all AI providers failed",
-    })
+    """Check which AI keys and clients are ready (no API calls)."""
+    return jsonify(debug_ai_status())
 
 @app.route("/test_ai", methods=["GET"])
 def test_ai():
-    """
-    Test all AI providers with a simple prompt.
-    Visit: https://your-app.onrender.com/test_ai
-    """
-    results = {}
-
-    # Test GROQ
-    if not GROQ_API_KEY:
-        results["GROQ"] = "SKIP - GROQ_API_KEY not set"
-    else:
-        try:
-            g = _get_groq()
-            if not g:
-                results["GROQ"] = "FAIL - client init failed"
-            else:
-                r = g.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": "Say OK in one word."}],
-                    max_tokens=5,
-                )
-                results["GROQ"] = f"OK - {r.choices[0].message.content.strip()}"
-        except Exception as e:
-            msg = str(e)
-            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
-                results["GROQ"] = "FAIL - Invalid API key. Regenerate at console.groq.com"
-            else:
-                results["GROQ"] = f"FAIL - {msg[:200]}"
-
-    # Test Gemini
-    if not GEMINI_API_KEY:
-        results["Gemini"] = "SKIP - GEMINI_API_KEY not set"
-    else:
-        try:
-            gm = _get_gemini()
-            if not gm:
-                results["Gemini"] = "FAIL - client init failed"
-            else:
-                r = gm.generate_content("Say OK in one word.")
-                results["Gemini"] = f"OK - {(getattr(r, 'text', '') or '').strip()}"
-        except Exception as e:
-            msg = str(e)
-            if "API_KEY_INVALID" in msg or "401" in msg:
-                results["Gemini"] = "FAIL - Invalid API key. Check aistudio.google.com"
-            else:
-                results["Gemini"] = f"FAIL - {msg[:200]}"
-
-    # Test OpenAI
-    if not OPENAI_API_KEY:
-        results["OpenAI"] = "SKIP - OPENAI_KEY not set"
-    else:
-        try:
-            oc = _get_openai()
-            if not oc:
-                results["OpenAI"] = "FAIL - client init failed"
-            else:
-                r = oc.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": "Say OK in one word."}],
-                    max_tokens=5,
-                )
-                results["OpenAI"] = f"OK - {r.choices[0].message.content.strip()}"
-        except Exception as e:
-            msg = str(e)
-            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
-                results["OpenAI"] = "FAIL - Invalid API key. Regenerate at platform.openai.com/api-keys"
-            else:
-                results["OpenAI"] = f"FAIL - {msg[:200]}"
-
-    any_ok = any("OK" in v for v in results.values())
-    return jsonify({
-        "status": "AI working" if any_ok else "ALL PROVIDERS FAILED",
-        "providers": results,
-        "keys_set": {
-            "GROQ_API_KEY":   bool(GROQ_API_KEY),
-            "GEMINI_API_KEY": bool(GEMINI_API_KEY),
-            "OPENAI_KEY":     bool(OPENAI_API_KEY),
-        },
-        "fix": "Update keys in Render Dashboard > Environment, then redeploy" if not any_ok else "OK",
-    })
-
+    """Live test all AI providers — visit in browser to diagnose key issues."""
+    return jsonify(test_ai_providers())
 
 @app.route("/debug_info/<symbol>", methods=["GET"])
 def debug_info(symbol):
-    """
-    Debug endpoint: shows exactly what yfinance returns for a symbol.
-    Usage: /debug_info/SBIN  or  /debug_info/TCS
-    """
+    """Show raw yfinance data for a symbol. Usage: /debug_info/SBIN"""
     symbol = symbol.upper().replace(".NS", "")
     ticker_str = f"{symbol}.NS"
     t = yf.Ticker(ticker_str)
     result = {"symbol": symbol, "ticker": ticker_str}
-
-    # fast_info
     try:
         fi = t.fast_info
         result["fast_info"] = {
-            "market_cap":   getattr(fi, "market_cap",   None),
-            "year_high":    getattr(fi, "year_high",    None),
-            "year_low":     getattr(fi, "year_low",     None),
-            "prev_close":   getattr(fi, "previous_close", None),
+            "market_cap": getattr(fi, "market_cap",    None),
+            "year_high":  getattr(fi, "year_high",     None),
+            "year_low":   getattr(fi, "year_low",      None),
+            "prev_close": getattr(fi, "previous_close", None),
         }
     except Exception as e:
         result["fast_info_error"] = str(e)
-
-    # .info fundamentals
     try:
         info = t.info or {}
         result["info_key_count"] = len(info)
@@ -1591,30 +1139,6 @@ def debug_info(symbol):
         }
     except Exception as e:
         result["info_error"] = str(e)
-
-    # Alpha Vantage
-    if ALPHA_VANTAGE_KEY:
-        try:
-            r = requests.get(
-                "https://www.alphavantage.co/query",
-                params={"function": "OVERVIEW", "symbol": f"NSE:{symbol}",
-                        "apikey": ALPHA_VANTAGE_KEY},
-                timeout=8,
-            ).json()
-            result["alpha_vantage"] = {
-                "Name":     r.get("Name"),
-                "Sector":   r.get("Sector"),
-                "PERatio":  r.get("PERatio"),
-                "ROE":      r.get("ReturnOnEquityTTM"),
-                "EPS":      r.get("EPS"),
-                "DivYield": r.get("DividendYield"),
-                "raw_keys": list(r.keys())[:10],
-            }
-        except Exception as e:
-            result["alpha_vantage_error"] = str(e)
-    else:
-        result["alpha_vantage"] = "ALPHA_VANTAGE_KEY not set"
-
     return jsonify(result)
 
 # ── auto-register webhook on startup ──────────────────────────────────────────
