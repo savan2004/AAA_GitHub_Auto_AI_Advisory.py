@@ -1,8 +1,8 @@
 """
-main.py  —  AI Stock Advisory Telegram Bot (Screener Fixed)
+main.py  —  AI Stock Advisory Telegram Bot (Render/Cloud Fixed)
 ====================================================================
-Fix: Replaced unreliable yf.download with robust Ticker.history loops.
-     This guarantees data is fetched for NSE stocks on cloud servers.
+Fix: Added User-Agent headers to yfinance to bypass Yahoo Finance blocks.
+     This resolves "No Data" issues on Render/Heroku/AWS.
 """
 import os
 import time
@@ -43,6 +43,13 @@ WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 
 app = Flask(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
+
+# ── CRITICAL FIX: User-Agent for Cloud Servers ───────────────────────────────
+# Yahoo Finance blocks generic cloud requests. We must masquerade as a browser.
+YF_SESSION = requests.Session()
+YF_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+})
 
 # ─- Global State & Thread Safety ──────────────────────────────────────────────
 _cache = {}
@@ -93,7 +100,6 @@ def ai_available() -> bool:
 
 def call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
     errors = []
-    # 1. Groq
     groq = get_groq()
     if groq:
         try:
@@ -101,7 +107,7 @@ def call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
             resp = groq.chat.completions.create(model="llama-3.3-70b-versatile", messages=msgs, max_tokens=max_tokens)
             if resp.choices and resp.choices[0].message.content: return resp.choices[0].message.content.strip(), ""
         except Exception as e: errors.append(f"Groq: {str(e)[:80]}")
-    # 2. Gemini
+    
     gemini = get_gemini()
     if gemini:
         try:
@@ -109,7 +115,7 @@ def call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
             resp = gemini.generate_content(prompt)
             if resp.text: return resp.text.strip(), ""
         except Exception as e: errors.append(f"Gemini: {str(e)[:80]}")
-    # 3. OpenAI
+
     openai = get_openai()
     if openai:
         try:
@@ -181,18 +187,18 @@ def extract_fundamentals(info: dict) -> dict:
         "mcap": _safe_get(info, "marketCap"),
     }
 
-# ─- Individual Stock Analysis ─────────────────────────────────────────────────
+# ─- Individual Stock Analysis (WITH SESSION FIX) ───────────────────────────────
 def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
-    """Fetches history for a single stock using the reliable Ticker.history() method."""
+    """Fetches history using a custom Session to bypass blocks."""
     key = f"hist_{symbol}_{period}"
     cached = get_cached(key)
     if cached is not None: return cached
     
-    # Handle NSE suffix
     ticker_str = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
     
     try:
-        df = yf.Ticker(ticker_str).history(period=period, interval="1d", auto_adjust=True)
+        # FIX: Pass the global YF_SESSION with User-Agent
+        df = yf.Ticker(ticker_str, session=YF_SESSION).history(period=period, interval="1d", auto_adjust=True)
         if df.empty or len(df) < 5: return pd.DataFrame()
         set_cached(key, df)
         return df
@@ -206,7 +212,8 @@ def fetch_info(symbol: str) -> dict:
     if cached is not None: return cached
     info = {}
     try:
-        t = yf.Ticker(f"{symbol}.NS")
+        # FIX: Pass the global YF_SESSION with User-Agent
+        t = yf.Ticker(f"{symbol}.NS", session=YF_SESSION)
         fi = t.fast_info
         if fi:
             info["marketCap"] = getattr(fi, "market_cap", None)
@@ -249,7 +256,7 @@ def build_advisory(symbol: str) -> str:
     ]
     return "\n".join(lines)
 
-# ─- Robust Screeners (Using Loops instead of Batch Download) ───────────────────
+# ─- Robust Screeners ──────────────────────────────────────────────────────────
 def build_portfolio_scan(profile: str) -> str:
     stocks_map = {
         "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "WIPRO", "SBIN"],
@@ -261,10 +268,10 @@ def build_portfolio_scan(profile: str) -> str:
     
     lines = [f"📊 <b>{profile.upper()} PORTFOLIO SCAN</b>", "━━━━━━━━━━━━━━━━━━━━"]
     
-    # Robust Loop: Fetches one by one using the working fetch_history method
     for sym in stocks:
         try:
-            df = fetch_history(sym, period="1mo") # Use 1mo for RSI/Momentum
+            # Uses fetch_history which has the User-Agent fix
+            df = fetch_history(sym, period="1mo") 
             
             if df.empty or len(df) < 2: 
                 lines.append(f"⚪ {sym}: No Data")
@@ -288,11 +295,10 @@ def build_market_breadth() -> str:
     indices = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK"}
     lines = ["📊 <b>MARKET BREADTH</b>", "━━━━━━━━━━━━━━━━━━━━"]
     
-    # Indices
     for name, tic in indices.items():
         try:
-            # Using Ticker.history directly for indices
-            df = yf.Ticker(tic).history(period="2d")
+            # Use session for indices too
+            df = yf.Ticker(tic, session=YF_SESSION).history(period="2d")
             if len(df) >= 2:
                 ltp = round(float(df["Close"].iloc[-1]), 2)
                 prev = round(float(df["Close"].iloc[-2]), 2)
@@ -301,7 +307,6 @@ def build_market_breadth() -> str:
                 lines.append(f"{em} <b>{name}</b>: {ltp:,.2f} ({chg}%)")
         except: pass
 
-    # Breadth Calculation
     adv, dec = 0, 0
     watchlist = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "ITC", "SBIN", "LT", "AXISBANK", "KOTAKBANK"]
     
@@ -325,7 +330,7 @@ def build_swing_scan() -> str:
     found = 0
     for sym in stocks:
         try:
-            df = fetch_history(sym, period="2mo") # Need 2mo for stable RSI
+            df = fetch_history(sym, period="2mo")
             if df.empty: continue
             
             close = df["Close"]
