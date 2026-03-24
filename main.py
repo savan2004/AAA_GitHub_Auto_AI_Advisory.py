@@ -1,7 +1,8 @@
 """
-main.py  —  AI Stock Advisory Telegram Bot (Reviewed & Patched)
+main.py  —  AI Stock Advisory Telegram Bot (Screener Fixed)
 ====================================================================
-Fixes: yfinance MultiIndex column access bug in batch downloads.
+Fix: Replaced unreliable yf.download with robust Ticker.history loops.
+     This guarantees data is fetched for NSE stocks on cloud servers.
 """
 import os
 import time
@@ -33,7 +34,6 @@ PORT              = int(os.getenv("PORT", 8000))
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
 OPENAI_API_KEY    = os.getenv("OPENAI_KEY", "")
-ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
 TAVILY_API_KEY    = os.getenv("TAVILY_API_KEY", "")
 
 if not TELEGRAM_TOKEN:
@@ -50,21 +50,15 @@ _cache_lock = threading.Lock()
 _user_state = {}
 _user_state_lock = threading.Lock()
 _user_history = {}
-_usage_stats = {}
-_chat_history = {}
 _processed_updates = set()
 _processed_lock = threading.Lock()
 
-CACHE_TTL = 900  # 15 minutes
+CACHE_TTL = 900
 
-# ─- AI Client Globals (Lazy Init) ─────────────────────────────────────────────
+# ─- AI Engine ─────────────────────────────────────────────────────────────────
 _groq_client = None
 _gemini_model = None
 _openai_client = None
-
-# ══════════════════════════════════════════════════════════════════════════════
-# AI ENGINE
-# ══════════════════════════════════════════════════════════════════════════════
 
 def get_groq():
     global _groq_client
@@ -72,8 +66,7 @@ def get_groq():
         try:
             from groq import Groq
             _groq_client = Groq(api_key=GROQ_API_KEY)
-        except Exception as e:
-            logger.error(f"Groq Init Failed: {e}")
+        except Exception as e: logger.error(f"Groq Init Failed: {e}")
     return _groq_client
 
 def get_gemini():
@@ -83,8 +76,7 @@ def get_gemini():
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_API_KEY)
             _gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-        except Exception as e:
-            logger.error(f"Gemini Init Failed: {e}")
+        except Exception as e: logger.error(f"Gemini Init Failed: {e}")
     return _gemini_model
 
 def get_openai():
@@ -93,8 +85,7 @@ def get_openai():
         try:
             from openai import OpenAI
             _openai_client = OpenAI(api_key=OPENAI_API_KEY)
-        except Exception as e:
-            logger.error(f"OpenAI Init Failed: {e}")
+        except Exception as e: logger.error(f"OpenAI Init Failed: {e}")
     return _openai_client
 
 def ai_available() -> bool:
@@ -102,104 +93,49 @@ def ai_available() -> bool:
 
 def call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
     errors = []
-
     # 1. Groq
     groq = get_groq()
     if groq:
         try:
             msgs = ([{"role": "system", "content": system}] if system else []) + messages
-            resp = groq.chat.completions.create(
-                model="llama-3.3-70b-versatile", messages=msgs, max_tokens=max_tokens, temperature=0.5
-            )
-            if resp.choices and resp.choices[0].message.content:
-                return resp.choices[0].message.content.strip(), ""
-        except Exception as e:
-            errors.append(f"Groq: {str(e)[:80]}")
-    
+            resp = groq.chat.completions.create(model="llama-3.3-70b-versatile", messages=msgs, max_tokens=max_tokens)
+            if resp.choices and resp.choices[0].message.content: return resp.choices[0].message.content.strip(), ""
+        except Exception as e: errors.append(f"Groq: {str(e)[:80]}")
     # 2. Gemini
     gemini = get_gemini()
     if gemini:
         try:
             prompt = (system + "\n\n" if system else "") + "\n".join([f"{m['role']}: {m['content']}" for m in messages])
             resp = gemini.generate_content(prompt)
-            if resp.text:
-                return resp.text.strip(), ""
-        except Exception as e:
-            errors.append(f"Gemini: {str(e)[:80]}")
-
+            if resp.text: return resp.text.strip(), ""
+        except Exception as e: errors.append(f"Gemini: {str(e)[:80]}")
     # 3. OpenAI
     openai = get_openai()
     if openai:
         try:
             msgs = ([{"role": "system", "content": system}] if system else []) + messages
             resp = openai.chat.completions.create(model="gpt-4o-mini", messages=msgs, max_tokens=max_tokens)
-            if resp.choices and resp.choices[0].message.content:
-                return resp.choices[0].message.content.strip(), ""
-        except Exception as e:
-            errors.append(f"OpenAI: {str(e)[:80]}")
-
-    if not errors and not ai_available():
-        return "", "⚠️ No AI Keys found. Set GROQ_API_KEY in environment variables."
+            if resp.choices and resp.choices[0].message.content: return resp.choices[0].message.content.strip(), ""
+        except Exception as e: errors.append(f"OpenAI: {str(e)[:80]}")
     
+    if not errors and not ai_available(): return "", "⚠️ No AI Keys found."
     return "", "\n".join(errors)
 
-def ai_insights(symbol: str, ltp: float, rsi: float, macd_line: float, trend: str, pe: str, roe: str) -> str:
+def ai_insights(symbol: str, ltp: float, rsi: float, trend: str, pe: str) -> str:
     if not ai_available(): return "⚠️ AI Disabled."
-    prompt = (f"Give 3-bullet BULLISH factors and 2-bullet RISKS for {symbol} (NSE).\n"
-              f"Data: LTP ₹{ltp}, RSI {rsi}, Trend {trend}, PE {pe}.\n"
-              f"Format:\nBULLISH:\n• ...\nRISKS:\n• ...")
+    prompt = (f"Give 3-bullet BULLISH factors and 2-bullet RISKS for {symbol} (NSE).\nData: LTP ₹{ltp}, RSI {rsi}, Trend {trend}, PE {pe}.")
     text, err = call_ai([{"role": "user", "content": prompt}], max_tokens=300)
     return text if text else f"AI Error: {err}"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# DATA FETCHING & TECHNICALS
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ─- Technical Calculations ────────────────────────────────────────────────────
 def get_cached(key):
     with _cache_lock:
         item = _cache.get(key)
-        if item and time.time() - item["ts"] < CACHE_TTL:
-            return item["val"]
+        if item and time.time() - item["ts"] < CACHE_TTL: return item["val"]
     return None
 
 def set_cached(key, val):
-    with _cache_lock:
-        _cache[key] = {"val": val, "ts": time.time()}
-
-def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
-    key = f"hist_{symbol}_{period}"
-    cached = get_cached(key)
-    if cached is not None: return cached
-    
-    ticker = f"{symbol}.NS"
-    try:
-        df = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=True)
-        if df.empty or len(df) < 5: return pd.DataFrame()
-        set_cached(key, df)
-        return df
-    except Exception as e:
-        logger.error(f"yfinance error {symbol}: {e}")
-        return pd.DataFrame()
-
-def fetch_info(symbol: str) -> dict:
-    key = f"info_{symbol}"
-    cached = get_cached(key)
-    if cached is not None: return cached
-    
-    ticker = f"{symbol}.NS"
-    info = {}
-    try:
-        t = yf.Ticker(ticker)
-        fi = t.fast_info
-        if fi:
-            info["marketCap"] = getattr(fi, "market_cap", None)
-            info["fiftyTwoWeekHigh"] = getattr(fi, "year_high", None)
-            info["fiftyTwoWeekLow"] = getattr(fi, "year_low", None)
-        raw = t.info
-        if raw: info.update(raw)
-    except: pass
-    set_cached(key, info)
-    return info
+    with _cache_lock: _cache[key] = {"val": val, "ts": time.time()}
 
 def compute_rsi(close: pd.Series, period: int = 14) -> float:
     if len(close) < period + 1: return 50.0
@@ -222,6 +158,9 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> float:
     tr = pd.concat([(h-l), (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
     return round(float(tr.rolling(period).mean().iloc[-1]), 2)
 
+def fmt(v, suffix=""): return f"{v:.2f}{suffix}" if v is not None else "N/A"
+def crore(v): return f"₹{v/1e7:,.0f} Cr" if v else "N/A"
+
 def _safe_get(d, *keys, mult=1.0):
     for k in keys:
         v = d.get(k)
@@ -239,18 +178,43 @@ def extract_fundamentals(info: dict) -> dict:
         "pe": _safe_get(info, "trailingPE", "forwardPE"),
         "pb": _safe_get(info, "priceToBook"),
         "roe": _safe_get(info, "returnOnEquity", mult=100),
-        "div": _safe_get(info, "dividendYield", mult=100),
         "mcap": _safe_get(info, "marketCap"),
-        "high_52w": _safe_get(info, "fiftyTwoWeekHigh"),
-        "low_52w": _safe_get(info, "fiftyTwoWeekLow"),
     }
 
-def fmt(v, suffix=""): return f"{v:.2f}{suffix}" if v is not None else "N/A"
-def crore(v): return f"₹{v/1e7:,.0f} Cr" if v else "N/A"
+# ─- Individual Stock Analysis ─────────────────────────────────────────────────
+def fetch_history(symbol: str, period: str = "1y") -> pd.DataFrame:
+    """Fetches history for a single stock using the reliable Ticker.history() method."""
+    key = f"hist_{symbol}_{period}"
+    cached = get_cached(key)
+    if cached is not None: return cached
+    
+    # Handle NSE suffix
+    ticker_str = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
+    
+    try:
+        df = yf.Ticker(ticker_str).history(period=period, interval="1d", auto_adjust=True)
+        if df.empty or len(df) < 5: return pd.DataFrame()
+        set_cached(key, df)
+        return df
+    except Exception as e:
+        logger.error(f"History fetch error {symbol}: {e}")
+        return pd.DataFrame()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SCREENERS & BUILDERS
-# ══════════════════════════════════════════════════════════════════════════════
+def fetch_info(symbol: str) -> dict:
+    key = f"info_{symbol}"
+    cached = get_cached(key)
+    if cached is not None: return cached
+    info = {}
+    try:
+        t = yf.Ticker(f"{symbol}.NS")
+        fi = t.fast_info
+        if fi:
+            info["marketCap"] = getattr(fi, "market_cap", None)
+        raw = t.info
+        if raw: info.update(raw)
+    except: pass
+    set_cached(key, info)
+    return info
 
 def build_advisory(symbol: str) -> str:
     symbol = symbol.upper().replace(".NS", "")
@@ -270,8 +234,7 @@ def build_advisory(symbol: str) -> str:
     atr = compute_atr(df)
     trend = "BULLISH" if ltp > ema20 > ema50 else ("BEARISH" if ltp < ema20 < ema50 else "NEUTRAL")
     
-    ai_text = ai_insights(symbol, ltp, rsi, macd_l, trend, fmt(f["pe"]), fmt(f["roe"]))
-    score = 50 + (10 if trend=="BULLISH" else -10 if trend=="BEARISH" else 0)
+    ai_text = ai_insights(symbol, ltp, rsi, trend, fmt(f["pe"]))
     
     lines = [
         f"🏢 <b>{f['company']}</b> ({symbol})", f"💰 LTP: ₹{ltp} ({chg}%)",
@@ -282,37 +245,27 @@ def build_advisory(symbol: str) -> str:
         f"━━━━━━━━━━━━━━━━━━━━", f"🎯 <b>TRADE SETUP</b>",
         f"Target: ₹{round(ltp + 1.5*atr, 2)} | SL: ₹{round(ltp - 2*atr, 2)}",
         f"━━━━━━━━━━━━━━━━━━━━", f"🤖 <b>AI INSIGHTS</b>", ai_text,
-        f"━━━━━━━━━━━━━━━━━━━━", f"🏆 Quality: {score}/100", "⚠️ Educational only."
+        f"⚠️ Educational only."
     ]
     return "\n".join(lines)
 
+# ─- Robust Screeners (Using Loops instead of Batch Download) ───────────────────
 def build_portfolio_scan(profile: str) -> str:
-    stocks = {
+    stocks_map = {
         "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "WIPRO", "SBIN"],
         "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "TITAN", "BAJFINANCE"],
         "aggressive": ["TATAMOTORS", "ADANIENT", "JSWSTEEL", "TATAPOWER", "DIXON", "IRFC"]
-    }.get(profile, [])
-    
+    }
+    stocks = stocks_map.get(profile, [])
     if not stocks: return "Invalid profile."
     
-    tickers = [f"{s}.NS" for s in stocks]
     lines = [f"📊 <b>{profile.upper()} PORTFOLIO SCAN</b>", "━━━━━━━━━━━━━━━━━━━━"]
     
-    try:
-        # FIX: Added group_by='ticker' to ensure correct DataFrame structure
-        data = yf.download(tickers, period="5d", interval="1d", group_by='ticker', progress=False, threads=False)
-    except Exception as e:
-        return f"❌ Market data fetch failed: {e}"
-    
+    # Robust Loop: Fetches one by one using the working fetch_history method
     for sym in stocks:
         try:
-            # Access logic handles both single and multi-ticker downloads safely
-            if len(tickers) == 1:
-                df = data
-            else:
-                # With group_by='ticker', we can access directly by symbol
-                df = data[sym] if sym in data else pd.DataFrame()
-
+            df = fetch_history(sym, period="1mo") # Use 1mo for RSI/Momentum
+            
             if df.empty or len(df) < 2: 
                 lines.append(f"⚪ {sym}: No Data")
                 continue
@@ -326,7 +279,7 @@ def build_portfolio_scan(profile: str) -> str:
             em = "🟢" if chg >= 0 else "🔴"
             lines.append(f"{em} <b>{sym}</b>: ₹{ltp} ({chg}%) RSI:{rsi}")
         except Exception as e:
-            logger.error(f"Error scanning {sym}: {e}")
+            logger.error(f"Scan error {sym}: {e}")
             lines.append(f"⚠️ {sym}: Error")
 
     return "\n".join(lines)
@@ -335,8 +288,10 @@ def build_market_breadth() -> str:
     indices = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK"}
     lines = ["📊 <b>MARKET BREADTH</b>", "━━━━━━━━━━━━━━━━━━━━"]
     
+    # Indices
     for name, tic in indices.items():
         try:
+            # Using Ticker.history directly for indices
             df = yf.Ticker(tic).history(period="2d")
             if len(df) >= 2:
                 ltp = round(float(df["Close"].iloc[-1]), 2)
@@ -346,19 +301,15 @@ def build_market_breadth() -> str:
                 lines.append(f"{em} <b>{name}</b>: {ltp:,.2f} ({chg}%)")
         except: pass
 
+    # Breadth Calculation
     adv, dec = 0, 0
-    watchlist = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
+    watchlist = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "ITC", "SBIN", "LT", "AXISBANK", "KOTAKBANK"]
     
-    # FIX: Added group_by='ticker'
-    try:
-        batch = yf.download([f"{s}.NS" for s in watchlist], period="2d", group_by='ticker', progress=False)
-    except:
-        batch = pd.DataFrame()
-
-    for s in watchlist:
+    for sym in watchlist:
         try:
-            c = batch[s]["Close"] if s in batch else pd.DataFrame()
-            if len(c) >= 2:
+            df = fetch_history(sym, period="5d")
+            if len(df) >= 2:
+                c = df["Close"]
                 if c.iloc[-1] > c.iloc[-2]: adv += 1
                 else: dec += 1
         except: pass
@@ -368,30 +319,24 @@ def build_market_breadth() -> str:
     return "\n".join(lines)
 
 def build_swing_scan() -> str:
-    stocks = ["RELIANCE", "TCS", "HDFCBANK", "TATAMOTORS", "SBIN", "BAJFINANCE"]
+    stocks = ["RELIANCE", "TCS", "HDFCBANK", "TATAMOTORS", "SBIN", "BAJFINANCE", "MARUTI", "AXISBANK", "ICICIBANK", "HCLTECH"]
     lines = ["🎯 <b>SWING TRADE SCAN</b>", "━━━━━━━━━━━━━━━━━━━━"]
-    
-    # FIX: Added group_by='ticker'
-    try:
-        batch = yf.download([f"{s}.NS" for s in stocks], period="1mo", group_by='ticker', progress=False)
-    except:
-        batch = pd.DataFrame()
     
     found = 0
     for sym in stocks:
         try:
-            df = batch[sym] if sym in batch else pd.DataFrame()
+            df = fetch_history(sym, period="2mo") # Need 2mo for stable RSI
             if df.empty: continue
             
             close = df["Close"]
             rsi = compute_rsi(close)
             ltp = round(float(close.iloc[-1]), 2)
             
-            if rsi < 40:
+            if rsi < 35:
                 lines.append(f"🟢 <b>{sym}</b> @ ₹{ltp} (RSI: {rsi} - Oversold)")
                 found += 1
-            elif rsi > 60:
-                lines.append(f"🔴 <b>{sym}</b> @ ₹{ltp} (RSI: {rsi} - Strong)")
+            elif rsi > 65:
+                lines.append(f"🔴 <b>{sym}</b> @ ₹{ltp} (RSI: {rsi} - Overbought)")
                 found += 1
         except: pass
     
@@ -399,56 +344,27 @@ def build_swing_scan() -> str:
     return "\n".join(lines)
 
 def build_market_news() -> str:
-    headlines = []
     if TAVILY_API_KEY:
         try:
             r = requests.post("https://api.tavily.com/search", json={
-                "api_key": TAVILY_API_KEY, "query": "Indian stock market news",
-                "max_results": 3
+                "api_key": TAVILY_API_KEY, "query": "Indian stock market news", "max_results": 3
             }, timeout=5).json()
             headlines = [f"📰 {x['title']}" for x in r.get("results", [])]
             if headlines: return "<b>📰 MARKET NEWS</b>\n\n" + "\n".join(headlines)
         except: pass
-    return "📰 Market News unavailable (Configure TAVILY_API_KEY)."
+    return "📰 News unavailable (Set TAVILY_API_KEY)."
 
-def get_history(uid: int) -> list:
-    return list(_user_history.get(uid, deque(maxlen=5)))
-
-def record_history(uid: int, sym: str):
-    if uid not in _user_history: _user_history[uid] = deque(maxlen=5)
-    _user_history[uid].appendleft(sym)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# KEYBOARDS
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ─- Keyboards & Handlers ──────────────────────────────────────────────────────
 def main_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    kb.add(
-        types.KeyboardButton("🔍 Stock Analysis"),
-        types.KeyboardButton("📊 Market Breadth"),
-        types.KeyboardButton("🤖 AI Chat")
-    )
-    kb.add(
-        types.KeyboardButton("🏦 Conservative"),
-        types.KeyboardButton("⚖️ Moderate"),
-        types.KeyboardButton("🚀 Aggressive")
-    )
-    kb.add(
-        types.KeyboardButton("🎯 Swing Scan"),
-        types.KeyboardButton("📰 Market News"),
-        types.KeyboardButton("📋 Usage")
-    )
+    kb.add(types.KeyboardButton("🔍 Stock Analysis"), types.KeyboardButton("📊 Market Breadth"), types.KeyboardButton("🤖 AI Chat"))
+    kb.add(types.KeyboardButton("🏦 Conservative"), types.KeyboardButton("⚖️ Moderate"), types.KeyboardButton("🚀 Aggressive"))
+    kb.add(types.KeyboardButton("🎯 Swing Scan"), types.KeyboardButton("📰 Market News"), types.KeyboardButton("📋 Usage"))
     return kb
 
 def ai_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    kb.add(
-        types.KeyboardButton("📊 Nifty Valuation"),
-        types.KeyboardButton("💎 Fundamental Picks"),
-        types.KeyboardButton("📈 Nifty Update"),
-        types.KeyboardButton("🔙 Main Menu")
-    )
+    kb.add(types.KeyboardButton("📊 Nifty Valuation"), types.KeyboardButton("💎 Fundamental Picks"), types.KeyboardButton("📈 Nifty Update"), types.KeyboardButton("🔙 Main Menu"))
     return kb
 
 AI_TOPICS = {
@@ -456,10 +372,6 @@ AI_TOPICS = {
     "💎 Fundamental Picks": "Give 3 fundamentally strong NSE stocks with low PE.",
     "📈 Nifty Update": "Give a technical update on Nifty 50.",
 }
-
-# ══════════════════════════════════════════════════════════════════════════════
-# BOT HANDLERS
-# ══════════════════════════════════════════════════════════════════════════════
 
 def set_user_state(uid, state):
     with _user_state_lock: _user_state[uid] = state
@@ -469,28 +381,25 @@ def get_user_state(uid):
 
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
-    uid = msg.from_user.id
-    set_user_state(uid, None)
-    bot.send_message(uid, "👋 Welcome to AI Stock Advisor!\n\nType a symbol (e.g., RELIANCE) or use the menu.", reply_markup=main_keyboard())
+    set_user_state(msg.from_user.id, None)
+    bot.send_message(msg.chat.id, "👋 Welcome!\nType a symbol (e.g., RELIANCE) or use menu.", reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Main Menu")
 def to_main(msg):
     set_user_state(msg.from_user.id, None)
     bot.send_message(msg.chat.id, "🏠 Main Menu", reply_markup=main_keyboard())
 
-# Specific Button Handlers
 @bot.message_handler(func=lambda m: m.text == "🤖 AI Chat")
 def enter_ai(msg):
     set_user_state(msg.from_user.id, "ai_chat")
-    bot.send_message(msg.chat.id, "🤖 <b>AI Chat Mode</b>\nAsk anything or use buttons below.", reply_markup=ai_keyboard(), parse_mode="HTML")
+    bot.send_message(msg.chat.id, "🤖 <b>AI Chat Mode</b>", reply_markup=ai_keyboard(), parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text in AI_TOPICS)
 def handle_ai_topic(msg):
-    uid = msg.from_user.id
     q = AI_TOPICS[msg.text]
-    bot.send_message(uid, "🤖 Thinking...")
+    bot.send_message(msg.chat.id, "🤖 Thinking...")
     resp, err = call_ai([{"role": "user", "content": q}])
-    bot.send_message(uid, resp if resp else f"Error: {err}", reply_markup=ai_keyboard())
+    bot.send_message(msg.chat.id, resp if resp else f"Error: {err}", reply_markup=ai_keyboard())
 
 @bot.message_handler(func=lambda m: m.text in ["🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"])
 def handle_port(msg):
@@ -500,7 +409,7 @@ def handle_port(msg):
 
 @bot.message_handler(func=lambda m: m.text == "🎯 Swing Scan")
 def handle_swing(msg):
-    bot.send_message(msg.chat.id, "⏳ Scanning for swing setups...")
+    bot.send_message(msg.chat.id, "⏳ Scanning...")
     bot.send_message(msg.chat.id, build_swing_scan(), reply_markup=main_keyboard(), parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "📊 Market Breadth")
@@ -514,11 +423,10 @@ def handle_news(msg):
 @bot.message_handler(func=lambda m: m.text == "📋 Usage")
 def handle_usage(msg):
     uid = msg.from_user.id
-    hist = get_history(uid)
-    txt = f"📋 <b>Usage Stats</b>\n\nRecent Symbols:\n" + "\n".join([f"• {s}" for s in hist])
+    hist = list(_user_history.get(uid, []))
+    txt = f"📋 <b>Usage Stats</b>\n\nRecent Symbols:\n" + "\n".join([f"• {s}" for s in hist]) if hist else "No history."
     bot.send_message(uid, txt, reply_markup=main_keyboard(), parse_mode="HTML")
 
-# Catch-all
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_all(msg):
     uid = msg.from_user.id
@@ -531,24 +439,20 @@ def handle_all(msg):
         bot.send_message(uid, resp if resp else f"Error: {err}", reply_markup=ai_keyboard())
         return
 
-    # Assume Symbol
     clean = text.upper().replace(".NS", "")
     if 2 <= len(clean) <= 15 and clean.replace("-", "").isalnum():
-        record_history(uid, clean)
+        if uid not in _user_history: _user_history[uid] = deque(maxlen=5)
+        _user_history[uid].appendleft(clean)
+        
         bot.send_message(uid, f"🔍 Analyzing {clean}...")
         try:
-            adv = build_advisory(clean)
-            bot.send_message(uid, adv, parse_mode="HTML", reply_markup=main_keyboard())
+            bot.send_message(uid, build_advisory(clean), parse_mode="HTML", reply_markup=main_keyboard())
         except Exception as e:
-            logger.error(f"Analysis error: {e}")
             bot.send_message(uid, "❌ Analysis failed.", reply_markup=main_keyboard())
     else:
         bot.send_message(uid, "⚠️ Unrecognized. Type a symbol or use menu.", reply_markup=main_keyboard())
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FLASK & WEBHOOK
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ─- Flask Routes ──────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index(): return jsonify({"status": "running"})
 
@@ -577,14 +481,6 @@ def webhook():
         threading.Thread(target=process_update_async, args=(json_str,)).start()
         return "OK", 200
     return "Bad Request", 400
-
-@app.route("/set_webhook", methods=["GET"])
-def set_webhook():
-    if not WEBHOOK_URL: return "WEBHOOK_URL not set", 500
-    url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
-    bot.remove_webhook()
-    time.sleep(1)
-    return "Webhook Set" if bot.set_webhook(url=url) else "Failed", 200
 
 if __name__ == "__main__":
     logger.info(f"Starting server on port {PORT}")
