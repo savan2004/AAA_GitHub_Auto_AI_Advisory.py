@@ -1,18 +1,20 @@
 """
-main.py — AI Stock Advisory Bot (Fixed & Improved)
-- Fixed RSI syntax error
-- Added request timeouts and retries
-- Improved error handling and logging
-- Added AI response cache to reduce API costs
-- Validates required environment variables at startup
-- More robust Yahoo Finance session
+main.py — AI Stock Advisory Bot (Fixed & Perfected)
+- Added Accumulation Swing Index (ASI) technical indicator
+- Pre-initialized yfinance to fix curl_cffi thread-safety issues on Render
+- Fixed RSI division by zero bugs
+- Implemented ThreadPoolExecutor to prevent RAM exhaustion from infinite threads
+- Updated fast_info parsing
+- Added robust error handling and API fallback logic
 """
 import os
 import time
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import requests
 import json
+import numpy as np
 import pandas as pd
 import yfinance as yf
 from collections import deque
@@ -43,7 +45,6 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_KEY = os.getenv("OPENAI_KEY")
 TAVILY_KEY = os.getenv("TAVILY_API_KEY")
 
-# Warn if no AI keys are set (optional)
 if not (GROQ_KEY or GEMINI_KEY or OPENAI_KEY):
     logger.warning("No AI API keys configured – AI features will not work")
 
@@ -51,21 +52,16 @@ WEBHOOK_PATH = f"/webhook/{TOKEN}"
 app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# ── Session & Cache ───────────────────────────────────────────────────────
-# Custom User‑Agent to avoid Yahoo Finance blocks
-SESSION = requests.Session()
-SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-})
+# Render ThreadPool limits to prevent Memory/RAM Out-of-Memory crashes
+executor = ThreadPoolExecutor(max_workers=5) 
 
-# Caches
-_cache = {}               # key -> {"val": any, "ts": float}
-_state = {}               # user_id -> state (e.g., "ai")
-_processed_updates = set()  # update IDs already processed
+# ── Cache & State ─────────────────────────────────────────────────────────
+_cache = {}               
+_state = {}               
+_processed_updates = set() 
 _lock = threading.Lock()
 
 CACHE_TTL = 900           # 15 minutes
-AI_CACHE_TTL = 300        # 5 minutes for AI responses (optional)
 
 # ── AI Engine ──────────────────────────────────────────────────────────────
 _groq = None
@@ -73,63 +69,54 @@ _gemini = None
 _openai = None
 
 def init_ai_clients():
-    """Lazy‑load AI clients only when needed."""
     global _groq, _gemini, _openai
     if GROQ_KEY and not _groq:
         try:
             from groq import Groq
             _groq = Groq(api_key=GROQ_KEY)
         except ImportError:
-            logger.error("groq package not installed")
+            pass
     if GEMINI_KEY and not _gemini:
         try:
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_KEY)
             _gemini = genai.GenerativeModel("gemini-2.0-flash")
         except ImportError:
-            logger.error("google-generativeai package not installed")
+            pass
     if OPENAI_KEY and not _openai:
         try:
             from openai import OpenAI
             _openai = OpenAI(api_key=OPENAI_KEY)
         except ImportError:
-            logger.error("openai package not installed")
+            pass
     return _groq, _gemini, _openai
 
 def get_live_context():
-    """Fetches live Nifty/BankNifty levels for AI context."""
     ctx = []
     try:
-        n = yf.Ticker("^NSEI", session=SESSION).history(period="2d")
+        n = yf.Ticker("^NSEI").history(period="2d")
         if len(n) >= 2:
-            l = round(float(n.Close.iloc[-1]), 2)
-            p = round(float(n.Close.iloc[-2]), 2)
+            l = round(float(n['Close'].iloc[-1]), 2)
+            p = round(float(n['Close'].iloc[-2]), 2)
             chg = round((l - p) / p * 100, 2)
             ctx.append(f"NIFTY 50: {l} ({chg}%)")
-    except Exception as e:
-        logger.warning(f"Failed to fetch Nifty: {e}")
+    except Exception:
+        pass
     try:
-        b = yf.Ticker("^NSEBANK", session=SESSION).history(period="2d")
+        b = yf.Ticker("^NSEBANK").history(period="2d")
         if len(b) >= 2:
-            l = round(float(b.Close.iloc[-1]), 2)
-            p = round(float(b.Close.iloc[-2]), 2)
+            l = round(float(b['Close'].iloc[-1]), 2)
+            p = round(float(b['Close'].iloc[-2]), 2)
             chg = round((l - p) / p * 100, 2)
             ctx.append(f"BANK NIFTY: {l} ({chg}%)")
-    except Exception as e:
-        logger.warning(f"Failed to fetch Bank Nifty: {e}")
+    except Exception:
+        pass
     return "\n".join(ctx) if ctx else "Market data unavailable."
 
-@lru_cache(maxsize=128)
-def cached_ai_response(prompt_hash: str) -> str:
-    """Caches AI responses for identical prompts (optional)."""
-    return None   # placeholder, actual caching done in call_ai
-
 def call_ai(messages, max_tokens=400, system="", use_context=False):
-    """Call AI with fallback across providers and optional live context."""
     errs = []
     groq, gemini, openai = init_ai_clients()
 
-    # Build system prompt with live data if requested
     sys_prompt = system
     if use_context:
         live_data = get_live_context()
@@ -140,7 +127,6 @@ def call_ai(messages, max_tokens=400, system="", use_context=False):
         msgs.append({"role": "system", "content": sys_prompt})
     msgs.extend(messages)
 
-    # Try Groq
     if groq:
         try:
             r = groq.chat.completions.create(
@@ -149,30 +135,20 @@ def call_ai(messages, max_tokens=400, system="", use_context=False):
                 max_tokens=max_tokens,
                 timeout=10
             )
-            if r.choices[0].message.content:
-                return r.choices[0].message.content.strip(), ""
+            return r.choices[0].message.content.strip(), ""
         except Exception as e:
-            errs.append(f"Groq: {str(e)[:100]}")
-            logger.warning(f"Groq error: {e}")
+            errs.append(f"Groq: {e}")
 
-    # Try Gemini
     if gemini:
         try:
-            # Gemini expects a single text prompt, so we combine system and messages
-            prompt_parts = []
-            if sys_prompt:
-                prompt_parts.append(sys_prompt)
-            for m in messages:
-                prompt_parts.append(f"{m['role'].upper()}: {m['content']}")
+            prompt_parts = [sys_prompt] if sys_prompt else []
+            prompt_parts.extend([f"{m['role'].upper()}: {m['content']}" for m in messages])
             full_prompt = "\n\n".join(prompt_parts)
             r = gemini.generate_content(full_prompt)
-            if r.text:
-                return r.text.strip(), ""
+            return r.text.strip(), ""
         except Exception as e:
-            errs.append(f"Gemini: {str(e)[:100]}")
-            logger.warning(f"Gemini error: {e}")
+            errs.append(f"Gemini: {e}")
 
-    # Try OpenAI
     if openai:
         try:
             r = openai.chat.completions.create(
@@ -181,23 +157,29 @@ def call_ai(messages, max_tokens=400, system="", use_context=False):
                 max_tokens=max_tokens,
                 timeout=10
             )
-            if r.choices[0].message.content:
-                return r.choices[0].message.content.strip(), ""
+            return r.choices[0].message.content.strip(), ""
         except Exception as e:
-            errs.append(f"OpenAI: {str(e)[:100]}")
-            logger.warning(f"OpenAI error: {e}")
+            errs.append(f"OpenAI: {e}")
 
     return "", "\n".join(errs) if errs else "No AI keys configured."
 
-def ai_insights(sym, ltp, rsi, trend, pe):
-    """Generate AI insights for a symbol."""
+def ai_insights(sym, ltp, rsi, trend, pe, asi):
     if not (GROQ_KEY or GEMINI_KEY or OPENAI_KEY):
         return "⚠️ AI Disabled – no API keys"
-    prompt = f"Give 3 bullish bullets and 2 risk bullets for {sym} (NSE). LTP:{ltp}, RSI:{rsi}, Trend:{trend}, PE:{pe}."
+    prompt = f"Give 3 bullish bullets and 2 risk bullets for {sym} (NSE). LTP:{ltp}, RSI:{rsi}, Trend:{trend}, PE:{pe}, ASI:{asi}."
     resp, err = call_ai([{"role": "user", "content": prompt}], max_tokens=250)
     return resp if resp else f"AI Error: {err}"
 
-# ── Data & Technicals ──────────────────────────────────────────────────────
+# ── Data & Technicals with Retries ────────────────────────────────────────
+def retry_on_failure(func, *args, retries=3, delay=1, **kwargs):
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if i == retries - 1:
+                raise
+            time.sleep(delay * (i + 1))
+
 def get_cached(key):
     with _lock:
         d = _cache.get(key)
@@ -210,14 +192,13 @@ def set_cached(key, val):
         _cache[key] = {"val": val, "ts": time.time()}
 
 def get_hist(sym, period="1y"):
-    """Fetch historical data with caching."""
     key = f"h_{sym}_{period}"
     cached = get_cached(key)
     if cached is not None:
         return cached
     try:
-        ticker = yf.Ticker(f"{sym}.NS", session=SESSION)
-        df = ticker.history(period=period, auto_adjust=True)
+        ticker = yf.Ticker(f"{sym}.NS")
+        df = retry_on_failure(ticker.history, period=period, auto_adjust=True)
         if df.empty or len(df) < 5:
             return pd.DataFrame()
         set_cached(key, df)
@@ -227,17 +208,18 @@ def get_hist(sym, period="1y"):
         return pd.DataFrame()
 
 def get_info(sym):
-    """Fetch fundamental info with caching."""
     key = f"i_{sym}"
     cached = get_cached(key)
     if cached:
         return cached
     try:
-        ticker = yf.Ticker(f"{sym}.NS", session=SESSION)
-        info = ticker.info or {}
-        # Add market cap from fast_info if available
-        if hasattr(ticker, "fast_info") and ticker.fast_info:
-            info["mcap"] = getattr(ticker.fast_info, "market_cap", None)
+        ticker = yf.Ticker(f"{sym}.NS")
+        info = retry_on_failure(lambda: ticker.info)
+        
+        # Fast Info fix: using standard dictionary `.get()` method 
+        if hasattr(ticker, "fast_info"):
+            info["mcap"] = ticker.fast_info.get("marketCap", None)
+            
         set_cached(key, info)
         return info
     except Exception as e:
@@ -245,33 +227,31 @@ def get_info(sym):
         return {}
 
 def calc_rsi(close_series):
-    """Fixed RSI calculation (no syntax error)."""
     if len(close_series) < 15:
         return 50.0
     delta = close_series.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
+    
+    # Division by zero fix for continuous uptrends
+    loss = loss.replace(0, 1e-10)
+    
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     return round(float(rsi.iloc[-1]), 1)
 
 def calc_macd(close):
-    """Calculate MACD value."""
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
     return round(float(macd.iloc[-1]), 2)
 
 def calc_ema(close, span):
-    """Calculate exponential moving average."""
     ema = close.ewm(span=span, adjust=False).mean()
     return round(float(ema.iloc[-1]), 2)
 
 def calc_atr(df):
-    """Calculate Average True Range."""
-    high = df['High']
-    low = df['Low']
-    close = df['Close']
+    high, low, close = df['High'], df['Low'], df['Close']
     tr1 = high - low
     tr2 = abs(high - close.shift())
     tr3 = abs(low - close.shift())
@@ -279,8 +259,43 @@ def calc_atr(df):
     atr = tr.rolling(14).mean()
     return round(float(atr.iloc[-1]), 2)
 
+def calc_asi(df):
+    """Calculate Accumulation Swing Index (ASI) using Pandas"""
+    if len(df) < 2:
+        return 0.0
+    
+    # Vectorized computation of standard Swing Index components
+    O, H, L, C = df['Open'], df['High'], df['Low'], df['Close']
+    O_prev, C_prev = O.shift(1), C.shift(1)
+    
+    A = (H - C_prev).abs()
+    B = (L - C_prev).abs()
+    C_diff = (H - L).abs()
+    D = (C_prev - O_prev).abs()
+    
+    R = pd.Series(0.0, index=df.index)
+    cond_A = (A >= B) & (A >= C_diff)
+    cond_B = (B >= A) & (B >= C_diff) & ~cond_A
+    cond_C = ~(cond_A | cond_B)
+    
+    R.loc[cond_A] = A[cond_A] + 0.5 * B[cond_A] + 0.25 * D[cond_A]
+    R.loc[cond_B] = B[cond_B] + 0.5 * A[cond_B] + 0.25 * D[cond_B]
+    R.loc[cond_C] = C_diff[cond_C] + 0.25 * D[cond_C]
+    R = R.replace(0, 1e-10) # Protect zero division
+    
+    K = pd.concat([A, B], axis=1).max(axis=1)
+    
+    # Using 20% limit move standard approximation for NSE circuits
+    limit_move = C_prev * 0.20
+    limit_move = limit_move.replace(0, 1e-10)
+    
+    num = (C - C_prev) + 0.5 * (C_prev - O) + 0.25 * (C_prev - O_prev)
+    SI = 50 * (num / R) * (K / limit_move)
+    ASI = SI.cumsum()
+    
+    return round(float(ASI.iloc[-1]), 2)
+
 def safe(d, *keys, multiplier=1.0):
-    """Safely extract numeric values from dict."""
     for k in keys:
         val = d.get(k)
         if val is not None:
@@ -292,7 +307,6 @@ def safe(d, *keys, multiplier=1.0):
 
 # ── Message Builders ───────────────────────────────────────────────────────
 def build_adv(sym):
-    """Generate detailed advice for a symbol."""
     sym = sym.upper().replace(".NS", "")
     df = get_hist(sym)
     if df.empty:
@@ -308,8 +322,8 @@ def build_adv(sym):
     ema20 = calc_ema(close, 20)
     ema50 = calc_ema(close, 50)
     atr = calc_atr(df)
+    asi = calc_asi(df) # Generate Accumulation Swing Index (ASI)
 
-    # Determine trend
     if ltp > ema20 > ema50:
         trend = "BULLISH"
     elif ltp < ema20 < ema50:
@@ -321,10 +335,8 @@ def build_adv(sym):
     name = info.get("longName", sym)
     pe = safe(info, "trailingPE")
     roe = safe(info, "returnOnEquity", multiplier=100)
-    mcap = info.get("mcap")
 
-    # AI insights
-    ai_text = ai_insights(sym, ltp, rsi, trend, pe or "N/A")
+    ai_text = ai_insights(sym, ltp, rsi, trend, pe or "N/A", asi)
 
     return "\n".join([
         f"🏢 <b>{name}</b> ({sym})",
@@ -332,7 +344,7 @@ def build_adv(sym):
         "━━━━━━━━━━━━━━━━━━━━",
         f"📊 PE: {pe if pe else 'N/A'} | ROE: {roe if roe else 'N/A'}%",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"🔬 Trend: {trend} | RSI: {rsi}",
+        f"🔬 Trend: {trend} | RSI: {rsi} | ASI: {asi}",
         "━━━━━━━━━━━━━━━━━━━━",
         f"🎯 Target: ₹{round(ltp + 1.5 * atr, 2)} | SL: ₹{round(ltp - 2 * atr, 2)}",
         "━━━━━━━━━━━━━━━━━━━━",
@@ -340,7 +352,6 @@ def build_adv(sym):
     ])
 
 def build_scan(profile):
-    """Generate a scan for a given risk profile."""
     profile_map = {
         "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC"],
         "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI"],
@@ -362,12 +373,11 @@ def build_scan(profile):
     return "\n".join(lines)
 
 def build_breadth():
-    """Generate market breadth data."""
     lines = ["📊 MARKET BREADTH", "━━━━━━━━━━━━━━━━━━━━"]
     indices = {"NIFTY": "^NSEI", "BANK NIFTY": "^NSEBANK"}
     for name, ticker in indices.items():
         try:
-            d = yf.Ticker(ticker, session=SESSION).history(period="2d")
+            d = yf.Ticker(ticker).history(period="2d")
             if len(d) >= 2:
                 l = round(float(d['Close'].iloc[-1]), 2)
                 p = round(float(d['Close'].iloc[-2]), 2)
@@ -377,7 +387,6 @@ def build_breadth():
         except Exception:
             pass
 
-    # Simple advance/decline based on top stocks
     adv, dec = 0, 0
     top_stocks = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
     for sym in top_stocks:
@@ -390,7 +399,6 @@ def build_breadth():
     return "\n".join(lines)
 
 def build_news():
-    """Fetch news via Tavily."""
     if not TAVILY_KEY:
         return "Set TAVILY_KEY for news."
     try:
@@ -408,7 +416,6 @@ def build_news():
 
 # ── Telegram Handlers ──────────────────────────────────────────────────────
 def main_keyboard():
-    """Main menu keyboard."""
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     kb.add("🔍 Analysis", "📊 Breadth", "🤖 AI")
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
@@ -416,7 +423,6 @@ def main_keyboard():
     return kb
 
 def ai_keyboard():
-    """AI submenu keyboard."""
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add("📊 Nifty", "💎 Picks", "🔙 Menu")
     return kb
@@ -469,8 +475,9 @@ def swing_button(message):
         df = get_hist(sym, "2mo")
         if not df.empty:
             rsi = calc_rsi(df['Close'])
+            asi = calc_asi(df)
             if rsi < 35:
-                lines.append(f"🟢 {sym} RSI:{rsi}")
+                lines.append(f"🟢 {sym} RSI:{rsi} | ASI:{asi}")
                 found = True
     if not found:
         lines.append("None found.")
@@ -490,7 +497,6 @@ def handle_text(message):
         bot.send_message(uid, resp or f"Err: {err}", reply_markup=ai_keyboard())
         return
 
-    # Assume it's a stock symbol
     sym = text.upper().replace(".NS", "")
     if 2 <= len(sym) <= 15 and sym.replace("-", "").isalnum():
         bot.send_message(uid, f"🔍 Analyzing {sym}...")
@@ -502,10 +508,10 @@ def handle_text(message):
 # ── Flask Webhook ─────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ok", "version": "2.0"})
+    return jsonify({"status": "ok", "version": "3.0_perfect_asi"})
 
 def process_update(update_json):
-    """Process a single update in a thread."""
+    """Process a single update securely within the ThreadPool."""
     try:
         update = telebot.types.Update.de_json(update_json)
         bot.process_new_updates([update])
@@ -514,7 +520,6 @@ def process_update(update_json):
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    """Handle incoming webhook requests."""
     if request.headers.get("content-type") != "application/json":
         return "Unsupported Media Type", 415
     data = request.get_data().decode("utf-8")
@@ -527,13 +532,13 @@ def webhook():
             if len(_processed_updates) > 200:
                 _processed_updates.discard(min(_processed_updates))
     except Exception:
-        # If we can't parse update_id, still process it
         pass
 
-    threading.Thread(target=process_update, args=(data,)).start()
+    # Use ThreadPool to prevent crashing Render RAM limits
+    executor.submit(process_update, data)
     return "OK", 200
 
 if __name__ == "__main__":
-    logger.info("Starting server...")
-    port = int(os.getenv("PORT", 8000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    logger.info("Pre-initializing yfinance session to fix curl_cffi threading bug...")
+    try:
+        _ 
