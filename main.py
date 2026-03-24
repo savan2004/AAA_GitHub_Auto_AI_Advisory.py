@@ -541,4 +541,11 @@ def webhook():
 if __name__ == "__main__":
     logger.info("Pre-initializing yfinance session to fix curl_cffi threading bug...")
     try:
-        _ 
+        _ = yf.Ticker("^NSEI").history(period="1d")
+        logger.info("yfinance session successfully warmed up!")
+    except Exception as e:
+        logger.warning(f"Initial yfinance warm-up failed, continuing... {e}")
+
+    logger.info("Starting Render Webhook Server...")
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port, debug=False)
