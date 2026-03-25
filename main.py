@@ -1,5 +1,6 @@
 """
-main.py — AI Stock Advisory Bot (Fixed & Perfected v3.1)
+main.py — AI Stock Advisory Bot (Fixed & Perfected v3.2)
+- Fixed SyntaxError in f-strings
 - Fixed Rate Limiting by increasing Cache TTL and adding request delays
 - Fixed Render build errors by moving pip installation to build command
 - Added exponential backoff to yfinance retries
