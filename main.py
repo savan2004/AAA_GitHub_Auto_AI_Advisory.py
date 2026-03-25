@@ -72,18 +72,21 @@ def init_ai_clients():
         try:
             from groq import Groq
             _groq = Groq(api_key=GROQ_KEY)
-        except ImportError: pass
+        except ImportError:
+            pass
     if GEMINI_KEY and not _gemini:
         try:
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_KEY)
             _gemini = genai.GenerativeModel("gemini-2.0-flash")
-        except ImportError: pass
+        except ImportError:
+            pass
     if OPENAI_KEY and not _openai:
         try:
             from openai import OpenAI
             _openai = OpenAI(api_key=OPENAI_KEY)
-        except ImportError: pass
+        except ImportError:
+            pass
     return _groq, _gemini, _openai
 
 def get_live_context():
@@ -95,7 +98,8 @@ def get_live_context():
             p = round(float(n['Close'].iloc[-2]), 2)
             chg = round((l - p) / p * 100, 2)
             ctx.append(f"NIFTY 50: {l} ({chg}%)")
-    except Exception: pass
+    except Exception:
+        pass
     try:
         b = yf.Ticker("^NSEBANK").history(period="2d")
         if len(b) >= 2:
@@ -103,9 +107,9 @@ def get_live_context():
             p = round(float(b['Close'].iloc[-2]), 2)
             chg = round((l - p) / p * 100, 2)
             ctx.append(f"BANK NIFTY: {l} ({chg}%)")
-    except Exception: pass
-    return "
-".join(ctx) if ctx else "Market data unavailable."
+    except Exception:
+        pass
+    return "\n".join(ctx) if ctx else "Market data unavailable."
 
 def call_ai(messages, max_tokens=400, system="", use_context=False):
     errs = []
@@ -113,16 +117,13 @@ def call_ai(messages, max_tokens=400, system="", use_context=False):
     sys_prompt = system
     if use_context:
         live_data = get_live_context()
-        sys_prompt += f"
+        sys_prompt += f"\n\nLIVE MARKET DATA (Use these numbers in your answer):\n{live_data}"
 
-LIVE MARKET DATA (Use these numbers in your answer):
-{live_data}"
-    
     msgs = []
     if sys_prompt:
         msgs.append({"role": "system", "content": sys_prompt})
     msgs.extend(messages)
-    
+
     if groq:
         try:
             r = groq.chat.completions.create(
@@ -132,16 +133,16 @@ LIVE MARKET DATA (Use these numbers in your answer):
                 timeout=10
             )
             return r.choices[0].message.content.strip(), ""
-        except Exception as e: errs.append(f"Groq: {e}")
+        except Exception as e:
+            errs.append(f"Groq: {e}")
     if gemini:
         try:
             prompt_parts = [sys_prompt] if sys_prompt else []
             prompt_parts.extend([f"{m['role'].upper()}: {m['content']}" for m in messages])
-            r = gemini.generate_content("
-
-".join(prompt_parts))
+            r = gemini.generate_content("\n\n".join(prompt_parts))
             return r.text.strip(), ""
-        except Exception as e: errs.append(f"Gemini: {e}")
+        except Exception as e:
+            errs.append(f"Gemini: {e}")
     if openai:
         try:
             r = openai.chat.completions.create(
@@ -151,9 +152,9 @@ LIVE MARKET DATA (Use these numbers in your answer):
                 timeout=10
             )
             return r.choices[0].message.content.strip(), ""
-        except Exception as e: errs.append(f"OpenAI: {e}")
-    return "", "
-".join(errs) if errs else "No AI keys configured."
+        except Exception as e:
+            errs.append(f"OpenAI: {e}")
+    return "", "\n".join(errs) if errs else "No AI keys configured."
 
 def ai_insights(sym, ltp, rsi, trend, pe, asi):
     if not (GROQ_KEY or GEMINI_KEY or OPENAI_KEY):
@@ -170,10 +171,11 @@ def retry_on_failure(func, *args, retries=3, delay=2, **kwargs):
         except Exception as e:
             err_msg = str(e).lower()
             if "too many requests" in err_msg or "rate limit" in err_msg or "429" in err_msg:
-                wait_time = delay * (2 ** i) # 2s, 4s, 8s
+                wait_time = delay * (2 ** i)  # 2s, 4s, 8s
                 logger.warning(f"Rate limited. Waiting {wait_time}s...")
                 time.sleep(wait_time)
-            if i == retries - 1: raise
+            if i == retries - 1:
+                raise
             time.sleep(delay * (i + 1))
 
 def get_cached(key):
@@ -190,11 +192,13 @@ def set_cached(key, val):
 def get_hist(sym, period="1y"):
     key = f"h_{sym}_{period}"
     cached = get_cached(key)
-    if cached is not None: return cached
+    if cached is not None:
+        return cached
     try:
         ticker = yf.Ticker(f"{sym}.NS")
         df = retry_on_failure(ticker.history, period=period, auto_adjust=True)
-        if df.empty or len(df) < 5: return pd.DataFrame()
+        if df.empty or len(df) < 5:
+            return pd.DataFrame()
         set_cached(key, df)
         return df
     except Exception as e:
@@ -204,7 +208,8 @@ def get_hist(sym, period="1y"):
 def get_info(sym):
     key = f"i_{sym}"
     cached = get_cached(key)
-    if cached: return cached
+    if cached:
+        return cached
     try:
         ticker = yf.Ticker(f"{sym}.NS")
         info = retry_on_failure(lambda: ticker.info)
@@ -217,11 +222,12 @@ def get_info(sym):
         return {}
 
 def calc_rsi(close_series):
-    if len(close_series) < 15: return 50.0
+    if len(close_series) < 15:
+        return 50.0
     delta = close_series.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
-    loss = loss.replace(0, 1e-10) # Fix division by zero
+    loss = loss.replace(0, 1e-10)  # Fix division by zero
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     return round(float(rsi.iloc[-1]), 1)
@@ -246,7 +252,8 @@ def calc_atr(df):
     return round(float(atr.iloc[-1]), 2)
 
 def calc_asi(df):
-    if len(df) < 2: return 0.0
+    if len(df) < 2:
+        return 0.0
     O, H, L, C = df['Open'], df['High'], df['Low'], df['Close']
     O_prev, C_prev = O.shift(1), C.shift(1)
     A, B = (H - C_prev).abs(), (L - C_prev).abs()
@@ -270,15 +277,18 @@ def safe(d, *keys, multiplier=1.0):
     for k in keys:
         val = d.get(k)
         if val is not None:
-            try: return round(float(val) * multiplier, 2)
-            except: pass
+            try:
+                return round(float(val) * multiplier, 2)
+            except:
+                pass
     return None
 
 # ── Message Builders ───────────────────────────────────────────────────────
 def build_adv(sym):
     sym = sym.upper().replace(".NS", "")
     df = get_hist(sym)
-    if df.empty: return f"❌ {sym} not found. Check symbol or try again later."
+    if df.empty:
+        return f"❌ {sym} not found. Check symbol or try again later."
     close = df['Close']
     ltp = round(float(close.iloc[-1]), 2)
     prev_close = float(close.iloc[-2]) if len(close) > 1 else ltp
@@ -292,8 +302,7 @@ def build_adv(sym):
     pe = safe(info, "trailingPE")
     roe = safe(info, "returnOnEquity", multiplier=100)
     ai_text = ai_insights(sym, ltp, rsi, trend, pe or "N/A", asi)
-    return "
-".join([
+    return "\n".join([
         f"🏢 <b>{name}</b> ({sym})",
         f"💰 LTP: ₹{ltp} ({chg}%)",
         "━━━━━━━━━━━━━━━━━━━━",
@@ -303,8 +312,7 @@ def build_adv(sym):
         "━━━━━━━━━━━━━━━━━━━━",
         f"🎯 Target: ₹{round(ltp + 1.5 * atr, 2)} | SL: ₹{round(ltp - 2 * atr, 2)}",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"🤖 AI:
-{ai_text}"
+        f"🤖 AI:\n{ai_text}"
     ])
 
 def build_scan(profile):
@@ -318,21 +326,23 @@ def build_scan(profile):
     tickers = [f"{s}.NS" for s in symbols]
     try:
         data = yf.download(tickers, period="5d", group_by="ticker", auto_adjust=True, progress=False)
-    except: return "❌ Batch fetch failed. Try later."
-    
+    except:
+        return "❌ Batch fetch failed. Try later."
+
     lines = [f"📊 {profile.upper()} SCAN", "━━━━━━━━━━━━━━━━━━━━"]
     for sym in symbols:
         try:
             df = data[f"{sym}.NS"]
-            if df.empty: continue
+            if df.empty:
+                continue
             ltp = round(float(df['Close'].iloc[-1]), 2)
             prev = float(df['Close'].iloc[-2])
             chg = round((ltp - prev) / prev * 100, 2)
             icon = "🟢" if chg >= 0 else "🔴"
             lines.append(f"{icon} <b>{sym}</b>: ₹{ltp} ({chg}%)")
-        except: pass
-    return "
-".join(lines)
+        except:
+            pass
+    return "\n".join(lines)
 
 def build_breadth():
     lines = ["📊 MARKET BREADTH", "━━━━━━━━━━━━━━━━━━━━"]
@@ -344,17 +354,22 @@ def build_breadth():
                 l, p = round(float(d['Close'].iloc[-1]), 2), round(float(d['Close'].iloc[-2]), 2)
                 chg = round((l - p) / p * 100, 2)
                 lines.append(f"{'🟢' if chg >= 0 else '🔴'} {name}: {l:,.2f} ({chg}%)")
-        except: pass
-    return "
-".join(lines)
+        except:
+            pass
+    return "\n".join(lines)
 
 def build_news():
-    if not TAVILY_KEY: return "Set TAVILY_KEY for news."
+    if not TAVILY_KEY:
+        return "Set TAVILY_KEY for news."
     try:
-        r = requests.post("https://api.tavily.com/search", json={"api_key": TAVILY_KEY, "query": "India stock market", "max_results": 3}, timeout=5)
-        return "
-".join([f"📰 {x['title']}" for x in r.json().get("results", [])])
-    except: return "News fetch error."
+        r = requests.post(
+            "https://api.tavily.com/search",
+            json={"api_key": TAVILY_KEY, "query": "India stock market", "max_results": 3},
+            timeout=5
+        )
+        return "\n".join([f"📰 {x['title']}" for x in r.json().get("results", [])])
+    except:
+        return "News fetch error."
 
 # ── Telegram Handlers ──────────────────────────────────────────────────────
 def main_keyboard():
@@ -372,7 +387,11 @@ def ai_keyboard():
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
     _state[message.chat.id] = None
-    bot.send_message(message.chat.id, "👋 Ready! Type a symbol (e.g., RELIANCE) or use menu.", reply_markup=main_keyboard())
+    bot.send_message(
+        message.chat.id,
+        "👋 Ready! Type a symbol (e.g., RELIANCE) or use menu.",
+        reply_markup=main_keyboard()
+    )
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Menu")
 def back_to_main(message):
@@ -387,7 +406,10 @@ def enter_ai_mode(message):
 @bot.message_handler(func=lambda m: m.text in ["📊 Nifty", "💎 Picks"])
 def ai_predefined(message):
     bot.send_message(message.chat.id, "Thinking...")
-    prompts = {"📊 Nifty": "Analyze Nifty 50 trend.", "💎 Picks": "Suggest 2 swing trading stocks."}
+    prompts = {
+        "📊 Nifty": "Analyze Nifty 50 trend.",
+        "💎 Picks": "Suggest 2 swing trading stocks."
+    }
     resp, err = call_ai([{"role": "user", "content": prompts.get(message.text, "")}], use_context=True)
     bot.send_message(message.chat.id, resp or f"Err: {err}", reply_markup=ai_keyboard())
 
@@ -412,10 +434,10 @@ def swing_button(message):
             if rsi < 35:
                 lines.append(f"🟢 {sym} RSI:{rsi}")
                 found = True
-        time.sleep(0.5) # Prevent rate limit in loop
-    if not found: lines.append("None found.")
-    bot.send_message(message.chat.id, "
-".join(lines), parse_mode="HTML")
+        time.sleep(0.5)  # Prevent rate limit in loop
+    if not found:
+        lines.append("None found.")
+    bot.send_message(message.chat.id, "\n".join(lines), parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "📰 News")
 def news_button(message):
@@ -435,13 +457,15 @@ def handle_text(message):
 
 # ── Flask Webhook ─────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
-def index(): return jsonify({"status": "ok", "version": "3.1_fixed"})
+def index():
+    return jsonify({"status": "ok", "version": "3.1_fixed"})
 
 def process_update(update_json):
     try:
         update = telebot.types.Update.de_json(update_json)
         bot.process_new_updates([update])
-    except Exception as e: logger.error(f"Error: {e}")
+    except Exception as e:
+        logger.error(f"Error: {e}")
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
@@ -449,16 +473,21 @@ def webhook():
     try:
         update_id = json.loads(data).get("update_id")
         with _lock:
-            if update_id in _processed_updates: return "OK", 200
+            if update_id in _processed_updates:
+                return "OK", 200
             _processed_updates.add(update_id)
-            if len(_processed_updates) > 200: _processed_updates.discard(min(_processed_updates))
-    except: pass
+            if len(_processed_updates) > 200:
+                _processed_updates.discard(min(_processed_updates))
+    except:
+        pass
     executor.submit(process_update, data)
     return "OK", 200
 
 if __name__ == "__main__":
     # Warm up yfinance
-    try: _ = yf.Ticker("^NSEI").history(period="1d")
-    except: pass
+    try:
+        _ = yf.Ticker("^NSEI").history(period="1d")
+    except:
+        pass
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
