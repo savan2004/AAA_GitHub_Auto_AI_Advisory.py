@@ -53,12 +53,12 @@ app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
 # Render ThreadPool limits to prevent Memory/RAM Out-of-Memory crashes
-executor = ThreadPoolExecutor(max_workers=5) 
+executor = ThreadPoolExecutor(max_workers=5)
 
 # ── Cache & State ─────────────────────────────────────────────────────────
-_cache = {}               
-_state = {}               
-_processed_updates = set() 
+_cache = {}
+_state = {}
+_processed_updates = set()
 _lock = threading.Lock()
 
 CACHE_TTL = 900           # 15 minutes
