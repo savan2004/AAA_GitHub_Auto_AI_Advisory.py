@@ -683,7 +683,7 @@ def route_debug_ai():
     return jsonify(debug_ai_status())
 
 def process_update(update_json: str):
-        from requests.exceptions import ConnectionError as ReqConnErr
+    from requests.exceptions import ConnectionError as ReqConnErr
     for _attempt in range(3):
         try:
             update = telebot.types.Update.de_json(update_json)
