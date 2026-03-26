@@ -31,7 +31,7 @@ if GEMINI_API_KEY:
 
 # --- yfinance safe layer (rate limiting & cache) ---
 YF_WINDOW_SEC = 60
-YF_MAX_CALLS_PER_WINDOW = 10
+YF_MAX_CALLS_PER_WINDOW = 40
 YF_CALL_TIMES = deque()
 
 CACHE = {}
