@@ -23,6 +23,45 @@ import json
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+# === EXPERT FIX: Yahoo Finance Rate Limit Workaround ===
+import random
+from requests import Session
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+
+# Create custom session with retry logic and headers
+def _create_yf_session():
+    session = Session()
+    retry_strategy = Retry(
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    # Rotate user agents to avoid detection
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+    ]
+    session.headers['User-Agent'] = random.choice(user_agents)
+    return session
+
+# Global rate limiter
+_last_yf_call = 0
+_yf_call_delay = 2.0  # 2 second delay between calls
+
+def _rate_limit_yf():
+    """Enforce rate limiting between yfinance calls"""
+    global _last_yf_call
+    now = time.time()
+    elapsed = now - _last_yf_call
+    if elapsed < _yf_call_delay:
+        time.sleep(_yf_call_delay - elapsed + random.uniform(0.1, 0.5))
+    _last_yf_call = time.time()
 from collections import deque
 from datetime import datetime, date
 from flask import Flask, request, jsonify
@@ -177,8 +216,8 @@ def get_hist(sym: str, period: str = "1y") -> pd.DataFrame:
     if cached is not None:
         return cached
     try:
-        ticker = yf.Ticker(f"{sym}.NS")
-        df = retry_yf(ticker.history, period=period, auto_adjust=True)
+        _rate_limit_yf()  # Enforce delay between API calls
+        ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())        df = retry_yf(ticker.history, period=period, auto_adjust=True)
         if df.empty or len(df) < 2:
             return pd.DataFrame()
         set_cached(key, df)
@@ -195,8 +234,8 @@ def get_info(sym: str) -> dict:
         return cached
     info = {}
     try:
-        ticker = yf.Ticker(f"{sym}.NS")
-        try:
+        _rate_limit_yf()  # Enforce delay
+        ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())        try:
             info = dict(ticker.info)
         except Exception:
             pass
