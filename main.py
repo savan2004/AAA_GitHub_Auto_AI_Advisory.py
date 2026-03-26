@@ -77,9 +77,8 @@ _processed_updates = set()
 _lock  = threading.Lock()
 
 # FIX 4: Short TTL for live price data so AI always sees fresh numbers
-CACHE_TTL_LIVE = 300    # 5 min  — live prices / index data
-CACHE_TTL_FUND = 3600   # 60 min — fundamentals (PE, ROE, revenue…)
-
+CACHE_TTL_LIVE = 7200  # 2 hours — aggressive caching to avoid Yahoo rate limits= 300    # 5 min  — live prices / index data
+CACHE_TTL_FUND = 21600  # 6 hours — fundamentals (PE, ROE, revenue…)
 def get_cached(key: str, ttl: int):
     with _lock:
         d = _cache.get(key)
