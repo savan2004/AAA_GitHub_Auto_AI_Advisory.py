@@ -67,7 +67,7 @@ TAVILY_KEY   = os.getenv("TAVILY_API_KEY")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 
 app      = Flask(__name__)
-bot      = telebot.TeleBot(TOKEN, threaded=False)
+bot      = telebot.TeleBot(TOKEN, threaded=False, num_threads=4, colorful_logs=False)
 executor = ThreadPoolExecutor(max_workers=5)
 
 # ── Cache ──────────────────────────────────────────────────────────────────
@@ -683,11 +683,17 @@ def route_debug_ai():
     return jsonify(debug_ai_status())
 
 def process_update(update_json: str):
-    try:
-        update = telebot.types.Update.de_json(update_json)
-        bot.process_new_updates([update])
-    except Exception as e:
-        logger.error(f"process_update: {e}")
+        from requests.exceptions import ConnectionError as ReqConnErr
+    for _attempt in range(3):
+        try:
+            update = telebot.types.Update.de_json(update_json)
+            bot.process_new_updates([update])
+            return
+        except (ReqConnErr, Exception) as e:
+            if _attempt < 2:
+                time.sleep(1.5)
+            else:
+                logger.error(f"process_update failed after 3 retries: {e}")
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
