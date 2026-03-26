@@ -629,6 +629,16 @@ def swing_button(message):
             bot.send_message(message.chat.id, f"❌ Swing scan failed: {e}")
     executor.submit(_run)
 
+@bot.message_handler(func=lambda m: m.text == "🔍 Analysis")
+def analysis_button(message):
+    _state[message.chat.id] = "awaiting_symbol"
+    bot.send_message(
+        message.chat.id,
+        "🔍 <b>Stock Analysis</b>\n\nPlease type the NSE symbol you want to analyse.\nExample: <code>RELIANCE</code>, <code>TCS</code>, <code>INFY</code>",
+        parse_mode="HTML",
+        reply_markup=main_keyboard(),
+    )
+
 @bot.message_handler(func=lambda m: m.text == "📰 News")
 def news_button(message):
     bot.send_message(message.chat.id, build_news(), parse_mode="HTML")
@@ -647,6 +657,18 @@ def handle_text(message):
             bot.send_message(uid, resp or "❌ AI unavailable.", parse_mode="HTML",
                              reply_markup=ai_keyboard())
         executor.submit(_ai)
+        return
+          
+    if _state.get(uid) == "awaiting_symbol":
+        _state[uid] = None
+        sym = text.upper().replace(".NS", "")
+        if 2 <= len(sym) <= 15 and all(c.isalnum() or c == "&" for c in sym):
+            bot.send_message(uid, f"🔍 Analyzing <b>{sym}</b>...", parse_mode="HTML")
+            def _adv():
+                bot.send_message(uid, build_adv(sym), parse_mode="HTML")
+            executor.submit(_adv)
+        else:
+            bot.send_message(uid, "❌ Please enter a valid NSE symbol (2-15 alphanumeric characters).")
         return
 
     sym = text.upper().replace(".NS", "")
