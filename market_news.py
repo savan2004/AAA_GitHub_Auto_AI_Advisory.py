@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 _NEWS_CACHE: Dict[str, Dict] = {}
 _NEWS_TTL = 5 * 60  # 5 minutes
 
+NEWS_API_BASE = ""  # your custom news backend if any
+
 
 def _get_cached(key: str, ttl: int):
     d = _NEWS_CACHE.get(key)
@@ -25,8 +27,7 @@ def _set_cached(key: str, val):
 def fetch_latest_market_news(limit: int = 4) -> List[str]:
     """
     Fetch latest Indian market news headlines.
-    Currently placeholder – plug your real API here.
-    Returns a list of short headline strings.
+    Currently: static fallback + hook for your own API.
     """
     cache_key = f"news_{limit}"
     cached = _get_cached(cache_key, _NEWS_TTL)
@@ -36,24 +37,23 @@ def fetch_latest_market_news(limit: int = 4) -> List[str]:
     headlines: List[str] = []
 
     try:
-        # TODO: Replace this block with your real news API.
-        # Example shape:
-        # resp = requests.get("https://your-news-api.example.com/market", timeout=5)
-        # resp.raise_for_status()
-        # data = resp.json()
-        # headlines = [item["title"] for item in data["articles"]][:limit]
-
-        # TEMP fallback sample headlines (so bot never breaks)
-        headlines = [
-            "Taking Stock: Market fails to hold on to day's gains, ends marginally higher",
-            "Sensex, Nifty gain for third day in a row; easing volatility to support bull trend",
-            "Mid-day Mood | Cooling volatility sparks market rally, India VIX sees steepest fall in 4 years",
-            "Sensex, Nifty extend gains to 3rd day, Q4 results to guide stock-specific action",
-        ][:limit]
-
+        if NEWS_API_BASE:
+            url = f"{NEWS_API_BASE}/market-news"
+            r = requests.get(url, params={"limit": limit}, timeout=5)
+            r.raise_for_status()
+            data = r.json()
+            # expected: {"articles":[{"title": "..."}, ...]}
+            headlines = [a["title"] for a in data.get("articles", [])][:limit]
+        else:
+            # Static fallback so bot never breaks
+            headlines = [
+                "Taking Stock: Market fails to hold on to day's gains, ends marginally higher",
+                "Sensex, Nifty gain for third day in a row; easing volatility to support bull trend",
+                "Mid-day Mood | Cooling volatility sparks market rally, India VIX sees steepest fall in 4 years",
+                "Sensex, Nifty extend gains to 3rd day, Q4 results to guide stock-specific action",
+            ][:limit]
     except Exception as e:
         logger.error(f"Error fetching market news: {e}")
-        # On failure, keep headlines empty – section will be skipped in main.
 
     _set_cached(cache_key, headlines)
     return headlines
