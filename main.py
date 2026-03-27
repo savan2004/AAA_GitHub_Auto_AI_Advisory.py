@@ -217,7 +217,8 @@ def get_hist(sym: str, period: str = "1y") -> pd.DataFrame:
         return cached
     try:
         _rate_limit_yf()  # Enforce delay between API calls
-ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session()) df = retry_yf(ticker.history, period=period, auto_adjust=True)
+        ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())
+        df = retry_yf(ticker.history, period=period, auto_adjust=True)
 
         if df.empty or len(df) < 2:
             return pd.DataFrame()
