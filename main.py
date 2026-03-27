@@ -219,7 +219,6 @@ def get_hist(sym: str, period: str = "1y") -> pd.DataFrame:
         _rate_limit_yf()  # Enforce delay between API calls
         ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())
         df = retry_yf(ticker.history, period=period, auto_adjust=True)
-
         if df.empty or len(df) < 2:
             return pd.DataFrame()
         set_cached(key, df)
@@ -227,6 +226,7 @@ def get_hist(sym: str, period: str = "1y") -> pd.DataFrame:
     except Exception as e:
         logger.error(f"get_hist {sym}: {e}")
         return pd.DataFrame()
+
 
 def get_info(sym: str) -> dict:
     """FIX 2: Robust fundamental fetch — info + fast_info fallback."""
@@ -237,10 +237,13 @@ def get_info(sym: str) -> dict:
     info = {}
     try:
         _rate_limit_yf()  # Enforce delay
-        ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())        try:
+        ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())
+
+        try:
             info = dict(ticker.info)
         except Exception:
             pass
+
         # fast_info is more reliable in newer yfinance builds
         try:
             fi = ticker.fast_info
@@ -257,11 +260,11 @@ def get_info(sym: str) -> dict:
                     info.setdefault(dst_key, val)
         except Exception:
             pass
+
         set_cached(key, info)
     except Exception as e:
         logger.error(f"get_info {sym}: {e}")
     return info
-
 # ── Indicators ────────────────────────────────────────────────────────────
 def calc_rsi(c: pd.Series) -> float:
     if len(c) < 15:
