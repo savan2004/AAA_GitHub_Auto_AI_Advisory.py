@@ -269,49 +269,60 @@ def _yahoo_v8_quote(symbol: str) -> Optional[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
-    """Fetch PE, PB, ROE, EPS, dividend yield from Yahoo quoteSummary."""
+    """Fetch PE, PB, ROE, EPS, dividend yield from Yahoo quoteSummary.
+    Tries both query1 and query2 endpoints — Yahoo periodically blocks one.
+    """
     _wait_for_rate_slot()
     modules = "summaryDetail,defaultKeyStatistics,financialData,price"
-    url = (
-        f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
-        f"?modules={modules}"
-    )
-    try:
-        resp = requests.get(url, headers=_HEADERS, timeout=12)
-        if resp.status_code == 429:
-            time.sleep(_jitter(30))
-            return None
-        if not resp.ok:
-            return None
+    # Try query2 first, then query1 as fallback (Yahoo rotates which one works)
+    for host in ["query2", "query1"]:
+        url = (
+            f"https://{host}.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+            f"?modules={modules}&corsDomain=finance.yahoo.com&formatted=false"
+        )
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=12)
+            if resp.status_code in (401, 403):
+                logger.debug(f"[Yahoo v10] {host} blocked for {symbol} ({resp.status_code})")
+                continue
+            if resp.status_code == 429:
+                time.sleep(_jitter(30))
+                return None
+            if not resp.ok:
+                continue
 
-        data   = resp.json()
-        result = data.get("quoteSummary", {}).get("result", [None])[0]
-        if not result:
-            return None
+            data   = resp.json()
+            result = data.get("quoteSummary", {}).get("result", [None])[0]
+            if not result:
+                continue
 
-        sd = result.get("summaryDetail",         {})
-        ks = result.get("defaultKeyStatistics",  {})
-        fd = result.get("financialData",         {})
-        pr = result.get("price",                 {})
+            sd = result.get("summaryDetail",         {})
+            ks = result.get("defaultKeyStatistics",  {})
+            fd = result.get("financialData",         {})
+            pr = result.get("price",                 {})
 
-        def raw(d, key):
-            v = d.get(key)
-            return v.get("raw") if isinstance(v, dict) else v
+            def raw(d, key):
+                v = d.get(key)
+                return v.get("raw") if isinstance(v, dict) else v
 
-        return {
-            "pe":             raw(sd, "trailingPE")    or raw(pr, "trailingPE"),
-            "pb":             raw(ks, "priceToBook"),
-            "roe":            raw(fd, "returnOnEquity"),
-            "eps":            raw(ks, "trailingEps")   or raw(fd, "revenuePerShare"),
-            "dividend_yield": raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield"),
-            "high52":         raw(sd, "fiftyTwoWeekHigh"),
-            "low52":          raw(sd, "fiftyTwoWeekLow"),
-            "market_cap":     raw(pr, "marketCap"),
-            "name":           raw(pr, "longName") or raw(pr, "shortName") or symbol,
-        }
-    except Exception as e:
-        logger.debug(f"[Yahoo v10] {symbol}: {e}")
-        return None
+            out = {
+                "pe":             raw(sd, "trailingPE")    or raw(pr, "trailingPE"),
+                "pb":             raw(ks, "priceToBook"),
+                "roe":            raw(fd, "returnOnEquity"),
+                "eps":            raw(ks, "trailingEps")   or raw(fd, "revenuePerShare"),
+                "dividend_yield": raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield"),
+                "high52":         raw(sd, "fiftyTwoWeekHigh"),
+                "low52":          raw(sd, "fiftyTwoWeekLow"),
+                "market_cap":     raw(pr, "marketCap"),
+                "name":           raw(pr, "longName") or raw(pr, "shortName") or symbol,
+            }
+            # Only return if we got at least price or pe — otherwise try next host
+            if out.get("pe") is not None or out.get("market_cap") is not None:
+                return out
+        except Exception as e:
+            logger.debug(f"[Yahoo v10] {host} {symbol}: {e}")
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -591,6 +602,36 @@ def get_info(symbol: str) -> dict:
             for k, v in nse.items():
                 if v is not None and k not in info:
                     info[k] = v
+
+    # ── Source 4: Finnhub (fill missing PE / ROE / EPS if Yahoo failed) ───
+    missing_fund = not info.get("pe") and not info.get("roe")
+    if missing_fund:
+        finnhub_key = os.getenv("FINNHUB_API_KEY", "").strip()
+        if finnhub_key:
+            try:
+                r = requests.get(
+                    "https://finnhub.io/api/v1/stock/metric",
+                    params={"symbol": f"NSE:{sym_clean}", "metric": "all",
+                            "token": finnhub_key},
+                    timeout=8,
+                ).json()
+                m = r.get("metric", {})
+                if m:
+                    if not info.get("pe"):
+                        info["pe"] = m.get("peNormalizedAnnual") or m.get("peTTM")
+                    if not info.get("pb"):
+                        info["pb"] = m.get("pbQuarterly") or m.get("pbAnnual")
+                    if not info.get("roe"):
+                        info["roe"] = m.get("roeTTM")
+                    if not info.get("eps"):
+                        info["eps"] = m.get("epsTTM")
+                    if not info.get("high52"):
+                        info["high52"] = m.get("52WeekHigh")
+                    if not info.get("low52"):
+                        info["low52"] = m.get("52WeekLow")
+                    logger.info(f"[DataEngine] {sym_clean}: Finnhub filled missing fundamentals")
+            except Exception as e:
+                logger.debug(f"[DataEngine] Finnhub {sym_clean}: {e}")
 
     if info:
         cached_set(cache_key, info, TTL_FUND)
