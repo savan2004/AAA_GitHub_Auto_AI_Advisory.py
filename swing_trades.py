@@ -2,16 +2,12 @@ import os
 import time
 import logging
 from datetime import date
-from collections import deque
 import pandas as pd
-import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-try:
-    from yfinance.exceptions import YFRateLimitError
-except ImportError:
-    class YFRateLimitError(Exception): pass  # fallback if not available
+# ── Data engine (rate-limit resistant multi-source fetcher) ──────────────────
+from data_engine import get_hist, calc_rsi, calc_ema
 
 try:
     from groq import Groq
@@ -23,61 +19,23 @@ try:
 except ImportError:
     genai = None
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY    = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
 
-if GEMINI_API_KEY:
+if GEMINI_API_KEY and genai:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# --- yfinance safe layer (rate limiting & cache) ---
-YF_WINDOW_SEC = 60
-YF_MAX_CALLS_PER_WINDOW = 40
-YF_CALL_TIMES = deque()
-
-CACHE = {}
-CACHE_TTL = 900  # 15 minutes
-
-def cache_get(key: str):
-    data = CACHE.get(key)
-    if not data: return None
-    if time.time() - data['ts'] > CACHE_TTL:
-        del CACHE[key]
-        return None
-    return data['val']
-
-def cache_set(key: str, val):
-    CACHE[key] = {'val': val, 'ts': time.time()}
-
-def yf_allow_call() -> bool:
-    now = time.time()
-    while YF_CALL_TIMES and now - YF_CALL_TIMES[0] > YF_WINDOW_SEC:
-        YF_CALL_TIMES.popleft()
-    return len(YF_CALL_TIMES) < YF_MAX_CALLS_PER_WINDOW
-
-def yf_register_call():
-    YF_CALL_TIMES.append(time.time())
-
+# safe_history is now a thin wrapper around data_engine.get_hist
+# (keeps the existing call-sites working without changes)
 def safe_history(ticker: str, period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
-    key = f"sw_{ticker}_{period}_{interval}"
-    cached = cache_get(key)
-    if cached is not None:
-        return cached
-
-    if not yf_allow_call():
-        cached = cache_get(key)
-        if cached is not None: return cached
-        return pd.DataFrame()
-
-    try:
-        yf_register_call()
-        df = yf.Ticker(ticker).history(period=period, interval=interval)
-        if not df.empty:
-            cache_set(key, df)
-        return df
-    except YFRateLimitError:
-        return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
+    """
+    Fetch OHLCV history via data_engine (multi-source, rate-limit safe).
+    `ticker` is expected in Yahoo Finance format (e.g. "RELIANCE.NS").
+    `interval` is currently unused because data_engine returns daily data;
+    intraday intervals can be added to data_engine later.
+    """
+    sym = ticker.replace(".NS", "").replace(".NSE", "")
+    return get_hist(sym, period=period)
 
 # --- indicators ---
 def ema(series: pd.Series, span: int) -> pd.Series:
