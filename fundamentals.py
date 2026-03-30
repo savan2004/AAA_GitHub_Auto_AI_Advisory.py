@@ -1,19 +1,22 @@
-# fundamentals.py
+# fundamentals.py — Fixed: uses data_engine as primary source, yfinance only as fallback
+#
+# FIXES:
+#   - Primary source: data_engine.get_info() (Yahoo v8/v10 + NSE + Stooq, rate-limited)
+#   - Finnhub as secondary source for missing fundamentals (PE, market cap, EPS)
+#   - yfinance only used if both above fail — with proper rate limiting
+#   - All values normalized to match main.py expectations
+
+import os
 import time
 import logging
 import random
 from typing import Dict, Any, Optional
 
 import requests
-import yfinance as yf
-from requests import Session
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
-# ------------------ Local cache ------------------ #
-
+# ── Cache ─────────────────────────────────────────────────────────────────────
 _CACHE: Dict[str, Dict[str, Any]] = {}
 CACHE_TTL_FUND = 6 * 60 * 60  # 6 hours
 
@@ -29,40 +32,7 @@ def _set_cached(key: str, val: Any):
     _CACHE[key] = {"val": val, "ts": time.time()}
 
 
-# ------------------ yfinance helpers ------------------ #
-
-_last_yf_call = 0.0
-_YF_DELAY = 2.0
-
-
-def _rate_limit_yf():
-    global _last_yf_call
-    now = time.time()
-    elapsed = now - _last_yf_call
-    if elapsed < _YF_DELAY:
-        time.sleep(_YF_DELAY - elapsed + random.uniform(0.1, 0.4))
-    _last_yf_call = time.time()
-
-
-def _create_yf_session():
-    session = Session()
-    retry_strategy = Retry(
-        total=5,
-        backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-
-    uas = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-    ]
-    session.headers["User-Agent"] = random.choice(uas)
-    return session
-
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def safe_val(d: dict, *keys, mul: float = 1.0):
     for k in keys:
@@ -89,50 +59,99 @@ def fmt_cr(val) -> str:
         return "N/A"
 
 
-# ------------------ Other fundamentals API hook ------------------ #
-# Keep this ready for future plug-in.
+# ── Finnhub fundamentals ──────────────────────────────────────────────────────
 
-OTHER_API_BASE = ""  # e.g. "https://your-backend.example.com"
-
-
-def _fetch_other_api(sym: str) -> Optional[dict]:
-    """
-    Optional second source for fundamentals (custom backend / NSE proxy).
-    Disabled by default until OTHER_API_BASE is set.
-    Expected shape:
-    {
-      "company_name": "...",
-      "market_cap": 8.73e12,
-      "pe_ratio": 32.1,
-      "book_value": 940.5,
-      "dividend_yield": 1.5,
-      "roe": 24.3,
-      "eps": 102.3,
-      "revenue": 2200000000000
-    }
-    """
-    if not OTHER_API_BASE:
+def _fetch_finnhub(sym: str) -> Optional[dict]:
+    """Fetch basic fundamentals from Finnhub (free tier)."""
+    key = os.getenv("FINNHUB_API_KEY", "").strip()
+    if not key:
         return None
-
     try:
-        url = f"{OTHER_API_BASE}/stock/fundamentals"
-        params = {"symbol": sym.upper()}
-        r = requests.get(url, params=params, timeout=5)
-        r.raise_for_status()
-        return r.json()
+        r = requests.get(
+            "https://finnhub.io/api/v1/stock/metric",
+            params={"symbol": f"NSE:{sym}", "metric": "all", "token": key},
+            timeout=8,
+        ).json()
+        m = r.get("metric", {})
+        if not m:
+            return None
+        return {
+            "pe":          m.get("peNormalizedAnnual") or m.get("peTTM"),
+            "pb":          m.get("pbQuarterly") or m.get("pbAnnual"),
+            "roe":         m.get("roeTTM"),          # already in %
+            "eps":         m.get("epsTTM"),
+            "market_cap":  m.get("marketCapitalization"),  # in millions USD — convert below
+            "high52":      m.get("52WeekHigh"),
+            "low52":       m.get("52WeekLow"),
+            "dividend_yield": m.get("dividendYieldIndicatedAnnual"),
+            "beta":        m.get("beta"),
+        }
     except Exception as e:
-        logger.warning(f"Other fundamentals API failed for {sym}: {e}")
+        logger.debug(f"Finnhub fundamentals {sym}: {e}")
         return None
 
 
-# ------------------ Unified fundamentals fetch ------------------ #
+# ── yfinance fallback ─────────────────────────────────────────────────────────
+
+_last_yf_call = 0.0
+_YF_DELAY = 3.0
+
+
+def _rate_limit_yf():
+    global _last_yf_call
+    elapsed = time.time() - _last_yf_call
+    if elapsed < _YF_DELAY:
+        time.sleep(_YF_DELAY - elapsed + random.uniform(0.1, 0.5))
+    _last_yf_call = time.time()
+
+
+def _fetch_yfinance(sym: str) -> dict:
+    """Last-resort yfinance call — rate-limited."""
+    try:
+        import yfinance as yf
+        from requests import Session
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        _rate_limit_yf()
+        session = Session()
+        retry   = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.headers["User-Agent"] = random.choice([
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        ])
+
+        ticker = yf.Ticker(f"{sym}.NS", session=session)
+        info   = {}
+        try:
+            info = dict(ticker.info)
+        except Exception:
+            pass
+        try:
+            fi = ticker.fast_info
+            for attr, key in [("market_cap","marketCap"), ("fifty_two_week_high","fiftyTwoWeekHigh"),
+                               ("fifty_two_week_low","fiftyTwoWeekLow")]:
+                val = getattr(fi, attr, None)
+                if val is not None:
+                    info.setdefault(key, val)
+        except Exception:
+            pass
+        return info
+    except Exception as e:
+        logger.error(f"yfinance fundamentals {sym}: {e}")
+        return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UNIFIED FUNDAMENTALS FETCH
+# ══════════════════════════════════════════════════════════════════════════════
 
 def get_fundamentals(sym: str) -> dict:
     """
-    Unified fundamentals:
-    1) yfinance (info + fast_info)
-    2) Optional other API to fill gaps
-    Returns a normalized dict, safe to print in main.py.
+    Priority: data_engine → Finnhub → yfinance (last resort).
+    Returns normalized dict compatible with main.py build_adv().
     """
     sym = sym.upper().replace(".NS", "")
     cache_key = f"fund_{sym}"
@@ -140,79 +159,76 @@ def get_fundamentals(sym: str) -> dict:
     if cached:
         return cached
 
-    info: dict = {}
-
-    # 1) yfinance
-    try:
-        _rate_limit_yf()
-        ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())
-        try:
-            info = dict(ticker.info)
-        except Exception:
-            info = {}
-
-        try:
-            fi = ticker.fast_info
-            mapping = {
-                "market_cap": "marketCap",
-                "fifty_two_week_high": "fiftyTwoWeekHigh",
-                "fifty_two_week_low": "fiftyTwoWeekLow",
-                "last_price": "currentPrice",
-                "previous_close": "previousClose",
-            }
-            for src, dst in mapping.items():
-                val = getattr(fi, src, None)
-                if val is not None:
-                    info.setdefault(dst, val)
-        except Exception:
-            pass
-    except Exception as e:
-        logger.error(f"yfinance fundamentals failed for {sym}: {e}")
-
-    # 2) optional other API enrichment
-    other = _fetch_other_api(sym) or {}
-    if other:
-        info.setdefault("longName", other.get("company_name"))
-        info.setdefault("marketCap", other.get("market_cap"))
-        info.setdefault("trailingPE", other.get("pe_ratio"))
-        info.setdefault("priceToBook", other.get("book_value"))
-        info.setdefault("dividendYield", other.get("dividend_yield"))
-        info.setdefault("returnOnEquity", other.get("roe"))
-        info.setdefault("trailingEps", other.get("eps"))
-        info.setdefault("totalRevenue", other.get("revenue"))
-
-    name = info.get("longName") or info.get("shortName") or sym
-
-    mcap = info.get("marketCap")
-    rev = info.get("totalRevenue")
-    pe = safe_val(info, "trailingPE")
-    fwd_pe = safe_val(info, "forwardPE")
-    pb = safe_val(info, "priceToBook")
-    roe = safe_val(info, "returnOnEquity", mul=100)
-    eps = safe_val(info, "trailingEps")
-    de = safe_val(info, "debtToEquity", "debtEquity")
-    div_y = safe_val(info, "dividendYield", "dividendRate", mul=100)
-    w52h = safe_val(info, "fiftyTwoWeekHigh")
-    w52l = safe_val(info, "fiftyTwoWeekLow")
-    beta = safe_val(info, "beta")
-
     result = {
-        "name": name,
-        "mcap": mcap,
-        "rev": rev,
-        "pe": pe,
-        "fwd_pe": fwd_pe,
-        "pb": pb,
-        "roe": roe,
-        "eps": eps,
-        "de": de,
-        "div_y": div_y,
-        "w52h": w52h,
-        "w52l": w52l,
-        "beta": beta,
+        "name": sym, "mcap": None, "rev": None,
+        "pe": None, "fwd_pe": None, "pb": None,
+        "roe": None, "eps": None, "de": None,
+        "div_y": None, "w52h": None, "w52l": None, "beta": None,
     }
 
-    logger.info(f"get_fundamentals {sym}: keys="
-                f"{[k for k, v in result.items() if v is not None]}")
+    # ── Source 1: data_engine (already rate-limited, multi-source) ────────────
+    try:
+        from data_engine import get_info
+        info = get_info(sym)
+        if info:
+            result["name"]  = info.get("name") or sym
+            result["pe"]    = safe_val(info, "pe")
+            result["pb"]    = safe_val(info, "pb")
+            # data_engine roe is decimal (0.18 = 18%) → convert to percent
+            roe_raw = safe_val(info, "roe")
+            result["roe"]   = round(roe_raw * 100, 1) if roe_raw is not None else None
+            result["eps"]   = safe_val(info, "eps")
+            result["mcap"]  = info.get("market_cap")
+            result["w52h"]  = safe_val(info, "high52")
+            result["w52l"]  = safe_val(info, "low52")
+            # dividend_yield from data_engine is decimal → percent
+            div_raw = safe_val(info, "dividend_yield")
+            result["div_y"] = round(div_raw * 100, 2) if div_raw is not None else None
+            logger.info(f"get_fundamentals {sym}: data_engine OK")
+    except Exception as e:
+        logger.warning(f"get_fundamentals data_engine {sym}: {e}")
+
+    # ── Source 2: Finnhub (fills gaps — especially PE, ROE, beta) ─────────────
+    missing = [k for k in ["pe", "roe", "eps", "w52h", "w52l", "beta", "pb"] if result[k] is None]
+    if missing:
+        fh = _fetch_finnhub(sym)
+        if fh:
+            if result["pe"]   is None: result["pe"]   = safe_val(fh, "pe")
+            if result["pb"]   is None: result["pb"]   = safe_val(fh, "pb")
+            if result["roe"]  is None: result["roe"]  = safe_val(fh, "roe")   # already in %
+            if result["eps"]  is None: result["eps"]  = safe_val(fh, "eps")
+            if result["beta"] is None: result["beta"] = safe_val(fh, "beta")
+            if result["w52h"] is None: result["w52h"] = safe_val(fh, "high52")
+            if result["w52l"] is None: result["w52l"] = safe_val(fh, "low52")
+            if result["div_y"] is None:
+                dv = safe_val(fh, "dividend_yield")
+                result["div_y"] = dv  # Finnhub returns as % already
+            logger.info(f"get_fundamentals {sym}: Finnhub filled gaps")
+
+    # ── Source 3: yfinance last resort ────────────────────────────────────────
+    still_missing = [k for k in ["pe", "roe", "mcap"] if result[k] is None]
+    if still_missing:
+        yf_info = _fetch_yfinance(sym)
+        if yf_info:
+            if result["name"]  == sym:   result["name"]  = yf_info.get("longName") or yf_info.get("shortName") or sym
+            if result["pe"]    is None:  result["pe"]    = safe_val(yf_info, "trailingPE")
+            if result["fwd_pe"] is None: result["fwd_pe"] = safe_val(yf_info, "forwardPE")
+            if result["pb"]    is None:  result["pb"]    = safe_val(yf_info, "priceToBook")
+            if result["roe"]   is None:
+                roe_raw = safe_val(yf_info, "returnOnEquity")
+                result["roe"] = round(roe_raw * 100, 1) if roe_raw is not None else None
+            if result["eps"]   is None:  result["eps"]   = safe_val(yf_info, "trailingEps")
+            if result["mcap"]  is None:  result["mcap"]  = yf_info.get("marketCap")
+            if result["rev"]   is None:  result["rev"]   = yf_info.get("totalRevenue")
+            if result["de"]    is None:  result["de"]    = safe_val(yf_info, "debtToEquity")
+            if result["w52h"]  is None:  result["w52h"]  = safe_val(yf_info, "fiftyTwoWeekHigh")
+            if result["w52l"]  is None:  result["w52l"]  = safe_val(yf_info, "fiftyTwoWeekLow")
+            if result["beta"]  is None:  result["beta"]  = safe_val(yf_info, "beta")
+            if result["div_y"] is None:
+                div_raw = safe_val(yf_info, "dividendYield")
+                result["div_y"] = round(div_raw * 100, 2) if div_raw is not None else None
+            logger.info(f"get_fundamentals {sym}: yfinance filled remaining gaps")
+
+    logger.info(f"get_fundamentals {sym}: filled={[k for k,v in result.items() if v is not None]}")
     _set_cached(cache_key, result)
     return result
