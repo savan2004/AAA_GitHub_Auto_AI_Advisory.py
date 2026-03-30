@@ -22,46 +22,17 @@ import requests
 import json
 import numpy as np
 import pandas as pd
-import yfinance as yf
+import yfinance as yf   # kept only for warm-up ping; all data goes through data_engine
 
-# === EXPERT FIX: Yahoo Finance Rate Limit Workaround ===
-import random
-from requests import Session
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
-
-# Create custom session with retry logic and headers
-def _create_yf_session():
-    session = Session()
-    retry_strategy = Retry(
-        total=5,
-        backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    # Rotate user agents to avoid detection
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-    ]
-    session.headers['User-Agent'] = random.choice(user_agents)
-    return session
-
-# Global rate limiter
-_last_yf_call = 0
-_yf_call_delay = 2.0  # 2 second delay between calls
-
-def _rate_limit_yf():
-    """Enforce rate limiting between yfinance calls"""
-    global _last_yf_call
-    now = time.time()
-    elapsed = now - _last_yf_call
-    if elapsed < _yf_call_delay:
-        time.sleep(_yf_call_delay - elapsed + random.uniform(0.1, 0.5))
-    _last_yf_call = time.time()
+# ── Data engine — rate-limit resistant multi-source fetcher ───────────────
+from data_engine import (
+    get_hist,       # replaces the old get_hist (yfinance wrapper)
+    get_info,       # replaces the old get_info (yfinance wrapper)
+    get_live_price, # fast single-price lookup
+    batch_quotes,   # rate-limit-safe multi-symbol quote
+    calc_rsi   as de_calc_rsi,
+    calc_ema   as de_calc_ema,
+)
 from collections import deque
 from datetime import datetime, date
 from flask import Flask, request, jsonify
@@ -106,7 +77,7 @@ TAVILY_KEY   = os.getenv("TAVILY_API_KEY")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 
 app      = Flask(__name__)
-bot      = telebot.TeleBot(TOKEN, threaded=False, num_threads=4, colorful_logs=False)
+bot      = telebot.TeleBot(TOKEN, threaded=False)
 executor = ThreadPoolExecutor(max_workers=5)
 
 # ── Cache ──────────────────────────────────────────────────────────────────
@@ -116,8 +87,9 @@ _processed_updates = set()
 _lock  = threading.Lock()
 
 # FIX 4: Short TTL for live price data so AI always sees fresh numbers
-CACHE_TTL_LIVE = 7200  # 2 hours — aggressive caching to avoid Yahoo rate limits= 300    # 5 min  — live prices / index data
-CACHE_TTL_FUND = 21600  # 6 hours — fundamentals (PE, ROE, revenue…)
+CACHE_TTL_LIVE = 300    # 5 min  — live prices / index data
+CACHE_TTL_FUND = 3600   # 60 min — fundamentals (PE, ROE, revenue…)
+
 def get_cached(key: str, ttl: int):
     with _lock:
         d = _cache.get(key)
@@ -197,7 +169,13 @@ def build_portfolio_card(uid: int) -> str:
     return "\n".join(lines)
 
 # ── Data Layer ─────────────────────────────────────────────────────────────
+# get_hist() and get_info() are now imported from data_engine above.
+# They handle Yahoo rate limiting, NSE fallback, Stooq fallback, caching,
+# and exponential backoff automatically — no changes needed in callers.
+
+# Thin wrappers kept so the rest of the file doesn't break:
 def retry_yf(func, *args, retries=3, delay=2, **kwargs):
+    """Legacy retry wrapper — data_engine handles retries internally now."""
     for i in range(retries):
         try:
             return func(*args, **kwargs)
@@ -209,62 +187,6 @@ def retry_yf(func, *args, retries=3, delay=2, **kwargs):
             else:
                 raise
 
-def get_hist(sym: str, period: str = "1y") -> pd.DataFrame:
-    ttl = CACHE_TTL_LIVE if period in ("1d", "2d", "5d") else CACHE_TTL_FUND
-    key = f"h_{sym}_{period}"
-    cached = get_cached(key, ttl)
-    if cached is not None:
-        return cached
-    try:
-        _rate_limit_yf()  # Enforce delay between API calls
-        ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())
-        df = retry_yf(ticker.history, period=period, auto_adjust=True)
-        if df.empty or len(df) < 2:
-            return pd.DataFrame()
-        set_cached(key, df)
-        return df
-    except Exception as e:
-        logger.error(f"get_hist {sym}: {e}")
-        return pd.DataFrame()
-
-
-def get_info(sym: str) -> dict:
-    """FIX 2: Robust fundamental fetch — info + fast_info fallback."""
-    key = f"i_{sym}"
-    cached = get_cached(key, CACHE_TTL_FUND)
-    if cached:
-        return cached
-    info = {}
-    try:
-        _rate_limit_yf()  # Enforce delay
-        ticker = yf.Ticker(f"{sym}.NS", session=_create_yf_session())
-
-        try:
-            info = dict(ticker.info)
-        except Exception:
-            pass
-
-        # fast_info is more reliable in newer yfinance builds
-        try:
-            fi = ticker.fast_info
-            mapping = {
-                "market_cap":           "marketCap",
-                "fifty_two_week_high":  "fiftyTwoWeekHigh",
-                "fifty_two_week_low":   "fiftyTwoWeekLow",
-                "last_price":           "currentPrice",
-                "previous_close":       "previousClose",
-            }
-            for src_attr, dst_key in mapping.items():
-                val = getattr(fi, src_attr, None)
-                if val is not None:
-                    info.setdefault(dst_key, val)
-        except Exception:
-            pass
-
-        set_cached(key, info)
-    except Exception as e:
-        logger.error(f"get_info {sym}: {e}")
-    return info
 # ── Indicators ────────────────────────────────────────────────────────────
 def calc_rsi(c: pd.Series) -> float:
     if len(c) < 15:
@@ -348,19 +270,25 @@ def build_adv(sym: str) -> str:
 
     # ── Fundamentals ──────────────────────────────────────────────────────
     info = get_info(sym)
-    name = info.get("longName") or info.get("shortName") or sym
-    pe     = safe_val(info, "trailingPE")
+    # data_engine returns keys: pe, pb, roe, eps, dividend_yield, high52, low52,
+    # market_cap, name.  Safe-read both new and legacy yfinance key names.
+    name   = info.get("name") or info.get("longName") or info.get("shortName") or sym
+    pe     = safe_val(info, "pe", "trailingPE")
     fwd_pe = safe_val(info, "forwardPE")
-    roe    = safe_val(info, "returnOnEquity", mul=100)
-    eps    = safe_val(info, "trailingEps")
-    mcap   = info.get("marketCap")
-    rev    = info.get("totalRevenue")
-    de     = safe_val(info, "debtToEquity")
-    div_y  = safe_val(info, "dividendYield", mul=100)
-    w52h   = safe_val(info, "fiftyTwoWeekHigh")
-    w52l   = safe_val(info, "fiftyTwoWeekLow")
-    beta   = safe_val(info, "beta")
-    pb     = safe_val(info, "priceToBook")
+    # roe from data_engine is already a decimal (0.185 = 18.5%); multiply ×100
+    roe_raw = safe_val(info, "roe", "returnOnEquity")
+    roe     = round(roe_raw * 100, 1) if roe_raw is not None else None
+    eps     = safe_val(info, "eps", "trailingEps")
+    mcap    = info.get("market_cap") or info.get("marketCap")
+    rev     = info.get("totalRevenue")   # not returned by data_engine; kept for compat
+    de      = safe_val(info, "debtToEquity")
+    # dividend_yield from data_engine is already a decimal (0.025 = 2.5%)
+    div_raw = safe_val(info, "dividend_yield", "dividendYield")
+    div_y   = round(div_raw * 100, 2) if div_raw is not None else None
+    w52h    = safe_val(info, "high52", "fiftyTwoWeekHigh")
+    w52l    = safe_val(info, "low52",  "fiftyTwoWeekLow")
+    beta    = safe_val(info, "beta")
+    pb      = safe_val(info, "pb", "priceToBook")
 
     # Fallback 52W from price history
     n = min(252, len(close))
@@ -450,20 +378,37 @@ def build_scan(profile: str) -> str:
 
 def build_breadth() -> str:
     lines = ["📊 <b>MARKET BREADTH</b>", "━━━━━━━━━━━━━━━━━━━━"]
-    indices = {"NIFTY 50":"^NSEI","BANK NIFTY":"^NSEBANK",
-               "NIFTY IT":"^CNXIT","NIFTY MIDCAP":"^NSEMDCP50"}
+    # Index tickers passed directly to data_engine's Yahoo v8 endpoint
+    # (^NSEI etc. are Yahoo Finance index symbols, not NSE symbols)
+    from data_engine import _yahoo_v8_hist
+    indices = {
+        "NIFTY 50":   "^NSEI",
+        "BANK NIFTY": "^NSEBANK",
+        "NIFTY IT":   "^CNXIT",
+        "NIFTY MIDCAP": "^NSEMDCP50",
+    }
     for name, ticker in indices.items():
         try:
-            d = yf.Ticker(ticker).history(period="5d")
-            if len(d) >= 2:
-                l   = round(float(d["Close"].iloc[-1]), 2)
-                p   = round(float(d["Close"].iloc[-2]), 2)
-                chg = round((l - p) / p * 100, 2)
-                wh  = round(float(d["High"].max()), 2)
-                wl  = round(float(d["Low"].min()), 2)
-                icon = "🟢" if chg >= 0 else "🔴"
-                lines.append(f"{icon} <b>{name}</b>: {l:,.2f} ({chg:+.2f}%)\n"
-                             f"   5D Range: {wl:,} – {wh:,}")
+            d = _yahoo_v8_hist(ticker, period="5d")
+            if d is None or len(d) < 2:
+                # last-resort: try yfinance for indices (rate limit less
+                # of a concern for index symbols vs individual stocks)
+                try:
+                    d = yf.Ticker(ticker).history(period="5d")
+                except Exception:
+                    continue
+            if d is None or len(d) < 2:
+                continue
+            l   = round(float(d["Close"].iloc[-1]), 2)
+            p   = round(float(d["Close"].iloc[-2]), 2)
+            chg = round((l - p) / p * 100, 2)
+            wh  = round(float(d["High"].max()), 2)
+            wl  = round(float(d["Low"].min()), 2)
+            icon = "🟢" if chg >= 0 else "🔴"
+            lines.append(
+                f"{icon} <b>{name}</b>: {l:,.2f} ({chg:+.2f}%)\n"
+                f"   5D Range: {wl:,} – {wh:,}"
+            )
         except Exception:
             pass
     return "\n".join(lines)
@@ -672,16 +617,6 @@ def swing_button(message):
             bot.send_message(message.chat.id, f"❌ Swing scan failed: {e}")
     executor.submit(_run)
 
-@bot.message_handler(func=lambda m: m.text == "🔍 Analysis")
-def analysis_button(message):
-    _state[message.chat.id] = "awaiting_symbol"
-    bot.send_message(
-        message.chat.id,
-        "🔍 <b>Stock Analysis</b>\n\nPlease type the NSE symbol you want to analyse.\nExample: <code>RELIANCE</code>, <code>TCS</code>, <code>INFY</code>",
-        parse_mode="HTML",
-        reply_markup=main_keyboard(),
-    )
-
 @bot.message_handler(func=lambda m: m.text == "📰 News")
 def news_button(message):
     bot.send_message(message.chat.id, build_news(), parse_mode="HTML")
@@ -700,18 +635,6 @@ def handle_text(message):
             bot.send_message(uid, resp or "❌ AI unavailable.", parse_mode="HTML",
                              reply_markup=ai_keyboard())
         executor.submit(_ai)
-        return
-          
-    if _state.get(uid) == "awaiting_symbol":
-        _state[uid] = None
-        sym = text.upper().replace(".NS", "")
-        if 2 <= len(sym) <= 15 and all(c.isalnum() or c == "&" for c in sym):
-            bot.send_message(uid, f"🔍 Analyzing <b>{sym}</b>...", parse_mode="HTML")
-            def _adv():
-                bot.send_message(uid, build_adv(sym), parse_mode="HTML")
-            executor.submit(_adv)
-        else:
-            bot.send_message(uid, "❌ Please enter a valid NSE symbol (2-15 alphanumeric characters).")
         return
 
     sym = text.upper().replace(".NS", "")
@@ -748,17 +671,11 @@ def route_debug_ai():
     return jsonify(debug_ai_status())
 
 def process_update(update_json: str):
-    from requests.exceptions import ConnectionError as ReqConnErr
-    for _attempt in range(3):
-        try:
-            update = telebot.types.Update.de_json(update_json)
-            bot.process_new_updates([update])
-            return
-        except (ReqConnErr, Exception) as e:
-            if _attempt < 2:
-                time.sleep(1.5)
-            else:
-                logger.error(f"process_update failed after 3 retries: {e}")
+    try:
+        update = telebot.types.Update.de_json(update_json)
+        bot.process_new_updates([update])
+    except Exception as e:
+        logger.error(f"process_update: {e}")
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
