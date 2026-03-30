@@ -1,5 +1,5 @@
 """
-data_engine.py  —  Yahoo Finance Rate-Limit Resistant Data Layer
+data_engine.py — Yahoo Finance Rate-Limit Resistant Data Layer
 ================================================================
 Drop-in replacement for all yfinance calls in main.py and swing_trades.py.
 
@@ -11,15 +11,6 @@ STRATEGY (in priority order):
   5. NSE India API    → official source, never rate-limits retail users
   6. Stooq.com        → free, no key, good coverage for NSE stocks
   7. yfinance library → last resort, wrapped with long backoff
-
-WHY THIS FIXES THE ERROR:
-  - "Too Many Requests" from yfinance is caused by:
-      a) yfinance sending requests without proper browser headers
-      b) No inter-request delay → Yahoo sees burst traffic
-      c) No caching → same symbol fetched many times per session
-  - This engine uses browser-identical headers, a token-bucket rate
-    limiter (max 8 calls/60s), per-source exponential backoff,
-    and a two-tier cache that keeps frequently accessed data local.
 """
 
 import os
@@ -31,7 +22,9 @@ import logging
 import threading
 from collections import deque
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, Dict, List
+from io import StringIO
+
 import requests
 import pandas as pd
 
@@ -70,7 +63,7 @@ _HEADERS = {
 # MEMORY CACHE
 # ─────────────────────────────────────────────────────────────────────────────
 
-_mem: dict = {}
+_mem: Dict[str, dict] = {}
 _mem_lock = threading.Lock()
 
 
@@ -82,7 +75,7 @@ def _mem_get(key: str, ttl: int):
     return None
 
 
-def _mem_set(key: str, val, ttl: int):  # noqa: ARG001  (ttl stored implicitly via ts)
+def _mem_set(key: str, val, ttl: int):  # noqa: ARG001
     with _mem_lock:
         _mem[key] = {"val": val, "ts": time.time()}
 
@@ -156,7 +149,7 @@ def _wait_for_rate_slot():
 
 
 def _jitter(base: float, factor: float = 0.3) -> float:
-    """Add ±30% random jitter to a delay to avoid thundering herd."""
+    """Add ±factor random jitter to a delay to avoid thundering herd."""
     return base * (1 + random.uniform(-factor, factor))
 
 
@@ -190,7 +183,7 @@ def _yahoo_v8_hist(symbol: str, period: str = "6mo", interval: str = "1d") -> Op
             return None
 
         timestamps = result.get("timestamp", [])
-        q          = result.get("indicators", {}).get("quote", [{}])[0]
+        q = result.get("indicators", {}).get("quote", [{}])[0]
 
         if not timestamps or not q.get("close"):
             return None
@@ -242,7 +235,7 @@ def _yahoo_v8_quote(symbol: str) -> Optional[dict]:
         if not resp.ok:
             return None
 
-        data   = resp.json()
+        data = resp.json()
         result = data.get("chart", {}).get("result", [None])[0]
         if not result:
             return None
@@ -269,12 +262,12 @@ def _yahoo_v8_quote(symbol: str) -> Optional[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
-    """Fetch PE, PB, ROE, EPS, dividend yield from Yahoo quoteSummary.
+    """
+    Fetch PE, PB, ROE, EPS, dividend yield from Yahoo quoteSummary.
     Tries both query1 and query2 endpoints — Yahoo periodically blocks one.
     """
     _wait_for_rate_slot()
     modules = "summaryDetail,defaultKeyStatistics,financialData,price"
-    # Try query2 first, then query1 as fallback (Yahoo rotates which one works)
     for host in ["query2", "query1"]:
         url = (
             f"https://{host}.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
@@ -291,7 +284,7 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
             if not resp.ok:
                 continue
 
-            data   = resp.json()
+            data = resp.json()
             result = data.get("quoteSummary", {}).get("result", [None])[0]
             if not result:
                 continue
@@ -316,7 +309,6 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                 "market_cap":     raw(pr, "marketCap"),
                 "name":           raw(pr, "longName") or raw(pr, "shortName") or symbol,
             }
-            # Only return if we got at least price or pe — otherwise try next host
             if out.get("pe") is not None or out.get("market_cap") is not None:
                 return out
         except Exception as e:
@@ -374,7 +366,7 @@ def _nse_quote(symbol: str) -> Optional[dict]:
             "high52":     pd_.get("weekHighLow", {}).get("max"),
             "low52":      pd_.get("weekHighLow", {}).get("min"),
             "name":       md.get("companyName", symbol),
-            "pe":         None,   # NSE quote API doesn't return PE
+            "pe":         None,
             "eps":        None,
         }
     except Exception as e:
@@ -383,16 +375,13 @@ def _nse_quote(symbol: str) -> Optional[dict]:
 
 
 def _nse_hist(symbol: str, series: str = "EQ") -> Optional[pd.DataFrame]:
-    """
-    Fetch 1-year OHLCV history from NSE historical data API.
-    Note: NSE returns only ~1 year of daily data on the public API.
-    """
+    """Fetch ~1 year OHLCV history from NSE historical data API."""
     try:
         end   = date.today()
         start = date(end.year - 1, end.month, end.day)
         sess  = _get_nse_session()
         url   = (
-            f"https://www.nseindia.com/api/historical/cm/equity"
+            "https://www.nseindia.com/api/historical/cm/equity"
             f"?symbol={symbol}&series=[%22{series}%22]"
             f"&from={start.strftime('%d-%m-%Y')}&to={end.strftime('%d-%m-%Y')}&csv=true"
         )
@@ -400,10 +389,7 @@ def _nse_hist(symbol: str, series: str = "EQ") -> Optional[pd.DataFrame]:
         if not resp.ok:
             return None
 
-        from io import StringIO
         df = pd.read_csv(StringIO(resp.text))
-        # NSE CSV columns: SYMBOL, SERIES, DATE1, PREV CLOSE, OPEN PRICE,
-        #                  HIGH PRICE, LOW PRICE, LAST PRICE, CLOSE PRICE, ...
         col_map = {
             "DATE1":        "Date",
             "OPEN PRICE":   "Open",
@@ -412,14 +398,25 @@ def _nse_hist(symbol: str, series: str = "EQ") -> Optional[pd.DataFrame]:
             "CLOSE PRICE":  "Close",
             "TTL TRD QNTY": "Volume",
         }
-        df = df.rename(columns={c.strip(): v for c, v in col_map.items()
-                                 if c.strip() in [x.strip() for x in df.columns]})
+        df = df.rename(
+            columns={
+                c: col_map[c.strip()]
+                for c in df.columns
+                if c.strip() in col_map
+            }
+        )
+        if "Date" not in df.columns:
+            return None
+
         df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
         df = df.dropna(subset=["Date"]).set_index("Date").sort_index()
 
         for col in ["Open", "High", "Low", "Close", "Volume"]:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce")
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", ""),
+                    errors="coerce",
+                )
 
         df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
         return df if not df.empty else None
@@ -451,13 +448,13 @@ def _stooq_hist(symbol: str, period_days: int = 365) -> Optional[pd.DataFrame]:
         if not resp.ok or "No data" in resp.text[:50]:
             return None
 
-        from io import StringIO
         df = pd.read_csv(StringIO(resp.text))
         df.columns = [c.strip().title() for c in df.columns]
+        if "Date" not in df.columns:
+            return None
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.dropna(subset=["Date"]).set_index("Date").sort_index()
         df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-        # Keep only the requested period
         cutoff = pd.Timestamp(start_dt)
         df = df[df.index >= cutoff]
         return df if not df.empty else None
@@ -475,27 +472,28 @@ def _yfinance_hist(symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
     """Call yfinance with exponential backoff — used only when all else fails."""
     try:
         import yfinance as yf
-        for attempt in range(1, 4):
-            try:
-                _wait_for_rate_slot()
-                tk = yf.Ticker(symbol)
-                df = tk.history(period=period, auto_adjust=True, timeout=15)
-                if not df.empty:
-                    df = df[["Open", "High", "Low", "Close", "Volume"]]
-                    return df
-            except Exception as e:
-                msg = str(e).lower()
-                if "too many requests" in msg or "rate limit" in msg or "429" in msg:
-                    wait = _jitter(30 * (2 ** (attempt - 1)))   # 30s, 60s, 120s
-                    logger.warning(f"[yfinance] 429 on {symbol} attempt {attempt} — sleeping {wait:.0f}s")
-                    time.sleep(wait)
-                else:
-                    logger.warning(f"[yfinance] {symbol} attempt {attempt}: {e}")
-                    time.sleep(_jitter(5 * attempt))
-        return None
     except ImportError:
         logger.debug("[yfinance] not installed")
         return None
+
+    for attempt in range(1, 4):
+        try:
+            _wait_for_rate_slot()
+            tk = yf.Ticker(symbol)
+            df = tk.history(period=period, auto_adjust=True, timeout=15)
+            if not df.empty:
+                df = df[["Open", "High", "Low", "Close", "Volume"]]
+                return df
+        except Exception as e:
+            msg = str(e).lower()
+            if "too many requests" in msg or "rate limit" in msg or "429" in msg:
+                wait = _jitter(30 * (2 ** (attempt - 1)))   # 30s, 60s, 120s
+                logger.warning(f"[yfinance] 429 on {symbol} attempt {attempt} — sleeping {wait:.0f}s")
+                time.sleep(wait)
+            else:
+                logger.warning(f"[yfinance] {symbol} attempt {attempt}: {e}")
+                time.sleep(_jitter(5 * attempt))
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -505,20 +503,11 @@ def _yfinance_hist(symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
 def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     """
     Fetch OHLCV history for `symbol` (NSE ticker without .NS suffix).
-    Returns a DataFrame with columns [Open, High, Low, Close, Volume]
-    indexed by DatetimeIndex, or an empty DataFrame on complete failure.
-
-    Source priority:
-      Yahoo v8 → NSE India → Stooq → yfinance (library)
-
-    Period mapping for Yahoo v8:
-      "1y" → "1y", "6mo" → "6mo", "3mo" → "3mo",
-      "1mo" → "1mo", "5d" → "5d", "2d" → "5d"
+    Returns a DataFrame with columns [Open, High, Low, Close, Volume].
     """
     sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
     yahoo_sym = f"{sym_clean}.NS"
 
-    # Period → TTL mapping
     ttl = TTL_HIST if period not in ("5d", "2d", "1d") else TTL_PRICE
     cache_key = f"hist_{yahoo_sym}_{period}"
 
@@ -527,29 +516,29 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
         logger.debug(f"[Cache HIT] {cache_key}")
         return cached
 
-    df: Optional[pd.DataFrame] = None
+    df: Optional[pd.DataFrame]
 
-    # ── Source 1: Yahoo Finance v8 (direct HTTP) ──────────────────────────
-    yf_period = {"1y": "1y", "6mo": "6mo", "3mo": "3mo",
-                 "2mo": "3mo", "1mo": "1mo", "5d": "5d", "2d": "5d"}.get(period, "1y")
+    yf_period = {
+        "1y": "1y", "6mo": "6mo", "3mo": "3mo",
+        "2mo": "3mo", "1mo": "1mo", "5d": "5d", "2d": "5d",
+    }.get(period, "1y")
     df = _yahoo_v8_hist(yahoo_sym, period=yf_period)
 
     if df is None or df.empty:
         logger.info(f"[DataEngine] Yahoo v8 failed for {sym_clean} — trying NSE")
-        # ── Source 2: NSE India ───────────────────────────────────────────
         df = _nse_hist(sym_clean)
 
     if df is None or df.empty:
         logger.info(f"[DataEngine] NSE failed for {sym_clean} — trying Stooq")
-        # ── Source 3: Stooq.com ───────────────────────────────────────────
-        days_map = {"1y": 365, "6mo": 180, "3mo": 90, "2mo": 60,
-                    "1mo": 30, "5d": 5, "2d": 2}
+        days_map = {
+            "1y": 365, "6mo": 180, "3mo": 90,
+            "2mo": 60, "1mo": 30, "5d": 5, "2d": 2,
+        }
         df = _stooq_hist(yahoo_sym, period_days=days_map.get(period, 365))
 
     if df is None or df.empty:
         logger.info(f"[DataEngine] Stooq failed for {sym_clean} — trying yfinance (last resort)")
-        # ── Source 4: yfinance library (last resort) ───────────────────────
-        time.sleep(_jitter(3))   # courtesy delay before last-resort call
+        time.sleep(_jitter(3))
         df = _yfinance_hist(yahoo_sym, period=period)
 
     if df is not None and not df.empty:
@@ -564,12 +553,8 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
 def get_info(symbol: str) -> dict:
     """
     Fetch live quote + fundamentals for `symbol` (NSE ticker without .NS suffix).
-    Returns a dict with keys: price, prev_close, high52, low52, pe, pb, roe,
-                               eps, dividend_yield, market_cap, name.
-    All values may be None if unavailable.
-
-    Source priority:
-      Yahoo v10 quoteSummary → Yahoo v8 meta → NSE India quote
+    Keys: price, prev_close, high52, low52, pe, pb, roe,
+          eps, dividend_yield, market_cap, name.
     """
     sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
     yahoo_sym = f"{sym_clean}.NS"
@@ -582,12 +567,10 @@ def get_info(symbol: str) -> dict:
 
     info: dict = {}
 
-    # ── Source 1: Yahoo v10 (richer fundamentals) ─────────────────────────
     v10 = _yahoo_v10_fundamentals(yahoo_sym)
     if v10:
         info.update({k: v for k, v in v10.items() if v is not None})
 
-    # ── Source 2: Yahoo v8 meta (fills price gaps) ────────────────────────
     if not info.get("price"):
         v8 = _yahoo_v8_quote(yahoo_sym)
         if v8:
@@ -595,7 +578,6 @@ def get_info(symbol: str) -> dict:
                 if v is not None and k not in info:
                     info[k] = v
 
-    # ── Source 3: NSE India (price / prevClose fallback) ──────────────────
     if not info.get("price"):
         nse = _nse_quote(sym_clean)
         if nse:
@@ -603,7 +585,6 @@ def get_info(symbol: str) -> dict:
                 if v is not None and k not in info:
                     info[k] = v
 
-    # ── Source 4: Finnhub (fill missing PE / ROE / EPS if Yahoo failed) ───
     missing_fund = not info.get("pe") and not info.get("roe")
     if missing_fund:
         finnhub_key = os.getenv("FINNHUB_API_KEY", "").strip()
@@ -611,8 +592,11 @@ def get_info(symbol: str) -> dict:
             try:
                 r = requests.get(
                     "https://finnhub.io/api/v1/stock/metric",
-                    params={"symbol": f"NSE:{sym_clean}", "metric": "all",
-                            "token": finnhub_key},
+                    params={
+                        "symbol": f"NSE:{sym_clean}",
+                        "metric": "all",
+                        "token": finnhub_key,
+                    },
                     timeout=8,
                 ).json()
                 m = r.get("metric", {})
@@ -652,11 +636,9 @@ def get_live_price(symbol: str) -> Optional[float]:
     if cached is not None:
         return cached
 
-    # Try Yahoo v8 first (fastest)
     q = _yahoo_v8_quote(yahoo_sym)
     price = q.get("price") if q else None
 
-    # Fallback to NSE
     if price is None:
         nq = _nse_quote(sym_clean)
         price = nq.get("price") if nq else None
@@ -671,17 +653,15 @@ def get_live_price(symbol: str) -> Optional[float]:
     return price
 
 
-def batch_quotes(symbols: list[str]) -> dict[str, Optional[dict]]:
+def batch_quotes(symbols: List[str]) -> Dict[str, Optional[dict]]:
     """
     Fetch live quotes for multiple symbols with automatic rate-limit spacing.
     Returns { symbol: info_dict_or_None }.
-
-    Adds a small inter-request delay so Yahoo doesn't see a burst.
     """
-    results: dict[str, Optional[dict]] = {}
+    results: Dict[str, Optional[dict]] = {}
     for i, sym in enumerate(symbols):
         if i > 0:
-            time.sleep(_jitter(1.5))   # ~1.5s between requests
+            time.sleep(_jitter(1.5))
         try:
             results[sym] = get_info(sym)
         except Exception as e:
@@ -718,7 +698,7 @@ def calc_rsi(close: pd.Series, period: int = 14) -> float:
         return 50.0
     delta     = close.diff()
     gain      = delta.clip(lower=0)
-    loss      = (-delta.clip(upper=0))
+    loss      = -delta.clip(upper=0)
     avg_gain  = gain.rolling(period).mean()
     avg_loss  = loss.rolling(period).mean()
     avg_loss  = avg_loss.replace(0, 1e-10)
@@ -746,7 +726,7 @@ if __name__ == "__main__":
         print(f"Testing: {sym}")
         df = get_hist(sym, "3mo")
         if df.empty:
-            print(f"  ❌ History: FAILED")
+            print("  ❌ History: FAILED")
         else:
             print(f"  ✅ History: {len(df)} rows | Last close: ₹{df['Close'].iloc[-1]:.2f}")
             rsi = calc_rsi(df["Close"])
