@@ -268,27 +268,59 @@ def build_adv(sym: str) -> str:
              else "NEUTRAL")
     trend_icon = "🔼" if trend == "BULLISH" else "🔽" if trend == "BEARISH" else "↔️"
 
-    # ── Fundamentals ──────────────────────────────────────────────────────
+    # ── Fundamentals — data_engine primary, fundamentals.py fills gaps ─────
     info = get_info(sym)
-    # data_engine returns keys: pe, pb, roe, eps, dividend_yield, high52, low52,
-    # market_cap, name.  Safe-read both new and legacy yfinance key names.
+    # data_engine returns: pe, pb, roe (decimal), eps, dividend_yield (decimal),
+    #                      high52, low52, market_cap, name
     name   = info.get("name") or info.get("longName") or info.get("shortName") or sym
     pe     = safe_val(info, "pe", "trailingPE")
     fwd_pe = safe_val(info, "forwardPE")
-    # roe from data_engine is already a decimal (0.185 = 18.5%); multiply ×100
+
+    # ROE: data_engine returns decimal (0.185 = 18.5%) — multiply ×100
+    # But Finnhub returns already as % (18.5) — detect which one we got
     roe_raw = safe_val(info, "roe", "returnOnEquity")
-    roe     = round(roe_raw * 100, 1) if roe_raw is not None else None
+    if roe_raw is not None:
+        # If value is already > 1 it is already a percentage (from Finnhub)
+        roe = round(roe_raw, 1) if abs(roe_raw) > 1 else round(roe_raw * 100, 1)
+    else:
+        roe = None
+
     eps     = safe_val(info, "eps", "trailingEps")
     mcap    = info.get("market_cap") or info.get("marketCap")
-    rev     = info.get("totalRevenue")   # not returned by data_engine; kept for compat
+    rev     = info.get("totalRevenue")
     de      = safe_val(info, "debtToEquity")
-    # dividend_yield from data_engine is already a decimal (0.025 = 2.5%)
+
+    # dividend_yield: data_engine returns decimal (0.025 = 2.5%)
     div_raw = safe_val(info, "dividend_yield", "dividendYield")
-    div_y   = round(div_raw * 100, 2) if div_raw is not None else None
+    if div_raw is not None:
+        div_y = round(div_raw, 2) if div_raw > 1 else round(div_raw * 100, 2)
+    else:
+        div_y = None
+
     w52h    = safe_val(info, "high52", "fiftyTwoWeekHigh")
     w52l    = safe_val(info, "low52",  "fiftyTwoWeekLow")
     beta    = safe_val(info, "beta")
     pb      = safe_val(info, "pb", "priceToBook")
+
+    # If critical fundamentals still missing, try fundamentals.py (Finnhub path)
+    if pe is None or roe is None:
+        try:
+            from fundamentals import get_fundamentals
+            fund = get_fundamentals(sym)
+            if pe   is None: pe   = fund.get("pe")
+            if roe  is None: roe  = fund.get("roe")   # already in % from fundamentals.py
+            if eps  is None: eps  = fund.get("eps")
+            if pb   is None: pb   = fund.get("pb")
+            if beta is None: beta = fund.get("beta")
+            if mcap is None: mcap = fund.get("mcap")
+            if rev  is None: rev  = fund.get("rev")
+            if de   is None: de   = fund.get("de")
+            if div_y is None: div_y = fund.get("div_y")
+            if w52h is None: w52h = fund.get("w52h")
+            if w52l is None: w52l = fund.get("w52l")
+            if name == sym:  name = fund.get("name", sym)
+        except Exception as _fe:
+            logger.debug(f"fundamentals fallback {sym}: {_fe}")
 
     # Fallback 52W from price history
     n = min(252, len(close))
