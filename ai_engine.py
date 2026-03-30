@@ -28,7 +28,7 @@ import logging
 import time
 import requests
 import pandas as pd
-import yfinance as yf
+import yfinance as yf   # kept only as last-resort fallback for index tickers
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -382,12 +382,15 @@ def get_live_market_context() -> str:
     Build a real-time snapshot of Nifty + top stocks to inject into AI prompts.
     Uses yfinance directly — no dependency on main.py or data_engine.
     """
+    from data_engine import _yahoo_v8_hist, get_hist, calc_rsi, batch_quotes
     lines = [f"=== LIVE DATA {datetime.now().strftime('%d-%b-%Y %H:%M IST')} ==="]
 
-    # Nifty 50
+    # Nifty 50 — index symbols go through Yahoo v8 directly (data_engine handles it)
     try:
-        df = yf.Ticker("^NSEI").history(period="5d", interval="1d")
-        if len(df) >= 2:
+        df = _yahoo_v8_hist("^NSEI", period="5d")
+        if df is None or len(df) < 2:
+            df = yf.Ticker("^NSEI").history(period="5d")  # last resort
+        if df is not None and len(df) >= 2:
             ltp  = round(float(df["Close"].iloc[-1]), 2)
             prev = round(float(df["Close"].iloc[-2]), 2)
             chg  = round((ltp - prev) / prev * 100, 2)
@@ -402,8 +405,10 @@ def get_live_market_context() -> str:
 
     # Bank Nifty
     try:
-        df = yf.Ticker("^NSEBANK").history(period="2d", interval="1d")
-        if len(df) >= 2:
+        df = _yahoo_v8_hist("^NSEBANK", period="5d")
+        if df is None or len(df) < 2:
+            df = yf.Ticker("^NSEBANK").history(period="2d")
+        if df is not None and len(df) >= 2:
             ltp  = round(float(df["Close"].iloc[-1]), 2)
             prev = round(float(df["Close"].iloc[-2]), 2)
             chg  = round((ltp - prev) / prev * 100, 2)
@@ -411,40 +416,33 @@ def get_live_market_context() -> str:
     except Exception:
         pass
 
-    # Nifty PE
+    # Nifty PE — from Yahoo v8 meta (no yfinance.info call needed)
     try:
-        info = yf.Ticker("^NSEI").info
-        pe   = info.get("trailingPE") or info.get("forwardPE")
+        from data_engine import _yahoo_v8_quote
+        q  = _yahoo_v8_quote("^NSEI")
+        pe = q.get("pe") if q else None
         if pe:
             lines.append(f"NIFTY PE: {round(float(pe), 1)} "
                          f"(10yr avg ~20 | expensive >22 | cheap <18)")
     except Exception:
         pass
 
-    # Top 8 stocks snapshot
+    # Top 8 stocks — use batch_quotes for rate-limit-safe fetching
+    top8 = ["RELIANCE", "TCS", "HDFCBANK", "INFY",
+            "ICICIBANK", "SBIN", "BAJFINANCE", "TATAMOTORS"]
     snap = []
-    top8 = ["RELIANCE","TCS","HDFCBANK","INFY",
-            "ICICIBANK","SBIN","BAJFINANCE","TATAMOTORS"]
-
+    quotes = batch_quotes(top8)
     for sym in top8:
         try:
-            ticker = f"{sym}.NS"
-            df = yf.Ticker(ticker).history(period="5d", interval="1d")
-            if df.empty or len(df) < 2:
+            info = quotes.get(sym)
+            if not info or not info.get("price"):
                 continue
-            ltp  = round(float(df["Close"].iloc[-1]), 2)
-            prev = round(float(df["Close"].iloc[-2]), 2)
-            chg  = round((ltp - prev) / prev * 100, 2)
-            # Simple RSI without importing data_engine
-            close = df["Close"]
-            if len(close) >= 15:
-                delta = close.diff()
-                gain  = delta.clip(lower=0).rolling(14).mean()
-                loss  = (-delta.clip(upper=0)).rolling(14).mean()
-                rs    = gain / loss.replace(0, float("nan"))
-                rsi_v = round(float((100 - 100 / (1 + rs)).iloc[-1]), 1)
-            else:
-                rsi_v = 50.0
+            ltp  = round(float(info["price"]), 2)
+            prev = info.get("prev_close")
+            chg  = round((ltp - float(prev)) / float(prev) * 100, 2) if prev else 0.0
+            # RSI from recent history (cached by data_engine — no extra HTTP call)
+            df_hist = get_hist(sym, "5d")
+            rsi_v   = calc_rsi(df_hist["Close"]) if not df_hist.empty else 50.0
             snap.append(f"{sym}:₹{ltp}({chg:+.1f}%)RSI:{rsi_v}")
         except Exception:
             pass
