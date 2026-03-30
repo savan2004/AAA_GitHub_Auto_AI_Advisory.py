@@ -22,8 +22,7 @@ except ImportError:
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
 
-if GEMINI_API_KEY and genai:
-    genai.configure(api_key=GEMINI_API_KEY)
+# Gemini configured lazily inside ai_call() to avoid startup crash
 
 # safe_history is now a thin wrapper around data_engine.get_hist
 # (keeps the existing call-sites working without changes)
@@ -172,9 +171,13 @@ def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
 
 # --- AI explanation (optional) ---
 def ai_call(prompt: str, max_tokens: int = 600) -> str:
-    if GROQ_API_KEY and Groq:
+    # Re-read keys at call time so Render env updates are picked up
+    groq_key   = os.getenv("GROQ_API_KEY", "").strip()
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+
+    if groq_key and Groq:
         try:
-            client = Groq(api_key=GROQ_API_KEY)
+            client = Groq(api_key=groq_key)
             resp = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
@@ -188,12 +191,19 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
         except Exception as e:
             logger.warning(f"Groq swing error: {e}")
 
-    if GEMINI_API_KEY and genai:
+    if gemini_key and genai:
         try:
-            genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-2.0-flash")
-            resp = model.generate_content(prompt)
-            return (getattr(resp, "text", "") or "").strip()
+            genai.configure(api_key=gemini_key)
+            # Use gemini-1.5-flash (stable); gemini-2.0-flash was deprecated
+            for model_name in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
+                try:
+                    model = genai.GenerativeModel(model_name)
+                    resp = model.generate_content(prompt)
+                    text = (getattr(resp, "text", "") or "").strip()
+                    if text:
+                        return text
+                except Exception:
+                    continue
         except Exception as e:
             logger.warning(f"Gemini swing error: {e}")
 
