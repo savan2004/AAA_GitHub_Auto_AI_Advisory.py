@@ -1,4 +1,4 @@
-\"\"\"
+"""
 ai_engine.py — AI Engine for Stock Advisory Bot (Fixed v4.4)
 ================================================================
 FIXES:
@@ -7,7 +7,7 @@ FIXES:
  - OpenAI: Strict key format validation (must start with sk-)
  - Better Error Reporting: Specific messages for initialization failures
  - Live Key Sync: os.getenv called at runtime inside helper functions
-\"\"\"
+"""
 import os
 import logging
 import time
