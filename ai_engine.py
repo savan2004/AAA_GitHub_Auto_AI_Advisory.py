@@ -389,49 +389,179 @@ def clear_chat(uid: int):
 CHAT_SYSTEM = """You are an expert Indian stock market AI assistant with access to LIVE market data.
 You specialize in:
 1. NIFTY VALUATION — PE analysis, fair value, over/undervalued assessment
-2. FUNDAMENTAL PICKS — stocks with strong ROE, low PE, solid balance sheet
+2. FUNDAMENTAL PICKS — use ONLY the fundamental data provided in context; never invent metrics
 3. NIFTY UPDATE — index levels, trend, support/resistance, weekly outlook
 4. TECHNICAL SWING TRADES — entry zone, target 1, target 2, stop loss
-5. OPTION TRADES — strike, expiry, entry premium, target, SL for Nifty/BankNifty
+5. OPTION STRATEGIES — strategy name, strikes, direction, reasoning based on Nifty levels/trend
 
-RULES:
-- Always reference the live data provided. Quote specific numbers.
+CRITICAL RULES:
+- Use ONLY numbers from the live data context. Never hallucinate prices, PE, ROE or premiums.
+- For fundamentals: pick stocks from the FUNDAMENTAL DATA section only. Quote exact figures given.
+- For options: NEVER quote a specific premium price (you don't have live options chain data).
+  Instead: recommend a STRATEGY (Bull Call Spread / Bear Put Spread / Long CE / Long PE / Straddle etc.)
+  with strike selection based on Nifty spot, key levels, and trend. State why you chose that strike.
 - For swing trades: stock name, entry zone, T1, T2, SL, timeframe.
-- For options: index, CE/PE, strike, expiry, entry premium, target, SL.
-- Be specific. No vague answers.
+- Keep responses under 400 words to avoid Telegram message limits.
 - End with: ⚠️ Educational only. Not SEBI-registered advice."""
 
 AI_CHAT_TOPICS: dict[str, str] = {
     "📊 Nifty Valuation":
-        "What is the current Nifty 50 PE ratio? Is it overvalued or undervalued historically? "
-        "Give specific numbers, compare to 10-year average, and give your assessment.",
+        "Using the LIVE DATA provided, give a complete Nifty 50 valuation analysis. "
+        "Quote the exact PE, PB, Div Yield from the data. Compare PE to 10-year historical avg (~21). "
+        "Calculate fair value = Nifty EPS × 21. State clearly: overvalued / fairly valued / cheap. "
+        "Include current Nifty level, % gap from fair value, and your investment stance.",
 
     "💎 Fundamental Picks":
-        "Based on current market conditions, give me 3 fundamentally strong NSE stocks. "
-        "Criteria: PE < 25, ROE > 15%, low debt, consistent earnings growth. "
-        "For each: name, current price range, key metrics, and why it's attractive now.",
+        "Using ONLY the FUNDAMENTAL DATA section in the live context provided, "
+        "identify the 3 best value stocks. For each stock in the data: "
+        "show PE, ROE%, Debt/Equity, 52W position, and a one-line investment case. "
+        "Rank them: Best Pick / Second Pick / Watch. "
+        "Do NOT invent any numbers — use only what is in the context.",
 
     "📈 Nifty Update":
-        "Give me a complete Nifty 50 technical update using the live data provided. "
-        "Include: current level, trend direction, key support levels, key resistance levels, "
-        "RSI reading, and your outlook for the next 5–7 trading days.",
+        "Using the LIVE DATA provided, give a complete Nifty 50 technical update. "
+        "Quote exact: current level, day change%, RSI, key support (S1/S2), key resistance (R1/R2). "
+        "State trend direction (bullish/bearish/sideways). "
+        "Give specific support and resistance levels in numbers. "
+        "Outlook for next 5–7 trading days with a price range.",
 
     "🎯 Technical Swing Trade":
-        "Give me 2 specific technical swing trade setups for NSE stocks right now. "
-        "For each: stock name, current price, entry zone, target 1, target 2, stop loss, "
-        "expected timeframe, and the technical reason for the setup.",
+        "Using the TOP STOCKS data in the live context, identify 2 swing trade setups. "
+        "Pick stocks where RSI signals opportunity (oversold <40 for buy, overbought >65 for sell). "
+        "For each: Stock name, current price, Entry zone, Target 1, Target 2, Stop Loss, "
+        "Risk:Reward ratio, timeframe (3–7 days), and the technical reason.",
 
-    "⚡ Option Trade":
-        "Give me a specific option trade for Nifty or BankNifty for the current week expiry. "
-        "Include: which index, CE or PE, specific strike price, current premium estimate, "
-        "target premium, stop loss premium, max risk in rupees, and your reasoning.",
+    "⚡ Option Trade": (
+        "Based on Nifty level trend RSI and pivot levels in the LIVE DATA "
+        "recommend an options STRATEGY for this week expiry. "
+        "Format: STRATEGY(Bull Call Spread/Long PE/Bear Put Spread/Iron Condor) "
+        "DIRECTION(Bullish/Bearish/Neutral) "
+        "STRIKES(e.g. Buy 23000CE Sell 23300CE round to nearest 50) "
+        "WHY(2-3 lines Nifty trend+RSI+key level) "
+        "MAX RISK(in points not rupees) TARGET(in points profit) "
+        "EXIT IF(Nifty crosses level X) "
+        "CRITICAL: Do NOT quote any premium price you have no live options chain data."
+    ),
 }
 
 AI_CHAT_TOPIC_KEYS: set = set(AI_CHAT_TOPICS.keys())
 
 
+def _fetch_nifty_pe() -> dict:
+    """
+    Fetch official Nifty 50 PE, PB, Dividend Yield.
+
+    Source priority (all logged at WARNING so failures are visible in Render logs):
+      1. NSE India equity-stockIndices API  (requires cookie warmup)
+      2. NSE India indices overview API     (lighter, no cookie needed)
+      3. Screener.in Nifty 50 page          (scrape — PE visible in HTML)
+      4. Yahoo Finance ^NSEI trailingPE     (last resort — often wrong, but logged)
+
+    Returns dict: {pe, pb, div_yield, source} or {} on total failure.
+    """
+    _NSE_H = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/122.0.0.0 Safari/537.36"),
+        "Accept":          "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer":         "https://www.nseindia.com/",
+    }
+
+    def _parse_pe(val):
+        """Return float or None — rejects 0, negative, implausible values."""
+        try:
+            v = float(val)
+            if 8 < v < 60:   # sanity range for Nifty PE
+                return round(v, 2)
+        except Exception:
+            pass
+        return None
+
+    # ── Source 1: NSE equity-stockIndices (cookie-based) ──────────────────────
+    try:
+        s = requests.Session()
+        s.headers.update(_NSE_H)
+        s.get("https://www.nseindia.com/", timeout=8)   # get cookies
+        r = s.get(
+            "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050",
+            timeout=10,
+        )
+        if r.ok:
+            meta = r.json().get("metadata", {})
+            pe = _parse_pe(meta.get("pe"))
+            if pe:
+                logger.info(f"Nifty PE: {pe} [NSE equity-stockIndices]")
+                return {"pe": pe,
+                        "pb":        round(float(meta["pb"]), 2) if meta.get("pb") else "N/A",
+                        "div_yield": round(float(meta["divYield"]), 2) if meta.get("divYield") else "N/A",
+                        "source": "NSE"}
+            logger.warning(f"NSE stockIndices returned no valid PE — raw meta: {meta}")
+        else:
+            logger.warning(f"NSE stockIndices HTTP {r.status_code}")
+    except Exception as e:
+        logger.warning(f"_fetch_nifty_pe NSE-stockIndices failed: {e}")
+
+    # ── Source 2: NSE indices overview (lighter endpoint, no cookie needed) ───
+    try:
+        r = requests.get(
+            "https://www.nseindia.com/api/allIndices",
+            headers=_NSE_H, timeout=10,
+        )
+        if r.ok:
+            for idx in r.json().get("data", []):
+                if idx.get("index") == "NIFTY 50":
+                    pe = _parse_pe(idx.get("pe") or idx.get("P/E"))
+                    if pe:
+                        logger.info(f"Nifty PE: {pe} [NSE allIndices]")
+                        return {"pe": pe,
+                                "pb":        _parse_pe(idx.get("pb") or idx.get("P/B")) or "N/A",
+                                "div_yield": _parse_pe(idx.get("divYield")) or "N/A",
+                                "source": "NSE-allIndices"}
+            logger.warning("NSE allIndices: NIFTY 50 entry found but no valid PE")
+        else:
+            logger.warning(f"NSE allIndices HTTP {r.status_code}")
+    except Exception as e:
+        logger.warning(f"_fetch_nifty_pe NSE-allIndices failed: {e}")
+
+    # ── Source 3: Screener.in — PE visible without login ──────────────────────
+    try:
+        r = requests.get(
+            "https://www.screener.in/company/^NSEI/",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        if r.ok:
+            import re
+            # Screener shows: Stock P/E  19.45
+            m = re.search(r"Stock P/E[\D]*([\d]+\.[\d]+)", r.text)
+            if m:
+                pe = _parse_pe(m.group(1))
+                if pe:
+                    logger.info(f"Nifty PE: {pe} [Screener.in]")
+                    return {"pe": pe, "pb": "N/A", "div_yield": "N/A", "source": "Screener"}
+    except Exception as e:
+        logger.warning(f"_fetch_nifty_pe Screener failed: {e}")
+
+    # ── Source 4: Yahoo Finance ^NSEI trailingPE (last resort, often wrong) ───
+    try:
+        from data_engine import _yahoo_v8_quote
+        q  = _yahoo_v8_quote("^NSEI")
+        pe = _parse_pe(q.get("pe") if q else None)
+        if pe:
+            logger.warning(f"Nifty PE: {pe} [Yahoo — may be inaccurate, all NSE sources failed]")
+            return {"pe": pe, "pb": "N/A", "div_yield": "N/A", "source": "Yahoo-fallback"}
+        logger.warning("Yahoo ^NSEI also returned no valid PE")
+    except Exception as e:
+        logger.warning(f"_fetch_nifty_pe Yahoo failed: {e}")
+
+    logger.error("_fetch_nifty_pe: ALL sources failed — Nifty PE unavailable")
+    return {}
+
+
 def get_live_market_context() -> str:
-    from data_engine import _yahoo_v8_hist, _yahoo_v8_quote, get_hist, calc_rsi, batch_quotes
+    from data_engine import _yahoo_v8_hist, _yahoo_v8_quote, get_hist, get_info, calc_rsi, batch_quotes
     lines = [f"=== LIVE DATA {datetime.now().strftime('%d-%b-%Y %H:%M IST')} ==="]
 
     # Nifty 50
@@ -462,12 +592,25 @@ def get_live_market_context() -> str:
     except Exception:
         pass
 
-    # Nifty PE
+    # Nifty PE — from NSE official API (most accurate), Yahoo as fallback
     try:
-        q  = _yahoo_v8_quote("^NSEI")
-        pe = q.get("pe") if q else None
-        if pe:
-            lines.append(f"NIFTY PE: {round(float(pe), 1)} (10yr avg ~20 | expensive >22 | cheap <18)")
+        pe_data = _fetch_nifty_pe()
+        if pe_data:
+            pe   = pe_data.get("pe")
+            pb   = pe_data.get("pb")
+            divy = pe_data.get("div_yield")
+            src  = pe_data.get("source", "NSE")
+            pe_line = f"NIFTY PE: {pe} | PB: {pb} | Div Yield: {divy}% [src:{src}]"
+            # Valuation context for AI
+            try:
+                pe_f = float(pe)
+                if   pe_f > 24: pe_line += " → EXPENSIVE (historical avg ~21)"
+                elif pe_f > 22: pe_line += " → SLIGHTLY OVERVALUED (historical avg ~21)"
+                elif pe_f > 19: pe_line += " → FAIRLY VALUED (historical avg ~21)"
+                else:           pe_line += " → CHEAP / UNDERVALUED (historical avg ~21)"
+            except Exception:
+                pass
+            lines.append(pe_line)
     except Exception:
         pass
 
@@ -493,6 +636,72 @@ def get_live_market_context() -> str:
     if snap:
         lines.append("TOP STOCKS: " + "  ".join(snap))
 
+    # ── Fundamental data for top 12 stocks (powers Fundamental Picks topic) ───
+    FUND_STOCKS = [
+        "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK",
+        "SBIN","BAJFINANCE","ITC","TATAMOTORS","MARUTI","SUNPHARMA","LT",
+    ]
+    try:
+        fund_lines = []
+        for sym in FUND_STOCKS:
+            try:
+                info = get_info(sym)
+                if not info:
+                    continue
+                price = info.get("price")
+                pe_v  = info.get("pe")
+                pb_v  = info.get("pb")
+                roe_v = info.get("roe")
+                eps_v = info.get("eps")
+                h52   = info.get("high52")
+                l52   = info.get("low52")
+                roe_pct = None
+                if roe_v is not None:
+                    rv = float(roe_v)
+                    roe_pct = round(rv * 100, 1) if abs(rv) <= 1 else round(rv, 1)
+                pos52 = None
+                if price and h52 and l52:
+                    span = float(h52) - float(l52)
+                    if span > 0:
+                        pos52 = round((float(price) - float(l52)) / span * 100, 0)
+                parts = [sym]
+                if price:             parts.append(f"LTP:Rs{round(float(price),0):.0f}")
+                if pe_v:              parts.append(f"PE:{round(float(pe_v),1)}")
+                if pb_v:              parts.append(f"PB:{round(float(pb_v),1)}")
+                if roe_pct:           parts.append(f"ROE:{roe_pct}%")
+                if eps_v:             parts.append(f"EPS:{round(float(eps_v),1)}")
+                if pos52 is not None: parts.append(f"52W:{pos52:.0f}%")
+                if len(parts) > 2:
+                    fund_lines.append(" | ".join(parts))
+            except Exception:
+                pass
+        if fund_lines:
+            lines.append("\nFUNDAMENTAL DATA (use ONLY these exact numbers for Fundamental Picks):")
+            lines.extend(fund_lines)
+    except Exception as ex:
+        logger.warning(f"get_live_market_context fundamental section: {ex}")
+
+    # ── Nifty options context ─────────────────────────────────────────────────
+    try:
+        df_opt = _yahoo_v8_hist("^NSEI", period="1mo")
+        if df_opt is not None and len(df_opt) >= 15:
+            c       = df_opt["Close"]
+            rsi_n   = calc_rsi(c)
+            ema20n  = round(float(c.ewm(span=20, adjust=False).mean().iloc[-1]), 0)
+            spot_n  = round(float(c.iloc[-1]), 0)
+            trend_n = "BULLISH" if spot_n > ema20n else "BEARISH"
+            atm_n   = int(round(spot_n / 50) * 50)
+            lines.append(
+                f"\nNIFTY OPTIONS CONTEXT:"
+                f" Spot={spot_n} ATM={atm_n}"
+                f" EMA20={ema20n} RSI={round(rsi_n,1)} Trend={trend_n}"
+                f" | CE strikes nearby: {atm_n} {atm_n+50} {atm_n+100}"
+                f" | PE strikes nearby: {atm_n} {atm_n-50} {atm_n-100}"
+                f" | IMPORTANT: Do NOT quote option premiums - suggest strategy and strikes only"
+            )
+    except Exception:
+        pass
+
     return "\n".join(lines)
 
 
@@ -510,7 +719,7 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
     history    = get_chat_history(uid)
     messages   = list(history) + [{"role": "user", "content": user_message}]
 
-    text, err = _call_ai(messages, max_tokens=550, system=system)
+    text, err = _call_ai(messages, max_tokens=800, system=system)
 
     if text:
         add_to_chat(uid, "user",      user_message)
