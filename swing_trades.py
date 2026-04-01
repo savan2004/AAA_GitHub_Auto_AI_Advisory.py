@@ -177,7 +177,19 @@ def ai_call(prompt: str, max_tokens: int = 600) -> str:
 
     if groq_key and Groq:
         try:
-            client = Groq(api_key=groq_key)
+            # groq>=0.9 uses httpx which rejects proxies= from some proxy environments
+            def _safe_groq(api_key):
+                try:
+                    return Groq(api_key=api_key)
+                except TypeError as e:
+                    if "proxies" not in str(e): raise
+                    import httpx
+                    orig = httpx.Client.__init__
+                    httpx.Client.__init__ = lambda self,*a,**kw: orig(self,*a,**{k:v for k,v in kw.items() if k!="proxies"})
+                    c = Groq(api_key=api_key)
+                    httpx.Client.__init__ = orig
+                    return c
+            client = _safe_groq(groq_key)
             resp = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
