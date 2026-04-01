@@ -33,7 +33,20 @@ def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
         used_any = True
         try:
             from groq import Groq
-            client = Groq(api_key=GROQ_API_KEY)
+            import functools
+            # groq>=0.9 uses httpx which rejects proxies= kwarg from some environments
+            def _safe_groq(api_key):
+                try:
+                    return Groq(api_key=api_key)
+                except TypeError as e:
+                    if "proxies" not in str(e): raise
+                    import httpx
+                    orig = httpx.Client.__init__
+                    httpx.Client.__init__ = lambda self,*a,**kw: orig(self,*a,**{k:v for k,v in kw.items() if k!="proxies"})
+                    c = Groq(api_key=api_key)
+                    httpx.Client.__init__ = orig
+                    return c
+            client = _safe_groq(GROQ_API_KEY)
             for model in ["llama-3.3-70b-versatile", "llama3-70b-8192", "mixtral-8x7b-32768"]:
                 try:
                     resp = client.chat.completions.create(
