@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: aaa-github-auto-ai-advisory
+    env: python
+    plan: free
+    rootDir: .
+    buildCommand: chmod +x builder.sh && ./builder.sh
+    startCommand: python main.py
+    autoDeploy: true
