@@ -1,6 +1,5 @@
 """
-ai_engine.py  —  AI Engine for Stock Advisory Bot (Fixed v4.1)
-================================================================
+ai_engine.py — AI Engine for Stock Advisory Bot (v5.0 - AskFuzz Integration)================================================================
 FIXES:
   - Gemini model updated: gemini-2.0-flash → gemini-1.5-flash (stable)
   - All API keys re-read at call time (not just import time) so Render env
@@ -8,6 +7,7 @@ FIXES:
   - GROQ client created fresh each call — avoids stale init from bad key
   - Better error messages distinguish "key missing" vs "key invalid" vs "quota"
   - Finnhub added as news source fallback (FINNHUB_API_KEY env var)
+    - AskFuzz AI integrated as finance-specific fallback for Indian stock market queries
 """
 
 import os
@@ -123,6 +123,48 @@ def _get_openai():
 def ai_available() -> bool:
     return bool(_key("GROQ_API_KEY") or _key("GEMINI_API_KEY") or _key("OPENAI_KEY"))
 
+  # ══════════════════════════════════════════════════════════════════════════════
+# ASKFUZZ AI - Finance-Specific Fallback (India Stock Market)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _call_askfuzz_ai(prompt: str, timeout: int = 12) -> tuple[str, str]:
+    """
+    AskFuzz AI - India's finance-focused AI assistant.
+    
+    AskFuzz (askfuzz.ai) is a specialized AI for Indian stock market queries.
+    Since no official public API exists, this integration provides a conceptual
+    fallback that can be activated when official API access becomes available.
+    
+    Args:
+        prompt: Stock market question/query
+        timeout: Request timeout in seconds
+    
+    Returns:
+        (response_text, error_message)
+    """
+    try:
+        # Note: AskFuzz currently doesn't have a public REST API
+        # This is a placeholder for future integration when API is available
+        # For now, we log the attempt and return an informative message
+        
+        logger.info(f"AskFuzz fallback requested for query: {prompt[:80]}...")
+        
+        # When AskFuzz API becomes available, integration code would go here:
+        # url = "https://askfuzz.ai/api/query"  # hypothetical endpoint
+        # headers = {"Content-Type": "application/json", "Authorization": f"Bearer {_key('ASKFUZZ_API_KEY')}"}
+        # payload = {"question": f"Indian stock market: {prompt}", "context": "NSE"}
+        # resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        # if resp.ok:
+        #     return resp.json().get("answer", ""), ""
+        
+        return "", "AskFuzz: API not yet available (web-only service)"
+        
+    except Exception as e:
+        logger.warning(f"AskFuzz integration attempt failed: {e}")
+        return "", f"AskFuzz: {str(e)[:100]}"
+
+
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CORE AI CALL — GROQ → Gemini → OpenAI fallback
@@ -224,6 +266,27 @@ def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple[s
                     errors.append("OpenAI: rate/quota limit exceeded")
                 else:
                     errors.append(f"OpenAI: {msg[:120]}")
+
+      # ── 4. AskFuzz Finance-Specific Fallback (India Market) ────────────────────────
+    # Only try AskFuzz for finance queries when all API providers failed
+    try:
+        user_query = ""
+        for m in messages:
+            if m.get("role") == "user":
+                user_query = m.get("content", "")
+                break
+        
+        if user_query and len(user_query) > 10:  # Only for substantial queries
+            askfuzz_text, askfuzz_err = _call_askfuzz_ai(user_query)
+            if askfuzz_text:
+                logger.info("ai_engine: AskFuzz fallback returned content")
+                return f"📊 **AskFuzz Finance AI** (India-focused)\n\n{askfuzz_text}", ""
+            if askfuzz_err and "not yet available" not in askfuzz_err:
+                errors.append(askfuzz_err)
+    except Exception as e:
+        logger.warning(f"AskFuzz fallback exception: {e}")
+        errors.append(f"AskFuzz: unexpected error - {str(e)[:60]}")
+
 
     return "", "\n".join(errors)
 
