@@ -4,6 +4,9 @@ services:
     env: python
     plan: free
     rootDir: .
-    buildCommand: chmod +x builder.sh && ./builder.sh
+    buildCommand: bash builder.sh
     startCommand: python main.py
     autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
