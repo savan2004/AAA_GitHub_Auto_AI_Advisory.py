@@ -427,12 +427,19 @@ def build_scan(profile: str) -> str:
                 else "📉 Bear" if ltp < ema20 < ema50
                 else "↔️ Neut"
             )
-            signal = (
-                "⚡ OVERSOLD"     if rsi < 35
-                else "⚠️ OVERBOUGHT" if rsi > 68
-                else "✅ BUY ZONE"   if ltp > ema20 and chg > 0
-                else "⏳ WATCH"
-            )
+            # FIX: Smarter signal — RSI-primary, trend-confirmed
+            if rsi < 35:
+                signal = "⚡ OVERSOLD — bounce watch"
+            elif rsi > 72:
+                signal = "⚠️ OVERBOUGHT — pullback risk"
+            elif ltp > ema20 > ema50 and rsi > 50 and chg > 0:
+                signal = "✅ UPTREND — strong momentum"
+            elif ltp < ema20 < ema50 and rsi < 50:
+                signal = "🔻 DOWNTREND — avoid"
+            elif ltp > ema20 and 45 < rsi < 65 and chg > 0:
+                signal = "✅ BUY ZONE"
+            else:
+                signal = "⏳ WAIT — no clear signal"
             icon = "🟢" if chg >= 0 else "🔴"
             lines.append(
                 f"{icon} <b>{sym}</b>: ₹{ltp:,.2f} ({chg:+.2f}%)\n"
@@ -473,10 +480,17 @@ def build_breadth() -> str:
             chg = round((l - p) / p * 100, 2) if p else 0.0
             wh  = round(float(d["High"].max()), 2)
             wl  = round(float(d["Low"].min()), 2)
+            # RSI from 5-day close
+            try:
+                from data_engine import calc_rsi as _crsi
+                rsi_b = _crsi(d["Close"]) if len(d) >= 5 else 50.0
+            except Exception:
+                rsi_b = 50.0
             icon = "🟢" if chg >= 0 else "🔴"
+            trend_b = "Bull" if chg > 0 else "Bear"
             lines.append(
-                f"{icon} <b>{name}</b>: {l:,.2f} ({chg:+.2f}%)\n"
-                f"   5D Range: {wl:,} – {wh:,}"
+                f"{icon} <b>{name}</b>: {l:,.2f} ({chg:+.2f}%) | RSI:{rsi_b} | {trend_b}\n"
+                f"   5D Range: {wl:,.2f} – {wh:,.2f}"
             )
             hit += 1
         except Exception as e:
@@ -487,24 +501,77 @@ def build_breadth() -> str:
     return "\n".join(lines)
 
 
+# Tavily sometimes returns index/homepage titles — filter them out
+_NEWS_JUNK_PATTERNS = [
+    "Investing.com", "TradingView", "Yahoo Finance", "CNBC", "Stock Price, Quote",
+    "Live Share", "Chart and News", "NSE India", "National Stock Exchange",
+    "Index Today", "Nifty 50 Index Today", "Equity Market Watch",
+]
+
+def _is_real_headline(title: str) -> bool:
+    if not title or len(title) < 25:
+        return False
+    for pat in _NEWS_JUNK_PATTERNS:
+        if pat.lower() in title.lower():
+            return False
+    return True
+
+
 def build_news() -> str:
-    if not TAVILY_KEY:
-        return "📰 Set TAVILY_API_KEY for live news."
+    # Source 1: Tavily with financial news domains and headline filter
+    if TAVILY_KEY:
+        try:
+            r = requests.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key":       TAVILY_KEY,
+                    "query":         "India NSE Nifty Sensex stock market news today",
+                    "max_results":   8,
+                    "search_depth":  "advanced",
+                    "include_domains": [
+                        "economictimes.indiatimes.com", "moneycontrol.com",
+                        "livemint.com", "businessline.com", "ndtv.com",
+                        "financialexpress.com", "reuters.com", "bloomberg.com",
+                    ],
+                },
+                timeout=10,
+            )
+            items = r.json().get("results", [])
+            headlines = [
+                x["title"] for x in items
+                if _is_real_headline(x.get("title", ""))
+            ][:5]
+            if headlines:
+                lines = ["📰 <b>MARKET NEWS</b>", "━━━━━━━━━━━━━━━━━━━━"]
+                lines += [f"• {h[:100]}" for h in headlines]
+                lines.append("━━━━━━━━━━━━━━━━━━━━")
+                return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"News Tavily: {e}")
+
+    # Source 2: MoneyControl RSS — free, no key, real headlines
     try:
-        r = requests.post(
-            "https://api.tavily.com/search",
-            json={"api_key": TAVILY_KEY,
-                  "query": "India NSE Nifty stock market news today",
-                  "max_results": 5},
-            timeout=8,
+        import re
+        rss = requests.get(
+            "https://www.moneycontrol.com/rss/latestnews.xml",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=8,
         )
-        items = r.json().get("results", [])
-        if items:
-            return "📰 <b>MARKET NEWS</b>\n━━━━━━━━━━━━━━━━━━━━\n" + \
-                   "\n".join(f"• {x['title'][:90]}" for x in items)
+        if rss.ok:
+            titles = re.findall(r"<title><![CDATA[(.*?)]]></title>", rss.text)
+            mkt = [
+                t for t in titles[1:]
+                if any(kw in t.lower() for kw in
+                       ["nifty", "sensex", "market", "stock", "sebi", "rbi", "index"])
+            ][:5]
+            if mkt:
+                lines = ["📰 <b>MARKET NEWS</b> (MoneyControl)", "━━━━━━━━━━━━━━━━━━━━"]
+                lines += [f"• {t[:100]}" for t in mkt]
+                lines.append("━━━━━━━━━━━━━━━━━━━━")
+                return "\n".join(lines)
     except Exception as e:
-        logger.warning(f"News: {e}")
-    return "📰 News unavailable right now."
+        logger.warning(f"News RSS: {e}")
+
+    return "📰 News unavailable right now. Set TAVILY_API_KEY for live news."
 
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
