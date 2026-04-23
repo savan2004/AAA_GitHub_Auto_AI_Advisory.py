@@ -64,7 +64,18 @@ def fmt_cr(val) -> str:
         return f"₹{cr:.2f} Cr"
     except Exception:
         return "N/A"
-
+def fmt_rev(val) -> str:
+  if val is None:
+    return "N/A"
+  try:
+    cr = float(val)
+    if cr >= 1_00_000:
+      return f"₹{cr/1_00_000:.2f}L Cr"
+    if cr >= 1_000:
+      return f"₹{cr/1_000:.2f}K Cr"
+    return f"₹{cr:.2f} Cr"
+  except Exception:
+    return "N/A"
 
 # ── Source 1: Screener.in (NO API KEY needed, works for all NSE stocks) ───────
 
@@ -197,7 +208,7 @@ def _fetch_screener(sym: str) -> Optional[dict]:
         if rev_match:
             v = _parse_num(rev_match.group(1))
             if v:
-                result["rev"] = v * 1e7   # crore → rupees
+                result["rev"] = v  # Yahoo/Screener: already in crores   # crore → rupees
 
         # ── PB from Book Value (if price available) ───────────────────────────
         # PB = price / book_value — we'll compute in get_fundamentals
