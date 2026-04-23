@@ -362,7 +362,7 @@ def build_adv(sym: str) -> str:
         "━━━━━━━━━━━━━━━━━━━━",
         "📋 <b>FUNDAMENTALS</b>",
         frow("Market Cap",   fmt_mcap(mcap)),
-        frow("Revenue",      fmt_mcap(rev)),
+        frow("Revenue",      fmt_mcap(rev * 1e7 if rev is not None else None)),
         frow("PE (TTM)",     pe)  + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
         frow("Price/Book",   pb),
         frow("ROE",          roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
