@@ -803,8 +803,8 @@ def get_live_market_context() -> str:
                 ltp   = round(float(price), 2)
                 prev  = info.get("prev_close")
                 chg   = round((ltp - float(prev)) / float(prev) * 100, 2) if prev else 0.0
-                df_h  = get_hist(sym, "5d")
-                rsi_v = calc_rsi(df_h["Close"]) if not df_h.empty else 50.0
+                df_h  = get_hist(sym, "3mo")
+                rsi_v = calc_rsi(df_h["Close"]) if len(df_h) >= 50 else 50.0
                 snap.append(f"{sym}:₹{ltp}({chg:+.1f}%)RSI:{rsi_v}")
             except Exception:
                 pass
