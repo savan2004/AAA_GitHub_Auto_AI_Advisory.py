@@ -117,3 +117,57 @@ These files were reviewed and are correct as-is:
 | `ALPHA_VANTAGE_KEY` | Optional | News fallback |
 
 At least one of: `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_KEY`, or `ASKFUZZ_API_KEY` must be set for AI features.
+
+---
+
+## Round 2 Fixes (from live Telegram output analysis)
+
+### F1. Swing trade conditions truncated — `<` `>` stripped by Telegram HTML
+- **Symptom:** `"Trend (price  25, -DI > +DI"` — arrows and comparison operators eaten
+- **Fix:** All condition strings in `swing_trades.py` now use HTML entities:
+  `>` → `&gt;`, `<` → `&lt;`, `&` → `&amp;`
+
+### F2. Swing trade card improved — Entry Zone, R:R ratio, full conditions
+- Added `📥 Entry Zone: ₹X – ₹Y` (±0.5% around LTP)
+- Added `⚖️ Risk:Reward: 1:X` calculated from ATR
+- All conditions now listed in full, not truncated to 3
+
+### F3. Fundamentals all N/A for BEL (and many stocks without FINNHUB_API_KEY)
+- **Root cause:** Yahoo v10 blocked + no Finnhub key = zero fallback
+- **Fix:** Added **Screener.in scraper** as Source 2 — requires **NO API key**
+  Extracts: PE, ROE, D/E, Market Cap, Revenue, 52W H/L, Book Value, Div Yield, EPS
+  Priority: data_engine → **Screener.in** → Finnhub → yfinance
+
+### F4. AI responses generic and vague ("could", "might", "potentially")
+- **Fix:** Rewrote `CHAT_SYSTEM` prompt with strict output format enforcement
+- Added exact OUTPUT FORMAT templates for all 5 topics (Valuation, Picks, Update, Swing, Options)
+- Banned hedge words: "could", "might", "potentially", "I think"
+- AI must start with the exact metric asked for
+
+### F5. `ai_insights()` stock card — generic bullets not citing live data
+- **Fix:** Prompt now passes `rsi_label` ("OVERBOUGHT", "OVERSOLD", "neutral zone")
+- Forces VERDICT line: `BUY / HOLD / AVOID — [one sentence with exact numbers]`
+- System prompt: "Never say could/might/potentially. Output ONLY the requested format."
+
+### F6. Screener signals contradictory (SBIN RSI 81.4 = Neutral + OVERBOUGHT)
+- **Original logic:** signal computed independently of trend — could conflict
+- **Fix:** Smarter signal hierarchy:
+  1. RSI < 35 → OVERSOLD
+  2. RSI > 72 → OVERBOUGHT
+  3. price > EMA20 > EMA50 + RSI > 50 + positive → UPTREND (strong)
+  4. price < EMA20 < EMA50 + RSI < 50 → DOWNTREND (avoid)
+  5. price > EMA20 + RSI 45–65 + positive → BUY ZONE
+  6. else → WAIT
+
+### F7. News showing website names not headlines (MSN, Yahoo Finance page titles)
+- **Fix in `build_news()`:**
+  - Added `_NEWS_JUNK_PATTERNS` filter — rejects titles containing site names
+  - Added `search_depth: advanced` and `include_domains` targeting financial publishers
+  - Added **MoneyControl RSS fallback** — free, no key, real stock headlines
+- **Fix in `fetch_news()` (stock news):**
+  - Same junk filter applied to per-stock Tavily results
+  - Added MoneyControl buzzing stocks RSS as Source 4
+
+### F8. Market Breadth — no RSI shown
+- **Fix:** Added RSI(5-day) and Bull/Bear label to each index row
+  e.g. `🔴 NIFTY IT: 30,314.35 (-4.46%) | RSI:38.2 | Bear`
