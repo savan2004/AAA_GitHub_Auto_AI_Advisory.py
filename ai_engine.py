@@ -345,49 +345,79 @@ def ai_insights(symbol: str, ltp: float, rsi: float, macd_line: float,
         )
 
     direction = "bullish" if macd_line > 0 else "bearish"
+    rsi_label = (
+        "OVERBOUGHT — pullback risk" if rsi > 70
+        else "OVERSOLD — bounce potential" if rsi < 30
+        else "neutral zone"
+    )
     prompt = (
-        f"Give 3-bullet BULLISH factors and 2-bullet RISKS for {symbol} (NSE India).\n"
-        f"Data: LTP ₹{ltp}, RSI {rsi}, MACD {direction}, Trend {trend}, PE {pe}, ROE {roe}%.\n"
-        f"Format exactly:\nBULLISH:\n• ...\n• ...\n• ...\nRISKS:\n• ...\n• ..."
+        f"Stock: {symbol} (NSE India)\n"
+        f"Live Data: LTP \u20b9{ltp} | RSI {rsi} ({rsi_label}) | MACD {direction} | "
+        f"Trend {trend} | PE {pe} | ROE {roe}%\n\n"
+        f"Give structured analysis in EXACTLY this format (no other text):\n"
+        f"BULLISH FACTORS:\n"
+        f"\u2022 [factor citing exact numbers above]\n"
+        f"\u2022 [factor]\n"
+        f"\u2022 [factor]\n"
+        f"RISKS:\n"
+        f"\u2022 [risk citing exact numbers above]\n"
+        f"\u2022 [risk]\n"
+        f"VERDICT: BUY / HOLD / AVOID \u2014 [one sentence reason with exact data]."
     )
     text, err = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=300,
-        system="You are a concise Indian equity analyst. Be specific and data-driven.",
+        max_tokens=320,
+        system=(
+            "You are a precise Indian equity analyst. Always cite exact numbers from data. "
+            "Never say could, might, potentially. Output ONLY the requested format."
+        ),
     )
     if text:
         return text
     if err:
-        return f"⚠️ AI unavailable:\n{err}"
-    return "⚠️ AI analysis temporarily unavailable"
+        return f"\u26a0\ufe0f AI unavailable:\n{err}"
+    return "\u26a0\ufe0f AI analysis temporarily unavailable"
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# NEWS  (Tavily → Finnhub → Alpha Vantage)
-# ══════════════════════════════════════════════════════════════════════════════
 
 def fetch_news(symbol: str) -> str:
-    # FIX: was hardcoded from="2024-01-01"; now uses rolling 30-day window
+    """Fetch 2 real article headlines for a stock. Filters website-name-only results."""
     from_date = (date.today() - timedelta(days=30)).strftime("%Y-%m-%d")
     to_date   = date.today().strftime("%Y-%m-%d")
 
+    def _clean(title: str) -> bool:
+        """True if title looks like a real article, not a site name."""
+        junk = ["Stock Price", "Quote", "News, Quotes", "- Yahoo", "- MSN",
+                "Chart", "investing.com", "TradingView", "moneycontrol.com"]
+        if not title or len(title) < 20:
+            return False
+        return not any(j.lower() in title.lower() for j in junk)
+
+    # Source 1: Tavily
     tavily_key = _key("TAVILY_API_KEY")
     if tavily_key:
         try:
             r = requests.post(
                 "https://api.tavily.com/search",
-                json={"api_key": tavily_key,
-                      "query": f"{symbol} NSE India stock news",
-                      "max_results": 3, "search_depth": "basic"},
-                timeout=6,
+                json={
+                    "api_key":      tavily_key,
+                    "query":        f"{symbol} NSE India stock latest news",
+                    "max_results":  5,
+                    "search_depth": "advanced",
+                    "include_domains": [
+                        "economictimes.indiatimes.com", "moneycontrol.com",
+                        "livemint.com", "businessline.com", "financialexpress.com",
+                        "reuters.com", "bloomberg.com",
+                    ],
+                },
+                timeout=8,
             ).json()
-            lines = [f"📰 {x['title'][:85]}"
-                     for x in r.get("results", [])[:2] if x.get("title")]
-            if lines:
-                return "\n".join(lines)
+            headlines = [x["title"] for x in r.get("results", []) if _clean(x.get("title", ""))][:2]
+            if headlines:
+                return "\n".join(f"📰 {h[:90]}" for h in headlines)
         except Exception as e:
             logger.warning(f"ai_engine Tavily news {symbol}: {e}")
 
+    # Source 2: Finnhub
     finnhub_key = _key("FINNHUB_API_KEY")
     if finnhub_key:
         try:
@@ -405,6 +435,7 @@ def fetch_news(symbol: str) -> str:
         except Exception as e:
             logger.warning(f"ai_engine Finnhub news {symbol}: {e}")
 
+    # Source 3: Alpha Vantage
     alpha_key = _key("ALPHA_VANTAGE_KEY")
     if alpha_key:
         try:
@@ -421,6 +452,21 @@ def fetch_news(symbol: str) -> str:
                 return "\n".join(lines)
         except Exception as e:
             logger.warning(f"ai_engine AV news {symbol}: {e}")
+
+    # Source 4: MoneyControl RSS search (free fallback)
+    try:
+        import re
+        rss = requests.get(
+            f"https://www.moneycontrol.com/rss/buzzingstocks.xml",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=6,
+        )
+        if rss.ok:
+            titles = re.findall(r"<title><![CDATA[(.*?)]]></title>", rss.text)
+            matched = [t for t in titles[1:] if symbol.upper() in t.upper()][:2]
+            if matched:
+                return "\n".join(f"📰 {t[:90]}" for t in matched)
+    except Exception:
+        pass
 
     return ""
 
@@ -498,61 +544,89 @@ def clear_chat(uid: int):
     _chat_history.pop(uid, None)
 
 
-CHAT_SYSTEM = """You are an expert Indian stock market AI assistant with access to LIVE market data.
-You specialize in:
-1. NIFTY VALUATION — PE analysis, fair value, over/undervalued assessment
-2. FUNDAMENTAL PICKS — use ONLY the fundamental data provided in context; never invent metrics
-3. NIFTY UPDATE — index levels, trend, support/resistance, weekly outlook
-4. TECHNICAL SWING TRADES — entry zone, target 1, target 2, stop loss
-5. OPTION STRATEGIES — strategy name, strikes, direction, reasoning based on Nifty levels/trend
+CHAT_SYSTEM = """You are an expert Indian NSE stock market AI assistant. You MUST use ONLY the numbers in the LIVE MARKET CONTEXT block below — never invent or guess any price, PE, RSI, or level.
 
-CRITICAL RULES:
-- Use ONLY numbers from the live data context. Never hallucinate prices, PE, ROE or premiums.
-- For fundamentals: pick stocks from the FUNDAMENTAL DATA section only. Quote exact figures given.
-- For options: NEVER quote a specific premium price (you don't have live options chain data).
-  Instead: recommend a STRATEGY (Bull Call Spread / Bear Put Spread / Long CE / Long PE / Straddle etc.)
-  with strike selection based on Nifty spot, key levels, and trend. State why you chose that strike.
-- For swing trades: stock name, entry zone, T1, T2, SL, timeframe.
-- Keep responses under 400 words to avoid Telegram message limits.
-- End with: ⚠️ Educational only. Not SEBI-registered advice."""
+OUTPUT RULES (strictly enforced):
+1. Always start your reply with the EXACT metric asked for (e.g. "Nifty: 24,423 | Change: -0.62%").
+2. Use bullet points for lists. Use ₹ for prices. Use % for percentages.
+3. For support/resistance: calculate S1=spot-ATR, S2=spot-2×ATR, R1=spot+ATR, R2=spot+2×ATR where ATR≈spot×0.01.
+4. For options: NEVER state a premium price. Only name the strategy and strikes (rounded to nearest 50).
+5. Keep total response under 350 words — Telegram has a 4096-char limit.
+6. ALWAYS end with: ⚠️ Educational only. Not SEBI-registered advice.
+
+BANNED: Do not say "could", "might", "potentially", "based on my training", "I think", or any hedge that avoids the data. Use the live data and be direct."""
 
 AI_CHAT_TOPICS: dict = {
-    "📊 Nifty Valuation":
-        "Using the LIVE DATA provided, give a complete Nifty 50 valuation analysis. "
-        "Quote the exact PE, PB, Div Yield from the data. Compare PE to 10-year historical avg (~21). "
-        "Calculate fair value = Nifty EPS × 21. State clearly: overvalued / fairly valued / cheap. "
-        "Include current Nifty level, % gap from fair value, and your investment stance.",
+    "📊 Nifty Valuation": (
+        "TASK: Nifty 50 Valuation Report. Use ONLY numbers from LIVE DATA.\n"
+        "OUTPUT FORMAT (use exactly this):\n"
+        "📊 NIFTY VALUATION — [date]\n"
+        "• Level: [exact from data] | Change: [exact]\n"
+        "• PE: [exact] | PB: [exact] | Div Yield: [exact]%\n"
+        "• 10Y Avg PE: ~21 | Gap: [+/-X.X x]\n"
+        "• Fair Value (EPS×21): ₹[calc Nifty EPS = Nifty/PE, then ×21]\n"
+        "• Verdict: OVERVALUED / FAIRLY VALUED / CHEAP\n"
+        "• Stance: [1 line]\n"
+        "⚠️ Educational only. Not SEBI-registered advice."
+    ),
 
-    "💎 Fundamental Picks":
-        "Using ONLY the FUNDAMENTAL DATA section in the live context provided, "
-        "identify the 3 best value stocks. For each stock in the data: "
-        "show PE, ROE%, Debt/Equity, 52W position, and a one-line investment case. "
-        "Rank them: Best Pick / Second Pick / Watch. "
-        "Do NOT invent any numbers — use only what is in the context.",
+    "💎 Fundamental Picks": (
+        "TASK: Pick 3 best-value stocks from the FUNDAMENTAL DATA section in LIVE DATA only.\n"
+        "OUTPUT FORMAT (use exactly this for each pick):\n"
+        "🥇 BEST PICK: [SYM]\n"
+        "  PE: X | PB: X | ROE: X% | EPS: ₹X | 52W pos: X%\n"
+        "  Case: [one specific sentence using only the data above]\n"
+        "🥈 SECOND PICK: [SYM]\n"
+        "  [same format]\n"
+        "👁 WATCH: [SYM]\n"
+        "  [same format]\n"
+        "⚠️ Educational only. Not SEBI-registered advice."
+    ),
 
-    "📈 Nifty Update":
-        "Using the LIVE DATA provided, give a complete Nifty 50 technical update. "
-        "Quote exact: current level, day change%, RSI, key support (S1/S2), key resistance (R1/R2). "
-        "State trend direction (bullish/bearish/sideways). "
-        "Give specific support and resistance levels in numbers. "
-        "Outlook for next 5–7 trading days with a price range.",
+    "📈 Nifty Update": (
+        "TASK: Nifty 50 Technical Update. Use ONLY numbers from LIVE DATA.\n"
+        "OUTPUT FORMAT (use exactly this):\n"
+        "📈 NIFTY UPDATE — [date]\n"
+        "• Level: [exact] | Change: [exact]%\n"
+        "• Trend: BULLISH/BEARISH/SIDEWAYS\n"
+        "• RSI: [exact] — [overbought>70 / oversold<30 / neutral]\n"
+        "• EMA20: [exact] | Position: price [above/below] EMA20\n"
+        "• Support  S1: ₹[calc] | S2: ₹[calc]\n"
+        "• Resistance R1: ₹[calc] | R2: ₹[calc]\n"
+        "• 5-7 Day Outlook: [range] with [bias]\n"
+        "⚠️ Educational only. Not SEBI-registered advice."
+    ),
 
-    "🎯 Technical Swing Trade":
-        "Using the TOP STOCKS data in the live context, identify 2 swing trade setups. "
-        "Pick stocks where RSI signals opportunity (oversold <40 for buy, overbought >65 for sell). "
-        "For each: Stock name, current price, Entry zone, Target 1, Target 2, Stop Loss, "
-        "Risk:Reward ratio, timeframe (3–7 days), and the technical reason.",
+    "🎯 Technical Swing Trade": (
+        "TASK: Find 2 swing trades from TOP STOCKS in LIVE DATA.\n"
+        "Select: RSI<45 for LONG, RSI>60 for SHORT.\n"
+        "OUTPUT FORMAT (use exactly this for each trade):\n"
+        "📌 TRADE 1: [SYM] — [LONG/SHORT]\n"
+        "  LTP: ₹[exact] | RSI: [exact]\n"
+        "  Entry Zone: ₹[LTP×0.995] – ₹[LTP×1.005]\n"
+        "  Target 1:   ₹[LTP±2% for short trades or +ATR×2]\n"
+        "  Target 2:   ₹[LTP±4%]\n"
+        "  Stop Loss:  ₹[LTP∓2%]\n"
+        "  R:R Ratio:  1:[calc]\n"
+        "  Reason: [1 line using RSI + trend data from context]\n"
+        "  Timeframe: 3–5 trading days\n"
+        "⚠️ Educational only. Not SEBI-registered advice."
+    ),
 
     "⚡ Option Trade": (
-        "Based on Nifty level trend RSI and pivot levels in the LIVE DATA "
-        "recommend an options STRATEGY for this week expiry. "
-        "Format: STRATEGY(Bull Call Spread/Long PE/Bear Put Spread/Iron Condor) "
-        "DIRECTION(Bullish/Bearish/Neutral) "
-        "STRIKES(e.g. Buy 23000CE Sell 23300CE round to nearest 50) "
-        "WHY(2-3 lines Nifty trend+RSI+key level) "
-        "MAX RISK(in points not rupees) TARGET(in points profit) "
-        "EXIT IF(Nifty crosses level X) "
-        "CRITICAL: Do NOT quote any premium price you have no live options chain data."
+        "TASK: Recommend ONE options strategy for this week's Nifty expiry.\n"
+        "Use ONLY the NIFTY OPTIONS CONTEXT block in LIVE DATA.\n"
+        "OUTPUT FORMAT (use exactly this):\n"
+        "⚡ OPTION STRATEGY — [date]\n"
+        "• Nifty Spot: [exact] | ATM: [exact, round to 50]\n"
+        "• Trend: [exact] | RSI: [exact]\n"
+        "• Strategy: [Bull Call Spread / Long CE / Bear Put Spread / Long PE / Iron Condor]\n"
+        "• Direction: [Bullish/Bearish/Neutral]\n"
+        "• Strikes: [e.g. Buy 24450CE + Sell 24600CE — round to nearest 50]\n"
+        "• Why: [2 lines: Nifty level + RSI + EMA20 from data]\n"
+        "• Max Risk: [X pts] | Target Profit: [X pts]\n"
+        "• Exit if: Nifty closes [above/below] ₹[level]\n"
+        "⚠️ Do NOT quote premium prices. Educational only. Not SEBI-registered advice."
     ),
 }
 
