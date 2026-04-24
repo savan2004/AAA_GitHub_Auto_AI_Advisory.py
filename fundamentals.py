@@ -64,18 +64,7 @@ def fmt_cr(val) -> str:
         return f"₹{cr:.2f} Cr"
     except Exception:
         return "N/A"
-def fmt_rev(val) -> str:
-  if val is None:
-    return "N/A"
-  try:
-    cr = float(val)
-    if cr >= 1_00_000:
-      return f"₹{cr/1_00_000:.2f}L Cr"
-    if cr >= 1_000:
-      return f"₹{cr/1_000:.2f}K Cr"
-    return f"₹{cr:.2f} Cr"
-  except Exception:
-    return "N/A"
+
 
 # ── Source 1: Screener.in (NO API KEY needed, works for all NSE stocks) ───────
 
@@ -200,15 +189,8 @@ def _fetch_screener(sym: str) -> Optional[dict]:
         if eps_match:
             result["eps"] = _parse_num(eps_match.group(1))
 
-        # ── Revenue / Sales from quarterly/annual P&L ─────────────────────────
-        rev_match = re.search(
-            r'Sales.*?<td[^>]*>([\d,]+)</td>',
-            html, re.DOTALL | re.IGNORECASE
-        )
-        if rev_match:
-            v = _parse_num(rev_match.group(1))
-            if v:
-                result["rev"] = v  # Yahoo/Screener: already in crores   # crore → rupees
+        # Revenue: NOT scraped from Screener — too unreliable (regex matches wrong cells)
+        # Revenue comes from Yahoo v10 financialData.totalRevenue (absolute Rs) instead
 
         # ── PB from Book Value (if price available) ───────────────────────────
         # PB = price / book_value — we'll compute in get_fundamentals
@@ -318,18 +300,24 @@ def get_fundamentals(sym: str) -> dict:
         from data_engine import get_info
         info = get_info(sym) or {}
         if info:
-            result["name"] = info.get("name") or sym
-            result["pe"]   = safe_val(info, "pe")
-            result["pb"]   = safe_val(info, "pb")
+            result["name"]   = info.get("name") or sym
+            result["pe"]     = safe_val(info, "pe")
+            result["fwd_pe"] = safe_val(info, "forwardPE")
+            result["pb"]     = safe_val(info, "pb")
             roe_raw = safe_val(info, "roe")
-            result["roe"]  = round(roe_raw * 100, 1) if roe_raw is not None and abs(roe_raw) <= 1 else roe_raw
-            result["eps"]  = safe_val(info, "eps")
-            result["mcap"] = info.get("market_cap")
-            result["w52h"] = safe_val(info, "high52")
-            result["w52l"] = safe_val(info, "low52")
+            result["roe"]    = round(roe_raw * 100, 1) if roe_raw is not None and abs(roe_raw) <= 1 else roe_raw
+            result["eps"]    = safe_val(info, "eps")
+            result["mcap"]   = info.get("market_cap")
+            # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
+            # fmt_mcap() correctly converts to Crores by dividing by 1e7
+            result["rev"]    = info.get("totalRevenue")
+            result["de"]     = safe_val(info, "debtToEquity")
+            result["beta"]   = safe_val(info, "beta")
+            result["w52h"]   = safe_val(info, "high52")
+            result["w52l"]   = safe_val(info, "low52")
             div_raw = safe_val(info, "dividend_yield")
-            result["div_y"] = round(div_raw * 100, 2) if div_raw is not None and div_raw <= 1 else div_raw
-            logger.info(f"get_fundamentals {sym}: data_engine OK")
+            result["div_y"]  = round(div_raw * 100, 2) if div_raw is not None and div_raw <= 1 else div_raw
+            logger.info(f"get_fundamentals {sym}: data_engine OK (rev={result['rev'] is not None})")
     except Exception as e:
         logger.warning(f"get_fundamentals data_engine {sym}: {e}")
 
