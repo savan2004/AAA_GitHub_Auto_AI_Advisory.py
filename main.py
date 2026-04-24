@@ -178,13 +178,24 @@ def build_portfolio_card(uid: int) -> str:
 
 
 # ── Indicators ────────────────────────────────────────────────────────────────
-def calc_rsi(c: pd.Series) -> float:
-    if len(c) < 15:
+def calc_rsi(c: pd.Series, period: int = 14) -> float:
+    """
+    RSI using Wilder's EMA smoothing — matches TradingView / charting platforms.
+    FIX: original used simple rolling mean which gives different RSI values than
+    charting tools. Wilder's method uses ewm(alpha=1/period) = ewm(com=period-1).
+    Requires at least 2×period bars for stable output.
+    """
+    if len(c) < period * 2:
         return 50.0
     delta = c.diff()
-    gain  = delta.clip(lower=0).rolling(14).mean()
-    loss  = (-delta.clip(upper=0)).rolling(14).mean().replace(0, 1e-10)
-    return round(float((100 - 100 / (1 + gain / loss)).iloc[-1]), 1)
+    gain  = delta.clip(lower=0)
+    loss  = (-delta.clip(upper=0))
+    # Wilder's smoothing: alpha = 1/period
+    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    avg_loss = avg_loss.replace(0, 1e-10)
+    rsi_val  = 100 - (100 / (1 + avg_gain / avg_loss))
+    return round(float(rsi_val.iloc[-1]), 1)
 
 
 def calc_macd(c: pd.Series) -> float:
@@ -251,6 +262,29 @@ def fmt_mcap(val) -> str:
         return "N/A"
 
 
+def _fmt_revenue(rev, mcap=None) -> str:
+    """
+    Format revenue with sanity check.
+    FIX: Revenue was 40x overstated when Screener returned wrong units.
+    Guard: if revenue > 5× market cap, it is likely a data error — show N/A.
+    Yahoo v10 totalRevenue is in ABSOLUTE RUPEES → fmt_mcap divides by 1e7 for Crores.
+    """
+    if rev is None:
+        return "N/A"
+    try:
+        rev_f  = float(rev)
+        if rev_f <= 0:
+            return "N/A"
+        # Sanity: revenue should not exceed 5× market cap for most companies
+        if mcap:
+            mcap_f = float(mcap)
+            if mcap_f > 0 and rev_f > mcap_f * 5:
+                return "N/A (data error)"
+        return fmt_mcap(rev_f)
+    except Exception:
+        return "N/A"
+
+
 # ── Advisory Card ─────────────────────────────────────────────────────────────
 def build_adv(sym: str) -> str:
     sym = sym.upper().replace(".NS", "")
@@ -276,55 +310,30 @@ def build_adv(sym: str) -> str:
     trend_icon = "🔼" if trend == "BULLISH" else "🔽" if trend == "BEARISH" else "↔️"
 
     # ── Fundamentals ─────────────────────────────────────────────────────────
-    info = get_info(sym) or {}
-    name = info.get("name") or info.get("longName") or info.get("shortName") or sym
+    # FIX: Single call to get_fundamentals() which internally uses data_engine
+    # as Source 1 (fast cache) → Screener.in (no key) → Finnhub → yfinance
+    # Eliminates the double-fetch (get_info + get_fundamentals) that was causing 2× slowdown
+    try:
+        from fundamentals import get_fundamentals
+        fund = get_fundamentals(sym)
+    except Exception:
+        fund = {}
+    info = get_info(sym) or {}   # Still needed for live price + RSI history
 
-    pe     = safe_val(info, "pe", "trailingPE")
-    fwd_pe = safe_val(info, "forwardPE")
-
-    # ROE: data_engine returns decimal (0.185 = 18.5%) — Finnhub returns % (18.5)
-    roe_raw = safe_val(info, "roe", "returnOnEquity")
-    if roe_raw is not None:
-        roe = round(roe_raw, 1) if abs(roe_raw) > 1 else round(roe_raw * 100, 1)
-    else:
-        roe = None
-
-    eps  = safe_val(info, "eps", "trailingEps")
-    mcap = info.get("market_cap") or info.get("marketCap")
-    rev  = info.get("totalRevenue")
-    de   = safe_val(info, "debtToEquity")
-
-    # Dividend yield: data_engine returns decimal (0.025 = 2.5%)
-    div_raw = safe_val(info, "dividend_yield", "dividendYield")
-    if div_raw is not None:
-        div_y = round(div_raw, 2) if div_raw > 1 else round(div_raw * 100, 2)
-    else:
-        div_y = None
-
-    w52h = safe_val(info, "high52", "fiftyTwoWeekHigh")
-    w52l = safe_val(info, "low52",  "fiftyTwoWeekLow")
-    beta = safe_val(info, "beta")
-    pb   = safe_val(info, "pb", "priceToBook")
-
-    # Fundamentals fallback via fundamentals.py (Finnhub path)
-    if pe is None or roe is None:
-        try:
-            from fundamentals import get_fundamentals
-            fund = get_fundamentals(sym)
-            if pe    is None: pe    = fund.get("pe")
-            if roe   is None: roe   = fund.get("roe")   # already in % from fundamentals.py
-            if eps   is None: eps   = fund.get("eps")
-            if pb    is None: pb    = fund.get("pb")
-            if beta  is None: beta  = fund.get("beta")
-            if mcap  is None: mcap  = fund.get("mcap")
-            if rev   is None: rev   = fund.get("rev")
-            if de    is None: de    = fund.get("de")
-            if div_y is None: div_y = fund.get("div_y")
-            if w52h  is None: w52h  = fund.get("w52h")
-            if w52l  is None: w52l  = fund.get("w52l")
-            if name  == sym:  name  = fund.get("name", sym)
-        except Exception as fe:
-            logger.debug(f"fundamentals fallback {sym}: {fe}")
+    name   = fund.get("name")  or info.get("name") or sym
+    pe     = fund.get("pe")    or safe_val(info, "pe")
+    fwd_pe = fund.get("fwd_pe")
+    pb     = fund.get("pb")    or safe_val(info, "pb")
+    roe    = fund.get("roe")                           # already in % from fundamentals.py
+    eps    = fund.get("eps")   or safe_val(info, "eps")
+    mcap   = fund.get("mcap")  or info.get("market_cap")
+    # FIX: revenue from fundamentals (Yahoo v10 totalRevenue in absolute Rs)
+    rev    = fund.get("rev")   or info.get("totalRevenue")
+    de     = fund.get("de")    or safe_val(info, "debtToEquity")
+    div_y  = fund.get("div_y")
+    w52h   = fund.get("w52h")  or safe_val(info, "high52")
+    w52l   = fund.get("w52l")  or safe_val(info, "low52")
+    beta   = fund.get("beta")  or safe_val(info, "beta")
 
     # 52W from price history if still missing
     n = min(252, len(close))
@@ -362,7 +371,7 @@ def build_adv(sym: str) -> str:
         "━━━━━━━━━━━━━━━━━━━━",
         "📋 <b>FUNDAMENTALS</b>",
         frow("Market Cap",   fmt_mcap(mcap)),
-        frow("Revenue",      fmt_mcap(rev * 1e7 if rev is not None else None)),
+        frow("Revenue",      _fmt_revenue(rev, mcap)),
         frow("PE (TTM)",     pe)  + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
         frow("Price/Book",   pb),
         frow("ROE",          roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
@@ -412,7 +421,7 @@ def build_scan(profile: str) -> str:
     hit = 0
     for sym in syms:
         try:
-            df = get_hist(sym, "3mo")
+            df = get_hist(sym, "6mo")   # FIX: 3mo only 63 bars → RSI(14) unreliable; 6mo=126 bars
             if df.empty or len(df) < 15:
                 continue
             close = df["Close"]
