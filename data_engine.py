@@ -308,6 +308,11 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                 "low52":          raw(sd, "fiftyTwoWeekLow"),
                 "market_cap":     raw(pr, "marketCap"),
                 "name":           raw(pr, "longName") or raw(pr, "shortName") or symbol,
+                # FIX: previously missing — needed for advisory card
+                "totalRevenue":   raw(fd, "totalRevenue"),
+                "debtToEquity":   raw(fd, "debtToEquity"),
+                "beta":           raw(ks, "beta"),
+                "forwardPE":      raw(sd, "forwardPE"),
             }
             if out.get("pe") is not None or out.get("market_cap") is not None:
                 return out
