@@ -78,7 +78,7 @@ WEBHOOK_PATH = f"/webhook/{TOKEN}"
 
 app      = Flask(__name__)
 bot      = telebot.TeleBot(TOKEN, threaded=False)
-executor = ThreadPoolExecutor(max_workers=5)
+executor = ThreadPoolExecutor(max_workers=20)  # FIX: 5→20 — prevents queue starvation under load
 
 # ── State & cache ─────────────────────────────────────────────────────────────
 _cache              = {}
@@ -237,7 +237,7 @@ def _fmt_revenue(rev, mcap=None) -> str:
 # ── Advisory Card ─────────────────────────────────────────────────────────────
 def build_adv(sym: str) -> str:
     sym = sym.upper().replace(".NS", "")
-    df  = get_hist(sym, "1y")
+    df  = get_hist(sym, "6mo")  # FIX: 1y→6mo (126 bars) — faster, still enough for all indicators
     if df.empty:
         return f"❌ <b>{sym}</b> not found. Check the NSE symbol (e.g. RELIANCE, TCS)."
 
@@ -367,35 +367,47 @@ def build_scan(profile: str) -> str:
         f"📅 {date.today().strftime('%d-%b-%Y')}",
         "━━━━━━━━━━━━━━━━━━━━",
     ]
+
+    # FIX: Parallel fetch — was sequential (10 stocks × ~2s each = ~20s total).
+    # Now all 10 fetched simultaneously → ~2-3s total.
+    from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
+
+    def _fetch_one(sym):
+        df = get_hist(sym, "6mo")
+        if df.empty or len(df) < 28:
+            return None
+        close  = df["Close"]
+        ltp    = round(float(close.iloc[-1]), 2)
+        prev   = float(close.iloc[-2]) if len(close) > 1 else ltp
+        chg    = round((ltp - prev) / prev * 100, 2)
+        rsi    = calc_rsi(close)
+        trend  = trend_label(close)
+        signal = swing_signal(rsi, trend, chg)
+        return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi, "trend": trend, "signal": signal}
+
+    results = {}
+    with _TPE(max_workers=10) as pool:
+        futs = {pool.submit(_fetch_one, sym): sym for sym in syms}
+        for fut in _ac(futs, timeout=15):
+            sym = futs[fut]
+            try:
+                r = fut.result()
+                if r:
+                    results[sym] = r
+            except Exception as e:
+                logger.warning(f"Screener {sym}: {e}")
+
     hit = 0
     for sym in syms:
-        try:
-            df = get_hist(sym, "6mo")   # FIX: 3mo only 63 bars → RSI(14) unreliable; 6mo=126 bars
-            if df.empty or len(df) < 15:
-                continue
-            close = df["Close"]
-            ltp   = round(float(close.iloc[-1]), 2)
-            prev  = float(close.iloc[-2]) if len(close) > 1 else ltp
-            chg   = round((ltp - prev) / prev * 100, 2)
-            rsi   = calc_rsi(close)
-            ema20 = calc_ema(close, 20)
-            ema50 = calc_ema(close, 50)
-            trend = (
-                "📈 Bull" if ltp > ema20 > ema50
-                else "📉 Bear" if ltp < ema20 < ema50
-                else "↔️ Neut"
-            )
-            # Unified signal from technical_indicators (single source of truth)
-            trend  = trend_label(close)
-            signal = swing_signal(rsi, trend, chg)
-            icon = "🟢" if chg >= 0 else "🔴"
-            lines.append(
-                f"{icon} <b>{sym}</b>: ₹{ltp:,.2f} ({chg:+.2f}%)\n"
-                f"   RSI:{rsi} | {trend} | {signal}"
-            )
-            hit += 1
-        except Exception as e:
-            logger.warning(f"Screener {sym}: {e}")
+        r = results.get(sym)
+        if not r:
+            continue
+        icon = "🟢" if r["chg"] >= 0 else "🔴"
+        lines.append(
+            f"{icon} <b>{sym}</b>: ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n"
+            f"   RSI:{r['rsi']} | {r['trend']} | {r['signal']}"
+        )
+        hit += 1
 
     if hit == 0:
         lines.append("❌ Data unavailable. Try again in a moment.")
@@ -724,7 +736,10 @@ def scan_button(message):
 
 @bot.message_handler(func=lambda m: m.text == "📊 Breadth")
 def breadth_button(message):
-    safe_send(message.chat.id, build_breadth())
+    safe_send(message.chat.id, "⏳ Fetching market data…")
+    def _run():
+        safe_send(message.chat.id, build_breadth())
+    executor.submit(_run)
 
 
 @bot.message_handler(func=lambda m: m.text in ["🎯 Swing (Safe)", "🚀 Swing (Agr)"])
@@ -761,7 +776,10 @@ def swing_button(message):
 
 @bot.message_handler(func=lambda m: m.text == "📰 News")
 def news_button(message):
-    safe_send(message.chat.id, get_market_news())
+    safe_send(message.chat.id, "⏳ Fetching latest news…")
+    def _run():
+        safe_send(message.chat.id, get_market_news())
+    executor.submit(_run)
 
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Analysis")
@@ -880,13 +898,32 @@ def webhook():
     return "OK", 200
 
 
-if __name__ == "__main__":
-    # Warm-up yfinance connection
+def _startup_warmup():
+    """Pre-warm caches so first user never hits cold-path latency."""
+    import time as _t
+    _t.sleep(4)
+    logger.info("[warmup] Starting cache pre-warm…")
     try:
-        yf.Ticker("^NSEI").history(period="1d")
-        logger.info("yfinance warm-up OK")
-    except Exception:
-        pass
+        from ai_engine import get_live_market_context
+        get_live_market_context(force=True)
+        logger.info("[warmup] Market context ✅")
+    except Exception as e:
+        logger.warning(f"[warmup] ctx: {e}")
+    for sym in ["RELIANCE", "TCS", "HDFCBANK", "INFY", "NIFTY50"]:
+        try:
+            get_hist(sym.replace("NIFTY50","^NSEI"), "6mo")
+        except Exception:
+            pass
+    logger.info("[warmup] Cache pre-warm done ✅")
+
+
+if __name__ == "__main__":
+    import os as _os
+    setup_logging(
+        level=_os.getenv("LOG_LEVEL", "INFO"),
+        structured=_os.getenv("STRUCTURED_LOGS", "").lower() == "true",
+    )
+    threading.Thread(target=_startup_warmup, daemon=True, name="warmup").start()
     port = int(os.getenv("PORT", 8000))
-    logger.info(f"Starting bot on port {port} …")
+    logger.info(f"Starting bot v5.3 on port {port}…")
     app.run(host="0.0.0.0", port=port)
