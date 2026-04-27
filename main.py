@@ -32,9 +32,13 @@ from data_engine import (
     get_info,
     get_live_price,
     batch_quotes,
-    calc_rsi  as de_calc_rsi,
-    calc_ema  as de_calc_ema,
 )
+from technical_indicators import (
+    calc_rsi, calc_ema, calc_macd, calc_atr, calc_asi,
+    calc_bollinger, trend_label, swing_signal, rsi_label,
+)
+from api_utils import setup_logging, API_RATE_LIMITER
+from market_news import get_market_news, get_stock_news
 from collections import deque
 from datetime import datetime, date
 from flask import Flask, request, jsonify
@@ -44,7 +48,6 @@ from telebot import types
 from ai_engine import (
     ai_insights         as engine_ai_insights,
     ai_chat_respond,
-    fetch_news,
     get_live_market_context,
     ai_available,
     AI_CHAT_TOPICS,
@@ -178,61 +181,7 @@ def build_portfolio_card(uid: int) -> str:
 
 
 # ── Indicators ────────────────────────────────────────────────────────────────
-def calc_rsi(c: pd.Series, period: int = 14) -> float:
-    """
-    RSI using Wilder's EMA smoothing — matches TradingView / charting platforms.
-    FIX: original used simple rolling mean which gives different RSI values than
-    charting tools. Wilder's method uses ewm(alpha=1/period) = ewm(com=period-1).
-    Requires at least 2×period bars for stable output.
-    """
-    if len(c) < period * 2:
-        return 50.0
-    delta = c.diff()
-    gain  = delta.clip(lower=0)
-    loss  = (-delta.clip(upper=0))
-    # Wilder's smoothing: alpha = 1/period
-    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    avg_loss = avg_loss.replace(0, 1e-10)
-    rsi_val  = 100 - (100 / (1 + avg_gain / avg_loss))
-    return round(float(rsi_val.iloc[-1]), 1)
 
-
-def calc_macd(c: pd.Series) -> float:
-    return round(float((c.ewm(span=12, adjust=False).mean()
-                        - c.ewm(span=26, adjust=False).mean()).iloc[-1]), 2)
-
-
-def calc_ema(c: pd.Series, span: int) -> float:
-    return round(float(c.ewm(span=span, adjust=False).mean().iloc[-1]), 2)
-
-
-def calc_atr(df: pd.DataFrame) -> float:
-    h, l, c = df["High"], df["Low"], df["Close"]
-    tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
-    return round(float(tr.rolling(14).mean().iloc[-1]), 2)
-
-
-def calc_asi(df: pd.DataFrame) -> float:
-    if len(df) < 2:
-        return 0.0
-    O, H, L, C = df["Open"], df["High"], df["Low"], df["Close"]
-    Cp, Op = C.shift(1), O.shift(1)
-    A  = (H - Cp).abs()
-    B  = (L - Cp).abs()
-    CD = (H - L).abs()
-    D  = (Cp - Op).abs()
-    R  = pd.Series(0.0, index=df.index)
-    cA = (A >= B) & (A >= CD)
-    cB = (B >= A) & (B >= CD) & ~cA
-    R[cA] = A[cA] + 0.5 * B[cA] + 0.25 * D[cA]
-    R[cB] = B[cB] + 0.5 * A[cB] + 0.25 * D[cB]
-    R[~(cA | cB)] = CD[~(cA | cB)] + 0.25 * D[~(cA | cB)]
-    R  = R.replace(0, 1e-10)
-    K  = pd.concat([A, B], axis=1).max(axis=1)
-    lm = (Cp * 0.20).replace(0, 1e-10)
-    SI = 50 * ((C - Cp) + 0.5 * (Cp - O) + 0.25 * (Cp - Op)) / R * (K / lm)
-    return round(float(SI.cumsum().iloc[-1]), 2)
 
 
 def safe_val(d: dict, *keys, mul: float = 1.0):
@@ -342,7 +291,7 @@ def build_adv(sym: str) -> str:
     dist52 = round((ltp - w52h) / w52h * 100, 1) if w52h else None
 
     # ── News ─────────────────────────────────────────────────────────────────
-    news_text = fetch_news(sym)
+    news_text = get_stock_news(sym)
 
     # ── AI insights ──────────────────────────────────────────────────────────
     ai_text = engine_ai_insights(
@@ -436,19 +385,9 @@ def build_scan(profile: str) -> str:
                 else "📉 Bear" if ltp < ema20 < ema50
                 else "↔️ Neut"
             )
-            # FIX: Smarter signal — RSI-primary, trend-confirmed
-            if rsi < 35:
-                signal = "⚡ OVERSOLD — bounce watch"
-            elif rsi > 72:
-                signal = "⚠️ OVERBOUGHT — pullback risk"
-            elif ltp > ema20 > ema50 and rsi > 50 and chg > 0:
-                signal = "✅ UPTREND — strong momentum"
-            elif ltp < ema20 < ema50 and rsi < 50:
-                signal = "🔻 DOWNTREND — avoid"
-            elif ltp > ema20 and 45 < rsi < 65 and chg > 0:
-                signal = "✅ BUY ZONE"
-            else:
-                signal = "⏳ WAIT — no clear signal"
+            # Unified signal from technical_indicators (single source of truth)
+            trend  = trend_label(close)
+            signal = swing_signal(rsi, trend, chg)
             icon = "🟢" if chg >= 0 else "🔴"
             lines.append(
                 f"{icon} <b>{sym}</b>: ₹{ltp:,.2f} ({chg:+.2f}%)\n"
@@ -822,7 +761,7 @@ def swing_button(message):
 
 @bot.message_handler(func=lambda m: m.text == "📰 News")
 def news_button(message):
-    safe_send(message.chat.id, build_news())
+    safe_send(message.chat.id, get_market_news())
 
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Analysis")
@@ -840,6 +779,11 @@ def analysis_hint(message):
 def handle_text(message):
     uid  = message.chat.id
     text = message.text.strip()
+    # Copilot Fix #6: per-user rate limiting — abuse protection
+    if not API_RATE_LIMITER.is_allowed(uid):
+        rem = API_RATE_LIMITER.remaining(uid)
+        safe_send(uid, f"⚠️ Too many requests. Please wait {RATE_LIMIT_WINDOW}s. (Limit: {RATE_LIMIT_MAX_CALLS}/min)")
+        return
 
     if _state.get(uid) == "ai":
         safe_send(uid, "⏳ Thinking…")
@@ -860,9 +804,10 @@ def handle_text(message):
 # ── Flask routes ───────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
+    from api_utils import LIVE_CACHE, FUND_CACHE, NEWS_CACHE, HIST_CACHE, CTX_CACHE
     return jsonify({
         "status":  "ok",
-        "version": "5.0_fixed",
+        "version": "5.3_copilot_fixed",
         "fixes":   [
             "askfuzz_real_api", "openai_indentation", "fundamentals_all_fields",
             "safe_send_html_fallback", "webhook_dedup_deque", "news_date_rolling",
@@ -888,6 +833,27 @@ def route_test_ai():
 @app.route("/debug_ai", methods=["GET"])
 def route_debug_ai():
     return jsonify(debug_ai_status())
+
+
+@app.route("/cache_stats", methods=["GET"])
+def route_cache_stats():
+    """Copilot Fix #2/#10: Cache health endpoint for monitoring."""
+    from api_utils import LIVE_CACHE, FUND_CACHE, NEWS_CACHE, HIST_CACHE, CTX_CACHE
+    return jsonify({
+        "live":  LIVE_CACHE.stats(),
+        "fund":  FUND_CACHE.stats(),
+        "news":  NEWS_CACHE.stats(),
+        "hist":  HIST_CACHE.stats(),
+        "ctx":   CTX_CACHE.stats(),
+    })
+
+
+@app.route("/rate_limit_status/<int:user_id>", methods=["GET"])
+def route_rate_limit(user_id: int):
+    """Copilot Fix #6: per-user rate limit status."""
+    remaining = API_RATE_LIMITER.remaining(user_id)
+    return jsonify({"user_id": user_id, "remaining_calls": remaining,
+                    "window_sec": RATE_LIMIT_WINDOW, "max_calls": RATE_LIMIT_MAX_CALLS})
 
 
 def process_update(update_json: str):
