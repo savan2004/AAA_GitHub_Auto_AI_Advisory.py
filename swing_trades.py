@@ -14,7 +14,15 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-from data_engine import get_hist, calc_rsi, calc_ema
+from data_engine import get_hist
+from technical_indicators import (
+    calc_rsi, calc_ema, calc_macd, calc_atr, calc_adx, calc_bollinger,
+    ema_series, rsi_series,
+)
+from config import (
+    RSI_PERIOD, ADX_PERIOD, ATR_PERIOD,
+    HIST_PERIOD_SWING, TG_CHUNK_SIZE,
+)
 
 try:
     from groq import Groq
@@ -32,55 +40,6 @@ def safe_history(ticker: str, period: str = "6mo", interval: str = "1d") -> pd.D
     return get_hist(sym, period=period)
 
 
-def ema(series: pd.Series, span: int) -> pd.Series:
-    return series.ewm(span=span, adjust=False).mean()
-
-
-def sma(series: pd.Series, window: int) -> pd.Series:
-    return series.rolling(window).mean()
-
-
-def bollinger_bands(series: pd.Series, window: int = 20, num_sd: int = 2):
-    m    = series.rolling(window).mean()
-    rstd = series.rolling(window).std()
-    return m, m + num_sd * rstd, m - num_sd * rstd
-
-
-def adx(df: pd.DataFrame, period: int = 14):
-    high, low, close = df["High"], df["Low"], df["Close"]
-    plus_dm  = high.diff()
-    minus_dm = low.diff().abs()
-    plus_dm  = plus_dm.where((plus_dm > minus_dm)  & (plus_dm > 0),  0.0)
-    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
-    tr1 = high - low
-    tr2 = (high - close.shift()).abs()
-    tr3 = (low  - close.shift()).abs()
-    tr  = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr_r     = tr.rolling(period).mean()
-    plus_di   = 100 * (plus_dm.rolling(period).sum()  / atr_r)
-    minus_di  = 100 * (minus_dm.rolling(period).sum() / atr_r)
-    dx        = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
-    adx_val   = dx.rolling(period).mean()
-    return adx_val, plus_di, minus_di
-
-
-def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta    = series.diff()
-    gain     = delta.clip(lower=0)
-    loss     = -delta.clip(upper=0)
-    avg_gain = gain.rolling(period).mean()
-    avg_loss = loss.rolling(period).mean().replace(0, 1e-10)
-    return 100 - (100 / (1 + avg_gain / avg_loss))
-
-
-def macd(series: pd.Series):
-    exp1      = series.ewm(span=12, adjust=False).mean()
-    exp2      = series.ewm(span=26, adjust=False).mean()
-    macd_line = exp1 - exp2
-    signal    = macd_line.ewm(span=9, adjust=False).mean()
-    return macd_line, signal
-
-
 def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
     if df.empty or len(df) < 100:
         return {"score": 0, "details": [], "ltp": None}
@@ -89,20 +48,15 @@ def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
     ltp   = float(close.iloc[-1])
     n     = len(close)
 
-    ema50   = float(ema(close, min(50,  n-1)).iloc[-1])
-    ema200  = float(ema(close, min(200, n-1)).iloc[-1])
-    bb_mid_s, bb_upper_s, bb_lower_s = bollinger_bands(close, 20, 2)
-    bb_mid   = float(bb_mid_s.iloc[-1])
-    bb_upper = float(bb_upper_s.iloc[-1])
-    bb_lower = float(bb_lower_s.iloc[-1])
-    adx_val_s, plus_di_s, minus_di_s = adx(df, 14)
-    adx_last      = float(adx_val_s.iloc[-1])
-    plus_di_last  = float(plus_di_s.iloc[-1])
-    minus_di_last = float(minus_di_s.iloc[-1])
-    rsi_val       = float(rsi(close, 14).iloc[-1])
-    macd_line, signal_line = macd(close)
-    macd_last   = float(macd_line.iloc[-1])
-    signal_last = float(signal_line.iloc[-1])
+    ema50   = float(ema_series(close, min(50,  n-1)).iloc[-1])
+    ema200  = float(ema_series(close, min(200, n-1)).iloc[-1])
+    bb_mid, bb_upper, bb_lower = calc_bollinger(close, 20, 2)
+    adx_last, plus_di_last, minus_di_last = calc_adx(df, ADX_PERIOD)
+
+
+
+    rsi_val       = calc_rsi(close, RSI_PERIOD)
+    macd_last, signal_last, _ = calc_macd(close)
     vol_avg     = float(df["Volume"].rolling(20).mean().iloc[-1])
     vol_last    = float(df["Volume"].iloc[-1])
     recent_high = float(close.rolling(20).max().iloc[-1])
