@@ -184,10 +184,12 @@ def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
             msgs = ([{"role": "system", "content": system}] if system else []) + messages
             for model in _GROQ_MODELS:
                 try:
+                    # Use 8b-instant for simple queries (faster), 70b for complex
+                    _max_tok = max_tokens if model == "llama-3.3-70b-versatile" else min(max_tokens, 350)
                     r = groq.chat.completions.create(
                         model=model, messages=msgs,
-                        max_tokens=max_tokens,
-                        temperature=0.1,   # FIX: 0.4→0.1 for strict format compliance
+                        max_tokens=_max_tok,
+                        temperature=0.1,
                     )
                     text = (r.choices[0].message.content or "").strip()
                     if text:
@@ -393,8 +395,8 @@ def get_live_market_context(force: bool = False) -> str:
         results["top8"] = snap
 
     def fetch_fund_stocks():
-        FUND = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK",
-                "SBIN","BAJFINANCE","ITC","TATAMOTORS","MARUTI","SUNPHARMA","LT"]
+        FUND = ["RELIANCE","TCS","HDFCBANK","INFY",
+                "ICICIBANK","SBIN","BAJFINANCE","TATAMOTORS"]  # FIX: 12→8 stocks, faster context
         fund_lines = []
         for sym in FUND:
             try:
@@ -437,7 +439,7 @@ def get_live_market_context(force: bool = False) -> str:
             ex.submit(fetch_top8),
             ex.submit(fetch_fund_stocks),
         ]
-        for f in as_completed(futs, timeout=20):
+        for f in as_completed(futs, timeout=12):  # FIX: 20→12s timeout
             try: f.result()
             except Exception: pass
 
@@ -526,7 +528,7 @@ def ai_insights(symbol: str, ltp: float, rsi: float, macd_line: float,
     )
     text, err = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=280,
+        max_tokens=200,  # FIX: 280→200, faster stock card
         system="Precise Indian equity analyst. Use only the data given. No speculation. Exact format only.",
     )
     if text:
@@ -722,7 +724,7 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
     system     = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}"
     messages   = list(get_chat_history(uid)) + [{"role": "user", "content": user_message}]
 
-    text, err = _call_ai(messages, max_tokens=600, system=system)
+    text, err = _call_ai(messages, max_tokens=400, system=system)  # FIX: 600→400 tokens saves ~1s
 
     if text:
         add_to_chat(uid, "user",      user_message)
