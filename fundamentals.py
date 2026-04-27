@@ -115,11 +115,11 @@ def _fetch_screener(sym: str) -> Optional[dict]:
     """
     url = f"https://www.screener.in/company/{sym}/consolidated/"
     try:
-        resp = requests.get(url, headers=_SCREENER_HEADERS, timeout=12)
+        resp = requests.get(url, headers=_SCREENER_HEADERS, timeout=5)
         if resp.status_code == 404:
             # Try standalone (non-consolidated)
             url  = f"https://www.screener.in/company/{sym}/"
-            resp = requests.get(url, headers=_SCREENER_HEADERS, timeout=12)
+            resp = requests.get(url, headers=_SCREENER_HEADERS, timeout=5)
         if not resp.ok:
             logger.debug(f"Screener.in {sym}: HTTP {resp.status_code}")
             return None
