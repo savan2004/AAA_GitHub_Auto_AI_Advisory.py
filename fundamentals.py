@@ -20,23 +20,22 @@ import random
 from typing import Dict, Any, Optional
 
 import requests
+from api_utils import with_retry, raise_if_transient, TransientError, FUND_CACHE
+from config import (
+    TIMEOUT_SCREENER, TIMEOUT_FINNHUB, CACHE_TTL_FUND,
+    RETRY_MAX_ATTEMPTS, REVENUE_MAX_MCAP_RATIO,
+)
 
 logger = logging.getLogger(__name__)
 
-# ── Cache ─────────────────────────────────────────────────────────────────────
-_CACHE: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL_FUND = 4 * 60 * 60   # 4 hours (was 6; freshness matters more)
+# ── Cache — uses unified TTLCache from api_utils ──────────────────────────────
+# Copilot Fix #2: replaced ad-hoc dict cache with api_utils.FUND_CACHE (TTL, thread-safe, GC)
 
-
-def _get_cached(key: str, ttl: int):
-    d = _CACHE.get(key)
-    if d and time.time() - d["ts"] < ttl:
-        return d["val"]
-    return None
-
+def _get_cached(key: str, ttl: int = None):
+    return FUND_CACHE.get(key)
 
 def _set_cached(key: str, val: Any):
-    _CACHE[key] = {"val": val, "ts": time.time()}
+    FUND_CACHE.set(key, val)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -102,6 +101,7 @@ def _parse_crore(text: str) -> Optional[float]:
     return None
 
 
+@with_retry(max_attempts=2)
 def _fetch_screener(sym: str) -> Optional[dict]:
     """
     Scrape Screener.in for fundamental data.
@@ -206,6 +206,7 @@ def _fetch_screener(sym: str) -> Optional[dict]:
 
 # ── Source 2: Finnhub ─────────────────────────────────────────────────────────
 
+@with_retry(max_attempts=2)
 def _fetch_finnhub(sym: str) -> Optional[dict]:
     key = os.getenv("FINNHUB_API_KEY", "").strip()
     if not key:
