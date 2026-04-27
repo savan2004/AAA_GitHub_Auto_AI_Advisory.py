@@ -18,6 +18,8 @@ import time
 import json
 import shelve
 import random
+from api_utils import with_retry, raise_if_transient, TransientError, HIST_CACHE, LIVE_CACHE, FUND_CACHE
+from config import TIMEOUT_YAHOO, TIMEOUT_NSE, CACHE_TTL_LIVE, CACHE_TTL_FUND, CACHE_TTL_HIST
 import logging
 import threading
 from collections import deque
@@ -157,6 +159,7 @@ def _jitter(base: float, factor: float = 0.3) -> float:
 # SOURCE 1: Yahoo Finance v8 chart  (direct HTTP — most reliable)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@with_retry(max_attempts=2)
 def _yahoo_v8_hist(symbol: str, period: str = "6mo", interval: str = "1d") -> Optional[pd.DataFrame]:
     """
     Fetch OHLCV history from Yahoo Finance v8 chart API directly.
