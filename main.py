@@ -38,6 +38,7 @@ from technical_indicators import (
     calc_bollinger, trend_label, swing_signal, rsi_label,
 )
 from api_utils import setup_logging, API_RATE_LIMITER
+from config import RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_CALLS
 from market_news import get_market_news, get_stock_news
 from collections import deque
 from datetime import datetime, date
