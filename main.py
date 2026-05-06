@@ -233,12 +233,10 @@ def _fmt_revenue(rev, mcap=None) -> str:
         return fmt_mcap(rev_f)
     except Exception:
         return "N/A"
-
-
 # ── Advisory Card ─────────────────────────────────────────────────────────────
 def build_adv(sym: str) -> str:
     sym = sym.upper().replace(".NS", "")
-    df  = get_hist(sym, "6mo")  # FIX: 1y→6mo (126 bars) — faster, still enough for all indicators
+    df  = get_hist(sym, "6mo")
     if df.empty:
         return f"❌ <b>{sym}</b> not found. Check the NSE symbol (e.g. RELIANCE, TCS)."
 
@@ -247,7 +245,7 @@ def build_adv(sym: str) -> str:
     prev  = float(close.iloc[-2]) if len(close) > 1 else ltp
     chg   = round((ltp - prev) / prev * 100, 2)
     rsi   = calc_rsi(close)
-        macd, _macd_sig, _macd_hist = calc_macd(close)
+    macd, _macd_sig, _macd_hist = calc_macd(close)
     ema20 = calc_ema(close, 20)
     ema50 = calc_ema(close, 50)
     atr   = calc_atr(df)
@@ -258,7 +256,6 @@ def build_adv(sym: str) -> str:
         else "NEUTRAL"
     )
     trend_icon = "🔼" if trend == "BULLISH" else "🔽" if trend == "BEARISH" else "↔️"
-
     # ── Fundamentals ─────────────────────────────────────────────────────────
     # FIX: Single call to get_fundamentals() which internally uses data_engine
     # as Source 1 (fast cache) → Screener.in (no key) → Finnhub → yfinance
