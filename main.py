@@ -245,7 +245,7 @@ def build_adv(sym: str) -> str:
     prev  = float(close.iloc[-2]) if len(close) > 1 else ltp
     chg   = round((ltp - prev) / prev * 100, 2)
     rsi   = calc_rsi(close)
-    macd, _macd_sig, _macd_hist = calc_macd(close)
+        macd, _macd_sig, _macd_hist = calc_macd(close)
     ema20 = calc_ema(close, 20)
     ema50 = calc_ema(close, 50)
     atr   = calc_atr(df)
@@ -425,7 +425,7 @@ def build_breadth() -> str:
     hit = 0
     for name, ticker in indices.items():
         try:
-            d = _yahoo_v8_hist(ticker, period="5d")
+            d =             yf.Ticker(ticker).history(period="5d") if ticker.startswith("^") else _yahoo_v8_hist(ticker, period="5d")
             if d is None or len(d) < 2:
                 try:
                     d = yf.Ticker(ticker).history(period="5d")
@@ -909,7 +909,7 @@ def _startup_warmup():
         logger.warning(f"[warmup] ctx: {e}")
     for sym in ["RELIANCE", "TCS", "HDFCBANK", "INFY", "NIFTY50"]:
         try:
-            get_hist(sym.replace("NIFTY50","^NSEI"), "6mo")
+                            yf.download("^NSEI", period="5d", progress=False) if sym == "NIFTY50" else get_hist(sym, "6mo")
         except Exception:
             pass
     logger.info("[warmup] Cache pre-warm done ✅")
