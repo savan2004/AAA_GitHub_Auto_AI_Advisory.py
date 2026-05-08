@@ -245,7 +245,7 @@ def build_adv(sym: str) -> str:
     prev  = float(close.iloc[-2]) if len(close) > 1 else ltp
     chg   = round((ltp - prev) / prev * 100, 2)
     rsi   = calc_rsi(close)
-        macd, _macd_sig, _macd_hist = calc_macd(close)
+    macd, _macd_sig, _macd_hist = calc_macd(close)
     ema20 = calc_ema(close, 20)
     ema50 = calc_ema(close, 50)
     atr   = calc_atr(df)
