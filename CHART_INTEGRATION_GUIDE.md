@@ -8,7 +8,7 @@ This guide shows how to integrate `gen_smart_stock_chart.py` with the main Teleg
 ## Files Involved
 
 | File | Purpose |
-|------|---------|
+|------|----------|
 | `gen_smart_stock_chart.py` | Generates PNG technical charts with technical analysis |
 | `chart_integration.py` | **NEW** — Integration bridge with error handling & caching |
 | `main.py` | Main Telegram bot (to be updated with chart commands) |
@@ -274,4 +274,3 @@ For issues:
 1. Check bot logs: `grep -i chart logs/bot.log`
 2. Enable debug mode: `export LOG_LEVEL=DEBUG`
 3. Test directly: `python gen_smart_stock_chart.py RELIANCE "Reliance Industries"`
-
