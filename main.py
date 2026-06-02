@@ -61,6 +61,83 @@ from ai_engine import (
 from swing_trades import get_swing_trades
 from chart_integration import get_chart_generator
 
+
+# ── Smart Symbol Resolver ─────────────────────────────────────────────────────
+# Allows users to type company names, partial names, or any NSE/BSE symbol
+# instead of requiring the exact NSE ticker code.
+
+# Build a local name→symbol map from nifty500_collector
+try:
+    from nifty500_collector import SECTOR_STOCKS as _SC
+    _SYMBOL_MAP: dict = {}   # "RELIANCE INDUSTRIES" → "RELIANCE"
+    _ALL_NSE_SYMS: list = []
+    for _sec_syms in _SC.values():
+        for _s in _sec_syms:
+            _SYMBOL_MAP[_s.upper()] = _s          # exact symbol match
+            _ALL_NSE_SYMS.append(_s)
+except Exception:
+    _SYMBOL_MAP = {}
+    _ALL_NSE_SYMS = []
+
+
+def resolve_symbol(query: str) -> tuple:
+    """
+    Resolves a user query (name/partial/ticker) to (nse_ticker, company_name).
+    Returns (None, None) if not found.
+    Strategy:
+      1. Direct exact NSE ticker match (RELIANCE → RELIANCE.NS)
+      2. Partial symbol match (REL → best match)
+      3. yfinance search API for company name resolution
+      4. Try appending .NS directly as last resort
+    """
+    import yfinance as yf
+    q = query.upper().strip().replace(" ", "").replace(".NS", "").replace(".BO", "")
+    q_raw = query.strip()
+
+    # 1. Exact match in our known symbol map
+    if q in _SYMBOL_MAP:
+        sym = _SYMBOL_MAP[q]
+        return f"{sym}.NS", sym
+
+    # 2. Partial prefix match (e.g. "HDFC" → HDFCBANK)
+    matches = [s for s in _ALL_NSE_SYMS if s.startswith(q)]
+    if len(matches) == 1:
+        return f"{matches[0]}.NS", matches[0]
+    if len(matches) > 1:
+        # Pick shortest (most exact)
+        best = sorted(matches, key=len)[0]
+        return f"{best}.NS", best
+
+    # 3. yfinance search for company name
+    try:
+        results = yf.Search(q_raw, max_results=5).quotes
+        for r in results:
+            sym_raw = r.get("symbol", "")
+            exch    = r.get("exchange", "")
+            if sym_raw and exch in ("NSI", "BSE"):
+                # Prefer .NS; convert .BO if needed
+                if sym_raw.endswith(".NS"):
+                    return sym_raw, r.get("longname") or r.get("shortname") or sym_raw
+                elif sym_raw.endswith(".BO"):
+                    nse_sym = sym_raw.replace(".BO", ".NS")
+                    return nse_sym, r.get("longname") or r.get("shortname") or sym_raw
+                else:
+                    return f"{sym_raw}.NS", r.get("longname") or r.get("shortname") or sym_raw
+    except Exception as _e:
+        logger.debug(f"yfinance search failed for {q_raw}: {_e}")
+
+    # 4. Last resort: try ticker directly
+    try:
+        _t = yf.Ticker(f"{q}.NS")
+        _h = _t.history(period="2d", progress=False)
+        if not _h.empty:
+            _name = (_t.info or {}).get("longName") or q
+            return f"{q}.NS", _name
+    except Exception:
+        pass
+
+    return None, None
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -647,43 +724,39 @@ def cmd_chart(message):
             "Or tap <b>📈 Chart</b> in the menu for the best auto-picked stock.",
         )
         return
-    sym = parts[1].upper().replace(".NS", "")
-    company_name = " ".join(parts[2:]) if len(parts) > 2 else sym
-    # Fix #12: Validate period arg if provided
+    # Upgrade: smart resolver — supports "Infosys", "HDFC Bank", "INFY", partial names
+    raw_query = " ".join(parts[1:])
     period = None
-    if len(parts) >= 3 and parts[-1] in {"1mo","3mo","6mo","1y","2y"}:
+    if parts[-1] in {"1mo","3mo","6mo","1y","2y"}:
         period = parts[-1]
-        company_name = " ".join(parts[2:-1]) if len(parts) > 3 else sym
-    safe_send(message.chat.id, f"🔍 Validating <b>{sym}</b>…")
+        raw_query = " ".join(parts[1:-1])
+    safe_send(message.chat.id, f"🔍 Looking up <b>{raw_query}</b>…")
     def _run():
-        # Quick validation before spending 60s on chart generation
-        from data_engine import get_live_price
-        price = get_live_price(sym)
-        if not price:
+        ticker, company_name = resolve_symbol(raw_query)
+        if not ticker:
             safe_send(message.chat.id,
-                f"❌ <b>{sym}</b> not found on NSE. Check the symbol and try again.\n"
-                f"Example: <code>/chart INFY</code>  <code>/chart RELIANCE</code>")
+                f"❌ Could not find <b>{raw_query}</b> on NSE/BSE.\n"
+                "Try the NSE ticker: <code>/chart INFY</code>  <code>/chart RELIANCE</code>\n"
+                "Or company name: <code>/chart Infosys</code>  <code>/chart HDFC Bank</code>")
             return
-        safe_send(message.chat.id, f"📈 Generating chart for <b>{sym}</b>… (may take ~20s)")
+        sym = ticker.replace(".NS","").replace(".BO","")
+        safe_send(message.chat.id, f"📈 Generating chart for <b>{company_name}</b> ({sym})… (~20s)")
         gen = get_chart_generator()
-        ticker = f"{sym}.NS"
         args = [ticker, company_name]
         if period:
             args.append(period)
-        # Fix #11: Fall back to text analysis card if chart fails
         success, meta_text, png_path = gen.generate(*args)
         if success and png_path:
             try:
                 with open(png_path, "rb") as f:
                     bot.send_photo(message.chat.id, f,
-                        caption=f"<b>📈 Technical Analysis</b>\n\n{meta_text}",
+                        caption=f"<b>📈 {company_name} ({sym})</b>\n\n{meta_text}",
                         parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Chart send failed: {e}")
                 safe_send(message.chat.id, build_adv(sym))
         else:
-            # Fix #11: chart failed — send full text analysis instead
-            logger.warning(f"Chart failed for {sym}, falling back to text: {meta_text}")
+            logger.warning(f"Chart failed for {sym}: {meta_text}")
             safe_send(message.chat.id, "⚠️ Chart unavailable, sending text analysis:")
             safe_send(message.chat.id, build_adv(sym))
     executor.submit(_run)
@@ -886,11 +959,32 @@ def handle_text(message):
         executor.submit(_ai)
         return
 
-    sym = text.upper().replace(".NS", "")
-    if 2 <= len(sym) <= 15 and all(c.isalnum() or c == "&" for c in sym):
-        safe_send(uid, f"🔍 Analyzing <b>{sym}</b>…")
-        def _adv():
-            safe_send(uid, build_adv(sym))
+    # Upgrade: smart resolver — accept "Infosys", "HDFC Bank", "INFY", etc.
+    raw = text.strip()
+    raw_up = raw.upper().replace(".NS", "").replace(".BO", "")
+
+    # Heuristic: looks like a ticker (short, alphanumeric) → try direct first
+    _looks_ticker = 2 <= len(raw_up) <= 15 and all(c.isalnum() or c in "&-" for c in raw_up)
+    # Looks like a company name (has spaces or is longer)
+    _looks_name   = " " in raw or len(raw_up) > 12
+
+    if _looks_ticker or _looks_name:
+        safe_send(uid, f"🔍 Looking up <b>{raw}</b>…")
+        def _adv(q=raw):
+            ticker, cname = resolve_symbol(q)
+            if ticker:
+                sym_clean = ticker.replace(".NS","").replace(".BO","")
+                safe_send(uid, f"📊 Analyzing <b>{cname}</b> ({sym_clean})…")
+                safe_send(uid, build_adv(sym_clean))
+            else:
+                # Final fallback: try as-is
+                sym_clean = q.upper().replace(".NS","")
+                if 2 <= len(sym_clean) <= 15:
+                    safe_send(uid, build_adv(sym_clean))
+                else:
+                    safe_send(uid, f"❌ Could not find <b>{q}</b> on NSE/BSE.\n"
+                        "Try exact NSE symbol: <code>RELIANCE</code>  <code>TCS</code>\n"
+                        "Or company name: <code>Reliance Industries</code>  <code>HDFC Bank</code>")
         executor.submit(_adv)
 
 
