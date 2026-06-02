@@ -272,16 +272,16 @@ def draw_fib_levels(ax, swing_low: float, swing_high: float, x_start: int, x_end
     for frac, col, lbl, ls in fibs:
         price = swing_high - diff * frac
         ax.axhline(price, color=col, linestyle=ls, linewidth=0.8, alpha=0.7, zorder=2)
-        ax.annotate(f"  {lbl} ({price:,.1f})", xy=(1.001, price),
+        ax.annotate(f"{lbl} ({price:,.1f})  ", xy=(-0.001, price),
             xycoords=("axes fraction","data"), color=col,
             fontsize=6.5, va="center", fontweight="bold", zorder=6)
 
     for frac, col, lbl in exts:
         price = swing_low + diff * frac
         ax.axhline(price, color=col, linestyle="--", linewidth=0.9, alpha=0.7, zorder=2)
-        ax.annotate(f"  {lbl} ({price:,.1f})", xy=(1.001, price),
+        ax.annotate(f"{lbl} ({price:,.1f})  ", xy=(-0.001, price),
             xycoords=("axes fraction","data"), color=col,
-            fontsize=6.5, va="center", fontweight="bold", zorder=6)
+            fontsize=6.5, va="center", ha="right", fontweight="bold", zorder=6)
 
 def draw_ew_labels(ax, ew: ElliottWave, data: pd.DataFrame):
     """Draw Elliott Wave pivot labels as circled Roman numerals."""
@@ -338,22 +338,47 @@ except ImportError as e:
     sys.exit(1)
 
 OUT_DIR  = "output"
-OUT_FILE = os.path.join(OUT_DIR, "smart_stock_chart.png")
 os.makedirs(OUT_DIR, exist_ok=True)
 
-UNIVERSE = [
-    ("RELIANCE.NS","Reliance Industries"),("TCS.NS","TCS"),
-    ("HDFCBANK.NS","HDFC Bank"),("INFY.NS","Infosys"),
-    ("ICICIBANK.NS","ICICI Bank"),("HINDUNILVR.NS","Hindustan Unilever"),
-    ("SBIN.NS","State Bank of India"),("BHARTIARTL.NS","Bharti Airtel"),
-    ("ITC.NS","ITC"),("KOTAKBANK.NS","Kotak Mahindra Bank"),
-    ("LT.NS","L&T"),("AXISBANK.NS","Axis Bank"),
-    ("ASIANPAINT.NS","Asian Paints"),("MARUTI.NS","Maruti Suzuki"),
-    ("TATAMOTORS.NS","Tata Motors"),("WIPRO.NS","Wipro"),
-    ("BAJFINANCE.NS","Bajaj Finance"),("SUNPHARMA.NS","Sun Pharma"),
-    ("TITAN.NS","Titan"),("NESTLEIND.NS","Nestle India"),
-    ("HCLTECH.NS","HCL Technologies"),("ADANIENT.NS","Adani Enterprises"),
-]
+import time as _time
+
+def _cleanup_old_charts(directory, max_age_sec=7200):
+    try:
+        now = _time.time()
+        for fname in os.listdir(directory):
+            if fname.endswith(".png") and fname.startswith("chart_"):
+                fpath = os.path.join(directory, fname)
+                if now - os.path.getmtime(fpath) > max_age_sec:
+                    os.remove(fpath)
+    except Exception:
+        pass
+
+_cleanup_old_charts(OUT_DIR)
+
+# Fix #7: Use nifty500_collector symbol pool (250 stocks) instead of 22 hardcoded.
+# Falls back to original 22 if import fails.
+try:
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    from nifty500_collector import SECTOR_STOCKS as _SECTOR_STOCKS
+    _all_syms = sorted({s for stocks in _SECTOR_STOCKS.values() for s in stocks})
+    UNIVERSE = [(f"{s}.NS", s.title().replace("."," ")) for s in _all_syms]
+    print(f"SCAN: Universe loaded from nifty500_collector: {len(UNIVERSE)} stocks")
+except Exception as _e:
+    print(f"SCAN: nifty500_collector unavailable ({_e}), using default 22-stock list")
+    UNIVERSE = [
+        ("RELIANCE.NS","Reliance Industries"),("TCS.NS","TCS"),
+        ("HDFCBANK.NS","HDFC Bank"),("INFY.NS","Infosys"),
+        ("ICICIBANK.NS","ICICI Bank"),("HINDUNILVR.NS","Hindustan Unilever"),
+        ("SBIN.NS","State Bank of India"),("BHARTIARTL.NS","Bharti Airtel"),
+        ("ITC.NS","ITC"),("KOTAKBANK.NS","Kotak Mahindra Bank"),
+        ("LT.NS","L&T"),("AXISBANK.NS","Axis Bank"),
+        ("ASIANPAINT.NS","Asian Paints"),("MARUTI.NS","Maruti Suzuki"),
+        ("TATAMOTORS.NS","Tata Motors"),("WIPRO.NS","Wipro"),
+        ("BAJFINANCE.NS","Bajaj Finance"),("SUNPHARMA.NS","Sun Pharma"),
+        ("TITAN.NS","Titan"),("NESTLEIND.NS","Nestle India"),
+        ("HCLTECH.NS","HCL Technologies"),("ADANIENT.NS","Adani Enterprises"),
+    ]
 
 def last_cross(arr, window):
     for i in range(1, min(window+1, len(arr))):
@@ -391,10 +416,15 @@ def score_symbol(sym, name):
     except:
         return None
 
+# Fix #10: Accept optional period arg — /chart INFY 3mo or /chart INFY 1y
+VALID_PERIODS = {"1mo","3mo","6mo","1y","2y"}
+CHART_PERIOD  = "6mo"   # default
 if len(sys.argv)>=3:
     forced_sym=sys.argv[1]; forced_name=sys.argv[2]
+    if len(sys.argv)>=4 and sys.argv[3] in VALID_PERIODS:
+        CHART_PERIOD = sys.argv[3]
     winner={"sym":forced_sym,"name":forced_name,"score":0,"reason":"Manual pick"}
-    print("SCAN: skipped (manual)")
+    print(f"SCAN: skipped (manual), period={CHART_PERIOD}")
 else:
     candidates=[]; checked=0
     import time
@@ -419,11 +449,15 @@ else:
 
 symbol=forced_sym; company_name=forced_name
 
-data = yf.download(symbol, period="1y", interval="1d", progress=False, auto_adjust=True)
+# Fix #1: Per-symbol timestamped filename — no race condition between concurrent requests
+_sym_safe = symbol.replace(".NS","").replace(".BO","").upper()
+OUT_FILE = os.path.join(OUT_DIR, f"chart_{_sym_safe}_{int(_time.time())}.png")
+
+data = yf.download(symbol, period=CHART_PERIOD, interval="1d", progress=False, auto_adjust=True)
 if data.empty:
     print(f"[ERROR] No data for {symbol}", file=sys.stderr); sys.exit(1)
 if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-data = data.dropna(subset=["Open","High","Low","Close","Volume"]).tail(120)
+data = data.dropna(subset=["Open","High","Low","Close","Volume"])
 
 close_s=data["Close"]; vol_s=data["Volume"]
 close=close_s.values; n=len(close)
@@ -479,6 +513,11 @@ elif score<=-2:signal_text,sig_color="SELL","#EF5350"
 else:          signal_text,sig_color="NEUTRAL","#787B86"
 score_str=f"{score:+d}/5"; is_bull=score>=0
 
+# Fix #9: Compute ATR(14) for display in advisory panel
+_high_v = data["High"].values; _low_v = data["Low"].values; _close_v = data["Close"].values
+_tr = np.maximum(_high_v[1:]-_low_v[1:], np.maximum(np.abs(_high_v[1:]-_close_v[:-1]), np.abs(_low_v[1:]-_close_v[:-1])))
+atr_val = round(float(np.mean(_tr[-14:])), 2) if len(_tr) >= 14 else round(float(np.mean(_tr)), 2)
+
 if is_bull:
     sl_val=min(float(data["Low"].tail(5).min()),e21l)*0.997; sl_pct=(last_close-sl_val)/last_close*100
     t1_val=last_close+1.5*(last_close-sl_val); t2_val=last_close+2.5*(last_close-sl_val)
@@ -505,7 +544,7 @@ apds=[
     mpf.make_addplot(ema9,color="#F7931A",width=1.6),mpf.make_addplot(ema21,color="#2962FF",width=1.6),
     mpf.make_addplot(sma20,color="#9C27B0",width=1.1,linestyle="--"),mpf.make_addplot(sma50,color="#FF6D00",width=1.1,linestyle="--"),
     mpf.make_addplot([support]*n,color="#089981",linestyle=":",width=0.9),mpf.make_addplot([resistance]*n,color="#F23645",linestyle=":",width=0.9),
-    mpf.make_addplot(macd,panel=2,color="#2962FF",width=1.1,ylabel="MACD"),mpf.make_addplot(macd_sig,panel=2,color="#FF6D00",width=1.1),
+    mpf.make_addplot(macd,panel=2,color="#2962FF",width=1.1,ylabel="MACD"),mpf.make_addplot(macd_sig,panel=2,color="#FF6D00",width=1.1),mpf.make_addplot([0]*n,panel=2,color="#787B86",linestyle="--",width=0.7),
     mpf.make_addplot(hist,panel=2,type="bar",color=hc,alpha=0.55),
     mpf.make_addplot(rsi_s,panel=3,color="#9C27B0",width=1.2,ylabel="RSI"),
     mpf.make_addplot([70]*n,panel=3,color="#F2364566",linestyle="--",width=0.7),
@@ -518,6 +557,28 @@ try:
         figratio=(16,11), figscale=1.3, volume=True, panel_ratios=(5,1,2,2), returnfig=True, tight_layout=False)
     
     ax0=axes[0]
+    # mplfinance panel layout: axes[0]=price, axes[1]=volume, axes[2]=MACD, axes[3]=RSI
+    # axes list may include twin-axes so filter by panel ylabel
+    _all_axes = fig.get_axes()
+    ax2 = _all_axes[2] if len(_all_axes) > 2 else None   # MACD
+    ax3 = _all_axes[3] if len(_all_axes) > 3 else None   # RSI
+
+    # Fix #4: RSI zone shading — red above 70, green below 30
+    if ax3 is not None:
+        _rsi_vals = rsi_s.fillna(50).values
+        _xs = range(len(_rsi_vals))
+        ax3.fill_between(_xs, _rsi_vals, 70, where=(_rsi_vals > 70), color="#F23645", alpha=0.15, zorder=2)
+        ax3.fill_between(_xs, _rsi_vals, 30, where=(_rsi_vals < 30), color="#089981", alpha=0.15, zorder=2)
+
+    # Fix #3: Volume spike callout — orange vertical line when vol > 2x 20d avg
+    _vol_vals  = vol_s.values
+    _vma_vals  = vol_ma20.fillna(method="bfill").values
+    _ax_vol    = _all_axes[1] if len(_all_axes) > 1 else None
+    if _ax_vol is not None:
+        for _vi, (_v, _vm) in enumerate(zip(_vol_vals, _vma_vals)):
+            if _vm > 0 and _v > 2.0 * _vm:
+                _ax_vol.axvline(_vi, color="#FF6D00", lw=1.2, alpha=0.65, zorder=4)
+                ax0.axvline(_vi, color="#FF6D00", lw=0.7, alpha=0.30, zorder=3)
     pivots=find_pivots(data,left=5,right=5); ew=elliott_wave(data,pivots)
     patterns=detect_patterns(data,pivots,lookback=80); top_pat=patterns[0] if patterns else None
     al=sorted(pivots,key=lambda p:p.price); ah=sorted(pivots,key=lambda p:-p.price)
@@ -560,12 +621,24 @@ try:
     dy=row_top-len(checks)*row_gap+0.05
     sa.plot([0.05,0.95],[dy,dy],color="#CCCCCC",lw=1.0,transform=sa.transAxes,zorder=5)
     tl_top=dy-0.015; tl_gap=0.088
-    trows=[("Entry",last_close,None,"#131722",True),("Stop Loss",sl_val,sl_dp,"#F23645",False),("Target 1",t1_val,t1_pct,"#089981",False),("Target 2",t2_val,t2_pct,"#089981",False)]
-    for i,(lbl,price,pct,col,bold) in enumerate(trows):
+    # Fix #8: Risk:Reward ratio
+    _risk = abs(last_close - sl_val)
+    _rw1  = abs(t1_val - last_close)
+    _rw2  = abs(t2_val - last_close)
+    _rr1  = round(_rw1 / _risk, 1) if _risk > 0 else 0
+    _rr2  = round(_rw2 / _risk, 1) if _risk > 0 else 0
+    # Fix #9: ATR row above entry
+    _atr_y = tl_top + tl_gap
+    sa.text(0.06, _atr_y, "ATR(14)", transform=sa.transAxes, fontsize=8.5, color="#787B86", va="top", zorder=5)
+    sa.text(0.56, _atr_y, f"Rs.{atr_val:,.1f}", transform=sa.transAxes, fontsize=8.5, color="#787B86", va="top", ha="right", zorder=5, fontfamily="monospace")
+    trows=[("Entry",last_close,None,None,"#131722",True),("Stop Loss",sl_val,sl_dp,None,"#F23645",False),("Target 1",t1_val,t1_pct,_rr1,"#089981",False),("Target 2",t2_val,t2_pct,_rr2,"#089981",False)]
+    for i,(lbl,price,pct,rr,col,bold) in enumerate(trows):
         y=tl_top-i*tl_gap; fw2="bold" if bold else "normal"
         sa.text(0.06,y,lbl,transform=sa.transAxes,fontsize=8.5,color="#131722",va="top",fontweight=fw2,zorder=5)
         sa.text(0.56,y,f"Rs.{price:,.1f}",transform=sa.transAxes,fontsize=8.5,color=col,va="top",fontweight=fw2,ha="right",zorder=5,fontfamily="monospace")
-        if pct is not None:
+        if pct is not None and rr is not None:
+            sa.text(0.97,y,f"({pct:+.1f}% | R:R 1:{rr})",transform=sa.transAxes,fontsize=7.2,color=col,va="top",ha="right",zorder=5)
+        elif pct is not None:
             sa.text(0.97,y,f"({pct:+.1f}%)",transform=sa.transAxes,fontsize=8,color=col,va="top",ha="right",zorder=5)
 
     fig.text(0.38,0.003,"AI-generated. Not SEBI registered. Not financial advice.",ha="center",va="bottom",color="#B2B5BE",fontsize=6.5)
