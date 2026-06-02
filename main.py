@@ -649,11 +649,43 @@ def cmd_chart(message):
         return
     sym = parts[1].upper().replace(".NS", "")
     company_name = " ".join(parts[2:]) if len(parts) > 2 else sym
-    safe_send(message.chat.id, f"📈 Generating chart for <b>{sym}</b>… (may take ~15s)")
+    # Fix #12: Validate period arg if provided
+    period = None
+    if len(parts) >= 3 and parts[-1] in {"1mo","3mo","6mo","1y","2y"}:
+        period = parts[-1]
+        company_name = " ".join(parts[2:-1]) if len(parts) > 3 else sym
+    safe_send(message.chat.id, f"🔍 Validating <b>{sym}</b>…")
     def _run():
+        # Quick validation before spending 60s on chart generation
+        from data_engine import get_live_price
+        price = get_live_price(sym)
+        if not price:
+            safe_send(message.chat.id,
+                f"❌ <b>{sym}</b> not found on NSE. Check the symbol and try again.\n"
+                f"Example: <code>/chart INFY</code>  <code>/chart RELIANCE</code>")
+            return
+        safe_send(message.chat.id, f"📈 Generating chart for <b>{sym}</b>… (may take ~20s)")
         gen = get_chart_generator()
-        ticker = sym if sym.endswith(".NS") else f"{sym}.NS"
-        gen.send_to_telegram(bot, message.chat.id, ticker, company_name)
+        ticker = f"{sym}.NS"
+        args = [ticker, company_name]
+        if period:
+            args.append(period)
+        # Fix #11: Fall back to text analysis card if chart fails
+        success, meta_text, png_path = gen.generate(*args)
+        if success and png_path:
+            try:
+                with open(png_path, "rb") as f:
+                    bot.send_photo(message.chat.id, f,
+                        caption=f"<b>📈 Technical Analysis</b>\n\n{meta_text}",
+                        parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Chart send failed: {e}")
+                safe_send(message.chat.id, build_adv(sym))
+        else:
+            # Fix #11: chart failed — send full text analysis instead
+            logger.warning(f"Chart failed for {sym}, falling back to text: {meta_text}")
+            safe_send(message.chat.id, "⚠️ Chart unavailable, sending text analysis:")
+            safe_send(message.chat.id, build_adv(sym))
     executor.submit(_run)
 
 
