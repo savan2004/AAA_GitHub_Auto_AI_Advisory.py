@@ -59,6 +59,7 @@ from ai_engine import (
     debug_ai_status,
 )
 from swing_trades import get_swing_trades
+from chart_integration import get_chart_generator
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -538,7 +539,7 @@ def main_keyboard():
     kb.add("🔍 Analysis", "📊 Breadth", "🤖 AI")
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
-    kb.add("📰 News", "📈 Status")
+    kb.add("📰 News", "📈 Chart", "📋 Status")
     return kb
 
 
@@ -579,10 +580,11 @@ def cmd_start(message):
         message.chat.id,
         "👋 <b>AI Stock Advisory Bot v5.0</b>\n\n"
         "Type any NSE symbol (e.g. <code>RELIANCE</code>) for full analysis.\n"
-        "Use the menu for screeners, AI, swing trades, and portfolio.\n\n"
+        "Use the menu for screeners, AI, swing trades, portfolio, and charts.\n\n"
         "📌 <b>Commands:</b>\n"
         "/help — All commands\n"
         "/status — Bot health check\n"
+        "/chart SYMBOL — Technical chart (e.g. <code>/chart INFY</code>)\n"
         "/buy SYM QTY PRICE — Add to portfolio\n"
         "/sell SYM — Remove from portfolio\n"
         "/portfolio — View P&L\n"
@@ -598,6 +600,9 @@ def cmd_help(message):
         "📖 <b>COMMANDS</b>\n\n"
         "<b>Analysis:</b>\n"
         "  Type any NSE symbol — e.g. <code>TCS</code>, <code>INFY</code>\n\n"
+        "<b>Chart:</b>\n"
+        "  /chart SYMBOL — Technical chart (e.g. <code>/chart INFY</code>)\n"
+        "  Tap 📈 Chart in menu — Auto-scans best crossover\n\n"
         "<b>Portfolio:</b>\n"
         "  /buy SYMBOL QTY PRICE\n"
         "  /sell SYMBOL\n"
@@ -624,6 +629,46 @@ def cmd_status(message):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Use /test_ai endpoint on server to test each provider.</i>",
     )
+
+
+@bot.message_handler(commands=["chart"])
+def cmd_chart(message):
+    """Send a technical chart PNG for a given NSE symbol."""
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        safe_send(
+            message.chat.id,
+            "📈 <b>Chart Usage:</b>\n"
+            "<code>/chart SYMBOL</code>\n\n"
+            "Examples:\n"
+            "  <code>/chart INFY</code>\n"
+            "  <code>/chart RELIANCE</code>\n"
+            "  <code>/chart TCS</code>\n\n"
+            "Or tap <b>📈 Chart</b> in the menu for the best auto-picked stock.",
+        )
+        return
+    sym = parts[1].upper().replace(".NS", "")
+    company_name = " ".join(parts[2:]) if len(parts) > 2 else sym
+    safe_send(message.chat.id, f"📈 Generating chart for <b>{sym}</b>… (may take ~15s)")
+    def _run():
+        gen = get_chart_generator()
+        ticker = sym if sym.endswith(".NS") else f"{sym}.NS"
+        gen.send_to_telegram(bot, message.chat.id, ticker, company_name)
+    executor.submit(_run)
+
+
+@bot.message_handler(func=lambda m: m.text == "📈 Chart")
+def chart_button(message):
+    """Auto-scan Nifty 200 for best crossover and send chart."""
+    safe_send(
+        message.chat.id,
+        "📈 Scanning for the best crossover in Nifty 200…\n"
+        "⏳ This may take ~30s. You can also type <code>/chart SYMBOL</code> for a specific stock.",
+    )
+    def _run():
+        gen = get_chart_generator()
+        gen.send_to_telegram(bot, message.chat.id)  # No symbol = auto-scan
+    executor.submit(_run)
 
 
 @bot.message_handler(commands=["buy"])
@@ -692,7 +737,7 @@ def portfolio_button(message):
     executor.submit(_run)
 
 
-@bot.message_handler(func=lambda m: m.text == "📈 Status")
+@bot.message_handler(func=lambda m: m.text in ["📈 Status", "📋 Status"])
 def status_button(message):
     cmd_status(message)
 
