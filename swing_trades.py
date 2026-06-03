@@ -129,14 +129,30 @@ def ai_call(prompt: str, max_tokens: int = 400) -> str:
         return ""
 
 
-CANDIDATES = [
-    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
-    "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS", "LT.NS",
-    "WIPRO.NS", "HCLTECH.NS", "ASIANPAINT.NS", "MARUTI.NS", "TATAMOTORS.NS",
-    "TITAN.NS", "SUNPHARMA.NS", "ONGC.NS", "NTPC.NS", "M&M.NS",
-    "BAJFINANCE.NS", "AXISBANK.NS", "TECHM.NS", "DRREDDY.NS", "DIVISLAB.NS",
-    "HINDALCO.NS", "JSWSTEEL.NS", "TATASTEEL.NS", "BPCL.NS", "EICHERMOT.NS",
-]
+# Upgrade: load 50+ candidates from nifty500_collector, fallback to hardcoded list
+try:
+    from nifty500_collector import SECTOR_STOCKS as _SC
+    _base = [s for stocks in _SC.values() for s in stocks]
+    # Prioritize large/mid caps — take first 50 unique
+    _seen = set()
+    CANDIDATES = []
+    for s in _base:
+        if s not in _seen:
+            CANDIDATES.append(f"{s}.NS")
+            _seen.add(s)
+        if len(CANDIDATES) >= 50:
+            break
+    logger.info(f"Swing: loaded {len(CANDIDATES)} candidates from nifty500_collector")
+except Exception as _e:
+    logger.warning(f"Swing: nifty500_collector unavailable: {_e}")
+    CANDIDATES = [
+        "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+        "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS", "LT.NS",
+        "WIPRO.NS", "HCLTECH.NS", "ASIANPAINT.NS", "MARUTI.NS", "TATAMOTORS.NS",
+        "TITAN.NS", "SUNPHARMA.NS", "ONGC.NS", "NTPC.NS", "M&M.NS",
+        "BAJFINANCE.NS", "AXISBANK.NS", "TECHM.NS", "DRREDDY.NS", "DIVISLAB.NS",
+        "HINDALCO.NS", "JSWSTEEL.NS", "TATASTEEL.NS", "BPCL.NS", "EICHERMOT.NS",
+    ]
 
 
 def _display_sym(sym: str) -> str:
@@ -161,6 +177,9 @@ def _trade_card(p: dict, side: str) -> str:
         risk    = round(ltp - sl, 2)
         reward  = round(tgt1 - ltp, 2)
         icon    = "🟢"
+        sl_pct  = round((ltp - sl) / ltp * 100, 1)
+        t1_pct  = round((tgt1 - ltp) / ltp * 100, 1)
+        t2_pct  = round((tgt2 - ltp) / ltp * 100, 1)
     else:
         sl      = round(ltp + 2.0 * atr_val, 2)
         tgt1    = round(ltp - 2.0 * atr_val, 2)
@@ -168,19 +187,33 @@ def _trade_card(p: dict, side: str) -> str:
         risk    = round(sl - ltp, 2)
         reward  = round(ltp - tgt1, 2)
         icon    = "🔴"
+        sl_pct  = round((sl - ltp) / ltp * 100, 1)
+        t1_pct  = round((ltp - tgt1) / ltp * 100, 1)
+        t2_pct  = round((ltp - tgt2) / ltp * 100, 1)
 
-    rr = round(reward / risk, 1) if risk > 0 else 0
-    conds = "\n".join(f"      · {c}" for c in p["details"])
+    rr       = round(reward / risk, 1) if risk > 0 else 0
+    conds    = "\n".join(f"   ✅ {c}" for c in p["details"])
+    bb_pct_v = round(p.get("bb_pct", 0.5) * 100, 0) if "bb_pct" in p else None
+    bb_line  = f"   📉 BB %B      : {bb_pct_v:.0f}%\n" if bb_pct_v is not None else ""
+    rsi_label = ("🔴 Overbought" if rsi_v > 70 else "🟢 Oversold" if rsi_v < 30
+                 else "🟡 Neutral" if rsi_v < 50 else "🟠 Elevated")
 
     return (
-        f"{icon} <b>{sym}</b> [{side}]  Score: <b>{score}/8</b>\n"
-        f"   LTP: ₹{ltp:,.2f}  |  RSI: {rsi_v}  |  ADX: {adx_v}\n"
+        f"{'━'*22}\n"
+        f"{icon} <b>{sym}</b>  [{side}]  Score: <b>{score}/8</b>\n"
+        f"{'━'*22}\n"
+        f"   💰 LTP        : ₹{ltp:,.2f}\n"
+        f"   📊 RSI        : {rsi_v}  {rsi_label}\n"
+        f"   📈 ADX        : {adx_v}\n"
+        f"{bb_line}"
+        f"   ─────────────────\n"
         f"   📥 Entry Zone : ₹{entry_lo:,.2f} – ₹{entry_hi:,.2f}\n"
-        f"   🎯 Target 1   : ₹{tgt1:,.2f}\n"
-        f"   🎯 Target 2   : ₹{tgt2:,.2f}\n"
-        f"   🛑 Stop Loss  : ₹{sl:,.2f}\n"
-        f"   ⚖️  Risk:Reward: 1:{rr}\n"
-        f"   ✅ Conditions:\n{conds}"
+        f"   🎯 Target 1   : ₹{tgt1:,.2f}  (+{t1_pct}%)\n"
+        f"   🎯 Target 2   : ₹{tgt2:,.2f}  (+{t2_pct}%)\n"
+        f"   🛑 Stop Loss  : ₹{sl:,.2f}  (-{sl_pct}%)\n"
+        f"   ⚖️  R:Reward   : 1:{rr}  |  ATR: ₹{round(atr_val,1)}\n"
+        f"   ─────────────────\n"
+        f"   <b>Signals:</b>\n{conds}"
     )
 
 
