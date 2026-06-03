@@ -792,12 +792,26 @@ def _get_stock_live_context(sym: str) -> str:
         h52 = round(float(df["High"].max()), 2)
         l52 = round(float(df["Low"].min()),  2)
         trend = "BULLISH" if ltp > ema21 > ema50 else ("BEARISH" if ltp < ema21 < ema50 else "SIDEWAYS")
+        # P2 Nice: add today's OHLC for intraday/30-min context
+        today_open  = round(float(df["Open"].iloc[-1]), 2)
+        today_high  = round(float(df["High"].iloc[-1]), 2)
+        today_low   = round(float(df["Low"].iloc[-1]),  2)
+        vwap_approx = round((today_high + today_low + ltp) / 3, 2)
+        bb_mid  = round(float(df["Close"].rolling(20).mean().iloc[-1]), 2)
+        bb_std  = round(float(df["Close"].rolling(20).std().iloc[-1]),  2)
+        bb_up   = round(bb_mid + 2*bb_std, 2)
+        bb_lo   = round(bb_mid - 2*bb_std, 2)
         return (
             f"\nSPECIFIC STOCK DATA — {sym}:\n"
             f"LTP: ₹{ltp} ({chg:+.2f}%) | RSI: {rsi} | Trend: {trend}\n"
+            f"Today OHLC: O:{today_open} H:{today_high} L:{today_low} C:{ltp} | VWAP≈₹{vwap_approx}\n"
             f"EMA9: ₹{ema9} | EMA21: ₹{ema21} | EMA50: ₹{ema50}\n"
+            f"BB Upper: ₹{bb_up} | BB Mid: ₹{bb_mid} | BB Lower: ₹{bb_lo}\n"
             f"ATR(14): ₹{atr} | 52W H: ₹{h52} | 52W L: ₹{l52}\n"
             f"Support: ₹{round(ltp-atr,2)} | Resistance: ₹{round(ltp+atr,2)}\n"
+            f"30-min Pivot: ₹{round((today_high+today_low+ltp)/3,2)} | "
+            f"R1: ₹{round(2*(today_high+today_low+ltp)/3-today_low,2)} | "
+            f"S1: ₹{round(2*(today_high+today_low+ltp)/3-today_high,2)}\n"
         )
     except Exception as e:
         logger.debug(f"stock ctx fetch {sym}: {e}")
@@ -847,7 +861,7 @@ def test_ai_providers() -> dict:
         ("GROQ",    "GROQ_API_KEY",    lambda: _get_groq().chat.completions.create(
              model="llama-3.1-8b-instant",
              messages=[{"role":"user","content":"Say OK"}], max_tokens=3)),
-        ("Gemini",  "GEMINI_API_KEY",  lambda: _get_gemini().generate_content("Say OK")),
+        ("Gemini",  "GEMINI_API_KEY",  lambda: _get_gemini().generate_content("Say OK, just those two words.")),
         ("OpenAI",  "OPENAI_KEY",      lambda: _get_openai().chat.completions.create(
              model="gpt-4o-mini",
              messages=[{"role":"user","content":"Say OK"}], max_tokens=3)),
@@ -857,7 +871,13 @@ def test_ai_providers() -> dict:
             continue
         try:
             r    = test_fn()
-            text = getattr(r, "text", None) or getattr(r.choices[0].message, "content", "OK")
+            # P1 Fix 7: Gemini returns GenerateContentResponse — need .text or .candidates
+            if hasattr(r, "text"):
+                text = r.text
+            elif hasattr(r, "choices"):
+                text = r.choices[0].message.content
+            else:
+                text = str(r)[:30]
             results[name] = f"OK — {str(text).strip()[:20]}"
         except Exception as e:
             msg = str(e)
