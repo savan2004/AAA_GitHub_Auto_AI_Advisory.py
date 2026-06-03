@@ -105,6 +105,10 @@ def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
     tr      = pd.concat([(h-l), (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
     atr_val = float(tr.rolling(14).mean().iloc[-1])
 
+    # P0 Fix: compute bb_pct so _trade_card never gets KeyError
+    _bb_range = bb_upper - bb_lower
+    bb_pct_val = round((ltp - bb_lower) / _bb_range, 3) if _bb_range > 0 else 0.5
+
     return {
         "score": score, "details": conditions, "ltp": ltp,
         "ema50": ema50, "ema200": ema200, "adx": adx_last,
@@ -112,6 +116,7 @@ def swing_score(df: pd.DataFrame, side: str = "LONG") -> dict:
         "volume": vol_last, "avg_volume": vol_avg,
         "bb_mid": bb_mid, "bb_upper": bb_upper, "bb_lower": bb_lower,
         "recent_high": recent_high, "recent_low": recent_low, "atr_val": atr_val,
+        "bb_pct": bb_pct_val,
     }
 
 
@@ -193,26 +198,24 @@ def _trade_card(p: dict, side: str) -> str:
 
     rr       = round(reward / risk, 1) if risk > 0 else 0
     conds    = "\n".join(f"   ✅ {c}" for c in p["details"])
-    bb_pct_v = round(p.get("bb_pct", 0.5) * 100, 0) if "bb_pct" in p else None
+    bb_pct_v = round(float(p.get("bb_pct", 0.5)) * 100, 0)
     bb_line  = f"   📉 BB %B      : {bb_pct_v:.0f}%\n" if bb_pct_v is not None else ""
     rsi_label = ("🔴 Overbought" if rsi_v > 70 else "🟢 Oversold" if rsi_v < 30
                  else "🟡 Neutral" if rsi_v < 50 else "🟠 Elevated")
 
     return (
-        f"{'━'*22}\n"
         f"{icon} <b>{sym}</b>  [{side}]  Score: <b>{score}/8</b>\n"
-        f"{'━'*22}\n"
-        f"   💰 LTP        : ₹{ltp:,.2f}\n"
-        f"   📊 RSI        : {rsi_v}  {rsi_label}\n"
-        f"   📈 ADX        : {adx_v}\n"
+        f"   💰 LTP  : ₹{ltp:,.2f}\n"
+        f"   📊 RSI  : {rsi_v}  {rsi_label}\n"
+        f"   📈 ADX  : {adx_v}\n"
         f"{bb_line}"
-        f"   ─────────────────\n"
-        f"   📥 Entry Zone : ₹{entry_lo:,.2f} – ₹{entry_hi:,.2f}\n"
-        f"   🎯 Target 1   : ₹{tgt1:,.2f}  (+{t1_pct}%)\n"
-        f"   🎯 Target 2   : ₹{tgt2:,.2f}  (+{t2_pct}%)\n"
-        f"   🛑 Stop Loss  : ₹{sl:,.2f}  (-{sl_pct}%)\n"
-        f"   ⚖️  R:Reward   : 1:{rr}  |  ATR: ₹{round(atr_val,1)}\n"
-        f"   ─────────────────\n"
+        f"   ···\n"
+        f"   📥 Entry: ₹{entry_lo:,.2f} – ₹{entry_hi:,.2f}\n"
+        f"   🎯 T1   : ₹{tgt1:,.2f}  (+{t1_pct}%)\n"
+        f"   🎯 T2   : ₹{tgt2:,.2f}  (+{t2_pct}%)\n"
+        f"   🛑 SL   : ₹{sl:,.2f}  (-{sl_pct}%)\n"
+        f"   ⚖️  R:R  : 1:{rr}  |  ATR: ₹{round(atr_val,1)}\n"
+        f"   ···\n"
         f"   <b>Signals:</b>\n{conds}"
     )
 
