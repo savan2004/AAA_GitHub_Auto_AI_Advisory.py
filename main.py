@@ -445,7 +445,12 @@ def build_adv(sym: str) -> str:
         frow("Debt/Equity",  de)  + (f"  |  Beta: {beta}" if beta else ""),
         frow("Div Yield",    div_y, "%"),
         "━━━━━━━━━━━━━━━━━━━━",
-        f"🎯 Target: ₹{round(ltp + 1.5*atr, 2):,.2f}  |  SL: ₹{round(ltp - 2*atr, 2):,.2f}",
+        # Fix 12: direction-aware target and SL
+        (f"🎯 Target: ₹{round(ltp+1.5*atr,2):,.2f} (+{round(1.5*atr/ltp*100,1)}%)"
+         f"  |  SL: ₹{round(ltp-2*atr,2):,.2f} (-{round(2*atr/ltp*100,1)}%)")
+        if trend != "BEARISH" else
+        (f"🎯 Target: ₹{round(ltp-1.5*atr,2):,.2f} (-{round(1.5*atr/ltp*100,1)}%)"
+         f"  |  SL: ₹{round(ltp+2*atr,2):,.2f} (+{round(2*atr/ltp*100,1)}%)"),
     ]
 
     if news_text:
@@ -468,6 +473,12 @@ SCREENER_STOCKS = {
                      "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
     "aggressive":   ["TATAMOTORS", "ADANIENT", "JSWSTEEL", "TATAPOWER",
                      "ZOMATO", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
+}
+
+SCREENER_CRITERIA = {
+    "conservative": "Low beta, dividend payers, large-cap — good for wealth preservation",
+    "moderate":     "Growth + stability mix, mid-large cap — balanced risk/reward",
+    "aggressive":   "High momentum, sector themes, high beta — for risk-tolerant traders",
 }
 
 
@@ -520,15 +531,19 @@ def build_scan(profile: str) -> str:
         r = results.get(sym)
         if not r:
             continue
-        icon = "🟢" if r["chg"] >= 0 else "🔴"
+        icon      = "🟢" if r["chg"] >= 0 else "🔴"
+        rsi_badge = ("🔴OB" if r["rsi"] > 70 else ("🟢OS" if r["rsi"] < 30 else "🟡"))
         lines.append(
-            f"{icon} <b>{sym}</b>: ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n"
-            f"   RSI:{r['rsi']} | {r['trend']} | {r['signal']}"
+            f"{icon} <b>{sym}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n"
+            f"   RSI:{r['rsi']} {rsi_badge}  |  {r['trend']}  |  Signal: <b>{r['signal']}</b>"
         )
         hit += 1
 
     if hit == 0:
         lines.append("❌ Data unavailable. Try again in a moment.")
+    criteria_note = SCREENER_CRITERIA.get(profile, "")
+    if criteria_note:
+        lines.append(f"\n📌 <i>{criteria_note}</i>")
     lines.append("\n⚠️ Educational only. Not SEBI advice.")
     return "\n".join(lines)
 
@@ -545,29 +560,29 @@ def build_breadth() -> str:
     hit = 0
     for name, ticker in indices.items():
         try:
-            d =             yf.Ticker(ticker).history(period="5d") if ticker.startswith("^") else _yahoo_v8_hist(ticker, period="5d")
-            if d is None or len(d) < 2:
-                try:
-                    d = yf.Ticker(ticker).history(period="5d")
-                except Exception:
-                    continue
-            if d is None or len(d) < 2:
+            # Fix 5: fetch 1mo for valid RSI(14), use last 2 bars for day change
+            d = yf.Ticker(ticker).history(period="1mo")
+            if d is None or len(d) < 5:
                 continue
             l   = round(float(d["Close"].iloc[-1]), 2)
             p   = round(float(d["Close"].iloc[-2]), 2)
             chg = round((l - p) / p * 100, 2) if p else 0.0
-            wh  = round(float(d["High"].max()), 2)
-            wl  = round(float(d["Low"].min()), 2)
-            # RSI from 5-day close
+            wh  = round(float(d["High"].tail(5).max()), 2)
+            wl  = round(float(d["Low"].tail(5).min()),  2)
+            # RSI from full 1mo close — meaningful now
             try:
                 from data_engine import calc_rsi as _crsi
-                rsi_b = _crsi(d["Close"]) if len(d) >= 5 else 50.0
+                rsi_b = _crsi(d["Close"]) if len(d) >= 14 else 50.0
             except Exception:
                 rsi_b = 50.0
+            # EMA20 trend
+            ema20_b = round(float(d["Close"].ewm(span=20,adjust=False).mean().iloc[-1]), 2)
+            trend_b = "Bullish 🔼" if l > ema20_b else "Bearish 🔽"
+            rsi_label_b = "OB" if rsi_b > 70 else ("OS" if rsi_b < 30 else "OK")
             icon = "🟢" if chg >= 0 else "🔴"
-            trend_b = "Bull" if chg > 0 else "Bear"
             lines.append(
-                f"{icon} <b>{name}</b>: {l:,.2f} ({chg:+.2f}%) | RSI:{rsi_b} | {trend_b}\n"
+                f"{icon} <b>{name}</b>: {l:,.2f} ({chg:+.2f}%)\n"
+                f"   RSI:{rsi_b} [{rsi_label_b}] | {trend_b} | EMA20:{ema20_b:,.0f}\n"
                 f"   5D Range: {wl:,.2f} – {wh:,.2f}"
             )
             hit += 1
@@ -664,8 +679,12 @@ def main_keyboard():
 
 def ai_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    for topic in AI_CHAT_TOPICS.keys():
-        kb.add(topic)
+    topics = list(AI_CHAT_TOPICS.keys())
+    # Add topics in pairs
+    for i in range(0, len(topics)-1, 2):
+        kb.add(topics[i], topics[i+1])
+    if len(topics) % 2 == 1:
+        kb.add(topics[-1])
     kb.add("🔙 Menu")
     return kb
 
@@ -697,17 +716,24 @@ def cmd_start(message):
     _state[message.chat.id] = None
     safe_send(
         message.chat.id,
-        "👋 <b>AI Stock Advisory Bot v5.0</b>\n\n"
-        "Type any NSE symbol (e.g. <code>RELIANCE</code>) for full analysis.\n"
-        "Use the menu for screeners, AI, swing trades, portfolio, and charts.\n\n"
+        "👋 <b>AutoAI Advisory Bot v5.3</b>\n\n"
+        "Type any stock name or NSE symbol for full analysis:\n"
+        "<code>RELIANCE</code>  <code>TCS</code>  <code>HDFC Bank</code>  <code>Infosys</code>\n\n"
+        "🔘 <b>Menu Buttons:</b>\n"
+        "🔍 Analysis — Stock analysis by name or symbol\n"
+        "📊 Breadth — Market indices overview\n"
+        "🤖 AI — AI chat with live market data\n"
+        "🏦⚖️🚀 Screeners — Conservative/Moderate/Aggressive\n"
+        "🎯🚀 Swing — Trade setups (safe/aggressive)\n"
+        "💼 Portfolio — Track your positions\n"
+        "📰 News — Latest market news\n"
+        "📈 Chart — Technical chart by name/symbol\n\n"
         "📌 <b>Commands:</b>\n"
-        "/help — All commands\n"
-        "/status — Bot health check\n"
-        "/chart SYMBOL — Technical chart (e.g. <code>/chart INFY</code>)\n"
-        "/buy SYM QTY PRICE — Add to portfolio\n"
-        "/sell SYM — Remove from portfolio\n"
-        "/portfolio — View P&L\n"
-        "/clear — Reset AI chat",
+        "/chart SYMBOL [period] — e.g. <code>/chart INFY 3mo</code>\n"
+        "/buy SYM QTY PRICE | /sell SYM | /portfolio\n"
+        "/status — AI provider health check\n"
+        "/clear — Reset AI chat history\n"
+        "/help — All commands",
         reply_markup=main_keyboard(),
     )
 
@@ -737,17 +763,30 @@ def cmd_help(message):
 
 @bot.message_handler(commands=["status"])
 def cmd_status(message):
-    ai_ok = ai_available()
-    safe_send(
-        message.chat.id,
-        f"🤖 <b>BOT STATUS</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Bot:      ✅ Running\n"
-        f"AI:       {'✅ Ready' if ai_ok else '❌ No keys set'}\n"
-        f"Time:     {datetime.now().strftime('%d-%b-%Y %H:%M IST')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Use /test_ai endpoint on server to test each provider.</i>",
-    )
+    safe_send(message.chat.id, "⏳ Checking AI providers…")
+    def _run():
+        results = test_ai_providers()
+        status_icon = "✅" if results.get("_status","").startswith("✅") else "❌"
+        ai_lines = []
+        for provider in ["GROQ","Gemini","OpenAI","AskFuzz"]:
+            v = results.get(provider,"SKIP")
+            if v.startswith("OK"):   icon = "✅"
+            elif v.startswith("SKIP"): icon = "⚪"
+            else:                     icon = "❌"
+            ai_lines.append(f"  {icon} {provider}: {v[:40]}")
+        safe_send(
+            message.chat.id,
+            f"🤖 <b>BOT STATUS</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Bot : ✅ Running\n"
+            f"AI  : {status_icon} {results.get('_status','Unknown')}\n"
+            f"Time: {datetime.now().strftime('%d-%b-%Y %H:%M IST')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Provider Details:</b>\n" + "\n".join(ai_lines) +
+            "\n━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>⚪ = key not set  ✅ = working  ❌ = failed</i>"
+        )
+    executor.submit(_run)
 
 
 @bot.message_handler(commands=["chart"])
@@ -807,14 +846,24 @@ def cmd_chart(message):
 @bot.message_handler(func=lambda m: m.text == "📈 Chart")
 def chart_button(message):
     """Auto-scan Nifty 200 for best crossover and send chart."""
+    import time as _t
     safe_send(
         message.chat.id,
-        "📈 Scanning for the best crossover in Nifty 200…\n"
-        "⏳ This may take ~30s. You can also type <code>/chart SYMBOL</code> for a specific stock.",
+        "📈 Scanning Nifty 250 for best crossover setup…\n"
+        "⏳ May take ~30s. Or type <code>/chart SYMBOL</code> for a specific stock.",
     )
     def _run():
+        # Send a "still working" ping after 12s so user knows bot is alive
+        def _ping():
+            _t.sleep(12)
+            try:
+                safe_send(message.chat.id, "⏳ Still scanning… almost done.")
+            except Exception:
+                pass
+        import threading as _th
+        _th.Thread(target=_ping, daemon=True).start()
         gen = get_chart_generator()
-        gen.send_to_telegram(bot, message.chat.id)  # No symbol = auto-scan
+        gen.send_to_telegram(bot, message.chat.id)
     executor.submit(_run)
 
 
@@ -849,11 +898,18 @@ def cmd_sell(message):
         safe_send(message.chat.id,
             "Usage: <code>/sell SYMBOL</code>  e.g. <code>/sell RELIANCE</code>")
         return
-    sym = parts[1].upper().replace(".NS", "")
-    if remove_from_portfolio(message.chat.id, sym):
-        safe_send(message.chat.id, f"✅ Removed <b>{sym}</b> from portfolio.")
+    raw = " ".join(parts[1:]).upper().replace(".NS","").replace(".BO","")
+    # Try resolve if not found directly
+    p = get_portfolio(message.chat.id)
+    if raw not in p:
+        ticker, _ = resolve_symbol(raw)
+        if ticker:
+            raw = ticker.replace(".NS","").replace(".BO","").upper()
+    if remove_from_portfolio(message.chat.id, raw):
+        safe_send(message.chat.id, f"✅ Removed <b>{raw}</b> from portfolio.")
     else:
-        safe_send(message.chat.id, f"❌ <b>{sym}</b> not found in portfolio.")
+        safe_send(message.chat.id, f"❌ <b>{raw}</b> not found in portfolio.\n"
+            f"Your holdings: {', '.join(p.keys()) if p else 'none'}")
 
 
 @bot.message_handler(commands=["portfolio"])
@@ -867,7 +923,12 @@ def cmd_portfolio_cmd(message):
 @bot.message_handler(commands=["clear"])
 def cmd_clear(message):
     clear_chat(message.chat.id)
-    safe_send(message.chat.id, "🗑️ AI chat history cleared.")
+    _state[message.chat.id] = None
+    safe_send(message.chat.id,
+        "🗑️ AI chat history cleared.\n"
+        "You are now back in main mode.\n"
+        "Tap <b>🤖 AI</b> to start a fresh AI conversation.",
+        reply_markup=main_keyboard())
 
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Menu")
@@ -894,7 +955,14 @@ def enter_ai_mode(message):
     _state[message.chat.id] = "ai"
     safe_send(
         message.chat.id,
-        "🤖 <b>AI Mode</b>\nLive market data auto-injected. Ask anything or tap a topic.",
+        "🤖 <b>AI Mode — Live Data Active</b>\n\n"
+        "Ask anything about markets, stocks, options, or tap a topic below.\n\n"
+        "Examples:\n"
+        "  • <code>Reliance trade setup for 30 min</code>\n"
+        "  • <code>INFY buy or sell?</code>\n"
+        "  • <code>Nifty outlook for today</code>\n"
+        "  • <code>Best sector to invest now</code>\n\n"
+        "Tap <b>🔙 Menu</b> to return to main menu.",
         reply_markup=ai_keyboard(),
     )
 
@@ -949,11 +1017,18 @@ def breadth_button(message):
 def swing_button(message):
     mode  = "conservative" if "Safe" in message.text else "aggressive"
     label = "6/8 conditions" if mode == "conservative" else "5/8 conditions"
+    import time as _tsw
     safe_send(
         message.chat.id,
         f"⏳ Running swing scanner ({label})…\n"
-        "Checks: EMA trend, ADX, RSI, MACD, Volume, Bollinger Bands (may take ~20s)"
+        "Scanning 50 stocks: EMA, ADX, RSI, MACD, Volume, BB (may take ~25s)"
     )
+    def _ping_swing(cid=message.chat.id):
+        _tsw.sleep(15)
+        try: safe_send(cid, "⏳ Still scanning… checking final stocks.")
+        except Exception: pass
+    import threading as _tsth
+    _tsth.Thread(target=_ping_swing, daemon=True).start()
     def _run():
         try:
             result = get_swing_trades(mode=mode)
@@ -979,19 +1054,26 @@ def swing_button(message):
 
 @bot.message_handler(func=lambda m: m.text == "📰 News")
 def news_button(message):
-    safe_send(message.chat.id, "⏳ Fetching latest news…")
+    safe_send(message.chat.id, "⏳ Fetching latest market news…")
     def _run():
-        safe_send(message.chat.id, get_market_news())
+        result = build_news()
+        if not result or not result.strip():
+            result = "📰 News unavailable right now. Try again in a moment."
+        safe_send(message.chat.id, result)
     executor.submit(_run)
 
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Analysis")
 def analysis_hint(message):
+    _state[message.chat.id] = "analysis"
     safe_send(
         message.chat.id,
         "🔍 <b>Stock Analysis</b>\n\n"
-        "Type any NSE symbol to get a full analysis card.\n"
-        "Examples: <code>RELIANCE</code>  <code>TCS</code>  <code>HDFCBANK</code>"
+        "Type any stock name or NSE symbol:\n"
+        "• <code>RELIANCE</code> or <code>Reliance Industries</code>\n"
+        "• <code>TCS</code> or <code>Tata Consultancy</code>\n"
+        "• <code>HDFCBANK</code> or <code>HDFC Bank</code>\n\n"
+        "Tap <b>🔙 Menu</b> to go back."
     )
 
 
@@ -1014,6 +1096,24 @@ def handle_text(message):
         executor.submit(_ai)
         return
 
+    # Analysis mode — user tapped 🔍 Analysis button and is now typing a symbol
+    if _state.get(uid) == "analysis":
+        safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
+        def _analysis_run(q=text):
+            ticker, cname = resolve_symbol(q)
+            if ticker:
+                sym_clean = ticker.replace(".NS","").replace(".BO","")
+                safe_send(uid, f"📊 Analyzing <b>{cname}</b> ({sym_clean})…")
+                safe_send(uid, build_adv(sym_clean))
+            else:
+                sym_up = q.upper().replace(".NS","")
+                if 2 <= len(sym_up) <= 15:
+                    safe_send(uid, build_adv(sym_up))
+                else:
+                    safe_send(uid, f"❌ Could not find <b>{q}</b>. Try the exact NSE ticker like <code>RELIANCE</code>.")
+        executor.submit(_analysis_run)
+        return
+
     # Upgrade: smart resolver — accept "Infosys", "HDFC Bank", "INFY", etc.
     raw = text.strip()
     raw_up = raw.upper().replace(".NS", "").replace(".BO", "")
@@ -1032,15 +1132,30 @@ def handle_text(message):
                 safe_send(uid, f"📊 Analyzing <b>{cname}</b> ({sym_clean})…")
                 safe_send(uid, build_adv(sym_clean))
             else:
-                # Final fallback: try as-is
                 sym_clean = q.upper().replace(".NS","")
                 if 2 <= len(sym_clean) <= 15:
                     safe_send(uid, build_adv(sym_clean))
                 else:
                     safe_send(uid, f"❌ Could not find <b>{q}</b> on NSE/BSE.\n"
-                        "Try exact NSE symbol: <code>RELIANCE</code>  <code>TCS</code>\n"
-                        "Or company name: <code>Reliance Industries</code>  <code>HDFC Bank</code>")
+                        "Try: <code>RELIANCE</code>  <code>TCS</code>  <code>HDFC Bank</code>")
         executor.submit(_adv)
+    else:
+        # Fix 14: respond to greetings / unknown text instead of silent failure
+        greetings = {"hi","hello","hey","hlo","hii","good morning","gm","good evening"}
+        if raw.lower().strip("!.?") in greetings:
+            safe_send(uid,
+                "👋 Hello! I'm AutoAI Advisory.\n\n"
+                "Type any stock name (e.g. <code>RELIANCE</code> or <code>HDFC Bank</code>) "
+                "for a full analysis, or use the menu buttons below.",
+                reply_markup=main_keyboard())
+        elif any(kw in raw.lower() for kw in ["help","what can","how to","commands"]):
+            cmd_help(message)
+        else:
+            safe_send(uid,
+                "💡 Type a stock name or NSE symbol to analyze it.\n"
+                "Example: <code>TCS</code>  <code>Infosys</code>  <code>RELIANCE</code>\n\n"
+                "Or use the <b>menu buttons</b> below.",
+                reply_markup=main_keyboard())
 
 
 # ── Flask routes ───────────────────────────────────────────────────────────────
