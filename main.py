@@ -218,43 +218,85 @@ def build_portfolio_card(uid: int) -> str:
             "Add a position:\n<code>/buy RELIANCE 10 2500</code>\n\n"
             "Remove a position:\n<code>/sell RELIANCE</code>"
         )
-    lines = [
-        "💼 <b>PORTFOLIO TRACKER</b>",
-        f"📅 {date.today().strftime('%d-%b-%Y')}",
-        "━━━━━━━━━━━━━━━━━━━━",
-    ]
-    total_inv = 0.0
-    total_cur = 0.0
+
+    today_str  = date.today().strftime("%d-%b-%Y")
+    total_inv  = 0.0
+    total_cur  = 0.0
+    rows       = []
+    winners    = []
+    losers     = []
+
     for sym, pos in p.items():
         qty, avg = pos["qty"], pos["avg"]
-        # FIX: safe LTP fetch — never crashes on data error
         try:
             ltp = get_live_price(sym) or avg
             ltp = round(float(ltp), 2)
         except Exception:
             ltp = avg
-        inv  = qty * avg
-        cur  = qty * ltp
-        pnl  = round(cur - inv, 2)
-        pct  = round((ltp - avg) / avg * 100, 2) if avg > 0 else 0.0
-        icon = "🟢" if pnl >= 0 else "🔴"
-        lines.append(
-            f"{icon} <b>{sym}</b>  ×{qty}\n"
-            f"   Avg: ₹{avg:,.2f}  |  LTP: ₹{ltp:,.2f}\n"
-            f"   P&L: ₹{pnl:+,.2f}  ({pct:+.2f}%)"
-        )
+        inv    = qty * avg
+        cur    = qty * ltp
+        pnl    = round(cur - inv, 2)
+        pct    = round((ltp - avg) / avg * 100, 2) if avg > 0 else 0.0
+        weight = round(inv / 1, 2)   # will normalise after loop
+        rows.append({"sym": sym, "qty": qty, "avg": avg, "ltp": ltp,
+                     "inv": inv, "cur": cur, "pnl": pnl, "pct": pct})
         total_inv += inv
         total_cur += cur
-    total_pnl = round(total_cur - total_inv, 2)
-    total_pct = round((total_cur - total_inv) / total_inv * 100, 2) if total_inv else 0.0
-    icon = "🟢" if total_pnl >= 0 else "🔴"
+        (winners if pnl >= 0 else losers).append((sym, pnl, pct))
+
+    total_pnl  = round(total_cur - total_inv, 2)
+    total_pct  = round((total_cur - total_inv) / total_inv * 100, 2) if total_inv else 0.0
+    port_icon  = "🟢" if total_pnl >= 0 else "🔴"
+
+    lines = [
+        f"╔{'═'*30}╗",
+        f"║  💼  PORTFOLIO REPORT            ║",
+        f"╚{'═'*30}╝",
+        f"📅 Generated: {today_str}",
+        f"📊 Holdings : {len(rows)} stocks",
+        f"",
+        f"{'═'*32}",
+        f"  HOLDINGS DETAIL",
+        f"{'═'*32}",
+    ]
+
+    # Sort by absolute P&L
+    rows.sort(key=lambda x: x["pnl"], reverse=True)
+    for r in rows:
+        pnl_icon = "🟢" if r["pnl"] >= 0 else "🔴"
+        wt       = round(r["inv"] / total_inv * 100, 1) if total_inv else 0
+        lines += [
+            f"{pnl_icon} <b>{r['sym']}</b>",
+            f"   Qty    : {r['qty']} shares  ({wt}% of portfolio)",
+            f"   Avg    : ₹{r['avg']:,.2f}  →  LTP: ₹{r['ltp']:,.2f}",
+            f"   Invested: ₹{r['inv']:,.0f}  |  Current: ₹{r['cur']:,.0f}",
+            f"   P&L    : ₹{r['pnl']:+,.2f}  ({r['pct']:+.2f}%)",
+            f"   ─────────────────",
+        ]
+
     lines += [
-        "━━━━━━━━━━━━━━━━━━━━",
-        f"{icon} <b>Total P&L: ₹{total_pnl:+,.2f}  ({total_pct:+.2f}%)</b>",
-        f"💰 Invested: ₹{total_inv:,.2f}",
-        f"📊 Current:  ₹{total_cur:,.2f}",
-        "",
-        "➕ /buy SYM QTY PRICE   ➖ /sell SYM",
+        f"{'═'*32}",
+        f"  PORTFOLIO SUMMARY",
+        f"{'═'*32}",
+        f"💰 Total Invested : ₹{total_inv:,.2f}",
+        f"📈 Current Value  : ₹{total_cur:,.2f}",
+        f"{port_icon} <b>Total P&L      : ₹{total_pnl:+,.2f}  ({total_pct:+.2f}%)</b>",
+        f"",
+    ]
+
+    # Winners / Losers summary
+    if winners:
+        winners.sort(key=lambda x: x[1], reverse=True)
+        lines.append(f"🏆 <b>Best Performer:</b> {winners[0][0]}  ₹{winners[0][1]:+,.0f}  ({winners[0][2]:+.1f}%)")
+    if losers:
+        losers.sort(key=lambda x: x[1])
+        lines.append(f"⚠️ <b>Worst Performer:</b> {losers[0][0]}  ₹{losers[0][1]:+,.0f}  ({losers[0][2]:+.1f}%)")
+
+    lines += [
+        f"",
+        f"{'─'*32}",
+        f"➕ /buy SYM QTY PRICE   ➖ /sell SYM",
+        f"⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
     ]
     return "\n".join(lines)
 
@@ -860,6 +902,19 @@ def enter_ai_mode(message):
 @bot.message_handler(func=lambda m: m.text in AI_CHAT_TOPIC_KEYS)
 def ai_topic_button(message):
     uid  = message.chat.id
+    # Stock Analysis: ask user to type the symbol
+    if message.text == "🔍 Stock Analysis":
+        safe_send(uid,
+            "🔍 <b>Stock Analysis</b>\n\n"
+            "Type the stock name or symbol you want analyzed.\n"
+            "Examples:\n"
+            "  <code>Reliance trade setup for 30 min</code>\n"
+            "  <code>INFY analysis</code>\n"
+            "  <code>TCS buy or sell?</code>\n"
+            "  <code>HDFC Bank levels</code>",
+            reply_markup=ai_keyboard())
+        _state[uid] = "ai"   # put user in AI chat mode so next message is answered
+        return
     text = AI_CHAT_TOPICS[message.text]
     safe_send(uid, "⏳ Thinking with live data…")
     def _run():
