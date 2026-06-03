@@ -182,8 +182,33 @@ def set_cached(key: str, val):
         _cache[key] = {"val": val, "ts": time.time()}
 
 
-# ── Portfolio ─────────────────────────────────────────────────────────────────
+# ── Portfolio — File-persisted so data survives bot restart ──────────────────
 _portfolio: dict = {}
+_PORT_FILE = "portfolio_data.json"
+
+
+def _load_portfolio():
+    """Load portfolio from disk on startup."""
+    global _portfolio
+    try:
+        if os.path.exists(_PORT_FILE):
+            with open(_PORT_FILE) as f:
+                raw = json.load(f)
+            # JSON keys are strings — convert uid keys to int
+            _portfolio = {int(k): v for k, v in raw.items()}
+            logger.info(f"Portfolio loaded: {len(_portfolio)} users")
+    except Exception as e:
+        logger.warning(f"Portfolio load failed: {e}")
+        _portfolio = {}
+
+
+def _save_portfolio():
+    """Persist portfolio to disk."""
+    try:
+        with open(_PORT_FILE, "w") as f:
+            json.dump(_portfolio, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Portfolio save failed: {e}")
 
 
 def get_portfolio(uid: int) -> dict:
@@ -200,14 +225,20 @@ def add_to_portfolio(uid: int, sym: str, qty: int, price: float):
         p[sym]  = {"qty": new_qty, "avg": new_avg}
     else:
         p[sym] = {"qty": qty, "avg": round(price, 2)}
+    _save_portfolio()
 
 
 def remove_from_portfolio(uid: int, sym: str) -> bool:
     p = get_portfolio(uid)
     if sym in p:
         del p[sym]
+        _save_portfolio()
         return True
     return False
+
+
+# Load on import
+_load_portfolio()
 
 
 def build_portfolio_card(uid: int) -> str:
@@ -249,15 +280,10 @@ def build_portfolio_card(uid: int) -> str:
     port_icon  = "🟢" if total_pnl >= 0 else "🔴"
 
     lines = [
-        f"╔{'═'*30}╗",
-        f"║  💼  PORTFOLIO REPORT            ║",
-        f"╚{'═'*30}╝",
-        f"📅 Generated: {today_str}",
-        f"📊 Holdings : {len(rows)} stocks",
+        f"<b>━━━ 💼 PORTFOLIO REPORT ━━━</b>",
+        f"📅 {today_str}  |  {len(rows)} holdings",
         f"",
-        f"{'═'*32}",
-        f"  HOLDINGS DETAIL",
-        f"{'═'*32}",
+        f"<b>── HOLDINGS ──</b>",
     ]
 
     # Sort by absolute P&L
@@ -271,13 +297,12 @@ def build_portfolio_card(uid: int) -> str:
             f"   Avg    : ₹{r['avg']:,.2f}  →  LTP: ₹{r['ltp']:,.2f}",
             f"   Invested: ₹{r['inv']:,.0f}  |  Current: ₹{r['cur']:,.0f}",
             f"   P&L    : ₹{r['pnl']:+,.2f}  ({r['pct']:+.2f}%)",
-            f"   ─────────────────",
+            f"   ···",
         ]
 
     lines += [
-        f"{'═'*32}",
-        f"  PORTFOLIO SUMMARY",
-        f"{'═'*32}",
+        f"",
+        f"<b>── SUMMARY ──</b>",
         f"💰 Total Invested : ₹{total_inv:,.2f}",
         f"📈 Current Value  : ₹{total_cur:,.2f}",
         f"{port_icon} <b>Total P&L      : ₹{total_pnl:+,.2f}  ({total_pct:+.2f}%)</b>",
@@ -354,6 +379,19 @@ def _fmt_revenue(rev, mcap=None) -> str:
     except Exception:
         return "N/A"
 # ── Advisory Card ─────────────────────────────────────────────────────────────
+def _get_tgt_line(trend: str, ltp: float, atr: float) -> str:
+    """P0 Fix: direction-aware target/SL line — no chained ternary crash on NEUTRAL."""
+    if trend == "BULLISH":
+        return (f"🎯 Target: ₹{round(ltp+1.5*atr,2):,.2f} (+{round(1.5*atr/ltp*100,1)}%)"
+                f"  |  SL: ₹{round(ltp-2*atr,2):,.2f} (-{round(2*atr/ltp*100,1)}%)")
+    elif trend == "BEARISH":
+        return (f"🎯 Target: ₹{round(ltp-1.5*atr,2):,.2f} (-{round(1.5*atr/ltp*100,1)}%)"
+                f"  |  SL: ₹{round(ltp+2*atr,2):,.2f} (+{round(2*atr/ltp*100,1)}%)")
+    else:
+        return (f"🎯 R1: ₹{round(ltp+atr,2):,.2f}  |  S1: ₹{round(ltp-atr,2):,.2f}"
+                f"  |  Range SL: ₹{round(ltp-2*atr,2):,.2f}")
+
+
 def build_adv(sym: str) -> str:
     sym = sym.upper().replace(".NS", "")
     df  = get_hist(sym, "6mo")
@@ -445,12 +483,7 @@ def build_adv(sym: str) -> str:
         frow("Debt/Equity",  de)  + (f"  |  Beta: {beta}" if beta else ""),
         frow("Div Yield",    div_y, "%"),
         "━━━━━━━━━━━━━━━━━━━━",
-        # Fix 12: direction-aware target and SL
-        (f"🎯 Target: ₹{round(ltp+1.5*atr,2):,.2f} (+{round(1.5*atr/ltp*100,1)}%)"
-         f"  |  SL: ₹{round(ltp-2*atr,2):,.2f} (-{round(2*atr/ltp*100,1)}%)")
-        if trend != "BEARISH" else
-        (f"🎯 Target: ₹{round(ltp-1.5*atr,2):,.2f} (-{round(1.5*atr/ltp*100,1)}%)"
-         f"  |  SL: ₹{round(ltp+2*atr,2):,.2f} (+{round(2*atr/ltp*100,1)}%)"),
+        _get_tgt_line(trend, ltp, atr),
     ]
 
     if news_text:
@@ -876,19 +909,23 @@ def cmd_buy(message):
             "Example: <code>/buy RELIANCE 10 2500</code>")
         return
     try:
-        sym   = parts[1].upper().replace(".NS", "")
-        qty   = int(parts[2])
-        price = float(parts[3])
+        # P1 Fix 6: normalize symbol via resolve_symbol so "HDFC Bank" → "HDFCBANK"
+        raw_sym = parts[1]
+        qty     = int(parts[2])
+        price   = float(parts[3])
     except ValueError:
         safe_send(message.chat.id, "❌ Invalid format. Example: /buy RELIANCE 10 2500")
         return
     if qty <= 0 or price <= 0:
         safe_send(message.chat.id, "❌ Quantity and price must be positive.")
         return
+    # Normalize: try resolve then fallback to uppercase
+    ticker, _ = resolve_symbol(raw_sym)
+    sym = ticker.replace(".NS","").replace(".BO","") if ticker else raw_sym.upper().replace(".NS","")
     add_to_portfolio(message.chat.id, sym, qty, price)
     safe_send(message.chat.id,
         f"✅ Added <b>{qty} × {sym}</b> @ ₹{price:.2f} to portfolio.\n"
-        f"View with: /portfolio")
+        f"View with /portfolio or tap 💼 Portfolio")
 
 
 @bot.message_handler(commands=["sell"])
@@ -1089,7 +1126,7 @@ def handle_text(message):
         return
 
     if _state.get(uid) == "ai":
-        safe_send(uid, "⏳ Thinking…")
+        safe_send(uid, "⏳ Thinking… (~8s)")
         def _ai():
             resp = ai_chat_respond(uid, text)
             safe_send(uid, resp or "❌ AI unavailable.", reply_markup=ai_keyboard())
@@ -1099,6 +1136,7 @@ def handle_text(message):
     # Analysis mode — user tapped 🔍 Analysis button and is now typing a symbol
     if _state.get(uid) == "analysis":
         safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
+        _state[uid] = None   # P1 Fix 5: reset state immediately so user isn't stuck
         def _analysis_run(q=text):
             ticker, cname = resolve_symbol(q)
             if ticker:
@@ -1110,7 +1148,8 @@ def handle_text(message):
                 if 2 <= len(sym_up) <= 15:
                     safe_send(uid, build_adv(sym_up))
                 else:
-                    safe_send(uid, f"❌ Could not find <b>{q}</b>. Try the exact NSE ticker like <code>RELIANCE</code>.")
+                    safe_send(uid, f"❌ Could not find <b>{q}</b>. Try: <code>RELIANCE</code>  <code>TCS</code>  <code>HDFC Bank</code>",
+                        reply_markup=main_keyboard())
         executor.submit(_analysis_run)
         return
 
