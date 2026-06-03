@@ -643,18 +643,46 @@ def clear_chat(uid: int):
 
 
 # ── Structured AI topics ───────────────────────────────────────────────────────
-CHAT_SYSTEM = """You are an expert Indian NSE stock market AI. Use ONLY numbers from LIVE MARKET CONTEXT below.
+CHAT_SYSTEM = """You are AutoAI Advisory — an expert Indian NSE/BSE stock market AI assistant.
+You have access to LIVE MARKET DATA injected below. Use it to answer accurately.
 
-STRICT RULES:
-1. Start your reply with the exact metric requested (e.g. "Nifty: 24,423 | PE: 22.3")
-2. Use bullet points. Use ₹ for prices. Use % for returns.
-3. NEVER invent prices, PE, ROE, RSI or option premiums not in the context.
-4. Support = spot − ATR (≈spot×0.01). Resistance = spot + ATR.
-5. For options: state STRATEGY + STRIKES only. Never quote premiums.
-6. Max 300 words. End with: ⚠️ Educational only. Not SEBI-registered advice.
-7. BANNED words: could, might, potentially, I think, may, perhaps."""
+CORE RULES:
+1. For ANY specific stock question (e.g. "Reliance trade setup", "INFY analysis", "TCS levels"):
+   → Give Entry Zone, Stop Loss, Target 1, Target 2, RSI, Trend, Verdict.
+   → If the stock is NOT in live data, use general TA principles and say "Based on typical levels".
+2. For market/index questions: Use exact Nifty/BankNifty data from context.
+3. For options questions: Give strategy name + strikes only. NEVER quote premiums.
+4. For fundamental questions: Use PE, PB, ROE, EPS from context if available.
+5. Always use ₹ for prices, % for returns, bullet points for clarity.
+6. Max 350 words. End every response with: ⚠️ Educational only. Not SEBI-registered advice.
+7. BANNED: "could", "might", "I think", "perhaps", "may" — be direct and specific.
+8. For 30-min / intraday setups: Give levels based on EMA/RSI from available data.
+   State timeframe clearly. Example: "30-min setup: Buy above ₹X, SL ₹Y, T1 ₹Z"
+
+STOCK TRADE SETUP FORMAT (use when any specific stock is asked):
+📌 [SYMBOL] — [TIMEFRAME] SETUP
+• Trend: [Bullish/Bearish/Sideways based on RSI+EMA data]
+• Entry: ₹[price or zone]
+• Stop Loss: ₹[price] ([X]% risk)
+• Target 1: ₹[price] ([X]% gain)
+• Target 2: ₹[price] ([X]% gain)
+• R:R = 1:[X]
+• RSI: [value] | Signal: [Overbought/Oversold/Neutral]
+• Why: [2 lines max — specific reason with data]"""
 
 AI_CHAT_TOPICS: dict = {
+    "🔍 Stock Analysis": (
+        "TASK: Detailed stock analysis. The user will name a stock. Use SPECIFIC STOCK DATA if provided.\n"
+        "FORMAT:\n📌 [SYMBOL] ANALYSIS — [date]\n"
+        "• LTP: ₹[exact] | Change: [exact]%\n"
+        "• Trend: [Bullish/Bearish/Sideways] | RSI: [exact] — [label]\n"
+        "• EMA9: ₹[x] | EMA21: ₹[x] | EMA50: ₹[x]\n"
+        "• Support: ₹[x] | Resistance: ₹[x]\n"
+        "• Entry: ₹[x]–₹[y] | SL: ₹[x] | T1: ₹[x] | T2: ₹[x]\n"
+        "• R:R = 1:[x] | ATR: ₹[x]\n"
+        "• Verdict: BUY/HOLD/AVOID — [one specific reason]\n"
+        "⚠️ Educational only. Not SEBI-registered advice."
+    ),
     "📊 Nifty Valuation": (
         "TASK: Nifty 50 Valuation. Use ONLY numbers from LIVE DATA.\n"
         "FORMAT:\n📊 NIFTY VALUATION — [date]\n"
@@ -711,6 +739,71 @@ AI_CHAT_TOPICS: dict = {
 AI_CHAT_TOPIC_KEYS: set = set(AI_CHAT_TOPICS.keys())
 
 
+def _detect_stock_in_message(msg: str) -> str:
+    """Try to detect a stock symbol in the user message for context injection."""
+    import re
+    # Known large-caps / common mentions
+    KNOWN = [
+        "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BAJFINANCE",
+        "TATAMOTORS","WIPRO","HCLTECH","AXISBANK","KOTAKBANK","LT","ITC",
+        "SUNPHARMA","BHARTIARTL","ONGC","NTPC","MARUTI","M&M","TITAN",
+        "ADANIENT","ADANIPORTS","BAJAJ","HDFC","NESTLE","TATACONSUM",
+        "DRREDDY","DIVISLAB","CIPLA","ZOMATO","NYKAA","PAYTM","INDIGO",
+    ]
+    msg_up = msg.upper()
+    for sym in KNOWN:
+        if sym in msg_up:
+            return sym
+    # Detect patterns like "XYZ trade", "XYZ setup", "XYZ analysis"
+    m = re.search(r"\b([A-Z]{2,12})\s*(TRADE|SETUP|ANALYSIS|CHART|BUY|SELL|TARGET|SL|STOCK)\b", msg_up)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _get_stock_live_context(sym: str) -> str:
+    """Fetch live price + RSI + basic data for a specific stock to inject into AI."""
+    try:
+        import yfinance as yf
+        import numpy as np
+        ticker = yf.Ticker(f"{sym}.NS")
+        df = ticker.history(period="3mo", progress=False)
+        if df.empty:
+            return ""
+        close = df["Close"]
+        ltp   = round(float(close.iloc[-1]), 2)
+        prev  = round(float(close.iloc[-2]), 2)
+        chg   = round((ltp-prev)/prev*100, 2)
+        # RSI
+        d = close.diff()
+        gain = d.where(d>0,0).rolling(14).mean()
+        loss = (-d.where(d<0,0)).rolling(14).mean()
+        rs   = gain/loss
+        rsi  = round(float(100-(100/(1+rs.iloc[-1]))), 1)
+        # EMAs
+        ema9  = round(float(close.ewm(span=9,  adjust=False).mean().iloc[-1]), 2)
+        ema21 = round(float(close.ewm(span=21, adjust=False).mean().iloc[-1]), 2)
+        ema50 = round(float(close.ewm(span=50, adjust=False).mean().iloc[-1]), 2)
+        # ATR
+        h,l,c = df["High"].values, df["Low"].values, close.values
+        tr = np.maximum(h[1:]-l[1:], np.maximum(np.abs(h[1:]-c[:-1]), np.abs(l[1:]-c[:-1])))
+        atr = round(float(np.mean(tr[-14:])), 2)
+        # 52w H/L
+        h52 = round(float(df["High"].max()), 2)
+        l52 = round(float(df["Low"].min()),  2)
+        trend = "BULLISH" if ltp > ema21 > ema50 else ("BEARISH" if ltp < ema21 < ema50 else "SIDEWAYS")
+        return (
+            f"\nSPECIFIC STOCK DATA — {sym}:\n"
+            f"LTP: ₹{ltp} ({chg:+.2f}%) | RSI: {rsi} | Trend: {trend}\n"
+            f"EMA9: ₹{ema9} | EMA21: ₹{ema21} | EMA50: ₹{ema50}\n"
+            f"ATR(14): ₹{atr} | 52W H: ₹{h52} | 52W L: ₹{l52}\n"
+            f"Support: ₹{round(ltp-atr,2)} | Resistance: ₹{round(ltp+atr,2)}\n"
+        )
+    except Exception as e:
+        logger.debug(f"stock ctx fetch {sym}: {e}")
+        return ""
+
+
 def ai_chat_respond(uid: int, user_message: str) -> str:
     if not ai_available():
         return (
@@ -719,12 +812,21 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
             "• <code>GROQ_API_KEY</code> — free at console.groq.com\n"
             "• <code>GEMINI_API_KEY</code> — free at aistudio.google.com"
         )
-    # FIX: context now cached 5min — not rebuilt on every message
-    market_ctx = get_live_market_context()
-    system     = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}"
-    messages   = list(get_chat_history(uid)) + [{"role": "user", "content": user_message}]
 
-    text, err = _call_ai(messages, max_tokens=400, system=system)  # FIX: 600→400 tokens saves ~1s
+    # Market context (cached 5 min)
+    market_ctx = get_live_market_context()
+
+    # Detect specific stock in the message and fetch its live data
+    detected_sym = _detect_stock_in_message(user_message)
+    stock_ctx = ""
+    if detected_sym:
+        stock_ctx = _get_stock_live_context(detected_sym)
+        logger.info(f"AI: detected stock {detected_sym}, injecting live data")
+
+    system   = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}{stock_ctx}"
+    messages = list(get_chat_history(uid)) + [{"role": "user", "content": user_message}]
+
+    text, err = _call_ai(messages, max_tokens=500, system=system)
 
     if text:
         add_to_chat(uid, "user",      user_message)
