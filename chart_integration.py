@@ -35,7 +35,7 @@ class ChartGenerator:
         self.cache = {}
         os.makedirs(output_dir, exist_ok=True)
     
-    def generate(self, symbol: Optional[str] = None, company_name: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
+    def generate(self, symbol: Optional[str] = None, company_name: Optional[str] = None, period: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
         """
         Generate technical chart for a stock.
         
@@ -56,12 +56,15 @@ class ChartGenerator:
                     return True, cached_data["meta"], cached_data["path"]
         
         try:
-            # Build command
+            # Build command — P0 Fix: pass period arg to subprocess
             cmd = [sys.executable, self.script_path]
             if symbol and company_name:
                 cmd.extend([symbol, company_name])
+                if self._period:
+                    cmd.append(self._period)
             
-            logger.info(f"[Chart] Generating: {symbol or 'auto-scan'}")
+            self._period = period  # P0 Fix: store for subprocess builder
+            logger.info(f"[Chart] Generating: {symbol or 'auto-scan'} period={period or 'default'}")
             
             # Run subprocess with timeout
             result = subprocess.run(
@@ -130,10 +133,14 @@ class ChartGenerator:
             if success and png_path:
                 # Send chart image
                 with open(png_path, "rb") as f:
+                    # P0 Fix 4: Telegram caption hard limit = 1024 chars
+                    caption = f"<b>📈 Technical Analysis</b>\n\n{meta_text}"
+                    if len(caption) > 1020:
+                        caption = caption[:1017] + "…"
                     bot.send_photo(
                         chat_id,
                         f,
-                        caption=f"<b>📈 Technical Analysis</b>\n\n{meta_text}",
+                        caption=caption,
                         parse_mode="HTML"
                     )
             else:
