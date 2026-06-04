@@ -13,7 +13,7 @@ import time as _time
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches mpatches
+import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
