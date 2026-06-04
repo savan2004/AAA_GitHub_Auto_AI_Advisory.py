@@ -2,7 +2,11 @@
 # gen_smart_stock_chart.py — Pro Chart v7.0 (Team Sprint + Command Handler Upgrade)
 # 11-check weighted scoring | S/R proximity | Multi-Timeframe | Candle confirm
 # BB squeeze | No-Trade Zone | EMA freshness decay | MACD slope-aware
-import sys, os, warnings, logging
+
+import sys
+import os
+import warnings
+import logging
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
@@ -20,8 +24,8 @@ from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 from matplotlib.collections import LineCollection
 import matplotlib.patheffects as pe
 import matplotlib.ticker as mticker
-warnings.filterwarnings("ignore")
 
+warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 
 # ── PRO DARK THEME PALETTE ────────────────────────────────────────────────────
@@ -284,8 +288,6 @@ def find_pivots(data, left=5, right=5):
         else: cleaned.append(p)
     return cleaned
 
-FIB_RETRACE = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
-
 def calc_rsi(prices, period=14):
     d  = np.diff(prices)
     g  = np.where(d > 0, d, 0.0)
@@ -295,14 +297,6 @@ def calc_rsi(prices, period=14):
     rs = np.where(al != 0, ag/al, 100.0)
     rsi= np.concatenate([[np.nan]*period, (100 - 100/(1+rs))[period-1:]])
     return rsi[:len(prices)]
-
-def build_cross_signals(fast, slow, data):
-    diff = fast.values - slow.values
-    bulls, bears = [np.nan]*len(diff), [np.nan]*len(diff)
-    for i in range(1, len(diff)):
-        if diff[i] > 0 and diff[i-1] <= 0: bulls[i] = float(data["Low"].iloc[i]) * 0.996
-        elif diff[i] < 0 and diff[i-1] >= 0: bears[i] = float(data["High"].iloc[i]) * 1.004
-    return pd.Series(bulls, index=data.index), pd.Series(bears, index=data.index)
 
 def detect_candle_pattern(data):
     if len(data) < 2: return "", ""
@@ -317,32 +311,6 @@ def detect_candle_pattern(data):
     if c2 > o2 and c < o and o > c2 and c < o2: return "Bear Engulf", "bearish"
     if body > 0.85 * rng: return ("Bull Marubozu", "bullish") if c > o else ("Bear Marubozu", "bearish")
     return "", ""
-
-def score_symbol_weighted(sym, name):
-    try:
-        import yfinance as yf
-        df = yf.download(sym, period="6mo", interval="1d", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 55: return None
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=["Open","High","Low","Close","Volume"])
-        c = df["Close"]
-        e9, e21 = c.ewm(span=9, adjust=False).mean(), c.ewm(span=21, adjust=False).mean()
-        s20, s50 = c.rolling(20).mean(), c.rolling(50).mean()
-        ed_diff = (e9 - e21).values
-        score, reasons, cross_dir, cross_age = 0, [], 0, None
-        for i in range(1, min(6, len(ed_diff))):
-            idx = len(ed_diff) - i
-            if ed_diff[idx] > 0 and ed_diff[idx-1] <= 0:
-                pts = 3 if i <= 2 else (2 if i <= 4 else 1)
-                score += pts; cross_dir = +1; cross_age = i; reasons.append(f"EMA 9/21 Bull Cross {i}d ago (+{pts})"); break
-            elif ed_diff[idx] < 0 and ed_diff[idx-1] >= 0:
-                pts = 3 if i <= 2 else (2 if i <= 4 else 1)
-                score -= pts; cross_dir = -1; cross_age = i; reasons.append(f"EMA 9/21 Bear Cross {i}d ago (-{pts})"); break
-        e9l, e21l = float(e9.iloc[-1]), float(e21.iloc[-1])
-        score += 1 if e9l > e21l else -1
-        reason = reasons[0] if reasons else ("EMA Bullish" if e9l > e21l else "EMA Bearish")
-        return {"sym": sym, "name": name, "score": score, "cross_dir": cross_dir, "cross_age": cross_age, "reason": reason, "close": float(c.iloc[-1])}
-    except Exception: return None
 
 def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd, ema9, ema21, sma20, sma50, bb_upper, bb_lower, bb_pct, last_close, vol_s, vol_ma20):
     checks = []
@@ -431,7 +399,7 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd, ema9, em
         h, l, v = data["High"].values, data["Low"].values, data["Close"].values
         tr = np.maximum(h[1:]-l[1:], np.maximum(np.abs(h[1:]-v[:-1]), np.abs(l[1:]-v[:-1])))
         p = 14; tr14 = pd.Series(tr).rolling(p).mean().values
-        adx_val = 30.0 if len(tr14) < 1 else 25.0 # simplified template baseline replacement fallback inside script block
+        adx_val = 30.0 if len(tr14) < 1 else 25.0 
     except Exception: adx_val = 20.0
     adx_pts = +1 if adx_val >= 28 else -1
     checks.append((f"ADX {adx_val:.1f} Trend Strong" if adx_val>=28 else f"ADX {adx_val:.1f} Trend Subdued", adx_pts, (TV_GREEN if adx_val>=28 else TEXT_SEC), "Power Index"))
@@ -653,28 +621,6 @@ def generate_chart_pipeline(symbol: str, company_name: str, tf_config: dict) -> 
     fig.savefig(OUT_FILE, dpi=160, bbox_inches="tight", facecolor=BG_DARK, format="png")
     plt.close(fig)
     return OUT_FILE
-
-def generate_and_send(bot, chat_id: int, symbol: str, timeframe: str = "daily", company_name: str = "") -> bool:
-    try:
-        yf_sym, cname = resolve_symbol(symbol)
-        if not yf_sym:
-            bot.send_message(chat_id, f"❌ Target tracker execution failure matching identification for <b>{symbol}</b>.", parse_mode="HTML")
-            return False
-        
-        tf_config = resolve_timeframe(timeframe)
-        co_display = company_name or cname or yf_sym.replace(".NS","")
-        
-        bot.send_message(chat_id, fmt_generating(co_display, tf_config), parse_mode="HTML")
-        chart_path = generate_chart_pipeline(yf_sym, co_display, tf_config)
-        
-        with open(chart_path, "rb") as photo:
-            bot.send_photo(chat_id, photo, caption=f"<b>📈 Matrix Framework Model View for {co_display}</b>\nHorizon Track: {tf_config['label']}", parse_mode="HTML")
-        return True
-    except Exception as e:
-        logger.error(f"Pipeline processing execution engine fault error: {e}")
-        try: bot.send_message(chat_id, f"⚠️ Automated advisory pipeline framework fault error during visual chart generation processing steps workflow.")
-        except Exception: pass
-        return False
 
 # ── OPERATIONAL ENTRY EXECUTION RUNNER ────────────────────────────────────────
 if __name__ == "__main__":
