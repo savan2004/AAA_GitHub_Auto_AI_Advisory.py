@@ -72,7 +72,203 @@ class ElliottWave:
     labels: list
     fib_ext: dict
     wave_complete: bool
+#!/usr/bin/env python3
+"""
+chart_command_handler.py  —  /Chart <SYMBOL> command flow
+Drop-in replacement for the argument-parsing section of gen_smart_stock_chart.py
 
+USAGE (from your Telegram / Discord / CLI bot):
+  python gen_smart_stock_chart.py BPCL.NS "BPCL" daily
+  python gen_smart_stock_chart.py BPCL.NS "BPCL" 30min
+  python gen_smart_stock_chart.py BPCL.NS "BPCL" 60min
+  python gen_smart_stock_chart.py BPCL.NS "BPCL" weekly
+"""
+
+import sys
+import re
+
+# ── TIMEFRAME CONFIG ──────────────────────────────────────────────────────────
+# Each entry guarantees >= 60–90 candles as per spec.
+#
+# Rule applied:
+#   30min  → 5 trading days  × ~16 half-hour bars/day  =  ~80 candles
+#   60min  → 10 trading days × ~8  hourly bars/day     =  ~80 candles
+#   daily  → 6 months        × ~21 trading days/month  = ~126 candles
+#   weekly → 2 years         × ~52 weeks/year          = ~104 candles
+
+TIMEFRAME_MAP = {
+    # alias       yf period   yf interval   min_candles  label
+    "30min":  dict(period="5d",   interval="30m", min_candles=80,  label="30 Min"),
+    "30m":    dict(period="5d",   interval="30m", min_candles=80,  label="30 Min"),
+    "60min":  dict(period="10d",  interval="60m", min_candles=80,  label="60 Min"),
+    "60m":    dict(period="10d",  interval="60m", min_candles=80,  label="60 Min"),
+    "1h":     dict(period="10d",  interval="60m", min_candles=80,  label="60 Min"),
+    "daily":  dict(period="6mo",  interval="1d",  min_candles=126, label="Daily"),
+    "1d":     dict(period="6mo",  interval="1d",  min_candles=126, label="Daily"),
+    "weekly": dict(period="2y",   interval="1wk", min_candles=104, label="Weekly"),
+    "1wk":    dict(period="2y",   interval="1wk", min_candles=104, label="Weekly"),
+    "week":   dict(period="2y",   interval="1wk", min_candles=104, label="Weekly"),
+}
+
+DEFAULT_TIMEFRAME = "daily"
+
+
+def resolve_timeframe(raw: str) -> dict:
+    """
+    Maps user input to a timeframe config dict.
+    Accepts: '30min', '30m', '60min', '1h', 'daily', '1d', 'weekly', '1wk'
+    Falls back to DEFAULT_TIMEFRAME if unknown.
+    """
+    key = raw.strip().lower()
+    return TIMEFRAME_MAP.get(key, TIMEFRAME_MAP[DEFAULT_TIMEFRAME])
+
+
+def parse_chart_command(args: list):
+    """
+    Parse sys.argv-style args for the chart command.
+
+    Accepted forms:
+      BPCL                         → auto-scan mode, daily
+      BPCL daily                   → BPCL, daily
+      BPCL 60min                   → BPCL, 60 min
+      BPCL.NS "BPCL" daily         → already-resolved (legacy compat)
+
+    Returns: (yf_symbol, company_name, tf_config) or prints error + exits.
+    """
+    if not args:
+        print("[ERROR] Usage: /Chart <SYMBOL> [timeframe]", file=sys.stderr)
+        sys.exit(1)
+
+    # Legacy 3-arg form: BPCL.NS "Company Name" daily
+    if len(args) >= 2 and ("." in args[0]):
+        yf_sym  = args[0]
+        co_name = args[1]
+        tf_raw  = args[2] if len(args) >= 3 else DEFAULT_TIMEFRAME
+        return yf_sym, co_name, resolve_timeframe(tf_raw)
+
+    # New 1-or-2-arg form: BPCL [timeframe]
+    raw_sym = args[0]
+    tf_raw  = args[1] if len(args) >= 2 else DEFAULT_TIMEFRAME
+
+    result = resolve_symbol(raw_sym)
+    if result is None:
+        print(f"[ERROR] Symbol '{raw_sym}' not found. Try the full NSE ticker.", file=sys.stderr)
+        sys.exit(1)
+
+    yf_sym, co_name = result
+    return yf_sym, co_name, resolve_timeframe(tf_raw)
+
+
+# ── BOT MESSAGE HELPERS (Telegram / Discord / CLI) ────────────────────────────
+
+def fmt_company_found(yf_sym: str, co_name: str) -> str:
+    """Bot reply when company is matched."""
+    ticker = yf_sym.replace(".NS", "").replace(".BO", "")
+    exchange = "NSE" if yf_sym.endswith(".NS") else "BSE"
+    return (
+        f"Found: *{co_name}* ({exchange}: {ticker})\n"
+        f"Is this correct? Reply YES to continue or type another symbol."
+    )
+
+
+def fmt_timeframe_menu() -> str:
+    """Bot reply asking user to pick a timeframe."""
+    lines = ["Select a timeframe:\n"]
+    options = [
+        ("1", "30 Min",  "~80 candles  · 5 days intraday"),
+        ("2", "60 Min",  "~80 candles  · 10 days intraday"),
+        ("3", "Daily",   "~126 candles · 6 months swing"),
+        ("4", "Weekly",  "~104 candles · 2 years trend"),
+    ]
+    for num, label, detail in options:
+        lines.append(f"  {num}. {label:<10} {detail}")
+    lines.append("\nReply with 1 / 2 / 3 / 4 or the name (e.g. daily)")
+    return "\n".join(lines)
+
+
+def fmt_generating(co_name: str, tf_config: dict) -> str:
+    """Bot reply confirming chart generation start."""
+    return (
+        f"Generating *{tf_config['label']}* chart for {co_name} "
+        f"({tf_config['min_candles']} candles)…"
+    )
+
+
+# ── CANDLE COUNT GUARD ────────────────────────────────────────────────────────
+
+def ensure_min_candles(df, tf_config: dict, symbol: str):
+    """
+    After download, verify candle count meets the minimum.
+    If short (e.g. holiday-heavy week), extend the period automatically.
+
+    Returns the (possibly re-downloaded) DataFrame.
+    """
+    import yfinance as yf
+
+    if len(df) >= tf_config["min_candles"]:
+        return df
+
+    # Fallback periods for each interval
+    fallback = {
+        "30m": "10d",
+        "60m": "20d",
+        "1d":  "1y",
+        "1wk": "3y",
+    }
+    ext_period = fallback.get(tf_config["interval"], tf_config["period"])
+    print(
+        f"[WARN] Only {len(df)} candles on {tf_config['interval']}; "
+        f"extending to period={ext_period}",
+        file=sys.stderr
+    )
+    df2 = yf.download(
+        symbol,
+        period=ext_period,
+        interval=tf_config["interval"],
+        progress=False,
+        auto_adjust=True,
+    )
+    if len(df2) > len(df):
+        return df2
+    return df  # return original if extension didn't help
+
+
+# ── INTEGRATION SNIPPET ───────────────────────────────────────────────────────
+# Replace the argument-parsing block in gen_smart_stock_chart.py with this:
+#
+#   from chart_command_handler import parse_chart_command, ensure_min_candles
+#
+#   symbol, company_name, tf_config = parse_chart_command(sys.argv[1:])
+#   CHART_PERIOD  = tf_config["period"]
+#   CHART_INTERVAL = tf_config["interval"]
+#
+#   data = yf.download(symbol, period=CHART_PERIOD, interval=CHART_INTERVAL,
+#                      progress=False, auto_adjust=True)
+#   data = ensure_min_candles(data, tf_config, symbol)
+#
+# Then pass CHART_INTERVAL to the chart title / header so users see "30 Min" etc.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+if __name__ == "__main__":
+    # Quick smoke-test
+    tests = [
+        (["BPCL"],          "BPCL.NS"),
+        (["BPCL", "60min"], "BPCL.NS"),
+        (["BPCL", "daily"], "BPCL.NS"),
+        (["BPCL", "weekly"],"BPCL.NS"),
+        (["BPCL.NS", "Bharat Petroleum", "30min"], "BPCL.NS"),
+    ]
+    print("=== chart_command_handler smoke tests ===\n")
+    for args, expected_sym in tests:
+        sym, name, tf = parse_chart_command(args)
+        status = "OK" if sym == expected_sym else "FAIL"
+        print(f"[{status}] args={args}")
+        print(f"       sym={sym}  name={name}")
+        print(f"       tf={tf['label']}  period={tf['period']}  interval={tf['interval']}  min_candles={tf['min_candles']}")
+        print()
+    print("Timeframe menu preview:\n")
+    print(fmt_timeframe_menu())
 # ── PIVOT DETECTION ───────────────────────────────────────────────────────────
 def find_pivots(data, left=5, right=5):
     highs = data["High"].values
