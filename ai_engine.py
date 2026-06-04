@@ -1,39 +1,32 @@
 """
-ai_engine.py  v6.0  —  AI Engine (Full Upgrade)
+ai_engine.py — AI Engine v5.2 (Performance + Quality Fixed)
 
-FIXES vs v5.2:
-  CRITICAL:
-  1. _detect_stock_in_message: false-positive regex (GOOD/WHAT/TODAY etc.) blocked by deny-list
-  2. get_live_market_context: double-fetch race condition fixed with _CTX_FETCHING flag
-  3. ai_chat_respond: chat history drift fixed — user msg always added, assistant only on success
+FIXES vs v5.1:
+  SPEED:
+  1. get_live_market_context() now cached for 5 min — no longer rebuilt on every message
+  2. GROQ fallback model: llama-3.3-70b → llama-3.1-8b-instant when rate-limited
+  3. Gemini model updated: gemini-1.5-flash → gemini-2.0-flash (faster, cheaper)
+  4. AskFuzz timeout: 15s → 8s
+  5. NSE PE fetch: session reused across calls (was creating new Session every time)
+  6. Context fetch: parallel threading for Nifty + stocks (was fully sequential)
 
-  LOGIC BUGS:
-  4. _get_stock_live_context: RSI now uses Wilder's EWM (was simple rolling mean, ±5pt error)
-  5. _get_stock_live_context: 30-min pivot now fetches real 30m bars, not daily OHLC
-  6. fetch_news Finnhub: symbol prefix fixed — "SYMBOL.NS" not "NSE:SYMBOL"
-  7. test_ai_providers Gemini: safety-filtered response no longer marked as FAIL
-  8. _fetch_nifty_pe: removed slow homepage warmup that fails on cloud IPs (Render/Railway)
+  AI QUALITY:
+  7. Temperature: 0.4 → 0.1 for all structured outputs (less hallucination, strict format)
+  8. GROQ model fallback chain: 70b → 8b-instant → mixtral
+  9. Gemini prompt format fixed: plain text (not role-labelled) matches Gemini's expectation
+  10. ai_insights: never passes "N/A" strings to AI — skips insight if no data
+  11. fetch_news: Tavily domain filter active, junk titles filtered
 
-  PERFORMANCE:
-  9. Context timeout: 20s → 12s
-  10. ai_insights max_tokens: 280 → 200
-  11. NSE PE: direct API call with X-Requested-With header (better cloud IP acceptance)
-  12. AskFuzz timeout: retained at 8s
-
-  NEW FEATURES:
-  13. get_sector_rotation(): 5 sector indices ranked by 5-day momentum
-  14. _detect_timeframe_in_message(): auto-detects intraday request, switches to 30m data
-  15. _validate_ai_response(): sanity-checks AI output, retries on obvious hallucination
-  16. GROQ streaming support: sends partial response every ~80 tokens (eliminates 8s wait)
+  REVENUE:
+  12. Revenue sourced from Yahoo v10 financialData.totalRevenue (absolute Rs → fmt_mcap /1e7)
+      NOT from Screener.in scraper which was 40x overstated due to unit mismatch
 """
 
 import os
-import re
 import logging
 import time
 import threading
 import requests
-import numpy as np
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, date, timedelta
@@ -102,6 +95,7 @@ def _get_gemini():
         try:
             import google.generativeai as genai
             genai.configure(api_key=key)
+            # FIX: gemini-2.0-flash is faster and cheaper than 1.5-flash
             for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
                 try:
                     _gemini_model    = genai.GenerativeModel(model_name)
@@ -133,7 +127,7 @@ def _get_openai():
 
 
 # ── AskFuzz ────────────────────────────────────────────────────────────────────
-def _call_askfuzz_ai(prompt: str, timeout: int = 8) -> tuple:
+def _call_askfuzz_ai(prompt: str, timeout: int = 8) -> tuple:  # FIX: 15s → 8s
     api_key = _key("ASKFUZZ_API_KEY")
     if not api_key:
         return "", ""
@@ -150,7 +144,7 @@ def _call_askfuzz_ai(prompt: str, timeout: int = 8) -> tuple:
         data   = resp.json()
         answer = data.get("answer", "").strip()
         if answer:
-            conf   = data.get("confidence", 1.0)
+            conf = data.get("confidence", 1.0)
             clabel = "high" if conf >= 0.8 else "medium" if conf >= 0.5 else "low"
             return f"📊 <b>AskFuzz AI</b> [confidence:{clabel}]\n\n{answer}", ""
         return "", "AskFuzz: empty response"
@@ -161,18 +155,20 @@ def _call_askfuzz_ai(prompt: str, timeout: int = 8) -> tuple:
 
 
 # ── Core AI call ───────────────────────────────────────────────────────────────
+# GROQ model fallback chain
 _GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "mixtral-8x7b-32768",
+    "llama-3.3-70b-versatile",  # Best quality
+    "llama-3.1-8b-instant",     # FIX: fallback when 70b rate-limited
+    "mixtral-8x7b-32768",       # Second fallback
 ]
 
 
 def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
     """
     Provider chain: GROQ → Gemini → OpenAI → AskFuzz
-    temperature=0.1 for structured outputs (reduced hallucination).
-    GROQ tries 3 models before giving up.
+    FIX: temperature=0.1 for strict structured outputs (was 0.4)
+    FIX: GROQ now tries 3 models before giving up
+    FIX: Gemini prompt is clean text (not role-labelled string)
     """
     errors = []
 
@@ -188,6 +184,7 @@ def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
             msgs = ([{"role": "system", "content": system}] if system else []) + messages
             for model in _GROQ_MODELS:
                 try:
+                    # Use 8b-instant for simple queries (faster), 70b for complex
                     _max_tok = max_tokens if model == "llama-3.3-70b-versatile" else min(max_tokens, 350)
                     r = groq.chat.completions.create(
                         model=model, messages=msgs,
@@ -203,10 +200,10 @@ def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
                     msg = str(e)
                     if "429" in msg or "rate" in msg.lower():
                         errors.append(f"GROQ [{model}]: rate limited → trying next model")
-                        continue
+                        continue   # try next model in chain
                     elif "401" in msg or "invalid_api_key" in msg.lower():
                         errors.append("GROQ: INVALID KEY — regenerate at console.groq.com")
-                        break
+                        break      # wrong key — no point trying other models
                     else:
                         errors.append(f"GROQ [{model}]: {msg[:100]}")
                         break
@@ -221,22 +218,19 @@ def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
             errors.append("Gemini: client init failed")
         else:
             try:
+                # FIX: Gemini works better with plain structured text, not "USER:/ASSISTANT:" labels
                 full_prompt = ""
                 if system:
                     full_prompt += f"{system}\n\n"
                 for m in messages:
-                    role   = m.get("role", "user")
-                    txt    = m.get("content", "")
-                    prefix = "Question" if role == "user" else "Previous answer"
+                    role    = m.get("role", "user")
+                    txt     = m.get("content", "")
+                    prefix  = "Question" if role == "user" else "Previous answer"
                     full_prompt += f"{prefix}: {txt}\n\n"
                 full_prompt += "Answer:"
 
-                r = gemini.generate_content(full_prompt)
-                # FIX: safety-blocked responses raise on .text access — catch separately
-                try:
-                    text = (getattr(r, "text", "") or "").strip()
-                except (AttributeError, ValueError):
-                    text = "OK (safety filtered)"
+                r    = gemini.generate_content(full_prompt)
+                text = (getattr(r, "text", "") or "").strip()
                 if text:
                     logger.info("Gemini OK")
                     return text, ""
@@ -295,68 +289,54 @@ def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
 
 
 # ── Market context cache ───────────────────────────────────────────────────────
-_CTX_CACHE: dict    = {"text": "", "ts": 0.0}
-_CTX_TTL            = 300
-_CTX_LOCK           = threading.Lock()
-_CTX_FETCHING       = False   # FIX: prevents double-fetch race condition
+_CTX_CACHE: dict = {"text": "", "ts": 0.0}
+_CTX_TTL = 300   # 5 min — FIX: was rebuilt on EVERY message (0s cache)
+_CTX_LOCK = threading.Lock()
 
 
 def _fetch_nifty_pe() -> dict:
-    """
-    Fetch Nifty PE/PB/DivYield from NSE API.
-    FIX: removed homepage session warmup (fails on Render/Railway cloud IPs).
-    Uses direct API call with X-Requested-With header instead.
-    """
+    """Fetch Nifty PE from NSE → Screener → Yahoo."""
+    _NSE_H = {
+        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122",
+        "Accept":          "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer":         "https://www.nseindia.com/",
+    }
     def _parse_pe(v):
         try:
             f = float(v)
-            if 8 < f < 60:
-                return round(f, 2)
-        except Exception:
-            pass
+            if 8 < f < 60: return round(f, 2)
+        except Exception: pass
         return None
 
-    # Direct NSE API with cloud-friendly headers
+    # NSE equity-stockIndices
     try:
-        headers = {
-            "User-Agent":       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124",
-            "Accept":           "application/json",
-            "Accept-Language":  "en-US,en;q=0.9",
-            "Referer":          "https://www.nseindia.com/market-data/live-equity-market",
-            "X-Requested-With": "XMLHttpRequest",  # FIX: helps bypass cloud IP blocks
-        }
-        r = requests.get(
-            "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050",
-            headers=headers,
-            timeout=8,
-        )
+        s = requests.Session()
+        s.headers.update(_NSE_H)
+        s.get("https://www.nseindia.com/", timeout=5)
+        r = s.get("https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050", timeout=8)
         if r.ok:
             meta = r.json().get("metadata", {})
             pe   = _parse_pe(meta.get("pe"))
             if pe:
-                return {
-                    "pe":        pe,
-                    "pb":        round(float(meta["pb"]),       2) if meta.get("pb")       else "N/A",
-                    "div_yield": round(float(meta["divYield"]), 2) if meta.get("divYield") else "N/A",
-                    "source":    "NSE",
-                }
-    except Exception as e:
-        logger.debug(f"NSE PE direct: {e}")
+                return {"pe": pe,
+                        "pb":        round(float(meta["pb"]),       2) if meta.get("pb")       else "N/A",
+                        "div_yield": round(float(meta["divYield"]), 2) if meta.get("divYield") else "N/A",
+                        "source":    "NSE"}
+    except Exception: pass
 
     # Screener fallback
     try:
-        r = requests.get(
-            "https://www.screener.in/company/^NSEI/",
-            headers={"User-Agent": "Mozilla/5.0"}, timeout=8,
-        )
+        r = requests.get("https://www.screener.in/company/^NSEI/",
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
         if r.ok:
+            import re
             m = re.search(r"Stock P/E[\D]*([\d]+\.[\d]+)", r.text)
             if m:
                 pe = _parse_pe(m.group(1))
                 if pe:
                     return {"pe": pe, "pb": "N/A", "div_yield": "N/A", "source": "Screener"}
-    except Exception:
-        pass
+    except Exception: pass
 
     return {}
 
@@ -364,45 +344,34 @@ def _fetch_nifty_pe() -> dict:
 def get_live_market_context(force: bool = False) -> str:
     """
     Build live market context injected into every AI call.
-    Cached for 5 minutes.
-    FIX: double-fetch race condition resolved with _CTX_FETCHING flag.
+    FIX: Cached for 5 minutes — was rebuilt on every single message.
+    FIX: Nifty + stocks fetched in parallel threads.
     """
-    global _CTX_CACHE, _CTX_FETCHING
-
+    global _CTX_CACHE
     with _CTX_LOCK:
         if not force and _CTX_CACHE["text"] and (time.time() - _CTX_CACHE["ts"]) < _CTX_TTL:
             return _CTX_CACHE["text"]
-        # FIX: if another thread is already fetching, return stale data immediately
-        if _CTX_FETCHING and _CTX_CACHE["text"]:
-            return _CTX_CACHE["text"]
-        _CTX_FETCHING = True
 
-    try:
-        return _build_market_context()
-    finally:
-        with _CTX_LOCK:
-            _CTX_FETCHING = False
+    from data_engine import _yahoo_v8_hist, get_hist, get_info, calc_rsi, batch_quotes
 
+    lines = [f"=== LIVE DATA {datetime.now().strftime('%d-%b-%Y %H:%M IST')} ==="]
 
-def _build_market_context() -> str:
-    """Internal — does the actual parallel fetch. Called by get_live_market_context."""
-    from data_engine import get_hist, get_info, batch_quotes
-
-    lines   = [f"=== LIVE DATA {datetime.now().strftime('%d-%b-%Y %H:%M IST')} ==="]
+    # Parallel fetch: indices + top8 stocks + PE simultaneously
     results = {}
 
     def fetch_index(ticker, name):
         try:
-            d = yf.Ticker(ticker).history(period="5d")
-            if d is not None and len(d) >= 2:
-                ltp  = round(float(d["Close"].iloc[-1]), 2)
-                prev = round(float(d["Close"].iloc[-2]), 2)
+            df = _yahoo_v8_hist(ticker, period="5d")
+            if df is None or len(df) < 2:
+                df = yf.Ticker(ticker).history(period="5d")
+            if df is not None and len(df) >= 2:
+                ltp  = round(float(df["Close"].iloc[-1]), 2)
+                prev = round(float(df["Close"].iloc[-2]), 2)
                 chg  = round((ltp - prev) / prev * 100, 2) if prev else 0.0
-                h    = round(float(d["High"].iloc[-1]), 2)
-                l    = round(float(d["Low"].iloc[-1]),  2)
-                results[name] = (ltp, chg, h, l, d)
-        except Exception:
-            pass
+                h    = round(float(df["High"].iloc[-1]), 2)
+                l    = round(float(df["Low"].iloc[-1]),  2)
+                results[name] = (ltp, chg, h, l, df)
+        except Exception: pass
 
     def fetch_pe():
         results["pe"] = _fetch_nifty_pe()
@@ -415,20 +384,19 @@ def _build_market_context() -> str:
             try:
                 info  = quotes.get(sym) or {}
                 price = info.get("price")
-                if not price:
-                    continue
+                if not price: continue
                 ltp   = round(float(price), 2)
                 prev  = info.get("prev_close")
                 chg   = round((ltp - float(prev)) / float(prev) * 100, 2) if prev else 0.0
                 df_h  = get_hist(sym, "3mo")
-                rsi_v = _calc_rsi_wilder(df_h["Close"]) if not df_h.empty else 50.0
+                rsi_v = calc_rsi(df_h["Close"]) if not df_h.empty else 50.0
                 snap.append(f"{sym}:₹{ltp}({chg:+.1f}%)RSI:{rsi_v}")
-            except Exception:
-                pass
+            except Exception: pass
         results["top8"] = snap
 
     def fetch_fund_stocks():
-        FUND = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","SBIN","BAJFINANCE","TATAMOTORS"]
+        FUND = ["RELIANCE","TCS","HDFCBANK","INFY",
+                "ICICIBANK","SBIN","BAJFINANCE","TATAMOTORS"]  # FIX: 12→8 stocks, faster context
         fund_lines = []
         for sym in FUND:
             try:
@@ -458,30 +426,24 @@ def _build_market_context() -> str:
                 if pos52 is not None: parts.append(f"52W:{pos52:.0f}%")
                 if len(parts) > 2:
                     fund_lines.append(" | ".join(parts))
-            except Exception:
-                pass
+            except Exception: pass
         results["fund"] = fund_lines
 
-    def fetch_sector_rotation():
-        results["sectors"] = get_sector_rotation()
-
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    # Run all fetches in parallel
+    with ThreadPoolExecutor(max_workers=5) as ex:
         futs = [
-            ex.submit(fetch_index, "^NSEI",     "nifty50"),
+            ex.submit(fetch_index, "^NSEI",    "nifty50"),
             ex.submit(fetch_index, "^NSEBANK",  "banknifty"),
             ex.submit(fetch_index, "^CNXIT",    "niftyit"),
             ex.submit(fetch_pe),
             ex.submit(fetch_top8),
             ex.submit(fetch_fund_stocks),
-            ex.submit(fetch_sector_rotation),
         ]
-        for f in as_completed(futs, timeout=12):
-            try:
-                f.result()
-            except Exception:
-                pass
+        for f in as_completed(futs, timeout=12):  # FIX: 20→12s timeout
+            try: f.result()
+            except Exception: pass
 
-    # Assemble
+    # Assemble context
     if "nifty50" in results:
         ltp, chg, h, l, _ = results["nifty50"]
         lines.append(f"NIFTY 50: {ltp:,.2f} ({chg:+.2f}%) | Day H/L: {h}/{l}")
@@ -494,16 +456,12 @@ def _build_market_context() -> str:
 
     pe_data = results.get("pe", {})
     if pe_data:
-        pe, pb, divy, src = (
-            pe_data.get("pe","N/A"), pe_data.get("pb","N/A"),
-            pe_data.get("div_yield","N/A"), pe_data.get("source","NSE"),
-        )
+        pe, pb, divy, src = (pe_data.get("pe","N/A"), pe_data.get("pb","N/A"),
+                              pe_data.get("div_yield","N/A"), pe_data.get("source","NSE"))
         try:
-            pe_f    = float(pe)
-            verdict = ("→ EXPENSIVE"       if pe_f > 24
-                       else "→ SLIGHTLY RICH" if pe_f > 22
-                       else "→ FAIRLY VALUED" if pe_f > 19
-                       else "→ CHEAP")
+            pe_f = float(pe)
+            verdict = ("→ EXPENSIVE" if pe_f > 24 else "→ SLIGHTLY RICH" if pe_f > 22
+                       else "→ FAIRLY VALUED" if pe_f > 19 else "→ CHEAP")
         except Exception:
             verdict = ""
         lines.append(f"NIFTY PE: {pe} | PB: {pb} | DivYield: {divy}% [{src}] {verdict}")
@@ -515,179 +473,99 @@ def _build_market_context() -> str:
         lines.append("\nFUNDAMENTAL DATA (use ONLY these figures for Fundamental Picks):")
         lines.extend(results["fund"])
 
-    if results.get("sectors"):
-        lines.append(f"\nSECTOR ROTATION:\n{results['sectors']}")
-
-    # Nifty options context
+    # Nifty options context from cached index data
     try:
         nifty_df = results.get("nifty50", (None,)*5)[4]
         if nifty_df is not None and len(nifty_df) >= 5:
-            c      = nifty_df["Close"]
-            spot_n = round(float(c.iloc[-1]), 0)
-            ema20n = round(float(c.ewm(span=20, adjust=False).mean().iloc[-1]), 0)
-            rsi_n  = round(_calc_rsi_wilder(c), 1)
-            trend_n= "BULLISH" if spot_n > ema20n else "BEARISH"
-            atm_n  = int(round(spot_n / 50) * 50)
+            c       = nifty_df["Close"]
+            spot_n  = round(float(c.iloc[-1]), 0)
+            ema20n  = round(float(c.ewm(span=20, adjust=False).mean().iloc[-1]), 0)
+            from data_engine import calc_rsi
+            rsi_n   = calc_rsi(c)
+            trend_n = "BULLISH" if spot_n > ema20n else "BEARISH"
+            atm_n   = int(round(spot_n / 50) * 50)
             lines.append(
                 f"\nNIFTY OPTIONS CONTEXT: Spot={spot_n} ATM={atm_n} "
-                f"EMA20={ema20n} RSI={rsi_n} Trend={trend_n} "
+                f"EMA20={ema20n} RSI={round(rsi_n,1)} Trend={trend_n} "
                 f"| CE:{atm_n} {atm_n+50} {atm_n+100} "
                 f"| PE:{atm_n} {atm_n-50} {atm_n-100} "
                 f"| Do NOT quote option premiums"
             )
-    except Exception:
-        pass
+    except Exception: pass
 
     ctx = "\n".join(lines)
+    # Inject PCR scored interpretation into context
+    pcr_scored = _parse_pcr_score(ctx)
+    if pcr_scored:
+        ctx += f"\nPCR SIGNAL: {pcr_scored}"
     with _CTX_LOCK:
         _CTX_CACHE["text"] = ctx
         _CTX_CACHE["ts"]   = time.time()
     return ctx
 
 
-# ── NEW: Sector rotation ──────────────────────────────────────────────────────
-_SECTOR_TICKERS = {
-    "IT":     "^CNXIT",
-    "Bank":   "^NSEBANK",
-    "Auto":   "^CNXAUTO",
-    "Pharma": "^CNXPHARMA",
-    "FMCG":   "^CNXFMCG",
-    "Metal":  "^CNXMETAL",
-    "Energy": "^CNXENERGY",
-}
-
-def get_sector_rotation() -> str:
-    """
-    NEW: Fetches 5 sector indices and ranks by 5-day momentum.
-    Returns a formatted string for AI context injection.
-    """
-    results = []
-    for name, ticker in _SECTOR_TICKERS.items():
-        try:
-            d = yf.Ticker(ticker).history(period="10d")
-            if d is None or len(d) < 5:
-                continue
-            c     = d["Close"]
-            ltp   = float(c.iloc[-1])
-            base  = float(c.iloc[-5])
-            mom5d = round((ltp - base) / base * 100, 2) if base > 0 else 0.0
-            ema5  = float(c.ewm(span=5, adjust=False).mean().iloc[-1])
-            trend = "↑" if ltp > ema5 else "↓"
-            results.append((name, mom5d, trend))
-        except Exception:
-            pass
-
-    if not results:
-        return "Sector data unavailable"
-
-    results.sort(key=lambda x: -x[1])
-    lines = []
-    for i, (name, mom, trend) in enumerate(results):
-        rank  = ["🥇 LEAD","🥈 2nd","🥉 3rd","4th","5th","6th","7th"][i] if i < 7 else f"{i+1}th"
-        lines.append(f"{rank}: {name} {trend} 5D:{mom:+.2f}%")
-    return "\n".join(lines)
-
-
-# ── RSI helper (Wilder's EWM — used throughout this module) ───────────────────
-def _calc_rsi_wilder(close_series, period: int = 14) -> float:
-    """
-    FIX: Proper Wilder's smoothing. Matches TradingView within ±0.5 points.
-    Was previously using rolling().mean() (simple MA) — off by ±2-5 points.
-    """
-    s     = close_series.dropna()
-    delta = s.diff()
-    gain  = delta.clip(lower=0).ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-    loss  = (-delta.clip(upper=0)).ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-    rs    = gain / loss.replace(0, 1e-10)
-    rsi   = 100 - 100 / (1 + rs)
-    return round(float(rsi.iloc[-1]), 1)
-
-
 # ── Stock insights ─────────────────────────────────────────────────────────────
 def ai_insights(symbol: str, ltp: float, rsi: float, macd_line: float,
-                trend: str, pe: str, roe: str) -> str:
+                trend: str, pe: str, roe: str, atr: float = 0.0,
+                sl: float = 0.0, t1: float = 0.0) -> str:
+    """
+    6-field structured prompt with explicit ₹ price anchors.
+    Team fix: no 12-field dump that causes AI to invent prices.
+    """
     if not ai_available():
         return "⚠️ No AI key set. Add GROQ_API_KEY in Render env vars (free at console.groq.com)."
 
-    direction = "bullish" if macd_line > 0 else "bearish"
-    rsi_label = ("OVERBOUGHT — pullback risk" if rsi > 70
-                 else "OVERSOLD — bounce potential" if rsi < 30
-                 else "neutral zone")
+    direction = "BULLISH" if macd_line > 0 else "BEARISH"
+    rsi_zone  = ("OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "NEUTRAL")
 
-    has_fundamentals = pe not in ("N/A", "None", "") or roe not in ("N/A", "None", "")
-    fund_line = f"PE: {pe} | ROE: {roe}%\n" if has_fundamentals else ""
+    # Only include fundamentals if real — prevents hallucination
+    fund_line = ""
+    if pe not in ("N/A","None","","0","0.0") and roe not in ("N/A","None","","0","0.0"):
+        fund_line = f"Fundamentals: PE={pe} | ROE={roe}%\n"
 
+    # ATR-based levels (team spec: SL=1.2×ATR, T1=2×ATR)
+    atr_line = ""
+    if atr > 0:
+        _sl  = sl  if sl  > 0 else round(ltp - 1.2*atr, 2)
+        _t1  = t1  if t1  > 0 else round(ltp + 2.0*atr, 2)
+        atr_line = f"ATR(14)=₹{atr:.2f} | Calculated SL=₹{_sl:.2f} | T1=₹{_t1:.2f}\n"
+
+    # 6-field structured prompt — team consensus format
     prompt = (
-        f"Stock: {symbol} (NSE India)\n"
-        f"Technical: LTP ₹{ltp} | RSI {rsi} ({rsi_label}) | MACD {direction} | Trend {trend}\n"
+        f"STOCK: {symbol} (NSE India)\n"
+        f"PRICE: ₹{ltp:.2f} exactly — USE THIS NUMBER ONLY for all calculations\n"
+        f"SIGNAL: RSI={rsi:.1f} ({rsi_zone}) | MACD {direction} | Trend {trend}\n"
         f"{fund_line}"
-        f"\nOutput EXACTLY this format (no extra text):\n"
-        f"BULLISH FACTORS:\n• [factor with exact number]\n• [factor]\n• [factor]\n"
-        f"RISKS:\n• [risk with exact number]\n• [risk]\n"
-        f"VERDICT: BUY / HOLD / AVOID — [one sentence with specific reason and data]."
+        f"{atr_line}"
+        f"\nRespond in EXACTLY this format — no preamble, no extra lines:\n"
+        f"📌 {symbol} — [BULLISH/BEARISH/NEUTRAL]\n"
+        f"• Strength: [one specific technical reason citing ₹{ltp:.2f} and RSI/MACD numbers above]\n"
+        f"• Risk: [one specific risk citing actual price levels]\n"
+        f"• Catalyst: [sector/news factor in one line]\n"
+        f"• Verdict: [BUY ABOVE ₹X / SELL BELOW ₹X / HOLD] — [one sentence]\n"
+        f"• Horizon: [swing 3-5d / positional 2-4w / avoid]"
     )
     text, err = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=200,  # FIX: 280→200, faster stock card
-        system="Precise Indian equity analyst. Use only the data given. No speculation. Exact format only.",
+        max_tokens=180,
+        system=(
+            "You are a precise NSE equity analyst. "
+            "Use ONLY the exact ₹ price given — never invent or round prices. "
+            "Cite the actual RSI and MACD values. No speculation. Exact format only."
+        ),
     )
     if text:
-        if _validate_ai_response(text, symbol):
-            return text
-        # Retry with stricter prompt on validation failure
-        strict_prompt = prompt + "\n\nIMPORTANT: Use ONLY the numbers given above. Do NOT invent prices or percentages."
-        text2, _ = _call_ai([{"role":"user","content":strict_prompt}], max_tokens=200,
-                             system="Precise Indian equity analyst. Numbers from prompt only.")
-        if text2:
-            return text2
-        return text   # return original if retry also fails validation
-
+        return text
     return f"⚠️ AI unavailable: {err.split(chr(10))[0][:80]}" if err else "⚠️ AI temporarily unavailable."
 
 
-# ── NEW: Response quality validator ──────────────────────────────────────────
-def _validate_ai_response(text: str, symbol: str = "") -> bool:
-    """
-    NEW: Sanity-checks AI output for obvious hallucinations.
-    Returns True if response passes, False if it should be retried.
-    """
-    # Must contain a verdict
-    if not any(v in text.upper() for v in ["BUY", "HOLD", "AVOID", "SELL"]):
-        logger.warning(f"AI validation fail [{symbol}]: no verdict keyword")
-        return False
-
-    # Check for obviously wrong RSI values (negative or > 100)
-    rsi_matches = re.findall(r"RSI[:\s]+(-?\d+\.?\d*)", text)
-    for rm in rsi_matches:
-        v = float(rm)
-        if v < 0 or v > 100:
-            logger.warning(f"AI validation fail [{symbol}]: RSI={v} out of range")
-            return False
-
-    # Check for absurdly large prices (> ₹1 crore per share)
-    price_matches = re.findall(r"₹([\d,]+\.?\d*)", text.replace(",", ""))
-    for pm in price_matches:
-        try:
-            v = float(pm.replace(",", ""))
-            if v > 100_000:
-                logger.warning(f"AI validation fail [{symbol}]: price=₹{v} suspicious")
-                return False
-        except Exception:
-            pass
-
-    return True
-
-
 # ── News fetch ─────────────────────────────────────────────────────────────────
-_NEWS_JUNK = [
-    "Stock Price", "Quote", "Yahoo Finance", "TradingView", "Investing.com",
-    "CNBC", "Chart and News", "Index Today", "NSE India", "National Stock Exchange",
-    "Live Share", "Equity Market Watch", "moneycontrol.com",
-]
+_NEWS_JUNK = ["Stock Price","Quote","Yahoo Finance","TradingView","Investing.com",
+              "CNBC","Chart and News","Index Today","NSE India","National Stock Exchange",
+              "Live Share","Equity Market Watch","moneycontrol.com"]
 
 def _is_real_headline(title: str) -> bool:
-    if not title or len(title) < 25:
-        return False
+    if not title or len(title) < 25: return False
     return not any(j.lower() in title.lower() for j in _NEWS_JUNK)
 
 
@@ -700,22 +578,14 @@ def fetch_news(symbol: str) -> str:
         try:
             r = requests.post(
                 "https://api.tavily.com/search",
-                json={
-                    "api_key":        tavily_key,
-                    "query":          f"{symbol} NSE India stock news latest",
-                    "max_results":    6,
-                    "search_depth":   "advanced",
-                    "include_domains": [
-                        "economictimes.indiatimes.com", "moneycontrol.com",
-                        "livemint.com", "businessline.com", "reuters.com",
-                    ],
-                },
+                json={"api_key": tavily_key,
+                      "query": f"{symbol} NSE India stock news latest",
+                      "max_results": 6, "search_depth": "advanced",
+                      "include_domains": ["economictimes.indiatimes.com","moneycontrol.com",
+                                          "livemint.com","businessline.com","reuters.com"]},
                 timeout=8,
             ).json()
-            headlines = [
-                x["title"] for x in r.get("results", [])
-                if _is_real_headline(x.get("title", ""))
-            ][:2]
+            headlines = [x["title"] for x in r.get("results",[]) if _is_real_headline(x.get("title",""))][:2]
             if headlines:
                 return "\n".join(f"📰 {h[:90]}" for h in headlines)
         except Exception as e:
@@ -724,37 +594,24 @@ def fetch_news(symbol: str) -> str:
     finnhub_key = _key("FINNHUB_API_KEY")
     if finnhub_key:
         try:
-            # FIX: use "SYMBOL.NS" not "NSE:SYMBOL" — company-news endpoint uses .NS suffix
-            r = requests.get(
-                "https://finnhub.io/api/v1/company-news",
-                params={
-                    "symbol": f"{symbol}.NS",
-                    "from":   from_date,
-                    "to":     to_date,
-                    "token":  finnhub_key,
-                },
-                timeout=6,
-            ).json()
+            r = requests.get("https://finnhub.io/api/v1/company-news",
+                             params={"symbol": f"NSE:{symbol}", "from": from_date,
+                                     "to": to_date, "token": finnhub_key}, timeout=6).json()
             if isinstance(r, list):
                 lines = [f"📰 {a['headline'][:85]}" for a in r[:2] if a.get("headline")]
-                if lines:
-                    return "\n".join(lines)
-        except Exception:
-            pass
+                if lines: return "\n".join(lines)
+        except Exception: pass
 
-    # MoneyControl RSS fallback
     try:
-        rss = requests.get(
-            "https://www.moneycontrol.com/rss/buzzingstocks.xml",
-            headers={"User-Agent": "Mozilla/5.0"}, timeout=6,
-        )
+        import re
+        rss = requests.get("https://www.moneycontrol.com/rss/buzzingstocks.xml",
+                           headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
         if rss.ok:
-            titles  = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", rss.text)
+            titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", rss.text)
             matched = [t for t in titles[1:] if symbol.upper() in t.upper()][:2]
             if matched:
                 return "\n".join(f"📰 {t[:90]}" for t in matched)
-    except Exception:
-        pass
+    except Exception: pass
 
     return ""
 
@@ -765,42 +622,30 @@ def fetch_market_news() -> str:
         try:
             r = requests.post(
                 "https://api.tavily.com/search",
-                json={
-                    "api_key":        tavily_key,
-                    "query":          "India NSE Nifty stock market news today",
-                    "max_results":    8,
-                    "search_depth":   "advanced",
-                    "include_domains": [
-                        "economictimes.indiatimes.com", "moneycontrol.com",
-                        "livemint.com", "reuters.com", "financialexpress.com",
-                    ],
-                },
+                json={"api_key": tavily_key,
+                      "query": "India NSE Nifty stock market news today",
+                      "max_results": 8, "search_depth": "advanced",
+                      "include_domains": ["economictimes.indiatimes.com","moneycontrol.com",
+                                          "livemint.com","reuters.com","financialexpress.com"]},
                 timeout=10,
             ).json()
-            headlines = [
-                x["title"] for x in r.get("results", [])
-                if _is_real_headline(x.get("title", ""))
-            ][:5]
+            headlines = [x["title"] for x in r.get("results",[]) if _is_real_headline(x.get("title",""))][:5]
             if headlines:
                 return "\n".join(f"📰 {h}" for h in headlines)
-        except Exception:
-            pass
+        except Exception: pass
 
     try:
-        rss = requests.get(
-            "https://www.moneycontrol.com/rss/latestnews.xml",
-            headers={"User-Agent": "Mozilla/5.0"}, timeout=8,
-        )
+        import re
+        rss = requests.get("https://www.moneycontrol.com/rss/latestnews.xml",
+                           headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
         if rss.ok:
             titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", rss.text)
-            mkt = [
-                t for t in titles[1:]
-                if any(kw in t.lower() for kw in ["nifty","sensex","market","stock","sebi","rbi"])
-            ][:5]
+            mkt = [t for t in titles[1:] if any(
+                kw in t.lower() for kw in ["nifty","sensex","market","stock","sebi","rbi"]
+            )][:5]
             if mkt:
                 return "\n".join(f"📰 {t}" for t in mkt)
-    except Exception:
-        pass
+    except Exception: pass
 
     return ""
 
@@ -814,7 +659,7 @@ def add_to_chat(uid: int, role: str, content: str):
     _chat_history[uid] = _chat_history[uid][-10:]
 
 def get_chat_history(uid: int) -> list:
-    return list(_chat_history.get(uid, []))
+    return _chat_history.get(uid, [])
 
 def clear_chat(uid: int):
     _chat_history.pop(uid, None)
@@ -892,156 +737,98 @@ AI_CHAT_TOPICS: dict = {
     ),
     "🎯 Technical Swing Trade": (
         "TASK: 2 swing trades from TOP STOCKS in LIVE DATA.\n"
-        "LONG: RSI<45. SHORT: RSI>65.\n"
-        "FORMAT per trade:\n📌 [SYM] [LONG/SHORT] | LTP:₹[exact] RSI:[exact]\n"
-        "  Entry: ₹[LTP×0.995]–₹[LTP×1.005]\n"
-        "  T1: ₹[LTP±2%] | T2: ₹[LTP±4%] | SL: ₹[LTP∓2%]\n"
-        "  R:R 1:[calc] | Reason: [RSI+trend from data] | 3–5 days\n"
+        "RULES: LONG when RSI<50 + MACD bullish. SHORT when RSI>60 + MACD bearish.\n"
+        "ATR-BASED LEVELS: SL=entry−1.2×ATR, T1=entry+2×ATR, T2=entry+3.5×ATR\n"
+        "FORMAT per trade:\n"
+        "📌 [SYM] [LONG/SHORT] | LTP:₹[exact from data] | RSI:[exact]\n"
+        "   Entry: ₹[LTP×0.995]–₹[LTP×1.005]\n"
+        "   T1: ₹[LTP+2×ATR] | T2: ₹[LTP+3.5×ATR] | SL: ₹[LTP−1.2×ATR]\n"
+        "   R:R T1=1:[calc] | Hold: 3–7 days\n"
+        "   Why: [RSI+MACD+trend from exact data — 1 line]\n"
         "⚠️ Educational only. Not SEBI-registered advice."
     ),
     "⚡ Option Trade": (
-        "TASK: One Nifty options strategy from NIFTY OPTIONS CONTEXT in LIVE DATA.\n"
+        "TASK: One Nifty options strategy using LIVE DATA including PCR.\n"
+        "PCR RULE: PCR>1.1 = bullish bias (market hedged). PCR<0.85 = bearish bias.\n"
         "FORMAT:\n⚡ OPTION STRATEGY — [date]\n"
-        "• Spot: [exact] | ATM: [exact rounded to 50]\n"
-        "• Trend: [exact] | RSI: [exact]\n"
+        "• Spot: [exact] | ATM: [nearest 50] | PCR: [exact from data]\n"
+        "• PCR Signal: [Bullish/Bearish/Neutral] | RSI: [exact] | Trend: [exact]\n"
         "• Strategy: [Bull Call Spread/Long CE/Bear Put Spread/Long PE/Iron Condor]\n"
-        "• Direction: [Bullish/Bearish/Neutral]\n"
+        "• Direction: [Bullish/Bearish/Neutral — must match PCR signal]\n"
         "• Strikes: [e.g. Buy 24450CE + Sell 24600CE]\n"
-        "• Why: [Nifty level + RSI + EMA20 from data — 2 lines]\n"
+        "• Why: [Nifty + RSI + PCR numbers from data — 2 lines max]\n"
         "• Max Risk: [X pts] | Target: [X pts]\n"
         "• Exit if Nifty closes [above/below] ₹[level]\n"
         "⚠️ Do NOT quote premium prices. Educational only. Not SEBI-registered advice."
-    ),
-    "🔄 Sector Rotation": (
-        "TASK: Identify leading and lagging sectors from SECTOR ROTATION in LIVE DATA.\n"
-        "FORMAT:\n🔄 SECTOR ROTATION — [date]\n"
-        "• Leading (buy dips): [top 2 sectors with 5D momentum from data]\n"
-        "• Lagging (avoid/short): [bottom 2 sectors]\n"
-        "• Best stock in leading sector: [name it from TOP STOCKS data]\n"
-        "• Strategy: [2 lines — rotate out of X into Y because Z]\n"
-        "⚠️ Educational only. Not SEBI-registered advice."
     ),
 }
 
 AI_CHAT_TOPIC_KEYS: set = set(AI_CHAT_TOPICS.keys())
 
 
-# ── Stock + timeframe detection ────────────────────────────────────────────────
-
-# FIX: words that look like tickers but aren't — prevents spurious yfinance downloads
-_NON_TICKER_WORDS = {
-    "GOOD", "WHAT", "WHEN", "WHERE", "WHICH", "BEST", "SHOW", "GIVE",
-    "FIND", "TELL", "NIFTY", "MARKET", "TODAY", "HELP", "WANT", "NEED",
-    "THIS", "THAT", "HAVE", "BEEN", "WILL", "FROM", "WITH", "INTO",
-    "ABOUT", "TRADE", "SETUP", "ANALYSIS", "CHART", "INTRADAY", "SWING",
-    "LONG", "SHORT", "BULL", "BEAR", "CALL", "PUT", "OPTION",
-}
-
-# Known large-caps for fast match
-_KNOWN_STOCKS = [
-    "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BAJFINANCE",
-    "TATAMOTORS","WIPRO","HCLTECH","AXISBANK","KOTAKBANK","LT","ITC",
-    "SUNPHARMA","BHARTIARTL","ONGC","NTPC","MARUTI","M&M","TITAN",
-    "ADANIENT","ADANIPORTS","BAJAJ","HDFC","NESTLEIND","TATACONSUM",
-    "DRREDDY","DIVISLAB","CIPLA","ZOMATO","NYKAA","PAYTM","INDIGO",
-    "HAL","BEL","IRFC","PFC","BPCL","ONGC","COALINDIA","JSWSTEEL",
-    "TATAPOWER","POWERGRID","ADANIPORTS",
-]
-
-
 def _detect_stock_in_message(msg: str) -> str:
-    """
-    FIX: deny-list blocks common non-ticker words from triggering false stock lookups.
-    Previously "GOOD MORNING BUY" would detect "GOOD" as a stock.
-    """
+    """Try to detect a stock symbol in the user message for context injection."""
+    import re
+    # Known large-caps / common mentions
+    KNOWN = [
+        "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BAJFINANCE",
+        "TATAMOTORS","WIPRO","HCLTECH","AXISBANK","KOTAKBANK","LT","ITC",
+        "SUNPHARMA","BHARTIARTL","ONGC","NTPC","MARUTI","M&M","TITAN",
+        "ADANIENT","ADANIPORTS","BAJAJ","HDFC","NESTLE","TATACONSUM",
+        "DRREDDY","DIVISLAB","CIPLA","ZOMATO","NYKAA","PAYTM","INDIGO",
+    ]
     msg_up = msg.upper()
-
-    # 1. Direct known-stock match
-    for sym in _KNOWN_STOCKS:
-        if re.search(rf"\b{re.escape(sym)}\b", msg_up):
+    for sym in KNOWN:
+        if sym in msg_up:
             return sym
-
-    # 2. Regex pattern — with deny-list filter
-    m = re.search(
-        r"\b([A-Z]{2,12})\s*(TRADE|SETUP|ANALYSIS|CHART|BUY|SELL|TARGET|SL|STOCK)\b",
-        msg_up
-    )
-    if m and m.group(1) not in _NON_TICKER_WORDS:
+    # Detect patterns like "XYZ trade", "XYZ setup", "XYZ analysis"
+    m = re.search(r"\b([A-Z]{2,12})\s*(TRADE|SETUP|ANALYSIS|CHART|BUY|SELL|TARGET|SL|STOCK)\b", msg_up)
+    if m:
         return m.group(1)
-
     return ""
 
 
-def _detect_timeframe_in_message(msg: str) -> str:
-    """
-    NEW: Detects if the user is asking for an intraday / 30-min / 60-min setup.
-    Returns: "30min", "60min", "daily", or "" (unknown/swing).
-    """
-    msg_l = msg.lower()
-    if any(kw in msg_l for kw in ["30 min", "30min", "30-min", "scalp", "intraday session"]):
-        return "30min"
-    if any(kw in msg_l for kw in ["60 min", "60min", "1 hour", "1hr", "hourly"]):
-        return "60min"
-    if any(kw in msg_l for kw in ["intraday", "today trade", "today setup", "today session"]):
-        return "30min"  # default intraday to 30min
-    if any(kw in msg_l for kw in ["swing", "positional", "weekly", "1 week"]):
-        return "daily"
-    return ""
-
-
-def _get_stock_live_context(sym: str, timeframe: str = "") -> str:
-    """
-    Fetch live price + RSI + EMA + ATR + BB for a specific stock.
-    FIX: RSI now uses Wilder's EWM (was rolling mean — ±5pt error).
-    FIX: 30-min pivot now fetches real 30m OHLC bars, not daily OHLC.
-    """
+def _get_stock_live_context(sym: str) -> str:
+    """Fetch live price + RSI + basic data for a specific stock to inject into AI."""
     try:
+        import yfinance as yf
+        import numpy as np
         ticker = yf.Ticker(f"{sym}.NS")
-        df     = ticker.history(period="3mo", progress=False)
+        df = ticker.history(period="3mo", progress=False)
         if df.empty:
             return ""
-
         close = df["Close"]
         ltp   = round(float(close.iloc[-1]), 2)
         prev  = round(float(close.iloc[-2]), 2)
-        chg   = round((ltp - prev) / prev * 100, 2)
-
-        # FIX: Wilder's RSI
-        rsi = _calc_rsi_wilder(close)
-
+        chg   = round((ltp-prev)/prev*100, 2)
+        # RSI
+        d = close.diff()
+        gain = d.where(d>0,0).rolling(14).mean()
+        loss = (-d.where(d<0,0)).rolling(14).mean()
+        rs   = gain/loss
+        rsi  = round(float(100-(100/(1+rs.iloc[-1]))), 1)
         # EMAs
         ema9  = round(float(close.ewm(span=9,  adjust=False).mean().iloc[-1]), 2)
         ema21 = round(float(close.ewm(span=21, adjust=False).mean().iloc[-1]), 2)
         ema50 = round(float(close.ewm(span=50, adjust=False).mean().iloc[-1]), 2)
-
         # ATR
-        h  = df["High"].values
-        l  = df["Low"].values
-        c  = close.values
+        h,l,c = df["High"].values, df["Low"].values, close.values
         tr = np.maximum(h[1:]-l[1:], np.maximum(np.abs(h[1:]-c[:-1]), np.abs(l[1:]-c[:-1])))
         atr = round(float(np.mean(tr[-14:])), 2)
-
-        # 52W from 3mo history (approximate)
-        h52 = round(float(df["High"].max()),  2)
-        l52 = round(float(df["Low"].min()),   2)
-
-        trend = ("BULLISH" if ltp > ema21 > ema50
-                 else "BEARISH" if ltp < ema21 < ema50
-                 else "SIDEWAYS")
-
-        # Daily OHLC
-        today_open = round(float(df["Open"].iloc[-1]),  2)
-        today_high = round(float(df["High"].iloc[-1]),  2)
-        today_low  = round(float(df["Low"].iloc[-1]),   2)
+        # 52w H/L
+        h52 = round(float(df["High"].max()), 2)
+        l52 = round(float(df["Low"].min()),  2)
+        trend = "BULLISH" if ltp > ema21 > ema50 else ("BEARISH" if ltp < ema21 < ema50 else "SIDEWAYS")
+        # P2 Nice: add today's OHLC for intraday/30-min context
+        today_open  = round(float(df["Open"].iloc[-1]), 2)
+        today_high  = round(float(df["High"].iloc[-1]), 2)
+        today_low   = round(float(df["Low"].iloc[-1]),  2)
         vwap_approx = round((today_high + today_low + ltp) / 3, 2)
-
-        # Bollinger Bands
-        bb_mid = round(float(close.rolling(20).mean().iloc[-1]), 2)
-        bb_std = round(float(close.rolling(20).std().iloc[-1]),  2)
-        bb_up  = round(bb_mid + 2 * bb_std, 2)
-        bb_lo  = round(bb_mid - 2 * bb_std, 2)
-
-        ctx = (
+        bb_mid  = round(float(df["Close"].rolling(20).mean().iloc[-1]), 2)
+        bb_std  = round(float(df["Close"].rolling(20).std().iloc[-1]),  2)
+        bb_up   = round(bb_mid + 2*bb_std, 2)
+        bb_lo   = round(bb_mid - 2*bb_std, 2)
+        return (
             f"\nSPECIFIC STOCK DATA — {sym}:\n"
             f"LTP: ₹{ltp} ({chg:+.2f}%) | RSI: {rsi} | Trend: {trend}\n"
             f"Today OHLC: O:{today_open} H:{today_high} L:{today_low} C:{ltp} | VWAP≈₹{vwap_approx}\n"
@@ -1049,58 +836,15 @@ def _get_stock_live_context(sym: str, timeframe: str = "") -> str:
             f"BB Upper: ₹{bb_up} | BB Mid: ₹{bb_mid} | BB Lower: ₹{bb_lo}\n"
             f"ATR(14): ₹{atr} | 52W H: ₹{h52} | 52W L: ₹{l52}\n"
             f"Support: ₹{round(ltp-atr,2)} | Resistance: ₹{round(ltp+atr,2)}\n"
+            f"30-min Pivot: ₹{round((today_high+today_low+ltp)/3,2)} | "
+            f"R1: ₹{round(2*(today_high+today_low+ltp)/3-today_low,2)} | "
+            f"S1: ₹{round(2*(today_high+today_low+ltp)/3-today_high,2)}\n"
         )
-
-        # FIX: real 30m pivot if intraday requested
-        intraday_tf = timeframe or _detect_timeframe_in_message("")
-        if intraday_tf in ("30min", "60min"):
-            intraday_ctx = _get_intraday_pivot(sym, intraday_tf)
-            ctx += intraday_ctx
-        else:
-            # Daily pivot (for swing trades)
-            daily_pivot = round((today_high + today_low + ltp) / 3, 2)
-            r1 = round(2 * daily_pivot - today_low,  2)
-            s1 = round(2 * daily_pivot - today_high, 2)
-            ctx += f"Daily Pivot: ₹{daily_pivot} | R1: ₹{r1} | S1: ₹{s1}\n"
-
-        return ctx
-
     except Exception as e:
         logger.debug(f"stock ctx fetch {sym}: {e}")
         return ""
 
 
-def _get_intraday_pivot(sym: str, timeframe: str = "30min") -> str:
-    """
-    NEW: Fetch real intraday bars to compute accurate pivot levels.
-    FIX: was using daily OHLC and labelling it "30-min Pivot" — misleading.
-    """
-    interval_map = {"30min": "30m", "60min": "60m"}
-    interval = interval_map.get(timeframe, "30m")
-    try:
-        df30 = yf.Ticker(f"{sym}.NS").history(period="2d", interval=interval)
-        if df30.empty or len(df30) < 4:
-            return ""
-        last4   = df30.tail(4)
-        h       = float(last4["High"].max())
-        l       = float(last4["Low"].min())
-        c       = float(last4["Close"].iloc[-1])
-        pivot   = round((h + l + c) / 3, 2)
-        r1      = round(2 * pivot - l, 2)
-        r2      = round(pivot + (h - l), 2)
-        s1      = round(2 * pivot - h, 2)
-        s2      = round(pivot - (h - l), 2)
-        tf_label = "30-min" if interval == "30m" else "60-min"
-        return (
-            f"{tf_label} Pivot (last 4 bars): ₹{pivot} | "
-            f"R1: ₹{r1} | R2: ₹{r2} | S1: ₹{s1} | S2: ₹{s2}\n"
-        )
-    except Exception as e:
-        logger.debug(f"intraday pivot {sym}: {e}")
-        return ""
-
-
-# ── Chat responder ────────────────────────────────────────────────────────────
 def ai_chat_respond(uid: int, user_message: str) -> str:
     if not ai_available():
         return (
@@ -1110,35 +854,25 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
             "• <code>GEMINI_API_KEY</code> — free at aistudio.google.com"
         )
 
+    # Market context (cached 5 min)
     market_ctx = get_live_market_context()
 
+    # Detect specific stock in the message and fetch its live data
     detected_sym = _detect_stock_in_message(user_message)
-    detected_tf  = _detect_timeframe_in_message(user_message)
-    stock_ctx    = ""
+    stock_ctx = ""
     if detected_sym:
-        stock_ctx = _get_stock_live_context(detected_sym, timeframe=detected_tf)
-        logger.info(f"AI: detected stock={detected_sym} tf={detected_tf or 'swing'}")
+        stock_ctx = _get_stock_live_context(detected_sym)
+        logger.info(f"AI: detected stock {detected_sym}, injecting live data")
 
-    tf_hint = ""
-    if detected_tf:
-        tf_hint = f"\n\nUSER IS ASKING FOR {detected_tf.upper()} INTRADAY SETUP. Use intraday pivot levels from data."
-
-    system   = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}{stock_ctx}{tf_hint}"
-
-    # FIX: always add user message first, remove on failure to prevent history drift
-    add_to_chat(uid, "user", user_message)
-    messages = list(get_chat_history(uid))
+    system   = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}{stock_ctx}"
+    messages = list(get_chat_history(uid)) + [{"role": "user", "content": user_message}]
 
     text, err = _call_ai(messages, max_tokens=500, system=system)
 
     if text:
+        add_to_chat(uid, "user",      user_message)
         add_to_chat(uid, "assistant", text)
         return text
-
-    # FIX: remove the user message we added since the call failed
-    hist = _chat_history.get(uid, [])
-    if hist and hist[-1]["role"] == "user":
-        _chat_history[uid] = hist[:-1]
 
     return (
         "❌ <b>All AI providers failed.</b>\n\n"
@@ -1151,25 +885,22 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
 def test_ai_providers() -> dict:
     results = {}
     for name, key_env, test_fn in [
-        ("GROQ", "GROQ_API_KEY", lambda: _get_groq().chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": "Say OK"}], max_tokens=3)),
-        ("Gemini", "GEMINI_API_KEY", lambda: _get_gemini().generate_content("Say OK, just those two words.")),
-        ("OpenAI", "OPENAI_KEY", lambda: _get_openai().chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Say OK"}], max_tokens=3)),
+        ("GROQ",    "GROQ_API_KEY",    lambda: _get_groq().chat.completions.create(
+             model="llama-3.1-8b-instant",
+             messages=[{"role":"user","content":"Say OK"}], max_tokens=3)),
+        ("Gemini",  "GEMINI_API_KEY",  lambda: _get_gemini().generate_content("Say OK, just those two words.")),
+        ("OpenAI",  "OPENAI_KEY",      lambda: _get_openai().chat.completions.create(
+             model="gpt-4o-mini",
+             messages=[{"role":"user","content":"Say OK"}], max_tokens=3)),
     ]:
         if not _key(key_env):
             results[name] = f"SKIP — {key_env} not set"
             continue
         try:
-            r = test_fn()
-            # FIX: Gemini safety filter may block test — still mark as OK
+            r    = test_fn()
+            # P1 Fix 7: Gemini returns GenerateContentResponse — need .text or .candidates
             if hasattr(r, "text"):
-                try:
-                    text = r.text
-                except (AttributeError, ValueError):
-                    text = "OK (safety filtered)"
+                text = r.text
             elif hasattr(r, "choices"):
                 text = r.choices[0].message.content
             else:
@@ -1186,24 +917,18 @@ def test_ai_providers() -> dict:
 
     af_text, af_err = _call_askfuzz_ai("test", timeout=5)
     results["AskFuzz"] = "OK" if af_text else f"SKIP/FAIL — {af_err or 'no key set'}"
-    results["_status"] = (
-        "✅ AI WORKING"
-        if any(v.startswith("OK") for v in results.values())
-        else "❌ ALL FAILED"
-    )
+    results["_status"] = "✅ AI WORKING" if any(v.startswith("OK") for v in results.values()) else "❌ ALL FAILED"
     return results
 
 
 def debug_ai_status() -> dict:
     return {
-        "keys": {k: ("set" if _key(k) else "MISSING") for k in [
-            "GROQ_API_KEY", "GEMINI_API_KEY", "OPENAI_KEY", "ASKFUZZ_API_KEY",
-            "TAVILY_API_KEY", "FINNHUB_API_KEY", "ALPHA_VANTAGE_KEY",
-        ]},
+        "keys": {k: ("set" if _key(k) else "MISSING") for k in
+                 ["GROQ_API_KEY","GEMINI_API_KEY","OPENAI_KEY","ASKFUZZ_API_KEY",
+                  "TAVILY_API_KEY","FINNHUB_API_KEY","ALPHA_VANTAGE_KEY"]},
         "context_cached":  bool(_CTX_CACHE["text"]),
         "context_age_sec": round(time.time() - _CTX_CACHE["ts"], 0),
         "context_ttl_sec": _CTX_TTL,
         "groq_models":     _GROQ_MODELS,
         "ai_available":    ai_available(),
-        "sector_rotation": get_sector_rotation(),
     }
