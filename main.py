@@ -49,6 +49,7 @@ from telebot import types
 from ai_engine import (
     ai_insights         as engine_ai_insights,
     ai_chat_respond,
+    ai_topic_respond,        # Bug 3 Fix: topic calls bypass chat history
     get_live_market_context,
     ai_available,
     AI_CHAT_TOPICS,
@@ -1018,13 +1019,17 @@ def ai_topic_button(message):
             "  <code>TCS buy or sell?</code>\n"
             "  <code>HDFC Bank levels</code>",
             reply_markup=ai_keyboard())
-        _state[uid] = "ai"   # put user in AI chat mode so next message is answered
+        _state[uid] = "ai"
         return
-    text = AI_CHAT_TOPICS[message.text]
-    safe_send(uid, "⏳ Thinking with live data…")
+    # Bug 3 Fix: use ai_topic_respond — does NOT store in chat history
+    # This keeps chat context clean and saves tokens
+    topic_prompt = AI_CHAT_TOPICS[message.text]
+    safe_send(uid, "⏳ Getting live data… (~8s)")
+    try: bot.send_chat_action(uid, "typing")   # Siya: typing indicator
+    except Exception: pass
     def _run():
-        resp = ai_chat_respond(uid, text)
-        safe_send(uid, resp or "❌ Empty response.", reply_markup=ai_keyboard())
+        resp = ai_topic_respond(topic_prompt)
+        safe_send(uid, resp or "⚠️ AI unavailable. Try again in a moment.", reply_markup=ai_keyboard())
     executor.submit(_run)
 
 
@@ -1127,9 +1132,11 @@ def handle_text(message):
 
     if _state.get(uid) == "ai":
         safe_send(uid, "⏳ Thinking… (~8s)")
+        try: bot.send_chat_action(uid, "typing")   # Siya: typing indicator
+        except Exception: pass
         def _ai():
             resp = ai_chat_respond(uid, text)
-            safe_send(uid, resp or "❌ AI unavailable.", reply_markup=ai_keyboard())
+            safe_send(uid, resp or "⚠️ AI unavailable. Try again in a moment.", reply_markup=ai_keyboard())
         executor.submit(_ai)
         return
 
