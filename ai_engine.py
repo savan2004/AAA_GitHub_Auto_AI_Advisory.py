@@ -198,15 +198,18 @@ def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
                     errors.append(f"GROQ [{model}]: empty response")
                 except Exception as e:
                     msg = str(e)
-                    if "429" in msg or "rate" in msg.lower():
-                        errors.append(f"GROQ [{model}]: rate limited → trying next model")
-                        continue   # try next model in chain
-                    elif "401" in msg or "invalid_api_key" in msg.lower():
+                    if "429" in msg or "rate" in msg.lower() or "RateLimitError" in msg:
+                        errors.append(f"GROQ [{model}]: rate limited → trying next model/provider")
+                        continue   # try next GROQ model, then falls through to Gemini
+                    elif "401" in msg or "invalid_api_key" in msg.lower() or "AuthenticationError" in msg:
                         errors.append("GROQ: INVALID KEY — regenerate at console.groq.com")
-                        break      # wrong key — no point trying other models
+                        break      # wrong key — no point trying other GROQ models
+                    elif "503" in msg or "unavailable" in msg.lower():
+                        errors.append(f"GROQ [{model}]: service unavailable → trying next provider")
+                        break      # service down — fall through to Gemini
                     else:
-                        errors.append(f"GROQ [{model}]: {msg[:100]}")
-                        break
+                        errors.append(f"GROQ [{model}]: {msg[:120]}")
+                        break   # unexpected error — fall through to next provider
 
     # ── Gemini ────────────────────────────────────────────────────────────────
     gemini_key = _key("GEMINI_API_KEY")
@@ -656,7 +659,8 @@ _chat_history: dict = {}
 def add_to_chat(uid: int, role: str, content: str):
     _chat_history.setdefault(uid, [])
     _chat_history[uid].append({"role": role, "content": content})
-    _chat_history[uid] = _chat_history[uid][-10:]
+    # Bug 5 Fix: keep last 12 messages (6 turns) — GROQ 8b token limit protection
+    _chat_history[uid] = _chat_history[uid][-12:]
 
 def get_chat_history(uid: int) -> list:
     return _chat_history.get(uid, [])
@@ -789,13 +793,19 @@ def _detect_stock_in_message(msg: str) -> str:
 
 
 def _get_stock_live_context(sym: str) -> str:
-    """Fetch live price + RSI + basic data for a specific stock to inject into AI."""
+    """Fetch live price + RSI + basic data for a specific stock to inject into AI.
+    Bug 2 Fix: uses data_engine.get_hist() instead of yf.Ticker directly
+    so it works on Render where direct yfinance connections are blocked.
+    """
     try:
-        import yfinance as yf
         import numpy as np
-        ticker = yf.Ticker(f"{sym}.NS")
-        df = ticker.history(period="3mo", progress=False)
-        if df.empty:
+        from data_engine import get_hist as _get_hist
+        # Use project's own cached data engine — works on Render
+        df = _get_hist(sym, "3mo")
+        if df is None or df.empty:
+            # Fallback: try with .NS suffix
+            df = _get_hist(sym.replace(".NS",""), "3mo")
+        if df is None or df.empty:
             return ""
         close = df["Close"]
         ltp   = round(float(close.iloc[-1]), 2)
@@ -846,6 +856,11 @@ def _get_stock_live_context(sym: str) -> str:
 
 
 def ai_chat_respond(uid: int, user_message: str) -> str:
+    """
+    Handle free-form user chat. Stores turns in history.
+    Bug 3 Fix: topic prompts should use ai_topic_respond() — not this function.
+    Bug 5 Fix: chat history trimmed to 6 turns max (was 10) to stay within token limits.
+    """
     if not ai_available():
         return (
             "⚠️ <b>No AI keys configured.</b>\n\n"
@@ -854,30 +869,93 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
             "• <code>GEMINI_API_KEY</code> — free at aistudio.google.com"
         )
 
-    # Market context (cached 5 min)
-    market_ctx = get_live_market_context()
-
-    # Detect specific stock in the message and fetch its live data
+    market_ctx   = get_live_market_context()
     detected_sym = _detect_stock_in_message(user_message)
-    stock_ctx = ""
+    stock_ctx    = ""
     if detected_sym:
         stock_ctx = _get_stock_live_context(detected_sym)
-        logger.info(f"AI: detected stock {detected_sym}, injecting live data")
+        logger.info(f"AI: detected {detected_sym}, injecting live data")
 
-    system   = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}{stock_ctx}"
-    messages = list(get_chat_history(uid)) + [{"role": "user", "content": user_message}]
+    system = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}{stock_ctx}"
 
-    text, err = _call_ai(messages, max_tokens=500, system=system)
+    # Bug 5 Fix: cap at 6 turns (12 messages) to avoid exceeding GROQ 8b token limit
+    history  = get_chat_history(uid)[-12:]
+    messages = history + [{"role": "user", "content": user_message}]
+
+    text, err = _call_ai(messages, max_tokens=450, system=system)
 
     if text:
         add_to_chat(uid, "user",      user_message)
         add_to_chat(uid, "assistant", text)
         return text
 
+    # Bug 6 UX Fix: clean user-facing error — no raw internal error strings
+    return _friendly_ai_error(err)
+
+
+def ai_topic_respond(topic_prompt: str) -> str:
+    """
+    Bug 3 Fix: Topic button calls use this function — NOT stored in chat history.
+    Topic prompts are system-level instructions, not user conversation turns.
+    Keeps chat history clean and saves tokens.
+    """
+    if not ai_available():
+        return (
+            "⚠️ <b>No AI keys configured.</b>\n\n"
+            "Add <code>GROQ_API_KEY</code> in Render → Environment (free at console.groq.com)"
+        )
+
+    market_ctx = get_live_market_context()
+    # Topic prompt is the full instruction — treat as a fresh one-shot call
+    system     = (
+        "You are AutoAI Advisory, an expert Indian NSE equity analyst. "
+        "Use ONLY the data below. Be direct, specific, format exactly as instructed. "
+        "Never invent prices or percentages not in the data provided."
+    )
+    messages   = [{"role": "user", "content": f"{topic_prompt}\n\nLIVE DATA:\n{market_ctx}"}]
+
+    text, err = _call_ai(messages, max_tokens=400, system=system)
+    if text:
+        return text
+    return _friendly_ai_error(err)
+
+
+def _friendly_ai_error(err: str) -> str:
+    """
+    Bug 6 UX Fix: Convert raw provider error strings into clean user messages.
+    Never expose internal GROQ/Gemini/OpenAI error details to the user.
+    """
+    if not err:
+        return "⚠️ AI temporarily unavailable. Please try again in a moment."
+
+    err_lower = err.lower()
+    if "rate limit" in err_lower or "429" in err_lower:
+        return (
+            "⏳ <b>AI is busy right now</b> (rate limit reached).\n"
+            "Please wait 30 seconds and try again."
+        )
+    if "invalid key" in err_lower or "401" in err_lower or "authentication" in err_lower:
+        return (
+            "❌ <b>AI key issue detected.</b>\n"
+            "Go to Render → Environment → check GROQ_API_KEY is valid → Redeploy."
+        )
+    if "not set" in err_lower or "no key" in err_lower:
+        return (
+            "⚠️ <b>No AI key configured.</b>\n"
+            "Add GROQ_API_KEY in Render → Environment (free at console.groq.com)."
+        )
+    if "quota" in err_lower or "exceeded" in err_lower:
+        return (
+            "⏳ <b>AI quota exceeded</b> for today.\n"
+            "Will reset shortly. Try again in a few minutes."
+        )
+    if "timeout" in err_lower or "timed out" in err_lower:
+        return "⏳ AI response timed out. Please try again."
+
+    # Generic fallback — never show internal error
     return (
-        "❌ <b>All AI providers failed.</b>\n\n"
-        f"<b>Errors:</b>\n{err}\n\n"
-        "<b>Fix:</b> Render Dashboard → Environment → check GROQ_API_KEY → Save → Redeploy"
+        "⚠️ <b>AI temporarily unavailable.</b>\n"
+        "Please try again in a moment. If the issue persists, use /status to check providers."
     )
 
 
@@ -897,15 +975,20 @@ def test_ai_providers() -> dict:
             results[name] = f"SKIP — {key_env} not set"
             continue
         try:
-            r    = test_fn()
-            # P1 Fix 7: Gemini returns GenerateContentResponse — need .text or .candidates
-            if hasattr(r, "text"):
+            r = test_fn()
+            # Bug 5 Fix: handle all provider response types correctly
+            if hasattr(r, "choices") and r.choices:
+                # GROQ / OpenAI format
+                text = r.choices[0].message.content or "OK"
+            elif hasattr(r, "text") and r.text:
+                # Gemini format — GenerateContentResponse has .text property
                 text = r.text
-            elif hasattr(r, "choices"):
-                text = r.choices[0].message.content
+            elif hasattr(r, "candidates"):
+                # Gemini alternate format
+                text = str(r.candidates[0].content.parts[0].text)[:30] if r.candidates else "OK"
             else:
                 text = str(r)[:30]
-            results[name] = f"OK — {str(text).strip()[:20]}"
+            results[name] = f"OK — {str(text).strip()[:25]}"
         except Exception as e:
             msg = str(e)
             if "401" in msg or "invalid" in msg.lower():
