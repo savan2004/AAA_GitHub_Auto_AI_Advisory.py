@@ -50,7 +50,6 @@ from ai_engine import (
     ai_insights         as engine_ai_insights,
     ai_chat_respond,
     ai_topic_respond,        # Bug 3 Fix: topic calls bypass chat history
-    get_live_market_context,
     ai_available,
     AI_CHAT_TOPICS,
     AI_CHAT_TOPIC_KEYS,
@@ -811,14 +810,15 @@ def cmd_status(message):
         safe_send(
             message.chat.id,
             f"🤖 <b>BOT STATUS</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"── ── ── ── ── ──\n"
             f"Bot : ✅ Running\n"
             f"AI  : {status_icon} {results.get('_status','Unknown')}\n"
             f"Time: {datetime.now().strftime('%d-%b-%Y %H:%M IST')}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"── ── ── ── ── ──\n"
             f"<b>Provider Details:</b>\n" + "\n".join(ai_lines) +
-            "\n━━━━━━━━━━━━━━━━━━━━\n"
-            "<i>⚪ = key not set  ✅ = working  ❌ = failed</i>"
+            "\n── ── ── ── ── ──\n"
+            "<i>⚪ = key not set  ✅ = working  ❌ = failed</i>",
+            reply_markup=main_keyboard()   # Fix 5: restore keyboard after status
         )
     executor.submit(_run)
 
@@ -1143,20 +1143,21 @@ def handle_text(message):
     # Analysis mode — user tapped 🔍 Analysis button and is now typing a symbol
     if _state.get(uid) == "analysis":
         safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
-        _state[uid] = None   # P1 Fix 5: reset state immediately so user isn't stuck
-        def _analysis_run(q=text):
+        def _analysis_run(q=text, u=uid):
             ticker, cname = resolve_symbol(q)
             if ticker:
                 sym_clean = ticker.replace(".NS","").replace(".BO","")
-                safe_send(uid, f"📊 Analyzing <b>{cname}</b> ({sym_clean})…")
-                safe_send(uid, build_adv(sym_clean))
+                safe_send(u, f"📊 Analyzing <b>{cname}</b> ({sym_clean})…")
+                safe_send(u, build_adv(sym_clean))
             else:
                 sym_up = q.upper().replace(".NS","")
                 if 2 <= len(sym_up) <= 15:
-                    safe_send(uid, build_adv(sym_up))
+                    safe_send(u, build_adv(sym_up))
                 else:
-                    safe_send(uid, f"❌ Could not find <b>{q}</b>. Try: <code>RELIANCE</code>  <code>TCS</code>  <code>HDFC Bank</code>",
+                    safe_send(u, f"❌ Could not find <b>{q}</b>. Try: <code>RELIANCE</code>  <code>TCS</code>",
                         reply_markup=main_keyboard())
+            # Fix 4: reset state AFTER response sent, not before (prevents race condition)
+            _state[u] = None
         executor.submit(_analysis_run)
         return
 
