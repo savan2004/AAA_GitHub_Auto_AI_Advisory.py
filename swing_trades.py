@@ -93,17 +93,26 @@ def calc_supertrend(df, period=7, multiplier=3):
 
 
 # ── WEEKLY TREND CHECK ────────────────────────────────────────────────────────
+# Cache weekly trend per symbol to avoid 60+ extra yfinance calls per scan
+_WEEKLY_CACHE: dict = {}
+_WEEKLY_CACHE_TTL = 3600   # 1 hour
+
 def get_weekly_trend(sym):
     """
     Returns (direction, label):
       +2 = weekly bullish aligned
       -2 = weekly bearish confirmed
        0 = sideways / no data
+    Fix 7: cache results per symbol — prevents 60 extra yfinance calls per swing scan.
     """
+    import time as _t
+    cached = _WEEKLY_CACHE.get(sym)
+    if cached and _t.time() - cached["ts"] < _WEEKLY_CACHE_TTL:
+        return cached["val"]
     try:
         if not _YF_AVAILABLE:
             return 0, "Weekly: N/A"
-        wdf = yf.download(sym, period="1y", interval="1wk",
+        wdf = yf.download(sym, period="6mo", interval="1wk",
                           progress=False, auto_adjust=True)
         if isinstance(wdf.columns, pd.MultiIndex):
             wdf.columns = wdf.columns.get_level_values(0)
@@ -117,11 +126,13 @@ def get_weekly_trend(sym):
         we9l  = float(we9.iloc[-1])
         we21l = float(we21.iloc[-1])
         if wltp > we9l > we21l:
-            return +2, "Weekly BULLISH (EMA9&gt;EMA21) ✓"
+            result = +2, "Weekly BULLISH ✓"
         elif wltp < we9l < we21l:
-            return -2, "Weekly BEARISH (EMA9&lt;EMA21) ✓"
+            result = -2, "Weekly BEARISH ✓"
         else:
-            return 0, "Weekly SIDEWAYS"
+            result = 0, "Weekly SIDEWAYS"
+        _WEEKLY_CACHE[sym] = {"val": result, "ts": _t.time()}
+        return result
     except Exception as e:
         logger.debug(f"weekly trend {sym}: {e}")
         return 0, "Weekly: N/A"
