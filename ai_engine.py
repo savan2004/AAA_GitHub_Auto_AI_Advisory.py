@@ -195,7 +195,10 @@ def _call_ai(messages: list, max_tokens: int = 500, system: str = "") -> tuple:
                     if text:
                         logger.info(f"GROQ OK [{model}]")
                         return text, ""
+                    # Fix 1: empty response — try next model, don't stop chain
+                    logger.warning(f"GROQ [{model}]: empty response, trying next model")
                     errors.append(f"GROQ [{model}]: empty response")
+                    continue
                 except Exception as e:
                     msg = str(e)
                     if "429" in msg or "rate" in msg.lower() or "RateLimitError" in msg:
@@ -497,6 +500,15 @@ def get_live_market_context(force: bool = False) -> str:
     except Exception: pass
 
     ctx = "\n".join(lines)
+    # Fix 2: if context is empty (all sources failed), use minimal fallback
+    # so AI doesn't get a blank context and hallucinate
+    if not ctx.strip() or len(ctx.strip()) < 50:
+        ctx = (
+            "MARKET DATA: Temporarily unavailable (network issue).\n"
+            "Use general Indian equity market knowledge for analysis.\n"
+            "State clearly when specific data is not available."
+        )
+        logger.warning("Market context empty — using fallback text")
     # Inject PCR scored interpretation into context
     pcr_scored = _parse_pcr_score(ctx)
     if pcr_scored:
@@ -801,11 +813,11 @@ def _get_stock_live_context(sym: str) -> str:
         import numpy as np
         from data_engine import get_hist as _get_hist
         # Use project's own cached data engine — works on Render
-        df = _get_hist(sym, "3mo")
+        # Fix 3: data_engine.get_hist expects plain symbol without suffix
+        clean_sym = sym.replace(".NS","").replace(".BO","").strip().upper()
+        df = _get_hist(clean_sym, "3mo")
         if df is None or df.empty:
-            # Fallback: try with .NS suffix
-            df = _get_hist(sym.replace(".NS",""), "3mo")
-        if df is None or df.empty:
+            logger.debug(f"stock ctx: no data for {clean_sym}")
             return ""
         close = df["Close"]
         ltp   = round(float(close.iloc[-1]), 2)
