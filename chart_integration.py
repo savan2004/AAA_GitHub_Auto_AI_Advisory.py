@@ -61,7 +61,7 @@ class ChartGenerator:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                timeout=90,
+                timeout=60,   # Fix 11: reduced from 90s (Render web timeout ~30s, but chart runs in bg)
                 text=True,
                 cwd=cwd,
             )
@@ -153,10 +153,19 @@ class ChartGenerator:
                         parse_mode="HTML",
                     )
             else:
-                # Fallback — readable error, not raw exception text
-                msg = meta_text or "⚠️ Chart unavailable right now. Try again in a moment."
-                if "403" in msg or "allowlist" in msg.lower():
-                    msg = "⚠️ Market data temporarily blocked. Try again in 1–2 minutes."
+                # Fix 11: clean user-facing errors — no raw exception text
+                msg = meta_text or ""
+                if "403" in msg or "allowlist" in msg.lower() or "Host not in allowlist" in msg:
+                    msg = (
+                        "⚠️ <b>Chart temporarily unavailable</b>\n"
+                        "Market data connection issue on server.\n"
+                        "Try again in 1-2 minutes, or type the symbol for text analysis:\n"
+                        "<code>RELIANCE</code>  <code>TCS</code>  <code>INFY</code>"
+                    )
+                elif "timed out" in msg.lower() or "timeout" in msg.lower():
+                    msg = "Chart took too long to generate. Try again in a moment."
+                elif not msg:
+                    msg = "Chart unavailable right now. Try again in a moment."
                 bot.send_message(chat_id, msg, parse_mode="HTML")
         except Exception as e:
             logger.error(f"[Chart] Telegram send failed: {e}")
