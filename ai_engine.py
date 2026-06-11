@@ -347,6 +347,24 @@ def _fetch_nifty_pe() -> dict:
     return {}
 
 
+def _parse_pcr_score(ctx_text: str) -> str:
+    """Parse PCR number from context and return scored interpretation."""
+    import re
+    try:
+        m = re.search(r"PCR[:\s]+([0-9]+\.?[0-9]*)", ctx_text, re.IGNORECASE)
+        if m:
+            pcr = float(m.group(1))
+            if pcr > 1.1:
+                return f"PCR={pcr:.2f} → BULLISH signal"
+            elif pcr < 0.85:
+                return f"PCR={pcr:.2f} → BEARISH signal"
+            else:
+                return f"PCR={pcr:.2f} → Neutral zone"
+    except Exception:
+        pass
+    return ""
+
+
 def get_live_market_context(force: bool = False) -> str:
     """
     Build live market context injected into every AI call.
@@ -445,9 +463,16 @@ def get_live_market_context(force: bool = False) -> str:
             ex.submit(fetch_top8),
             ex.submit(fetch_fund_stocks),
         ]
-        for f in as_completed(futs, timeout=12):  # FIX: 20→12s timeout
-            try: f.result()
-            except Exception: pass
+        # PERMANENT FIX: as_completed raises TimeoutError — must be caught
+        # Root cause of AI not responding — this crashed ai_chat_respond silently
+        try:
+            for f in as_completed(futs, timeout=10):
+                try: f.result()
+                except Exception: pass
+        except TimeoutError:
+            logger.warning("Market context: data sources timed out — using partial data")
+        except Exception as _ctx_ex:
+            logger.warning(f"Market context error: {_ctx_ex}")
 
     # Assemble context
     if "nifty50" in results:
@@ -881,12 +906,21 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
             "• <code>GEMINI_API_KEY</code> — free at aistudio.google.com"
         )
 
-    market_ctx   = get_live_market_context()
+    # PERMANENT FIX 2: wrap every context call — any crash here must NOT kill response
+    try:
+        market_ctx = get_live_market_context()
+    except Exception as _e:
+        logger.warning(f"market context failed in ai_chat_respond: {_e}")
+        market_ctx = "Market data temporarily unavailable. Use general NSE knowledge."
+
     detected_sym = _detect_stock_in_message(user_message)
     stock_ctx    = ""
     if detected_sym:
-        stock_ctx = _get_stock_live_context(detected_sym)
-        logger.info(f"AI: detected {detected_sym}, injecting live data")
+        try:
+            stock_ctx = _get_stock_live_context(detected_sym)
+            logger.info(f"AI: detected {detected_sym}, injecting live data")
+        except Exception as _e:
+            logger.warning(f"stock context failed for {detected_sym}: {_e}")
 
     system = CHAT_SYSTEM + f"\n\nLIVE MARKET CONTEXT:\n{market_ctx}{stock_ctx}"
 
@@ -917,7 +951,12 @@ def ai_topic_respond(topic_prompt: str) -> str:
             "Add <code>GROQ_API_KEY</code> in Render → Environment (free at console.groq.com)"
         )
 
-    market_ctx = get_live_market_context()
+    # PERMANENT FIX 3: wrap context — any crash must NOT kill AI topic response
+    try:
+        market_ctx = get_live_market_context()
+    except Exception as _e:
+        logger.warning(f"market context failed in ai_topic_respond: {_e}")
+        market_ctx = "Market data temporarily unavailable. Use general NSE knowledge."
     # Topic prompt is the full instruction — treat as a fresh one-shot call
     system     = (
         "You are AutoAI Advisory, an expert Indian NSE equity analyst. "
