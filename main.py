@@ -1027,9 +1027,14 @@ def ai_topic_button(message):
     safe_send(uid, "⏳ Getting live data… (~8s)")
     try: bot.send_chat_action(uid, "typing")   # Siya: typing indicator
     except Exception: pass
-    def _run():
-        resp = ai_topic_respond(topic_prompt)
-        safe_send(uid, resp or "⚠️ AI unavailable. Try again in a moment.", reply_markup=ai_keyboard())
+    def _run(u=uid, tp=topic_prompt):
+        # PERMANENT FIX 7: catch all exceptions — user always gets a response
+        try:
+            resp = ai_topic_respond(tp)
+            safe_send(u, resp or "⚠️ AI unavailable. Try again.", reply_markup=ai_keyboard())
+        except Exception as _e:
+            logger.error(f"Topic handler crash: {_e}", exc_info=True)
+            safe_send(u, "⚠️ AI error. Please try again.", reply_markup=ai_keyboard())
     executor.submit(_run)
 
 
@@ -1132,11 +1137,19 @@ def handle_text(message):
 
     if _state.get(uid) == "ai":
         safe_send(uid, "⏳ Thinking… (~8s)")
-        try: bot.send_chat_action(uid, "typing")   # Siya: typing indicator
+        try: bot.send_chat_action(uid, "typing")
         except Exception: pass
-        def _ai():
-            resp = ai_chat_respond(uid, text)
-            safe_send(uid, resp or "⚠️ AI unavailable. Try again in a moment.", reply_markup=ai_keyboard())
+        def _ai(u=uid, t=text):
+            # PERMANENT FIX 6: catch ALL exceptions in executor so user always gets a response
+            try:
+                resp = ai_chat_respond(u, t)
+                safe_send(u, resp or "⚠️ AI unavailable. Try again in a moment.", reply_markup=ai_keyboard())
+            except Exception as _e:
+                logger.error(f"AI handler crash for uid={u}: {_e}", exc_info=True)
+                safe_send(u,
+                    "⚠️ <b>AI error.</b> Please try again.\n"
+                    "If this keeps happening, use /status to check providers.",
+                    reply_markup=ai_keyboard())
         executor.submit(_ai)
         return
 
