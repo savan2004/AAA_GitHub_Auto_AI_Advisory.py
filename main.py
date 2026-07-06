@@ -117,7 +117,7 @@ def safe_send(chat_id: int, text: str, reply_markup=None, parse_mode: str = "HTM
 
 @bot.message_handler(commands=["buy"])
 def cmd_buy(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     try:
         parts = message.text.split()
         if len(parts) < 4:
@@ -153,7 +153,7 @@ def cmd_buy(message):
 
 @bot.message_handler(commands=["sell"])
 def cmd_sell(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     try:
         parts = message.text.split()
         if len(parts) < 4:
@@ -199,7 +199,7 @@ def cmd_sell(message):
 
 @bot.message_handler(commands=["portfolio"])
 def cmd_portfolio(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     try:
         holdings = _portfolio[uid]["holdings"]
         if not holdings:
@@ -258,14 +258,25 @@ def cmd_portfolio(message):
 
 @bot.message_handler(commands=["stock"])
 def cmd_stock(message):
-    uid = message.from_user.id
-    try:
-        parts = message.text.split()
-        if len(parts) < 2:
-            safe_send(uid, "❌ Usage: /stock SYMBOL\nExample: /stock RELIANCE")
-            return
+    uid = message.chat.id
+    parts = message.text.split()
+    if len(parts) < 2:
+        safe_send(uid, "Usage: /stock SYMBOL\nExample: /stock RELIANCE")
+        return
+    sym = parts[1].upper()
+    safe_send(uid, f"⏳ Analyzing <b>{sym}</b>… (~10s)")
+    import threading
+    def _run_stock(u=uid, s=sym):
+        try:
+            _stock_inner(u, s)
+        except Exception as _e:
+            logger.error("stock %s: %s", s, _e)
+            safe_send(u, f"⚠️ Error analyzing {s}. Try again.")
+    threading.Thread(target=_run_stock, daemon=True).start()
 
-        sym = parts[1].upper()
+
+def _stock_inner(uid, sym):
+    try:
         ltp = get_live_price(sym)
         info = get_info(sym) or {}
         df = get_hist(sym, "1y")
@@ -343,7 +354,7 @@ def cmd_stock(message):
 
 @bot.message_handler(commands=["scan"])
 def cmd_scan(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     try:
         if not check_rate_limit(uid):
             safe_send(uid, "⏳ Rate limit exceeded. Please wait a moment.")
@@ -394,7 +405,7 @@ def cmd_scan(message):
 
 @bot.message_handler(commands=["swing"])
 def cmd_swing(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     try:
         if not check_rate_limit(uid):
             safe_send(uid, "⏳ Rate limit exceeded. Please wait a moment.")
@@ -410,7 +421,7 @@ def cmd_swing(message):
 
 @bot.message_handler(commands=["breadth"])
 def cmd_breadth(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     try:
         import yfinance as yf
 
@@ -460,7 +471,7 @@ def cmd_breadth(message):
 
 @bot.message_handler(commands=["news"])
 def cmd_news(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     try:
         news = get_market_news(5)
         safe_send(uid, news)
@@ -471,86 +482,28 @@ def cmd_news(message):
 
 @bot.message_handler(commands=["ask"])
 def cmd_ask(message):
-    uid = message.from_user.id
-    try:
-        if not ai_available():
-            safe_send(uid, "❌ AI not configured. Check your AI API keys.")
-            return
+    uid = message.chat.id
+    prompt = message.text[4:].strip() if len(message.text) > 4 else ""
+    if not prompt:
+        safe_send(uid, "Usage: /ask YOUR_QUESTION\nExample: /ask Nifty outlook for today")
+        return
 
-        prompt = message.text[5:].strip()
-        if not prompt:
-            safe_send(uid, "❌ Usage: /ask YOUR_QUESTION")
-            return
+    safe_send(uid, "⏳ Thinking… (~8s)")
 
-        response = ai_chat_respond(uid, prompt)
-        safe_send(uid, response)
-    except Exception as e:
-        logger.error("cmd_ask: %s", e)
-        safe_send(uid, f"❌ Error: {str(e)[:100]}")
-
-
-@bot.message_handler(commands=["start", "help"])
-def cmd_help(message):
-    uid = message.from_user.id
-    help_text = (
-        f"<b>AAA Advisory Bot v{BOT_VERSION}</b>\n\n"
-        "<b>📊 Analysis:</b>\n"
-        "/stock SYMBOL — Analyze stock with indicators and AI\n"
-        "/scan — Quick market scan\n"
-        "/swing — Swing trade setups\n"
-        "/breadth — Market breadth & indices\n\n"
-        "<b>💼 Portfolio:</b>\n"
-        "/buy SYMBOL PRICE QTY — Buy stock\n"
-        "/sell SYMBOL PRICE QTY — Sell stock\n"
-        "/portfolio — Show portfolio + P&L\n\n"
-        "<b>📰 Market:</b>\n"
-        "/news — Market news\n"
-        "/ask QUESTION — Ask AI anything\n\n"
-        "<b>⚙️ Settings:</b>\n"
-        "/status — System status\n"
-    )
-    safe_send(uid, help_text)
-
-
-@bot.message_handler(commands=["status"])
-def cmd_status(message):
-    uid = message.from_user.id
-    try:
-        status = debug_ai_status()
-        keys_status = status.get("keys", {})
-
-        lines = ["⚙️ <b>SYSTEM STATUS</b>", "━━━━━━━━━━━━━━━━━━━━"]
-        lines.append(f"Version: {BOT_VERSION}")
-        lines.append(f"Time: {datetime.now().strftime('%H:%M:%S IST')}")
-        lines.append("")
-        lines.append("🔑 API Keys:")
-        for key, val in keys_status.items():
-            lines.append(f"  {key}: {val}")
-
-        lines.append("")
-        lines.append("💾 Cache:")
-        lines.append(f"  Cached: {status.get('context_cached', False)}")
-        lines.append(f"  Age: {status.get('context_age_sec', 0):.0f}s")
-
-        safe_send(uid, "\n".join(lines))
-    except Exception as e:
-        logger.error("cmd_status: %s", e)
-        safe_send(uid, f"❌ Error: {str(e)[:100]}")
-
-
-@bot.message_handler(func=lambda m: True)
-def handle_message(message):
-    uid = message.from_user.id
-    try:
-        if not ai_available():
-            safe_send(uid, "❌ AI not configured.\n\nUse /help for available commands.")
-            return
-
-        response = ai_chat_respond(uid, message.text)
-        safe_send(uid, response)
-    except Exception as e:
-        logger.error("handle_message: %s", e)
-        safe_send(uid, f"❌ Error: {str(e)[:100]}")
+    import threading
+    def _run():
+        try:
+            if not ai_available():
+                safe_send(uid,
+                    "⚠️ <b>AI keys not configured.</b>\n"
+                    "Add GROQ_API_KEY in Render → Environment (free at console.groq.com)")
+                return
+            response = ai_chat_respond(uid, prompt)
+            safe_send(uid, response or "⚠️ AI returned empty. Try again.")
+        except Exception as e:
+            logger.error("cmd_ask: %s", e)
+            safe_send(uid, "⚠️ AI error. Please try again in a moment.")
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def main():
@@ -588,13 +541,18 @@ def main():
         def health():
             return {"status": "ok", "bot": BOT_VERSION, "ai": ai_available()}, 200
 
-        @flask_app.route(f"/webhook/{TOKEN}", methods=["POST"])
+        # Use the module-level TOKEN for the route path
+        _tok = TOKEN  # module-level, validated at startup
+        @flask_app.route(f"/webhook/{_tok}", methods=["POST"])
         def webhook():
             if flask_request.headers.get("content-type") != "application/json":
                 abort(400)
-            json_str = flask_request.get_data(as_text=True)
-            update   = telebot.types.Update.de_json(json_str)
-            bot.process_new_updates([update])
+            try:
+                json_str = flask_request.get_data(as_text=True)
+                update   = telebot.types.Update.de_json(json_str)
+                bot.process_new_updates([update])
+            except Exception as _we:
+                logger.error("webhook process error: %s", _we)
             return "OK", 200
 
         logger.info("Starting Flask on port %d (webhook mode)", PORT)
