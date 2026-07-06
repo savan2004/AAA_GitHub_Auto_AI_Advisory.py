@@ -556,13 +556,68 @@ def handle_message(message):
 def main():
     logger.info("🤖 Bot started: %s", BOT_VERSION)
     logger.info("AI Available: %s", ai_available())
-    try:
-        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error("Bot error: %s", e)
-        raise
+
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip().rstrip("/")
+    TOKEN       = os.getenv("TELEGRAM_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "")).strip()
+    PORT        = int(os.getenv("PORT", "8000"))
+
+    if WEBHOOK_URL:
+        # ── WEBHOOK MODE (Render / production) ────────────────────────────────
+        # Step 1: always delete any existing webhook first to avoid 409 conflict
+        try:
+            bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Old webhook deleted")
+            time.sleep(1)
+        except Exception as e:
+            logger.warning("delete_webhook: %s", e)
+
+        # Step 2: set new webhook
+        webhook_endpoint = f"{WEBHOOK_URL}/webhook/{TOKEN}"
+        try:
+            bot.set_webhook(url=webhook_endpoint)
+            logger.info("Webhook set: %s", webhook_endpoint)
+        except Exception as e:
+            logger.error("set_webhook failed: %s", e)
+            raise
+
+        # Step 3: run Flask to receive webhook updates
+        from flask import Flask, request as flask_request, abort
+        flask_app = Flask(__name__)
+
+        @flask_app.route("/", methods=["GET"])
+        def health():
+            return {"status": "ok", "bot": BOT_VERSION, "ai": ai_available()}, 200
+
+        @flask_app.route(f"/webhook/{TOKEN}", methods=["POST"])
+        def webhook():
+            if flask_request.headers.get("content-type") != "application/json":
+                abort(400)
+            json_str = flask_request.get_data(as_text=True)
+            update   = telebot.types.Update.de_json(json_str)
+            bot.process_new_updates([update])
+            return "OK", 200
+
+        logger.info("Starting Flask on port %d (webhook mode)", PORT)
+        flask_app.run(host="0.0.0.0", port=PORT, debug=False)
+
+    else:
+        # ── POLLING MODE (local development only) ─────────────────────────────
+        # Delete webhook first so polling works cleanly
+        try:
+            bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook cleared for polling mode")
+            time.sleep(1)
+        except Exception as e:
+            logger.warning("delete_webhook: %s", e)
+
+        logger.info("Starting polling mode (local dev)")
+        try:
+            bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+        except Exception as e:
+            logger.error("Bot polling error: %s", e)
+            raise
 
 
 if __name__ == "__main__":
