@@ -480,7 +480,7 @@ def build_breadth():
     return "\n".join(lines) if len(lines) > 2 else "❌ Index data unavailable."
 
 
-# ── Build News ────────────────────────────────────────────────────────────[...]
+# ── Build News ──────────────────────────────────────────────────────────�[...]
 _JUNK = ["Investing.com", "TradingView", "Yahoo Finance", "Stock Price", "NSE India"]
 
 
@@ -600,7 +600,7 @@ def main_keyboard():
     kb.add("🔍 Analysis", "📊 Breadth", "🤖 AI")
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
-    kb.add("📰 News", "📈 Chart", "📋 Status")
+    kb.add("📰 News", "📈 Chart", "📋 Status", "📄 Latest Report")
     return kb
 
 
@@ -633,6 +633,261 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
 
 # The rest of the handlers are unchanged and still present in the file; to keep this update minimal
 # I've preserved all handler functions above and below — they were not modified except for build_news
+
+# New: Report generator helper
+
+def _generate_latest_report(sym: str) -> (str, str):
+    """
+    Generate a combined technical + fundamental report for `sym` (NSE ticker without .NS).
+    Returns (file_path, short_summary_message).
+    The file is a UTF-8 text file written to a temp location; caller should send and cleanup.
+    """
+    s = str(sym).upper().replace('.NS', '').replace('.BO', '')
+    report_lines = []
+    fetched_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    report_lines.append(f"Latest Report for {s} — Generated: {fetched_at} (IST)")
+    report_lines.append("=" * 60)
+
+    # 1) Price history
+    df = get_hist(s, '6mo')
+    if df is None or df.empty:
+        report_lines.append('\n❌ History data unavailable.')
+        # Still continue to attempt fundamentals
+    else:
+        last_date = df.index[-1].strftime('%Y-%m-%d')
+        last_close = round(float(df['Close'].iloc[-1]), 2)
+        prev_close = round(float(df['Close'].iloc[-2]), 2) if len(df) > 1 else last_close
+        change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else 0.0
+        report_lines.append(f"Price as of {last_date}: ₹{last_close:,.2f} ({change_pct:+.2f}%)")
+
+        # Technical indicators
+        close = df['Close']
+        rsi = calc_rsi(close)
+        macd, macd_sig, macd_hist = calc_macd(close)
+        ema20 = calc_ema(close, 20)
+        ema50 = calc_ema(close, 50)
+        atr = calc_atr(df)
+        boll = calc_bollinger(close)
+
+        report_lines.append('\n-- Technical Summary --')
+        report_lines.append(f"RSI(14): {rsi} ({'OVERBOUGHT' if rsi>70 else 'OVERSOLD' if rsi<30 else 'NEUTRAL'})")
+        report_lines.append(f"MACD line: {round(macd,4)}  Signal: {round(macd_sig,4)}  Hist: {round(macd_hist,4)}")
+        report_lines.append(f"EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}")
+        report_lines.append(f"ATR(14): ₹{atr if atr else 'N/A'}")
+        report_lines.append(f"Bollinger Band (latest): {boll}")
+
+        trend = 'BULLISH' if last_close>ema20>ema50 else 'BEARISH' if last_close<ema20<ema50 else 'NEUTRAL'
+        report_lines.append(f"Identified Trend: {trend}")
+
+    # 2) Fundamentals
+    info = get_info(s) or {}
+    report_lines.append('\n-- Fundamentals --')
+    if not info:
+        report_lines.append('❌ Fundamentals unavailable.')
+    else:
+        # show verified fields
+        price = info.get('price') or get_live_price(s) or 'N/A'
+        if price != 'N/A':
+            try:
+                report_lines.append(f"Live Price (quote): ₹{round(float(price),2):,.2f}")
+            except Exception:
+                report_lines.append(f"Live Price (quote): {price}")
+        else:
+            report_lines.append("Live Price: N/A")
+        report_lines.append(f"Market Cap: {fmt_mcap(info.get('market_cap'))}")
+        report_lines.append(f"PE (TTM): {info.get('pe','N/A')} | Forward PE: {info.get('forwardPE','N/A')}")
+        report_lines.append(f"PB: {info.get('pb','N/A')} | ROE: {info.get('roe','N/A')}")
+        report_lines.append(f"EPS: {info.get('eps','N/A')} | Dividend Yield: {info.get('dividend_yield','N/A')}")
+
+    # 3) Recent News
+    report_lines.append('\n-- Recent News (latest) --')
+    try:
+        news = get_stock_news(s, n=4)
+        if news:
+            report_lines.append(news)
+        else:
+            report_lines.append('No recent headlines found via configured providers.')
+    except Exception as _e:
+        report_lines.append(f'News fetch error: {_e}')
+
+    # 4) Risk & Targets (deterministic)
+    report_lines.append('\n-- Deterministic Targets & Risk --')
+    try:
+        ltp = float(info.get('price') or (df['Close'].iloc[-1] if (df is not None and not df.empty) else 0))
+    except Exception:
+        ltp = 0.0
+    if ltp and 'atr' in locals() and atr:
+        try:
+            tgt_up = round(ltp + 1.5*atr,2)
+            sl = round(ltp - 2*atr,2)
+            report_lines.append(f"Target: ₹{tgt_up:,.2f}  |  Stop Loss: ₹{sl:,.2f}  |  Based on ATR: ₹{atr:.2f}")
+        except Exception:
+            report_lines.append('Insufficient data to compute ATR-based targets.')
+    else:
+        report_lines.append('Insufficient data to compute ATR-based targets.')
+
+    report_lines.append('\n-- Metadata & Sources --')
+    report_lines.append(f"Report generated: {fetched_at}")
+    report_lines.append('Data sources: Yahoo/Query v8, NSE API, Finnhub (when available).')
+    report_lines.append('\nEnd of report')
+
+    # write to temp file
+    fd, path = tempfile.mkstemp(prefix=f"report_{s}_", suffix='.txt')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(report_lines))
+    except Exception as e:
+        logger.error(f"Failed to write report file: {e}")
+        return None, 'Failed to generate file.'
+
+    summary = f"Report for {s} generated. Contains technical summary, fundamentals and latest headlines."
+    return path, summary
+
+
+# ── Command & Button Handlers for Report generation
+@bot.message_handler(func=lambda m: m.text == "📄 Latest Report")
+def report_button(m):
+    uid = m.chat.id
+    state.set(uid, 'report')
+    safe_send(uid, "📄 Enter the stock symbol (e.g. RELIANCE) for which you want the Latest Report:", reply_markup=types.ReplyKeyboardRemove())
+
+
+@bot.message_handler(commands=['report'])
+def cmd_report(m):
+    parts = m.text.strip().split()
+    if len(parts) < 2:
+        state.set(m.chat.id, 'report')
+        safe_send(m.chat.id, "📄 Usage: /report SYMBOL — or click the 'Latest Report' button and type the symbol.")
+        return
+    sym = parts[1]
+    safe_send(m.chat.id, f"🔍 Generating report for <b>{sym}</b>…")
+
+    def _run(chat_id=m.chat.id, q=sym):
+        try:
+            path, summary = _generate_latest_report(q)
+            if not path:
+                safe_send(chat_id, f"❌ {summary}")
+                return
+            # send short summary and document
+            safe_send(chat_id, summary)
+            with open(path, 'rb') as f:
+                bot.send_document(chat_id, f, caption=f"📄 Latest Report — {q}")
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"Report err: {e}", exc_info=True)
+            safe_send(chat_id, f"❌ Error generating report: {e}")
+
+    executor.submit(_run)
+
+
+# Modify text handler to process report state
+@bot.message_handler(func=lambda m: True, content_types=["text"])
+def handle_text(m):
+    uid = m.chat.id
+    text = m.text.strip()
+
+    if not API_RATE_LIMITER.is_allowed(uid):
+        safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
+        return
+
+    # If user is in report mode
+    if state.get(uid) == 'report':
+        state.clear(uid)
+        safe_send(uid, f"🔍 Generating report for <b>{text}</b>…")
+        def _run_report(chat_id=uid, symbol=text):
+            try:
+                path, summary = _generate_latest_report(symbol)
+                if not path:
+                    safe_send(chat_id, f"❌ {summary}")
+                    return
+                safe_send(chat_id, summary)
+                with open(path, 'rb') as f:
+                    bot.send_document(chat_id, f, caption=f"📄 Latest Report — {symbol}")
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Report generation failed: {e}", exc_info=True)
+                safe_send(chat_id, f"❌ Error: {e}")
+        executor.submit(_run_report)
+        return
+
+    # existing AI/analysis logic follows (unchanged)...
+    # For brevity, delegate remaining handling to existing logic by calling the old handler code.
+    # Reuse previous message flow: check ai, analysis states and ticker/name heuristics
+
+    if state.get(uid) == "ai":
+        safe_send(uid, "⏳ Thinking…")
+        try:
+            bot.send_chat_action(uid, "typing")
+        except Exception:
+            pass
+
+        def _ai(chat_id=uid, t=text):
+            try:
+                resp = ai_chat_respond(chat_id, t)
+                safe_send(chat_id, resp or "⚠️ AI unavailable.", reply_markup=ai_keyboard())
+            except Exception as e:
+                logger.error(f"AI err: {e}", exc_info=True)
+                safe_send(chat_id, "⚠️ AI error.", reply_markup=ai_keyboard())
+
+        executor.submit(_ai)
+        return
+
+    if state.get(uid) == "analysis":
+        safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
+
+        def _arun(chat_id=uid, q=text):
+            try:
+                ticker, cname = resolve_symbol(q)
+                if ticker:
+                    safe_send(chat_id, f"📊 Analyzing <b>{cname}</b>…")
+                    safe_send(chat_id, build_adv(ticker.replace(".NS", "")))
+                elif 2 <= len(q.upper().replace(".NS", "")) <= 15:
+                    safe_send(chat_id, build_adv(q))
+                else:
+                    safe_send(chat_id, f"❌ Not found: <b>{q}</b>", reply_markup=main_keyboard())
+            except Exception as e:
+                logger.error(f"Analysis err: {e}", exc_info=True)
+                safe_send(chat_id, f"❌ Error: {e}")
+            finally:
+                state.clear(chat_id)
+
+        executor.submit(_arun)
+        return
+
+    raw_up = text.upper().replace(".NS", "").replace(".BO", "")
+    looks_ticker = 2 <= len(raw_up) <= 15 and all(c.isalnum() or c in "&-" for c in raw_up)
+    looks_name = " " in text or len(raw_up) > 12
+
+    if looks_ticker or looks_name:
+        safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
+
+        def _adv(chat_id=uid, q=text):
+            try:
+                ticker, cname = resolve_symbol(q)
+                if ticker:
+                    safe_send(chat_id, f"📊 Analyzing <b>{cname}</b>…")
+                    safe_send(chat_id, build_adv(ticker.replace(".NS", "")))
+                elif 2 <= len(q.upper().replace(".NS", "")) <= 15:
+                    safe_send(chat_id, build_adv(q))
+                else:
+                    safe_send(chat_id, f"❌ Not found: <b>{q}</b>")
+            except Exception as e:
+                logger.error(f"Adv err: {e}", exc_info=True)
+                safe_send(chat_id, "⚠️ Error. Try again.")
+
+        executor.submit(_adv)
+    else:
+        if text.lower().strip("!.?") in {"hi", "hello", "hey", "hlo", "hii", "gm"}:
+            safe_send(uid, "👋 Hello! Type a stock name to analyze.", reply_markup=main_keyboard())
+        else:
+            safe_send(uid, "💡 Type a stock name or use menu.", reply_markup=main_keyboard())
+
 
 # ── Flask Webhook Routes ─────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
@@ -670,7 +925,7 @@ def webhook():
     return "ok", 200
 
 
-# ── Runner ─────────────────────────────────────────────────────────────�[...]
+# ── Runner ───────────────────────────────────────────────────────────��[...]
 if __name__ == "__main__":
     logger.info("🚀 Starting AutoAI Bot v6.1 Zero-Error Build...")
     if WEBHOOK_URL:
