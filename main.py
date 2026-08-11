@@ -14,6 +14,8 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import tempfile
+import zipfile
+import hashlib
 
 import requests
 import pandas as pd
@@ -631,117 +633,291 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
                 pass
 
 
-# The rest of the handlers are unchanged and still present in the file; to keep this update minimal
-# I've preserved all handler functions above and below — they were not modified except for build_news
+# New: Enhanced Report generator helper (timestamps, provenance, SHA + chart ZIP)
 
-# New: Report generator helper
+def _iso(ts):
+    try:
+        if ts is None:
+            return ""
+        if isinstance(ts, str):
+            return ts
+        return ts.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts)
+
 
 def _generate_latest_report(sym: str) -> (str, str):
     """
     Generate a combined technical + fundamental report for `sym` (NSE ticker without .NS).
-    Returns (file_path, short_summary_message).
-    The file is a UTF-8 text file written to a temp location; caller should send and cleanup.
+    Returns (zip_path, short_summary_message). ZIP contains report.txt and chart.png (if generated).
     """
     s = str(sym).upper().replace('.NS', '').replace('.BO', '')
-    report_lines = []
     fetched_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    report_lines.append(f"Latest Report for {s} — Generated: {fetched_at} (IST)")
+    report_lines = []
+    report_lines.append(f"Latest Report for {s} — Generated: {fetched_at} (local)")
     report_lines.append("=" * 60)
 
-    # 1) Price history
-    df = get_hist(s, '6mo')
+    # Price/history
+    df = None
+    price_src = "unknown"
+    price_ts = None
+    last_close = None
+    atr = None
+
+    try:
+        df = get_hist(s, '6mo')
+    except Exception:
+        df = None
+
     if df is None or df.empty:
         report_lines.append('\n❌ History data unavailable.')
-        # Still continue to attempt fundamentals
     else:
-        last_date = df.index[-1].strftime('%Y-%m-%d')
-        last_close = round(float(df['Close'].iloc[-1]), 2)
-        prev_close = round(float(df['Close'].iloc[-2]), 2) if len(df) > 1 else last_close
-        change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else 0.0
-        report_lines.append(f"Price as of {last_date}: ₹{last_close:,.2f} ({change_pct:+.2f}%)")
+        # normalize index
+        try:
+            if not hasattr(df.index, 'tz'):
+                df.index = pd.to_datetime(df.index)
+            price_ts = df.index[-1]
+            last_close = round(float(df['Close'].iloc[-1]), 2)
+            prev_close = round(float(df['Close'].iloc[-2]), 2) if len(df) > 1 else last_close
+            change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else 0.0
+            price_src = 'yfinance'
+            report_lines.append(f"Price as of {_iso(price_ts)} ({price_src}): ₹{last_close:,.2f} ({change_pct:+.2f}%)")
 
-        # Technical indicators
-        close = df['Close']
-        rsi = calc_rsi(close)
-        macd, macd_sig, macd_hist = calc_macd(close)
-        ema20 = calc_ema(close, 20)
-        ema50 = calc_ema(close, 50)
-        atr = calc_atr(df)
-        boll = calc_bollinger(close)
+            # technicals
+            close = df['Close']
+            rsi = calc_rsi(close)
+            macd, macd_sig, macd_hist = calc_macd(close)
+            ema20 = calc_ema(close, 20)
+            ema50 = calc_ema(close, 50)
+            atr = calc_atr(df)
+            boll = calc_bollinger(close)
 
-        report_lines.append('\n-- Technical Summary --')
-        report_lines.append(f"RSI(14): {rsi} ({'OVERBOUGHT' if rsi>70 else 'OVERSOLD' if rsi<30 else 'NEUTRAL'})")
-        report_lines.append(f"MACD line: {round(macd,4)}  Signal: {round(macd_sig,4)}  Hist: {round(macd_hist,4)}")
-        report_lines.append(f"EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}")
-        report_lines.append(f"ATR(14): ₹{atr if atr else 'N/A'}")
-        report_lines.append(f"Bollinger Band (latest): {boll}")
+            report_lines.append('\n-- Technical Summary --')
+            report_lines.append(f"RSI(14): {rsi} ({'OVERBOUGHT' if rsi>70 else 'OVERSOLD' if rsi<30 else 'NEUTRAL'})")
+            report_lines.append(f"MACD: {round(macd,4)}  Signal: {round(macd_sig,4)}  Hist: {round(macd_hist,4)}")
+            report_lines.append(f"EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}")
+            report_lines.append(f"ATR(14): ₹{atr if atr else 'N/A'}")
+            report_lines.append(f"Bollinger (last): {boll}")
+            trend = 'BULLISH' if last_close>ema20>ema50 else 'BEARISH' if last_close<ema20<ema50 else 'NEUTRAL'
+            report_lines.append(f"Identified Trend: {trend}")
+        except Exception as e:
+            report_lines.append(f"Technical calc error: {e}")
 
-        trend = 'BULLISH' if last_close>ema20>ema50 else 'BEARISH' if last_close<ema20<ema50 else 'NEUTRAL'
-        report_lines.append(f"Identified Trend: {trend}")
-
-    # 2) Fundamentals
-    info = get_info(s) or {}
+    # Fundamentals
     report_lines.append('\n-- Fundamentals --')
+    info = {}
+    fund_src = 'unknown'
+    fund_ts = None
+    try:
+        info = get_info(s) or {}
+        if info:
+            fund_src = info.get('provider') or fund_src
+            fund_ts = info.get('timestamp') or fetched_at
+    except Exception:
+        info = {}
+
     if not info:
         report_lines.append('❌ Fundamentals unavailable.')
     else:
-        # show verified fields
-        price = info.get('price') or get_live_price(s) or 'N/A'
-        if price != 'N/A':
+        # Live price
+        price_val = info.get('price')
+        if price_val is None:
             try:
-                report_lines.append(f"Live Price (quote): ₹{round(float(price),2):,.2f}")
+                price_val = get_live_price(s)
+                price_src = 'live_quote'
+                price_ts = datetime.now()
             except Exception:
-                report_lines.append(f"Live Price (quote): {price}")
-        else:
-            report_lines.append("Live Price: N/A")
-        report_lines.append(f"Market Cap: {fmt_mcap(info.get('market_cap'))}")
+                price_val = 'N/A'
+        if price_val != 'N/A':
+            try:
+                report_lines.append(f"Live Price ({price_src}): ₹{round(float(price_val),2):,.2f} — timestamp: {_iso(price_ts)}")
+            except Exception:
+                report_lines.append(f"Live Price: {price_val} — timestamp: {_iso(price_ts)}")
+
+        report_lines.append(f"Market Cap ({fund_src}): {fmt_mcap(info.get('market_cap'))}")
         report_lines.append(f"PE (TTM): {info.get('pe','N/A')} | Forward PE: {info.get('forwardPE','N/A')}")
         report_lines.append(f"PB: {info.get('pb','N/A')} | ROE: {info.get('roe','N/A')}")
         report_lines.append(f"EPS: {info.get('eps','N/A')} | Dividend Yield: {info.get('dividend_yield','N/A')}")
+        report_lines.append(f"Fundamentals fetched at: {_iso(fund_ts)}")
 
-    # 3) Recent News
+    # News (structured)
     report_lines.append('\n-- Recent News (latest) --')
-    try:
-        news = get_stock_news(s, n=4)
-        if news:
-            report_lines.append(news)
-        else:
-            report_lines.append('No recent headlines found via configured providers.')
-    except Exception as _e:
-        report_lines.append(f'News fetch error: {_e}')
+    news_items = []
+    newsapi_key = os.getenv('NEWSAPI_KEY','').strip()
+    gnews_key = os.getenv('GNEWS_KEY','').strip()
+    tavily_key = os.getenv('TAVILY_API_KEY','').strip()
 
-    # 4) Risk & Targets (deterministic)
+    def _add_news_item(title, source, url, published):
+        if not title:
+            return
+        news_items.append({'title': title.strip(), 'source': source or 'unknown', 'url': url or '', 'publishedAt': published or ''})
+
+    try:
+        if newsapi_key:
+            q = f"{s} stock OR {s} company OR {s} share"
+            params = {'q': q, 'language': 'en', 'pageSize': 6, 'apiKey': newsapi_key}
+            r = requests.get('https://newsapi.org/v2/everything', params=params, timeout=8)
+            if r.ok:
+                for a in r.json().get('articles', [])[:6]:
+                    _add_news_item(a.get('title'), a.get('source',{}).get('name'), a.get('url'), a.get('publishedAt'))
+        if not news_items and gnews_key:
+            q = s
+            params = {'q': q, 'lang': 'en', 'max': 6, 'token': gnews_key}
+            r = requests.get('https://gnews.io/api/v4/search', params=params, timeout=8)
+            if r.ok:
+                for a in r.json().get('articles', [])[:6]:
+                    _add_news_item(a.get('title'), a.get('source',{}).get('name'), a.get('url'), a.get('publishedAt'))
+        if not news_items and tavily_key:
+            r = requests.post('https://api.tavily.com/search', json={'api_key': tavily_key, 'query': f"{s} NSE", 'max_results': 6}, timeout=8)
+            if r.ok:
+                for a in r.json().get('results', [])[:6]:
+                    _add_news_item(a.get('title'), a.get('source'), a.get('url'), a.get('published_at') or a.get('publishedAt'))
+    except Exception as e:
+        report_lines.append(f"News fetch error: {e}")
+
+    if news_items:
+        for it in news_items[:5]:
+            pub = it.get('publishedAt') or ''
+            report_lines.append(f"• {it['title']}  — {it['source']}  — {pub}")
+            if it.get('url'):
+                report_lines.append(f"  URL: {it['url']}")
+    else:
+        # fallback to existing market_news text block
+        try:
+            block = get_market_news(5)
+            if block and 'MARKET NEWS' in block:
+                report_lines.append(block)
+            else:
+                report_lines.append('No recent headlines found via configured providers.')
+        except Exception:
+            report_lines.append('No recent headlines found via configured providers.')
+
+    # Targets & risk
     report_lines.append('\n-- Deterministic Targets & Risk --')
     try:
-        ltp = float(info.get('price') or (df['Close'].iloc[-1] if (df is not None and not df.empty) else 0))
-    except Exception:
-        ltp = 0.0
-    if ltp and 'atr' in locals() and atr:
-        try:
-            tgt_up = round(ltp + 1.5*atr,2)
-            sl = round(ltp - 2*atr,2)
-            report_lines.append(f"Target: ₹{tgt_up:,.2f}  |  Stop Loss: ₹{sl:,.2f}  |  Based on ATR: ₹{atr:.2f}")
-        except Exception:
-            report_lines.append('Insufficient data to compute ATR-based targets.')
-    else:
-        report_lines.append('Insufficient data to compute ATR-based targets.')
+        if info and info.get('price'):
+            ltp_val = float(info.get('price'))
+            ltp_ts_for_hash = _iso(fund_ts)
+            ltp_src_for_hash = fund_src
+        elif last_close is not None:
+            ltp_val = float(last_close)
+            ltp_ts_for_hash = _iso(price_ts)
+            ltp_src_for_hash = price_src
+        else:
+            ltp_val = 0.0
+            ltp_ts_for_hash = fetched_at
+            ltp_src_for_hash = 'unknown'
 
+        if ltp_val and atr:
+            tgt_up = round(ltp_val + 1.5*atr, 2)
+            sl = round(ltp_val - 2*atr, 2)
+            report_lines.append(f"Target: ₹{tgt_up:,.2f}  |  Stop Loss: ₹{sl:,.2f}  |  Based on ATR(14): ₹{atr:.2f}")
+            report_lines.append(f"Primary price source for target: {ltp_src_for_hash} — timestamp: {ltp_ts_for_hash}")
+        else:
+            report_lines.append('Insufficient data to compute ATR-based targets.')
+    except Exception as e:
+        report_lines.append(f"Target computation error: {e}")
+
+    # Metadata & SHA
     report_lines.append('\n-- Metadata & Sources --')
     report_lines.append(f"Report generated: {fetched_at}")
-    report_lines.append('Data sources: Yahoo/Query v8, NSE API, Finnhub (when available).')
+    srcs = []
+    if price_src: srcs.append(price_src)
+    if fund_src and fund_src != 'unknown': srcs.append(fund_src)
+    if news_items: srcs.append('news_api' if newsapi_key else ('gnews' if gnews_key else ('tavily' if tavily_key else 'market_news')))
+    report_lines.append(f"Data sources observed: {', '.join(srcs) if srcs else 'internal/cached'}")
+
+    # canonical payload
+    canonical_parts = [s, _iso(price_ts) or '', str(last_close or ''), str(info.get('market_cap','') if info else ''), str(info.get('pe','') if info else '')]
+    for ni in news_items[:3]:
+        canonical_parts.append((ni.get('title','') or '') + '|' + (ni.get('publishedAt','') or ''))
+    canonical = '\n'.join(canonical_parts)
+    try:
+        h = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+        report_lines.append(f"Report SHA256: {h}")
+    except Exception:
+        report_lines.append('Report SHA256: unavailable')
+
     report_lines.append('\nEnd of report')
 
-    # write to temp file
-    fd, path = tempfile.mkstemp(prefix=f"report_{s}_", suffix='.txt')
+    # write report.txt + chart.png (optional) into ZIP
+    txt_fd, txt_path = tempfile.mkstemp(prefix=f"report_{s}_", suffix='.txt')
+    png_path = None
+    zip_fd, zip_path = tempfile.mkstemp(prefix=f"report_{s}_", suffix='.zip')
+    os.close(txt_fd)
+    os.close(zip_fd)
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        with open(txt_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(report_lines))
     except Exception as e:
-        logger.error(f"Failed to write report file: {e}")
-        return None, 'Failed to generate file.'
+        logger.error(f"Failed to write report text: {e}")
+        try:
+            os.remove(txt_path)
+        except Exception:
+            pass
+        return None, 'Failed to generate report file.'
 
-    summary = f"Report for {s} generated. Contains technical summary, fundamentals and latest headlines."
-    return path, summary
+    # attempt chart generation using matplotlib (fallback to chart_integration)
+    try:
+        chart_generated = False
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            if df is not None and not df.empty:
+                png_fd, png_path = tempfile.mkstemp(prefix=f"chart_{s}_", suffix='.png')
+                os.close(png_fd)
+                plt.figure(figsize=(10,4))
+                tail = df['Close'][-120:]
+                plt.plot(tail.index, tail.values, label='Close')
+                plt.title(f"{s} — Close (last {len(tail)} records)")
+                plt.xlabel('Date')
+                plt.ylabel('Price')
+                plt.grid(True)
+                if last_close is not None:
+                    plt.axhline(last_close, color='red', linestyle='--', linewidth=0.8)
+                plt.tight_layout()
+                plt.savefig(png_path)
+                plt.close()
+                chart_generated = True
+        except Exception:
+            # attempt chart_integration if available
+            try:
+                gen = get_chart_generator()
+                if df is not None and not df.empty and callable(gen):
+                    png_path = gen(df, s)
+                    chart_generated = True
+            except Exception:
+                chart_generated = False
+
+        # create zip
+        with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(txt_path, arcname=f"report_{s}.txt")
+            if png_path and os.path.exists(png_path):
+                zf.write(png_path, arcname=f"chart_{s}.png")
+    except Exception as e:
+        logger.error(f"Failed to create ZIP report: {e}", exc_info=True)
+        try:
+            os.remove(txt_path)
+            if png_path and os.path.exists(png_path):
+                os.remove(png_path)
+        except Exception:
+            pass
+        return None, 'Failed to create ZIP report.'
+
+    # cleanup temp txt/png, leave zip for caller
+    try:
+        os.remove(txt_path)
+    except Exception:
+        pass
+    try:
+        if png_path and os.path.exists(png_path):
+            os.remove(png_path)
+    except Exception:
+        pass
+
+    summary = f"Report for {s} generated. ZIP contains report text (and chart if available). SHA: {h if 'h' in locals() else 'n/a'}"
+    return zip_path, summary
 
 
 # ── Command & Button Handlers for Report generation
@@ -768,7 +944,7 @@ def cmd_report(m):
             if not path:
                 safe_send(chat_id, f"❌ {summary}")
                 return
-            # send short summary and document
+            # send short summary and document (zip)
             safe_send(chat_id, summary)
             with open(path, 'rb') as f:
                 bot.send_document(chat_id, f, caption=f"📄 Latest Report — {q}")
