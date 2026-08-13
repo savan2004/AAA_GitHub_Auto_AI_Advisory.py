@@ -113,15 +113,6 @@ def _rupee(v, dash="N/A"):
         return dash
 
 
-def _clean_news_line(line: str) -> str:
-    """Strip leading emoji/markers and any stray HTML from a news line."""
-    line = re.sub(r"<[^>]+>", "", line)
-    line = _html.unescape(line)
-    line = _strip_emoji(line)
-    line = line.lstrip("• ").strip()
-    return line
-
-
 _EMOJI_RE = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\u2B50\u2705\u26A0\uFE0F]+"
 )
@@ -131,11 +122,30 @@ def _strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub("", text or "").strip()
 
 
+def _fix_currency(text: str) -> str:
+    """PDF fonts (Helvetica/WinAnsi) have no glyph for the rupee sign (₹) —
+    it renders as a black box in the PDF. Replace with 'Rs ' before it
+    reaches a Paragraph. (Telegram chat text is untouched — ₹ renders fine
+    there; this only applies to text destined for the PDF.)"""
+    return re.sub(r"₹\s*", "Rs ", text or "")
+
+
+def _clean_news_line(line: str) -> str:
+    """Strip leading emoji/markers and any stray HTML from a news line."""
+    line = re.sub(r"<[^>]+>", "", line)
+    line = _html.unescape(line)
+    line = _strip_emoji(line)
+    line = _fix_currency(line)
+    line = line.lstrip("• ").strip()
+    return line
+
+
 def _clean_ai_text(text: str) -> str:
     """Convert the bot's Telegram-HTML-flavoured AI text into paragraph-safe text."""
     text = _html.unescape(text or "")
     text = re.sub(r"</?b>", "", text)
     text = _strip_emoji(text).strip()
+    text = _fix_currency(text)
     return text
 
 
@@ -198,25 +208,35 @@ def _collect_report_data(sym: str) -> dict:
     news_raw = _safe(get_stock_news, sym, 4) or ""
     news_lines = [_clean_news_line(l) for l in news_raw.split("\n") if l.strip()]
 
+    # Target / stop-loss (same ATR logic used in chat card) — compute the
+    # RAW numbers first, then feed the *same* numbers into the AI prompt so
+    # the AI-Generated Outlook text can never quote a different target/SL
+    # than the table above it.
+    tgt_line = None
+    sl_val = t1_val = 0.0
+    if atr and atr > 0 and ltp > 0:
+        if trend == "BULLISH":
+            t1_val = round(ltp + 1.5 * atr, 2)
+            sl_val = round(ltp - 2 * atr, 2)
+            tgt_line = ("Target", f"Rs {t1_val:,.2f}  (+{(t1_val-ltp)/ltp*100:.1f}%)",
+                        "Stop-loss", f"Rs {sl_val:,.2f}  ({(sl_val-ltp)/ltp*100:.1f}%)")
+        elif trend == "BEARISH":
+            t1_val = round(ltp - 1.5 * atr, 2)
+            sl_val = round(ltp + 2 * atr, 2)
+            tgt_line = ("Target", f"Rs {t1_val:,.2f}  ({(t1_val-ltp)/ltp*100:.1f}%)",
+                        "Stop-loss", f"Rs {sl_val:,.2f}  (+{(sl_val-ltp)/ltp*100:.1f}%)")
+        else:
+            t1_val = round(ltp + atr, 2)          # R1 — used as the AI's reference "T1"
+            sl_val = round(ltp - 2 * atr, 2)       # Range SL
+            tgt_line = ("Resistance (R1)", f"Rs {t1_val:,.2f}",
+                        "Support (S1)", f"Rs {round(ltp - atr, 2):,.2f}")
+
     ai_text = _safe(
         engine_ai_insights, sym, ltp, rsi, macd, trend,
         str(fund.get("pe") if fund.get("pe") is not None else "N/A"),
         str(fund.get("roe") if fund.get("roe") is not None else "N/A"),
-        atr, 0.0, 0.0,
+        atr, sl_val, t1_val,
     ) or ""
-
-    # Target / stop-loss (same ATR logic used in chat card)
-    tgt_line = None
-    if atr and atr > 0 and ltp > 0:
-        if trend == "BULLISH":
-            tgt_line = ("Target", f"Rs {ltp + 1.5*atr:,.2f}  (+{1.5*atr/ltp*100:.1f}%)",
-                        "Stop-loss", f"Rs {ltp - 2*atr:,.2f}  (-{2*atr/ltp*100:.1f}%)")
-        elif trend == "BEARISH":
-            tgt_line = ("Target", f"Rs {ltp - 1.5*atr:,.2f}  (-{1.5*atr/ltp*100:.1f}%)",
-                        "Stop-loss", f"Rs {ltp + 2*atr:,.2f}  (+{2*atr/ltp*100:.1f}%)")
-        else:
-            tgt_line = ("Resistance (R1)", f"Rs {ltp + atr:,.2f}",
-                        "Support (S1)", f"Rs {ltp - atr:,.2f}")
 
     # Chart image (best-effort — report still generates without it)
     chart_path = None
