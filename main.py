@@ -264,6 +264,12 @@ def _get_tgt_line(trend, ltp, atr):
             f"  |  Range SL: ₹{round(ltp - 2 * atr, 2):,.2f}")
 
 
+def frow(label, val, suffix=""):
+    if val is None or val == "N/A":
+        return f"  {label:<14}: N/A"
+    return f"  {label:<14}: {val}{suffix}"
+
+
 # ── Build Advisory Card ──────────────────────────────────────────────────────
 def build_adv(sym):
     sym = str(sym).upper().replace(".NS", "").replace(".BO", "")
@@ -354,11 +360,6 @@ def build_adv(sym):
 
     chg_icon = "🟢" if chg >= 0 else "🔴"
 
-    def frow(label, val, suffix=""):
-        if val is None or val == "N/A":
-            return f"  {label:<14}: N/A"
-        return f"  {label:<14}: {val}{suffix}"
-
     rows = [
         f"🏢 <b>{name}</b>  ({sym})",
         f"{chg_icon} LTP: ₹{ltp:,.2f}  <b>({chg:+.2f}%)</b>",
@@ -392,7 +393,104 @@ def build_adv(sym):
     return "\n".join(rows)
 
 
-# ── Build Screener Card ──────────────────────────────────────────────────────
+# ── Modular Cards (Technical-only / Fundamental-only) ────────────────────────
+# Both reuse the exact same fetch + formatting helpers as build_adv() above,
+# so numbers always agree across the quick-menu options and the full card /
+# PDF report. Kept as separate functions (not a slice of build_adv) so each
+# can be sent standalone from the post-lookup selection menu.
+def build_technical_text(sym, cname=None):
+    sym = str(sym).upper().replace(".NS", "").replace(".BO", "")
+    try:
+        df = get_hist(sym, "6mo")
+    except Exception as e:
+        return f"❌ Error fetching history for {sym}: {e}"
+    if df is None or df.empty or len(df) < 2:
+        return f"❌ <b>{sym}</b> not found or insufficient data."
+
+    close = df["Close"]
+    ltp = round(float(close.iloc[-1]), 2)
+    prev = float(close.iloc[-2])
+    chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+    rsi = calc_rsi(close)
+    macd, _, _ = calc_macd(close)
+    ema20 = calc_ema(close, 20)
+    ema50 = calc_ema(close, 50)
+    atr = calc_atr(df)
+    asi = calc_asi(df)
+    trend = "BULLISH" if ltp > ema20 > ema50 else "BEARISH" if ltp < ema20 < ema50 else "NEUTRAL"
+    t_icon = "🔼" if trend == "BULLISH" else "🔽" if trend == "BEARISH" else "↔️"
+
+    n = min(252, len(close))
+    w52h = round(float(close.rolling(n).max().iloc[-1]), 2)
+    w52l = round(float(close.rolling(n).min().iloc[-1]), 2)
+    dist52 = round((ltp - w52h) / w52h * 100, 1) if w52h else None
+
+    name = cname or sym
+    chg_icon = "🟢" if chg >= 0 else "🔴"
+    rows = [
+        f"📊 <b>{name}</b>  ({sym}) — Technical Analysis",
+        f"{chg_icon} LTP: ₹{ltp:,.2f}  <b>({chg:+.2f}%)</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"📐 EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}",
+        f"📏 52W H: ₹{w52h}  |  52W L: ₹{w52l}" + (f"  ({dist52:+.1f}% from peak)" if dist52 is not None else ""),
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"🔬 Trend: <b>{trend} {t_icon}</b>",
+        f"📊 RSI: {rsi}  |  MACD: {'▲' if macd > 0 else '▼'} {macd}  |  ASI: {asi}",
+        f"📉 ATR(14): ₹{atr if atr else 'N/A'}",
+        "━━━━━━━━━━━━━━━━━━━━",
+        _get_tgt_line(trend, ltp, atr),
+        "━━━━━━━━━━━━━━━━━━━━",
+        "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
+    ]
+    return "\n".join(rows)
+
+
+def build_fundamental_text(sym, cname=None):
+    sym = str(sym).upper().replace(".NS", "").replace(".BO", "")
+    fund = {}
+    try:
+        from fundamentals import get_fundamentals
+        fund = get_fundamentals(sym) or {}
+    except Exception:
+        pass
+    info = {}
+    try:
+        info = get_info(sym) or {}
+    except Exception:
+        pass
+
+    name = cname or fund.get("name") or info.get("name") or sym
+    pe = fund.get("pe") or safe_val(info, "pe")
+    fwd_pe = fund.get("fwd_pe")
+    pb = fund.get("pb") or safe_val(info, "pb")
+    roe = fund.get("roe")
+    eps = fund.get("eps") or safe_val(info, "eps")
+    mcap = fund.get("mcap") or info.get("market_cap")
+    rev = fund.get("rev") or info.get("totalRevenue")
+    de = fund.get("de") or safe_val(info, "debtToEquity")
+    div_y = fund.get("div_y")
+    beta = fund.get("beta") or safe_val(info, "beta")
+
+    if all(v is None for v in (pe, pb, roe, mcap, rev, de, div_y, beta)):
+        return f"❌ Fundamentals unavailable for <b>{name}</b> ({sym}) right now. Try again shortly."
+
+    rows = [
+        f"💰 <b>{name}</b>  ({sym}) — Fundamental Analysis",
+        "━━━━━━━━━━━━━━━━━━━━",
+        frow("Market Cap", fmt_mcap(mcap)),
+        frow("Revenue", _fmt_revenue(rev, mcap)),
+        frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
+        frow("Price/Book", pb),
+        frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
+        frow("Debt/Equity", de) + (f"  |  Beta: {beta}" if beta else ""),
+        frow("Div Yield", div_y, "%"),
+        "━━━━━━━━━━━━━━━━━━━━",
+        "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
+    ]
+    return "\n".join(rows)
+
+
+# ── Screener Card ─────────────────────────────────────────────────────────
 SCREENER_STOCKS = {
     "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
     "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
@@ -562,6 +660,21 @@ def ai_keyboard():
     return kb
 
 
+def analysis_choice_keyboard(sym):
+    """Inline menu shown after a stock is found — lets the user pick exactly
+    what they want instead of receiving one long combined message."""
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("📊 Technical", callback_data=f"tech|{sym}"),
+        types.InlineKeyboardButton("💰 Fundamental", callback_data=f"fund|{sym}"),
+    )
+    kb.add(
+        types.InlineKeyboardButton("📈 Chart", callback_data=f"chart|{sym}"),
+        types.InlineKeyboardButton("📄 Full Report (PDF)", callback_data=f"pdf|{sym}"),
+    )
+    return kb
+
+
 # ── Safe Sender ──────────────────────────────────────────────────────────────
 def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
     if text is None:
@@ -649,6 +762,104 @@ def cmd_report(m):
     cid = m.chat.id
     safe_send(cid, f"🔍 Looking up <b>{raw_q}</b>…")
     executor.submit(run_report, cid, raw_q)
+
+
+# ── Find-then-choose flow ─────────────────────────────────────────────────
+# Typing a stock name/symbol no longer dumps the full combined card straight
+# away. Instead: resolve the symbol, confirm what was found with a live LTP,
+# then offer Technical / Fundamental / Chart / Full Report as buttons so the
+# user picks exactly what they want.
+def send_symbol_menu(chat_id, query):
+    try:
+        ticker, cname = resolve_symbol(query)
+        if ticker:
+            sym = ticker.replace(".NS", "").replace(".BO", "")
+        elif 2 <= len(query.upper().replace(".NS", "").replace(".BO", "")) <= 15:
+            sym = query.upper().replace(".NS", "").replace(".BO", "")
+        else:
+            safe_send(chat_id, f"❌ Not found: <b>{query}</b>", reply_markup=main_keyboard())
+            return
+
+        ltp_line = ""
+        try:
+            p = get_live_price(sym)
+            if p:
+                ltp_line = f"\n💰 LTP: ₹{p:,.2f}"
+        except Exception:
+            pass
+
+        safe_send(
+            chat_id,
+            f"✅ Found <b>{cname or sym}</b> ({sym}){ltp_line}\n\nWhat would you like to see?",
+            reply_markup=analysis_choice_keyboard(sym),
+        )
+    except Exception as e:
+        logger.error(f"Symbol menu err: {e}", exc_info=True)
+        safe_send(chat_id, f"❌ Error: {e}")
+
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_analysis_callback(call):
+    try:
+        action, _, sym = (call.data or "").partition("|")
+    except Exception:
+        action, sym = "", ""
+    chat_id = call.message.chat.id
+
+    if not action or not sym:
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+        return
+
+    try:
+        bot.answer_callback_query(call.id, text="Working on it…")
+    except Exception:
+        pass
+
+    if action == "tech":
+        def _run(cid=chat_id, s=sym):
+            try:
+                ticker, cname = resolve_symbol(s)
+                safe_send(cid, build_technical_text(s, cname))
+            except Exception as e:
+                logger.error(f"tech cb err: {e}", exc_info=True)
+                safe_send(cid, f"❌ Error: {e}")
+        executor.submit(_run)
+
+    elif action == "fund":
+        def _run(cid=chat_id, s=sym):
+            try:
+                ticker, cname = resolve_symbol(s)
+                safe_send(cid, build_fundamental_text(s, cname))
+            except Exception as e:
+                logger.error(f"fund cb err: {e}", exc_info=True)
+                safe_send(cid, f"❌ Error: {e}")
+        executor.submit(_run)
+
+    elif action == "chart":
+        safe_send(chat_id, f"📈 Generating chart for <b>{sym}</b>… (~20s)")
+
+        def _run(cid=chat_id, s=sym):
+            try:
+                ticker, cname = resolve_symbol(s)
+                gen = get_chart_generator()
+                success, meta, path = gen.generate(f"{s}.NS", cname or s)
+                if success and path:
+                    with open(path, "rb") as f:
+                        bot.send_photo(cid, f, caption=f"<b>📈 {cname or s}</b>\n\n{meta}", parse_mode="HTML")
+                else:
+                    safe_send(cid, "⚠️ Chart failed, sending text instead:")
+                    safe_send(cid, build_technical_text(s, cname))
+            except Exception as e:
+                logger.error(f"chart cb err: {e}", exc_info=True)
+                safe_send(cid, f"❌ Error: {e}")
+        executor.submit(_run)
+
+    elif action == "pdf":
+        safe_send(chat_id, f"📄 Preparing full report for <b>{sym}</b>…")
+        executor.submit(run_report, chat_id, sym)
 
 
 @bot.message_handler(commands=["status"])
@@ -964,17 +1175,7 @@ def handle_text(m):
 
         def _arun(chat_id=uid, q=text):
             try:
-                ticker, cname = resolve_symbol(q)
-                if ticker:
-                    safe_send(chat_id, f"📊 Analyzing <b>{cname}</b>…")
-                    safe_send(chat_id, build_adv(ticker.replace(".NS", "")))
-                elif 2 <= len(q.upper().replace(".NS", "")) <= 15:
-                    safe_send(chat_id, build_adv(q))
-                else:
-                    safe_send(chat_id, f"❌ Not found: <b>{q}</b>", reply_markup=main_keyboard())
-            except Exception as e:
-                logger.error(f"Analysis err: {e}", exc_info=True)
-                safe_send(chat_id, f"❌ Error: {e}")
+                send_symbol_menu(chat_id, q)
             finally:
                 state.clear(chat_id)
 
@@ -993,22 +1194,7 @@ def handle_text(m):
 
     if looks_ticker or looks_name:
         safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
-
-        def _adv(chat_id=uid, q=text):
-            try:
-                ticker, cname = resolve_symbol(q)
-                if ticker:
-                    safe_send(chat_id, f"📊 Analyzing <b>{cname}</b>…")
-                    safe_send(chat_id, build_adv(ticker.replace(".NS", "")))
-                elif 2 <= len(q.upper().replace(".NS", "")) <= 15:
-                    safe_send(chat_id, build_adv(q))
-                else:
-                    safe_send(chat_id, f"❌ Not found: <b>{q}</b>")
-            except Exception as e:
-                logger.error(f"Adv err: {e}", exc_info=True)
-                safe_send(chat_id, "⚠️ Error. Try again.")
-
-        executor.submit(_adv)
+        executor.submit(send_symbol_menu, uid, text)
     else:
         if text.lower().strip("!.?") in {"hi", "hello", "hey", "hlo", "hii", "gm"}:
             safe_send(uid, "👋 Hello! Type a stock name to analyze.", reply_markup=main_keyboard())
