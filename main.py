@@ -45,6 +45,7 @@ from ai_engine import (
 )
 from swing_trades import get_swing_trades
 from chart_integration import get_chart_generator
+from report_generator import generate_stock_report_pdf
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -546,6 +547,7 @@ def main_keyboard():
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📰 News", "📈 Chart", "📋 Status")
+    kb.add("📄 Report")
     return kb
 
 
@@ -581,14 +583,72 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
 def cmd_start(m):
     state.clear(m.chat.id)
     safe_send(m.chat.id,
-              "👋 <b>AutoAI Advisory Bot v6.1</b>\n\nType any stock name or symbol for analysis.\nUse menu buttons below.",
+              "👋 <b>AutoAI Advisory Bot v6.1</b>\n\nType any stock name or symbol for analysis.\n"
+              "Use <code>/report SYMBOL</code> for a downloadable PDF (Technical + Fundamental).\n"
+              "Use menu buttons below.",
               reply_markup=main_keyboard())
 
 
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nAI: Tap 🤖 AI\nStatus: <code>/status</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nPDF Report: <code>/report DLF</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nAI: Tap 🤖 AI\nStatus: <code>/status</code>")
+
+
+def run_report(chat_id, query):
+    """Shared worker for /report SYMBOL and the 📄 Report button flow."""
+    try:
+        ticker, cname = resolve_symbol(query)
+        sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else query.upper().replace(" ", "")
+
+        safe_send(chat_id, f"📄 Generating full Technical + Fundamental report for <b>{cname or sym}</b>… (~20-30s)")
+
+        def _ping():
+            time.sleep(15)
+            try:
+                safe_send(chat_id, "⏳ Still compiling the report…")
+            except Exception:
+                pass
+
+        threading.Thread(target=_ping, daemon=True).start()
+
+        ok, result, name = generate_stock_report_pdf(sym)
+        if ok:
+            try:
+                with open(result, "rb") as f:
+                    bot.send_document(
+                        chat_id, f,
+                        visible_file_name=f"{sym}_Analysis_Report.pdf",
+                        caption=(f"📄 <b>{name or sym} — Full Analysis Report</b>\n"
+                                 f"Technical + Fundamental Analysis\n"
+                                 f"Generated {datetime.now().strftime('%d-%b-%Y %H:%M')}\n\n"
+                                 f"⚠️ Educational only. Not SEBI-registered advice."),
+                        parse_mode="HTML",
+                    )
+            finally:
+                try:
+                    os.remove(result)
+                except Exception:
+                    pass
+        else:
+            safe_send(chat_id, f"❌ Could not generate report for <b>{query}</b>: {result}")
+    except Exception as e:
+        logger.error(f"Report err: {e}", exc_info=True)
+        safe_send(chat_id, f"❌ Error generating report: {e}")
+
+
+@bot.message_handler(commands=["report"])
+def cmd_report(m):
+    parts = m.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        safe_send(m.chat.id,
+                   "📄 Usage: <code>/report SYMBOL</code>\ne.g. <code>/report DLF</code>")
+        return
+
+    raw_q = parts[1].strip()
+    cid = m.chat.id
+    safe_send(cid, f"🔍 Looking up <b>{raw_q}</b>…")
+    executor.submit(run_report, cid, raw_q)
 
 
 @bot.message_handler(commands=["status"])
@@ -865,6 +925,12 @@ def analysis_btn(m):
     safe_send(m.chat.id, "🔍 Type any stock name or symbol:")
 
 
+@bot.message_handler(func=lambda m: m.text == "📄 Report")
+def report_btn(m):
+    state.set(m.chat.id, "report")
+    safe_send(m.chat.id, "📄 Type a stock name or symbol for a full PDF report:")
+
+
 # ── Catch-all Text Handler ───────────────────────────────────────────────────
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_text(m):
@@ -913,6 +979,12 @@ def handle_text(m):
                 state.clear(chat_id)
 
         executor.submit(_arun)
+        return
+
+    if state.get(uid) == "report":
+        state.clear(uid)
+        safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
+        executor.submit(run_report, uid, text)
         return
 
     raw_up = text.upper().replace(".NS", "").replace(".BO", "")
