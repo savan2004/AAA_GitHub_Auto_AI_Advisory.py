@@ -1,6 +1,6 @@
 """
 report_generator.py — /report command PDF engine
-────────────────────────────────────────────────────────────────────────────
+──────────────────────────────────────────────────────────────────��[...]
 Builds a professional, multi-page equity research–style PDF combining:
   • Cover / snapshot block (price, change, 52W range)
   • Technical Analysis  (RSI, MACD, EMA/SMA, ADX, ATR, Bollinger, ASI,
@@ -22,7 +22,7 @@ import os
 import re
 import logging
 import html as _html
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from reportlab.lib import colors
@@ -59,9 +59,9 @@ GREY_LT   = colors.HexColor("#F2F4F7")
 BORDER    = colors.HexColor("#D6DBE3")
 
 
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════��[...]
 # Small formatting helpers (mirrors main.py's conventions)
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════��[...]
 def _fmt_mcap(val):
     if val is None:
         return "N/A"
@@ -157,9 +157,9 @@ def _safe(fn, *a, **k):
         return None
 
 
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════�[...]
 # Data assembly — reuses the exact same modules as build_adv()
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════�[...]
 def _collect_report_data(sym: str) -> dict:
     from data_engine import get_hist, get_info
     from fundamentals import get_fundamentals
@@ -218,13 +218,13 @@ def _collect_report_data(sym: str) -> dict:
         if trend == "BULLISH":
             t1_val = round(ltp + 1.5 * atr, 2)
             sl_val = round(ltp - 2 * atr, 2)
-            tgt_line = ("Target", f"Rs {t1_val:,.2f}  (+{(t1_val-ltp)/ltp*100:.1f}%)",
-                        "Stop-loss", f"Rs {sl_val:,.2f}  ({(sl_val-ltp)/ltp*100:.1f}%)")
+            tgt_line = ("Target", f"Rs {t1_val:,.2f}  (+{(t1_val-ltp)/ltp*100:.1f}%))",
+                        "Stop-loss", f"Rs {sl_val:,.2f}  ({(sl_val-ltp)/ltp*100:.1f}%))")
         elif trend == "BEARISH":
             t1_val = round(ltp - 1.5 * atr, 2)
             sl_val = round(ltp + 2 * atr, 2)
-            tgt_line = ("Target", f"Rs {t1_val:,.2f}  ({(t1_val-ltp)/ltp*100:.1f}%)",
-                        "Stop-loss", f"Rs {sl_val:,.2f}  (+{(sl_val-ltp)/ltp*100:.1f}%)")
+            tgt_line = ("Target", f"Rs {t1_val:,.2f}  ({(t1_val-ltp)/ltp*100:.1f}%))",
+                        "Stop-loss", f"Rs {sl_val:,.2f}  (+{(sl_val-ltp)/ltp*100:.1f}%))")
         else:
             t1_val = round(ltp + atr, 2)          # R1 — used as the AI's reference "T1"
             sl_val = round(ltp - 2 * atr, 2)       # Range SL
@@ -249,6 +249,9 @@ def _collect_report_data(sym: str) -> dict:
     except Exception as e:
         logger.info(f"[Report] chart unavailable for {sym}: {e}")
 
+    # Ensure generated_at uses IST (India Standard Time)
+    ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+
     return dict(
         sym=sym, name=name, ltp=ltp, chg=chg, day_hi=day_hi, day_lo=day_lo,
         rsi=rsi, rsi_label=r_label, macd=macd, macd_sig=macd_sig, macd_hist=macd_hist,
@@ -262,13 +265,13 @@ def _collect_report_data(sym: str) -> dict:
         div_y=fund.get("div_y"), beta=fund.get("beta"),
         news_lines=news_lines, ai_text=ai_text, tgt_line=tgt_line,
         chart_path=chart_path,
-        generated_at=datetime.now().strftime("%d-%b-%Y %H:%M IST"),
+        generated_at=ist_now.strftime("%d-%b-%Y %H:%M IST"),
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════�[...]
 # PDF building
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════�[...]
 def _styles():
     ss = getSampleStyleSheet()
     ss.add(ParagraphStyle("ReportTitle", parent=ss["Heading1"], fontSize=20,
@@ -331,7 +334,8 @@ def _header_footer(canvas: rl_canvas.Canvas, doc, meta: dict):
     canvas.rect(0, h - 14, w, 14, fill=1, stroke=0)
     canvas.setFillColor(colors.white)
     canvas.setFont("Helvetica-Bold", 8)
-    canvas.drawString(18 * mm, h - 10.5, "KSV / AutoAI Advisory — Equity Research Report")
+    # Updated report name: removed 'KSV' and use 'Auto Advisory'
+    canvas.drawString(18 * mm, h - 10.5, "Auto Advisory — Equity Research Report")
     canvas.setFont("Helvetica", 8)
     canvas.drawRightString(w - 18 * mm, h - 10.5, meta.get("sym", ""))
     # footer
@@ -389,7 +393,7 @@ def build_report_pdf(d: dict, output_path: str) -> str:
     # ── Snapshot strip ────────────────────────────────────────────────
     def stat(label, val, color_hex=NAVY_HEX):
         return [Paragraph(f"<font color='{color_hex}'>{val}</font>", ss["BigStat"]),
-                Paragraph(label, ss["BigStatLabel"])]
+                Paragraph(label, ss["BigStatLabel"]) ]
 
     snap_cells = [
         stat("DAY RANGE", f"{_rupee(d['day_lo'])} – {_rupee(d['day_hi'])}"),
@@ -477,7 +481,7 @@ def build_report_pdf(d: dict, output_path: str) -> str:
     if d.get("ai_text"):
         story.append(Paragraph("AI-Generated Outlook", ss["SectionHead"]))
         story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceAfter=8))
-        ai_clean = _clean_ai_text(d["ai_text"])
+        ai_clean = _clean_ai_text(d["ai_text"]) 
         for line in ai_clean.split("\n"):
             line = line.strip()
             if not line:
@@ -504,9 +508,9 @@ def build_report_pdf(d: dict, output_path: str) -> str:
     return output_path
 
 
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════�[...]
 # Public entrypoint
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════�[...]
 def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
     """
     Fetches all data for `symbol` and writes a PDF report.
@@ -517,7 +521,8 @@ def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
         return False, "No symbol provided.", None
     try:
         data = _collect_report_data(sym)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Ensure filename timestamp uses IST
+        ts = (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%Y%m%d_%H%M%S")
         out_path = os.path.join(OUTPUT_DIR, f"{sym}_Report_{ts}.pdf")
         build_report_pdf(data, out_path)
         return True, out_path, data["name"]
