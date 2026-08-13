@@ -202,5 +202,5 @@ def get_stock_news(symbol: str, n: int = 2) -> str:
             headlines.extend(matched)
         except Exception: pass
 
-    result = "\n".join(f"📰 {h[:90]}" for h in headlines[:n]) if headlines else ""
+    result = "\n".join(f"📰 {h[:87] + '…' if len(h) > 87 else h}" for h in headlines[:n]) if headlines else ""
     return result
