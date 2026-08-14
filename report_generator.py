@@ -1,13 +1,15 @@
 """
 report_generator.py — /report command PDF engine
-──────────────────────────────────────────────────────────────────��[...]
+────────────────────────────────────────────────────────────────────────────
 Builds a professional, multi-page equity research–style PDF combining:
   • Cover / snapshot block (price, change, 52W range)
   • Technical Analysis  (RSI, MACD, EMA/SMA, ADX, ATR, Bollinger, ASI,
     trend read, support/resistance, target & stop-loss, price chart)
   • Fundamental Analysis (valuation, profitability, leverage, dividend)
+  • Peer Comparison (3-5 same-sector stocks, ranked by market cap)
+  • Long-Term Investment View (quality/valuation vs peers, 1-3yr+ horizon)
   • News digest
-  • AI outlook (reuses ai_engine.ai_insights)
+  • AI outlook (reuses ai_engine.ai_insights) — short-term/technical
   • Disclaimer footer + page numbers on every page
 
 Design goal: reuse the SAME data sources as build_adv() in main.py so the
@@ -22,8 +24,9 @@ import os
 import re
 import logging
 import html as _html
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -59,9 +62,9 @@ GREY_LT   = colors.HexColor("#F2F4F7")
 BORDER    = colors.HexColor("#D6DBE3")
 
 
-# ════════════════════════════════════════════════════════════════��[...]
+# ══════════════════════════════════════════════════════════════════════════
 # Small formatting helpers (mirrors main.py's conventions)
-# ════════════════════════════════════════════════════════════════��[...]
+# ══════════════════════════════════════════════════════════════════════════
 def _fmt_mcap(val):
     if val is None:
         return "N/A"
@@ -157,14 +160,69 @@ def _safe(fn, *a, **k):
         return None
 
 
-# ════════════════════════════════════════════════════════════════�[...]
+# ══════════════════════════════════════════════════════════════════════════
+# Peer discovery — same-sector companies via the static SECTOR_STOCKS map
+# ══════════════════════════════════════════════════════════════════════════
+def _find_peers(sym: str, max_peers: int = 5, fetch_timeout: int = 10) -> tuple:
+    """
+    Returns (sector_name, [peer_dicts]) where each peer_dict has
+    sym/name/mcap/pe/roe. Peers are fetched concurrently (best-effort —
+    a slow/failed peer is simply dropped, never blocks the report).
+    """
+    try:
+        from nifty500_collector import get_stock_sector, SECTOR_STOCKS
+        from fundamentals import get_fundamentals
+    except Exception as e:
+        logger.info(f"[Report] peer lookup unavailable: {e}")
+        return None, []
+
+    sector = get_stock_sector(sym)
+    if not sector or sector == "📦 Others":
+        return sector, []
+
+    candidates = [s for s in SECTOR_STOCKS.get(sector, []) if s != sym][: max_peers + 3]
+    if not candidates:
+        return sector, []
+
+    peers = []
+    pool = ThreadPoolExecutor(max_workers=min(6, len(candidates)))
+    try:
+        futures = {pool.submit(_safe, get_fundamentals, c): c for c in candidates}
+        done, not_done = wait(futures.keys(), timeout=fetch_timeout)
+        for fut in done:
+            c = futures[fut]
+            try:
+                f = fut.result()
+            except Exception:
+                f = None
+            if not f or not f.get("mcap"):
+                continue
+            peers.append(dict(
+                sym=c, name=f.get("name") or c, mcap=f.get("mcap"),
+                pe=f.get("pe"), roe=f.get("roe"),
+            ))
+        for fut in not_done:
+            fut.cancel()
+    finally:
+        pool.shutdown(wait=False)
+
+    peers.sort(key=lambda p: p["mcap"] or 0, reverse=True)
+    return sector, peers[:max_peers]
+
+
+def _sector_avg(peers: list, key: str):
+    vals = [p[key] for p in peers if isinstance(p.get(key), (int, float))]
+    return sum(vals) / len(vals) if vals else None
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Data assembly — reuses the exact same modules as build_adv()
-# ════════════════════════════════════════════════════════════════�[...]
+# ══════════════════════════════════════════════════════════════════════════
 def _collect_report_data(sym: str) -> dict:
     from data_engine import get_hist, get_info
     from fundamentals import get_fundamentals
     from market_news import get_stock_news
-    from ai_engine import ai_insights as engine_ai_insights
+    from ai_engine import ai_insights as engine_ai_insights, long_term_view as engine_long_term_view
 
     sym = sym.upper().replace(".NS", "").replace(".BO", "")
     df = get_hist(sym, "1y")
@@ -218,13 +276,13 @@ def _collect_report_data(sym: str) -> dict:
         if trend == "BULLISH":
             t1_val = round(ltp + 1.5 * atr, 2)
             sl_val = round(ltp - 2 * atr, 2)
-            tgt_line = ("Target", f"Rs {t1_val:,.2f}  (+{(t1_val-ltp)/ltp*100:.1f}%))",
-                        "Stop-loss", f"Rs {sl_val:,.2f}  ({(sl_val-ltp)/ltp*100:.1f}%))")
+            tgt_line = ("Target", f"Rs {t1_val:,.2f}  (+{(t1_val-ltp)/ltp*100:.1f}%)",
+                        "Stop-loss", f"Rs {sl_val:,.2f}  ({(sl_val-ltp)/ltp*100:.1f}%)")
         elif trend == "BEARISH":
             t1_val = round(ltp - 1.5 * atr, 2)
             sl_val = round(ltp + 2 * atr, 2)
-            tgt_line = ("Target", f"Rs {t1_val:,.2f}  ({(t1_val-ltp)/ltp*100:.1f}%))",
-                        "Stop-loss", f"Rs {sl_val:,.2f}  (+{(sl_val-ltp)/ltp*100:.1f}%))")
+            tgt_line = ("Target", f"Rs {t1_val:,.2f}  ({(t1_val-ltp)/ltp*100:.1f}%)",
+                        "Stop-loss", f"Rs {sl_val:,.2f}  (+{(sl_val-ltp)/ltp*100:.1f}%)")
         else:
             t1_val = round(ltp + atr, 2)          # R1 — used as the AI's reference "T1"
             sl_val = round(ltp - 2 * atr, 2)       # Range SL
@@ -238,6 +296,23 @@ def _collect_report_data(sym: str) -> dict:
         atr, sl_val, t1_val,
     ) or ""
 
+    # Peers (same sector, ranked by market cap) — best-effort, never blocks
+    sector, peers = _safe(_find_peers, sym) or (None, [])
+    peer_avg_pe = _sector_avg(peers, "pe")
+    peer_avg_roe = _sector_avg(peers, "roe")
+
+    # Long-term investment view — separate AI call, fundamentals/quality
+    # framed, no short-term price targets. Falls back to "" (section
+    # skipped in the PDF) if AI is unavailable, never blocks report gen.
+    long_term_text = ""
+    _ema_for_lt = ema200 or ema50
+    if _ema_for_lt:
+        long_term_text = _safe(
+            engine_long_term_view, sym, sector or "General", ltp,
+            fund.get("pe"), fund.get("roe"), fund.get("de"), fund.get("div_y"),
+            _ema_for_lt, w52h, w52l, peer_avg_pe, peer_avg_roe,
+        ) or ""
+
     # Chart image (best-effort — report still generates without it)
     chart_path = None
     try:
@@ -248,9 +323,6 @@ def _collect_report_data(sym: str) -> dict:
             chart_path = path
     except Exception as e:
         logger.info(f"[Report] chart unavailable for {sym}: {e}")
-
-    # Ensure generated_at uses IST (India Standard Time)
-    ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
 
     return dict(
         sym=sym, name=name, ltp=ltp, chg=chg, day_hi=day_hi, day_lo=day_lo,
@@ -263,15 +335,17 @@ def _collect_report_data(sym: str) -> dict:
         pe=fund.get("pe"), fwd_pe=fund.get("fwd_pe"), pb=fund.get("pb"),
         roe=fund.get("roe"), eps=fund.get("eps"), de=fund.get("de"),
         div_y=fund.get("div_y"), beta=fund.get("beta"),
+        sector=sector, peers=peers, peer_avg_pe=peer_avg_pe, peer_avg_roe=peer_avg_roe,
+        long_term_text=long_term_text,
         news_lines=news_lines, ai_text=ai_text, tgt_line=tgt_line,
         chart_path=chart_path,
-        generated_at=ist_now.strftime("%d-%b-%Y %H:%M IST"),
+        generated_at=datetime.now().strftime("%d-%b-%Y %H:%M IST"),
     )
 
 
-# ════════════════════════════════════════════════════════════════�[...]
+# ══════════════════════════════════════════════════════════════════════════
 # PDF building
-# ════════════════════════════════════════════════════════════════�[...]
+# ══════════════════════════════════════════════════════════════════════════
 def _styles():
     ss = getSampleStyleSheet()
     ss.add(ParagraphStyle("ReportTitle", parent=ss["Heading1"], fontSize=20,
@@ -334,8 +408,7 @@ def _header_footer(canvas: rl_canvas.Canvas, doc, meta: dict):
     canvas.rect(0, h - 14, w, 14, fill=1, stroke=0)
     canvas.setFillColor(colors.white)
     canvas.setFont("Helvetica-Bold", 8)
-    # Updated report name: removed 'KSV' and use 'Auto Advisory'
-    canvas.drawString(18 * mm, h - 10.5, "Auto Advisory — Equity Research Report")
+    canvas.drawString(18 * mm, h - 10.5, "KSV / AutoAI Advisory — Equity Research Report")
     canvas.setFont("Helvetica", 8)
     canvas.drawRightString(w - 18 * mm, h - 10.5, meta.get("sym", ""))
     # footer
@@ -393,7 +466,7 @@ def build_report_pdf(d: dict, output_path: str) -> str:
     # ── Snapshot strip ────────────────────────────────────────────────
     def stat(label, val, color_hex=NAVY_HEX):
         return [Paragraph(f"<font color='{color_hex}'>{val}</font>", ss["BigStat"]),
-                Paragraph(label, ss["BigStatLabel"]) ]
+                Paragraph(label, ss["BigStatLabel"])]
 
     snap_cells = [
         stat("DAY RANGE", f"{_rupee(d['day_lo'])} – {_rupee(d['day_hi'])}"),
@@ -469,6 +542,81 @@ def build_report_pdf(d: dict, output_path: str) -> str:
     story.append(_kv_table(fund_rows))
     story.append(Spacer(1, 8))
 
+    # ── Peer Comparison ──────────────────────────────────────────────────
+    if d.get("peers"):
+        sector_clean = _strip_emoji(d.get("sector") or "").strip()
+        story.append(Paragraph(f"Peer Comparison — {sector_clean}", ss["SectionHead"]))
+        story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceAfter=8))
+        story.append(Paragraph(
+            f"{d['name']} compared against the {len(d['peers'])} largest same-sector peers by market cap.",
+            ss["Body"]))
+        story.append(Spacer(1, 4))
+
+        label_style = ParagraphStyle("peerLabel", fontName="Helvetica", fontSize=8.7,
+                                      leading=11, textColor=colors.HexColor("#1A1F27"))
+        val_style = ParagraphStyle("peerVal", fontName="Helvetica-Bold", fontSize=8.7,
+                                    leading=11, textColor=colors.HexColor("#1A1F27"))
+        self_style = ParagraphStyle("peerSelf", fontName="Helvetica-Bold", fontSize=8.7,
+                                     leading=11, textColor=NAVY)
+
+        header = [Paragraph(h, ParagraphStyle("peerHead", fontName="Helvetica-Bold", fontSize=8.7,
+                                               textColor=colors.white))
+                  for h in ["Company", "Symbol", "Market Cap", "PE", "ROE"]]
+        rows_data = [header]
+        rows_data.append([
+            Paragraph(d["name"], self_style), Paragraph(f"{d['sym']} (this stock)", self_style),
+            Paragraph(_fmt_mcap(d["mcap"]), self_style), Paragraph(_n(d["pe"]), self_style),
+            Paragraph(_n(d["roe"], "%"), self_style),
+        ])
+        for p in d["peers"]:
+            rows_data.append([
+                Paragraph(p["name"], label_style), Paragraph(p["sym"], label_style),
+                Paragraph(_fmt_mcap(p["mcap"]), val_style), Paragraph(_n(p.get("pe")), val_style),
+                Paragraph(_n(p.get("roe"), "%"), val_style),
+            ])
+        peer_table = Table(rows_data, colWidths=[48*mm, 30*mm, 34*mm, 24*mm, 24*mm])
+        peer_style = [
+            ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+            ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#E4ECF7")),
+            ("GRID", (0, 0), (-1, -1), 0.5, BORDER),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("ROWBACKGROUNDS", (0, 2), (-1, -1), [colors.white, GREY_LT]),
+        ]
+        peer_table.setStyle(TableStyle(peer_style))
+        story.append(peer_table)
+        if d.get("peer_avg_pe") or d.get("peer_avg_roe"):
+            avg_bits = []
+            if d.get("peer_avg_pe"):
+                avg_bits.append(f"peer avg PE {d['peer_avg_pe']:.1f}")
+            if d.get("peer_avg_roe"):
+                avg_bits.append(f"peer avg ROE {d['peer_avg_roe']:.1f}%")
+            story.append(Spacer(1, 4))
+            story.append(Paragraph(f"Sector reference: {' · '.join(avg_bits)}.", ss["Small"]))
+        story.append(Spacer(1, 8))
+
+    # ── Long-Term Investment View ─────────────────────────────────────────
+    if d.get("long_term_text"):
+        story.append(Paragraph("Long-Term Investment View (1-3yr+)", ss["SectionHead"]))
+        story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceAfter=8))
+        lt_clean = _clean_ai_text(d["long_term_text"])
+        for line in lt_clean.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                label, _, rest = line.partition(":")
+                story.append(Paragraph(f"<b>{label.strip()}:</b>{rest}", ss["Body"]))
+            else:
+                story.append(Paragraph(line, ss["Body"]))
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(
+            "This view is fundamentals-driven and separate from the short-term technical read "
+            "above — it does not imply a near-term price target.", ss["Small"]))
+        story.append(Spacer(1, 8))
+
     # ── News ───────────────────────────────────────────────────────────
     if d.get("news_lines"):
         story.append(Paragraph("Recent News", ss["SectionHead"]))
@@ -481,7 +629,7 @@ def build_report_pdf(d: dict, output_path: str) -> str:
     if d.get("ai_text"):
         story.append(Paragraph("AI-Generated Outlook", ss["SectionHead"]))
         story.append(HRFlowable(width="100%", thickness=1, color=BORDER, spaceAfter=8))
-        ai_clean = _clean_ai_text(d["ai_text"]) 
+        ai_clean = _clean_ai_text(d["ai_text"])
         for line in ai_clean.split("\n"):
             line = line.strip()
             if not line:
@@ -508,9 +656,9 @@ def build_report_pdf(d: dict, output_path: str) -> str:
     return output_path
 
 
-# ════════════════════════════════════════════════════════════════�[...]
+# ══════════════════════════════════════════════════════════════════════════
 # Public entrypoint
-# ════════════════════════════════════════════════════════════════�[...]
+# ══════════════════════════════════════════════════════════════════════════
 def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
     """
     Fetches all data for `symbol` and writes a PDF report.
@@ -521,8 +669,7 @@ def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
         return False, "No symbol provided.", None
     try:
         data = _collect_report_data(sym)
-        # Ensure filename timestamp uses IST
-        ts = (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = os.path.join(OUTPUT_DIR, f"{sym}_Report_{ts}.pdf")
         build_report_pdf(data, out_path)
         return True, out_path, data["name"]
