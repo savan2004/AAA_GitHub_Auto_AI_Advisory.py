@@ -714,18 +714,30 @@ def run_report(chat_id, query):
         ticker, cname = resolve_symbol(query)
         sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else query.upper().replace(" ", "")
 
-        safe_send(chat_id, f"📄 Generating full Technical + Fundamental report for <b>{cname or sym}</b>… (~20-30s)")
+        safe_send(chat_id, f"📄 Generating full report (Technical + Fundamental + Peers + Long-Term View) for <b>{cname or sym}</b>… (~30-45s)")
+
+        done_event = threading.Event()
 
         def _ping():
-            time.sleep(15)
+            if done_event.wait(15):
+                return
             try:
                 safe_send(chat_id, "⏳ Still compiling the report…")
+            except Exception:
+                pass
+            if done_event.wait(20):
+                return
+            try:
+                safe_send(chat_id, "⏳ Almost there — fetching peer comparisons…")
             except Exception:
                 pass
 
         threading.Thread(target=_ping, daemon=True).start()
 
-        ok, result, name = generate_stock_report_pdf(sym)
+        try:
+            ok, result, name = generate_stock_report_pdf(sym)
+        finally:
+            done_event.set()
         if ok:
             try:
                 with open(result, "rb") as f:
@@ -733,7 +745,7 @@ def run_report(chat_id, query):
                         chat_id, f,
                         visible_file_name=f"{sym}_Analysis_Report.pdf",
                         caption=(f"📄 <b>{name or sym} — Full Analysis Report</b>\n"
-                                 f"Technical + Fundamental Analysis\n"
+                                 f"Technical + Fundamental + Peer Comparison + Long-Term View\n"
                                  f"Generated {datetime.now().strftime('%d-%b-%Y %H:%M')}\n\n"
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
