@@ -561,6 +561,50 @@ def ai_insights(symbol: str, ltp: float, rsi: float, macd_line: float,
     return f"⚠️ AI unavailable: {err.split(chr(10))[0][:80]}" if err else "⚠️ AI temporarily unavailable."
 
 
+def long_term_view(symbol: str, sector: str, ltp: float, pe, roe, de, div_y,
+                    ema200: float, w52h: float, w52l: float,
+                    peer_avg_pe: float = None, peer_avg_roe: float = None) -> str:
+    """
+    Long-horizon (1-3yr+) fundamentals-driven view — deliberately separate from
+    ai_insights() above, which is short-term/technical. No target price or
+    buy/sell timing language; framed around quality, valuation vs sector peers,
+    and what an investor should track.
+    """
+    if not ai_available():
+        return ""
+
+    peer_line = ""
+    if peer_avg_pe:
+        peer_line += f"Sector avg PE: {peer_avg_pe:.1f}  "
+    if peer_avg_roe:
+        peer_line += f"Sector avg ROE: {peer_avg_roe:.1f}%"
+
+    prompt = (
+        f"STOCK: {symbol} — Sector: {sector} (NSE India)\n"
+        f"CMP: Rs {ltp:.2f} | Long-term trend EMA: Rs {ema200:.2f} | 52W range: Rs {w52l:.2f}-Rs {w52h:.2f}\n"
+        f"PE: {pe if pe not in (None, 'N/A') else 'N/A'} | ROE: {roe if roe not in (None, 'N/A') else 'N/A'}% | "
+        f"Debt/Equity: {de if de not in (None, 'N/A') else 'N/A'} | Dividend Yield: {div_y if div_y not in (None, 'N/A') else 'N/A'}%\n"
+        f"{peer_line}\n\n"
+        "Write a long-term (1-3 year+) investment view for a retail investor. "
+        "Respond in EXACTLY this format, one short line each, no preamble:\n"
+        "Quality: [one line on ROE/leverage vs what's typical for the sector]\n"
+        "Valuation: [one line comparing PE to the sector average given above]\n"
+        "Watch for: [one concrete thing an investor should track over the next few quarters]\n"
+        "Suitability: [Core holding / Accumulate on dips / Watchlist only / Not for long-term] — one line why"
+    )
+    text, err = _call_ai(
+        [{"role": "user", "content": prompt}],
+        max_tokens=200,
+        system=(
+            "You are a long-term equity research analyst writing for retail investors. "
+            "Do not give short-term price targets, entry/exit timing, or technical signals. "
+            "Focus on business quality, valuation versus peers, and risk factors. "
+            "Use only the numbers given — never invent figures. Exact format only."
+        ),
+    )
+    return text or ""
+
+
 # ── News fetch ──────────────────────────────────────────────────────────
 _NEWS_JUNK = ["Stock Price","Quote","Yahoo Finance","TradingView","Investing.com",
               "CNBC","Chart and News","Index Today","NSE India","National Stock Exchange",
