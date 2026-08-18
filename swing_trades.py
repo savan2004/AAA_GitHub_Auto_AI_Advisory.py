@@ -495,6 +495,17 @@ def get_swing_trades(mode="conservative"):
         f"📅 {today}  |  Universe: {len(CANDIDATES)} stocks  |  ATR-based SL/TP\n",
     ]
 
+    # Sector breakdown of today's setups — a quick market-regime read (e.g.
+    # "5 of 7 setups are in Banking & IT" signals sector-driven momentum
+    # rather than isolated single-stock moves). Uses the CANDIDATE_SECTORS
+    # map already built above, so this is free — no extra fetches.
+    if all_picks:
+        from collections import Counter
+        sector_counts = Counter(CANDIDATE_SECTORS.get(p["symbol"], "Other") for p in all_picks)
+        top_sectors = sector_counts.most_common(3)
+        breakdown = ", ".join(f"{s} ({c})" for s, c in top_sectors)
+        lines.append(f"🏭 <b>Setups by sector:</b> {breakdown}\n")
+
     if not long_picks and not short_picks:
         # Watchlist — best approaching stocks
         watch = []
