@@ -32,21 +32,29 @@ except ImportError:
 
 
 # ── CANDIDATE UNIVERSE ────────────────────────────────────────────────────────
+# Built by round-robin across sectors (one stock per sector per pass) instead
+# of exhausting the cap sector-by-sector in dict order. The old approach hit
+# the 60-stock cap inside the first 3 sectors (Banking, Industrials, IT) —
+# meaning Pharma, FMCG, Auto, Power, Real Estate, and 6 other sectors NEVER
+# appeared in a swing scan, no matter how strong their setup. Round-robin
+# guarantees every sector gets a fair slice of the 60 slots.
 try:
     from nifty500_collector import SECTOR_STOCKS as _SC
     _seen = set()
     CANDIDATES = []
     CANDIDATE_SECTORS = {}
-    for _sector, _syms in _SC.items():
-        for _s in _syms:
-            if _s not in _seen:
-                CANDIDATES.append(f"{_s}.NS")
-                CANDIDATE_SECTORS[f"{_s}.NS"] = _sector
-                _seen.add(_s)
+    _sector_queues = {sector: list(syms) for sector, syms in _SC.items()}
+    while len(CANDIDATES) < 60 and any(_sector_queues.values()):
+        for _sector, _queue in _sector_queues.items():
             if len(CANDIDATES) >= 60:
                 break
-        if len(CANDIDATES) >= 60:
-            break
+            while _queue:
+                _s = _queue.pop(0)
+                if _s not in _seen:
+                    CANDIDATES.append(f"{_s}.NS")
+                    CANDIDATE_SECTORS[f"{_s}.NS"] = _sector
+                    _seen.add(_s)
+                    break
     logger.info(f"Swing v6: {len(CANDIDATES)} candidates, {len(set(CANDIDATE_SECTORS.values()))} sectors")
 except Exception as _e:
     logger.warning(f"Swing: nifty500_collector unavailable: {_e}")
@@ -419,6 +427,15 @@ def _trade_card(p, side):
     st_icon  = "🟢 Bull" if p.get("supertrend")==1 else ("🔴 Bear" if p.get("supertrend")==-1 else "⚪ Flat")
     wk_icon  = "🟢" if wk_sc>0 else ("🔴" if wk_sc<0 else "⚪")
 
+    # Sign the % labels by actual price direction, not by side. For a SHORT,
+    # the target is a price DECREASE and the stop-loss is a price INCREASE —
+    # showing them with the same "+target / -stoploss" convention as LONG
+    # (as the previous version did, unconditionally) inverts the meaning and
+    # can mislead a trader reading the card at a glance.
+    t1_sign = "+" if tgt1 >= ltp else "-"
+    t2_sign = "+" if tgt2 >= ltp else "-"
+    sl_sign = "+" if sl >= ltp else "-"
+
     lines = [
         f"{icon} <b>{sym}</b>  [{side}]  Score: <b>{score}/13</b>",
     ]
@@ -432,9 +449,9 @@ def _trade_card(p, side):
         f"   📅 Weekly   : {wk_icon} {wk_lbl}",
         f"   ···",
         f"   📥 Entry    : ₹{entry_lo:,.2f} – ₹{entry_hi:,.2f}",
-        f"   🎯 Target 1 : ₹{tgt1:,.2f}  (+{t1_pct}%)  R:R 1:{rr1}",
-        f"   🎯 Target 2 : ₹{tgt2:,.2f}  (+{t2_pct}%)  R:R 1:{rr2}",
-        f"   🛑 Stop Loss: ₹{sl:,.2f}  (-{sl_pct}%)  ATR×1.2",
+        f"   🎯 Target 1 : ₹{tgt1:,.2f}  ({t1_sign}{t1_pct}%)  R:R 1:{rr1}",
+        f"   🎯 Target 2 : ₹{tgt2:,.2f}  ({t2_sign}{t2_pct}%)  R:R 1:{rr2}",
+        f"   🛑 Stop Loss: ₹{sl:,.2f}  ({sl_sign}{sl_pct}%)  ATR×1.2",
         f"   ···",
         f"   <b>Signals ({len(p['details'])}):</b>",
         conds,
