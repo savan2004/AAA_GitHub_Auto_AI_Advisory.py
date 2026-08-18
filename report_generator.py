@@ -254,6 +254,35 @@ def _collect_report_data(sym: str) -> dict:
     w52h = round(float(close.rolling(n).max().iloc[-1]), 2)
     w52l = round(float(close.rolling(n).min().iloc[-1]), 2)
 
+    # ── Risk badge (annualized volatility) ──────────────────────────────
+    # Reuses the 1y close series already fetched above — no extra API call.
+    daily_ret = close.pct_change().dropna()
+    ann_vol = round(float(daily_ret.std()) * (252 ** 0.5) * 100, 1) if len(daily_ret) > 20 else None
+    if ann_vol is None:
+        risk_level = "N/A"
+    elif ann_vol < 25:
+        risk_level = "Low"
+    elif ann_vol < 40:
+        risk_level = "Moderate"
+    else:
+        risk_level = "High"
+
+    # ── Market context — stock's 1yr return vs Nifty 50 ─────────────────
+    # Best-effort single extra fetch, reused for both the Technical section
+    # context line and (further below) the Long-Term View's benchmark line.
+    nifty_1y_ret = stock_1y_ret = None
+    try:
+        import yfinance as _yf
+        _nifty_df = _yf.Ticker("^NSEI").history(period="1y")
+        if _nifty_df is not None and len(_nifty_df) > 20:
+            nifty_1y_ret = round(
+                (float(_nifty_df["Close"].iloc[-1]) - float(_nifty_df["Close"].iloc[0]))
+                / float(_nifty_df["Close"].iloc[0]) * 100, 1)
+        if len(close) > 20:
+            stock_1y_ret = round((ltp - float(close.iloc[0])) / float(close.iloc[0]) * 100, 1)
+    except Exception as e:
+        logger.info(f"[Report] Nifty benchmark unavailable: {e}")
+
     fund = _safe(get_fundamentals, sym) or {}
     info = _safe(get_info, sym) or {}
 
@@ -324,6 +353,18 @@ def _collect_report_data(sym: str) -> dict:
     except Exception as e:
         logger.info(f"[Report] chart unavailable for {sym}: {e}")
 
+    # Data-completeness — the fields an investor actually reads a fundamentals
+    # section for. Counted explicitly rather than inferred from the whole dict
+    # so a missing chart or news item (cosmetic) doesn't get conflated with a
+    # missing PE or EPS (substantive).
+    _core_fund_fields = {
+        "PE": fund.get("pe"), "Forward PE": fund.get("fwd_pe"), "P/B": fund.get("pb"),
+        "ROE": fund.get("roe"), "EPS": fund.get("eps"), "Revenue": rev,
+        "D/E": fund.get("de"), "Dividend Yield": fund.get("div_y"), "Beta": fund.get("beta"),
+    }
+    fund_available = sum(1 for v in _core_fund_fields.values() if v is not None)
+    fund_total = len(_core_fund_fields)
+
     return dict(
         sym=sym, name=name, ltp=ltp, chg=chg, day_hi=day_hi, day_lo=day_lo,
         rsi=rsi, rsi_label=r_label, macd=macd, macd_sig=macd_sig, macd_hist=macd_hist,
@@ -339,6 +380,9 @@ def _collect_report_data(sym: str) -> dict:
         long_term_text=long_term_text,
         news_lines=news_lines, ai_text=ai_text, tgt_line=tgt_line,
         chart_path=chart_path,
+        risk_level=risk_level, ann_vol=ann_vol,
+        stock_1y_ret=stock_1y_ret, nifty_1y_ret=nifty_1y_ret,
+        fund_available=fund_available, fund_total=fund_total,
         generated_at=datetime.now().strftime("%d-%b-%Y %H:%M IST"),
     )
 
@@ -468,6 +512,11 @@ def build_report_pdf(d: dict, output_path: str) -> str:
         return [Paragraph(f"<font color='{color_hex}'>{val}</font>", ss["BigStat"]),
                 Paragraph(label, ss["BigStatLabel"])]
 
+    risk_hex = {"Low": GREEN_HEX, "Moderate": "#B8860B", "High": RED_HEX}.get(d.get("risk_level"), GREY_HEX)
+    risk_val = d.get("risk_level", "N/A")
+    if d.get("ann_vol") is not None:
+        risk_val = f"{risk_val} ({d['ann_vol']}%)"
+
     snap_cells = [
         stat("DAY RANGE", f"{_rupee(d['day_lo'])} – {_rupee(d['day_hi'])}"),
         stat("52-WEEK RANGE", f"{_rupee(d['w52l'])} – {_rupee(d['w52h'])}"),
@@ -487,6 +536,20 @@ def build_report_pdf(d: dict, output_path: str) -> str:
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
     ]))
     story.append(snap_table)
+
+    # Risk badge — separate strip so it reads as a distinct "how volatile is
+    # this" signal rather than getting lost among the four stats above.
+    risk_row = stat("RISK LEVEL (ann. volatility)", risk_val, risk_hex)
+    risk_table = Table([[risk_row[0]], [risk_row[1]]], colWidths=[174*mm])
+    risk_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
+        ("TOPPADDING", (0, 0), (-1, 0), 8),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(Spacer(1, 4))
+    story.append(risk_table)
 
     # ── Technical Analysis ────────────────────────────────────────────
     story.append(Paragraph("Technical Analysis", ss["SectionHead"]))
@@ -517,7 +580,20 @@ def build_report_pdf(d: dict, output_path: str) -> str:
         f"{'ADX above 25 indicates a trending market.' if d['adx'] and d['adx'] > 25 else 'ADX below 25 suggests a range-bound / weak-trend market.' if d['adx'] else ''}"
     )
     story.append(Paragraph(tech_note, ss["Body"]))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
+
+    if d.get("stock_1y_ret") is not None and d.get("nifty_1y_ret") is not None:
+        outperf = d["stock_1y_ret"] - d["nifty_1y_ret"]
+        outperf_hex = GREEN_HEX if outperf >= 0 else RED_HEX
+        story.append(Paragraph(
+            f"<b>Market context:</b> {d['sym']} is {'+' if d['stock_1y_ret']>=0 else ''}{d['stock_1y_ret']}% "
+            f"over the last year vs the Nifty 50's {'+' if d['nifty_1y_ret']>=0 else ''}{d['nifty_1y_ret']}% — "
+            f"<font color='{outperf_hex}'>{'outperforming' if outperf >= 0 else 'underperforming'} "
+            f"the broader market by {abs(round(outperf, 1))} pts</font>.",
+            ss["Body"]))
+        story.append(Spacer(1, 4))
+
+    story.append(Spacer(1, 4))
 
     if d.get("chart_path"):
         try:
@@ -612,9 +688,15 @@ def build_report_pdf(d: dict, output_path: str) -> str:
             else:
                 story.append(Paragraph(line, ss["Body"]))
         story.append(Spacer(1, 4))
-        story.append(Paragraph(
+        bench_bits = []
+        if d.get("stock_1y_ret") is not None and d.get("nifty_1y_ret") is not None:
+            bench_bits.append(
+                f"1-year return: {d['sym']} {'+' if d['stock_1y_ret']>=0 else ''}{d['stock_1y_ret']}% "
+                f"vs Nifty 50 {'+' if d['nifty_1y_ret']>=0 else ''}{d['nifty_1y_ret']}%.")
+        bench_bits.append(
             "This view is fundamentals-driven and separate from the short-term technical read "
-            "above — it does not imply a near-term price target.", ss["Small"]))
+            "above — it does not imply a near-term price target.")
+        story.append(Paragraph(" ".join(bench_bits), ss["Small"]))
         story.append(Spacer(1, 8))
 
     # ── News ───────────────────────────────────────────────────────────
@@ -636,6 +718,19 @@ def build_report_pdf(d: dict, output_path: str) -> str:
                 continue
             story.append(Paragraph(line, ss["Body"]))
         story.append(Spacer(1, 8))
+
+    # ── Data completeness & freshness ────────────────────────────────────
+    story.append(Spacer(1, 4))
+    fund_pct = round(d["fund_available"] / d["fund_total"] * 100) if d.get("fund_total") else None
+    completeness_hex = GREEN_HEX if (fund_pct or 0) >= 80 else ("#B8860B" if (fund_pct or 0) >= 50 else RED_HEX)
+    story.append(Paragraph(
+        f"<b>Data completeness:</b> "
+        f"<font color='{completeness_hex}'>{d.get('fund_available','?')}/{d.get('fund_total','?')} "
+        f"fundamental fields available</font> from live sources"
+        + (f" ({fund_pct}%)." if fund_pct is not None else ".")
+        + " Price and technical indicators reflect the latest close; fundamental data may be cached "
+          "for up to 4 hours for performance.",
+        ss["Small"]))
 
     # ── Disclaimer ─────────────────────────────────────────────────────
     story.append(Spacer(1, 4))
