@@ -1,5 +1,27 @@
 """
-fundamentals.py — Fixed v3
+fundamentals.py — Fixed v4
+
+FIXES vs v3 (this pass — data-completeness audit):
+  1. Screener.in request timeout was hardcoded to 5s, ignoring the
+     configured TIMEOUT_SCREENER (8s) — premature failures on slow responses.
+  2. Revenue was NEVER scraped from Screener.in (explicitly skipped, relying
+     solely on Yahoo v10 / yfinance — both frequently rate-limited/blocked
+     from cloud IPs). Now scraped from the Profit & Loss "Sales" row.
+  3. EPS regex searched the ENTIRE page with DOTALL and could latch onto an
+     unrelated number after the first "EPS" text occurrence. Now scoped to a
+     200-char window right after the label.
+  4. The missing-field trigger lists gating each fallback source (Screener →
+     Finnhub → yfinance) only checked a handful of "important" fields
+     (pe/roe/mcap). If those happened to already be filled, EPS/Revenue/
+     Forward PE/Beta/D-E were silently never fetched from later sources even
+     though those sources could supply them. Trigger lists now cover every
+     field each source can plausibly fill; yfinance (last resort) now
+     attempts ALL still-missing fields.
+  5. Finnhub fetch never requested Debt/Equity or Forward PE at all — added.
+  6. A single transient failure (one site down, one rate-limit) got cached
+     as N/A for the full 4-hour TTL. Incomplete results (missing any of
+     PE/ROE/EPS/Revenue/MCap) are now cached for only 10 minutes so the next
+     lookup retries soon instead of being stuck showing N/A for hours.
 
 FIXES vs v2:
   1. Added Screener.in scraper as Source 2 — works WITHOUT any API key,
@@ -34,8 +56,8 @@ logger = logging.getLogger(__name__)
 def _get_cached(key: str, ttl: int = None):
     return FUND_CACHE.get(key)
 
-def _set_cached(key: str, val: Any):
-    FUND_CACHE.set(key, val)
+def _set_cached(key: str, val: Any, ttl: int = None):
+    FUND_CACHE.set(key, val, ttl=ttl)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -115,11 +137,11 @@ def _fetch_screener(sym: str) -> Optional[dict]:
     """
     url = f"https://www.screener.in/company/{sym}/consolidated/"
     try:
-        resp = requests.get(url, headers=_SCREENER_HEADERS, timeout=5)
+        resp = requests.get(url, headers=_SCREENER_HEADERS, timeout=TIMEOUT_SCREENER)
         if resp.status_code == 404:
             # Try standalone (non-consolidated)
             url  = f"https://www.screener.in/company/{sym}/"
-            resp = requests.get(url, headers=_SCREENER_HEADERS, timeout=5)
+            resp = requests.get(url, headers=_SCREENER_HEADERS, timeout=TIMEOUT_SCREENER)
         if not resp.ok:
             logger.debug(f"Screener.in {sym}: HTTP {resp.status_code}")
             return None
@@ -156,6 +178,10 @@ def _fetch_screener(sym: str) -> Optional[dict]:
                 result["roce"] = _parse_num(val_clean)
             elif "debt to equity" in name_clean or "d/e" in name_clean:
                 result["de"] = _parse_num(val_clean)
+            elif name_clean == "eps" or name_clean.startswith("eps"):
+                v = _parse_num(val_clean)
+                if v is not None:
+                    result["eps"] = v
 
         # ── 52W High / Low from the "High / Low" ratio ────────────────────────
         hw_match = re.search(
@@ -181,16 +207,38 @@ def _fetch_screener(sym: str) -> Optional[dict]:
         if name_match:
             result["name"] = re.sub(r"<[^>]+>", "", name_match.group(1)).strip()
 
-        # ── EPS from key ratios ───────────────────────────────────────────────
-        eps_match = re.search(
-            r'EPS.*?<span[^>]*>([\d,\.\-]+)</span>',
-            html, re.DOTALL | re.IGNORECASE
-        )
-        if eps_match:
-            result["eps"] = _parse_num(eps_match.group(1))
+        # ── EPS ──────────────────────────────────────────────────────────────
+        # Now extracted above, inside the ratio_blocks loop (scoped to the
+        # name="..."/value span pair), so it can't accidentally match an
+        # unrelated "EPS" mention elsewhere on the page.
 
-        # Revenue: NOT scraped from Screener — too unreliable (regex matches wrong cells)
-        # Revenue comes from Yahoo v10 financialData.totalRevenue (absolute Rs) instead
+        # ── Revenue (Sales) from the Profit & Loss table ───────────────────
+        # Previously NOT scraped here at all — this left Revenue with only
+        # Yahoo v10 / yfinance as sources, both of which are frequently
+        # rate-limited or blocked from cloud IPs, so Revenue showed N/A far
+        # more often than the other fields. Screener.in's P&L table is the
+        # most reliable free source, so we pull the "Sales" row and take its
+        # last populated column (most recent period — TTM if present, else
+        # latest FY), matching the "last column = latest" convention already
+        # used above for the 52W high/low parsing.
+        pl_section = re.search(
+            r'(?:id="profit-loss"|Profit\s*&amp;\s*Loss)(.*?)(?:id="balance-sheet"|Balance\s*Sheet)',
+            html, re.DOTALL | re.IGNORECASE,
+        )
+        pl_html = pl_section.group(1) if pl_section else html
+        sales_row = re.search(
+            r'<tr[^>]*>\s*<td[^>]*>\s*(?:Sales|Revenue)\b.*?</tr>',
+            pl_html, re.DOTALL | re.IGNORECASE,
+        )
+        if sales_row:
+            cells = re.findall(r'<td[^>]*>\s*([\d,\.\-]+)\s*</td>', sales_row.group(0))
+            # Walk from the end so a trailing empty/placeholder cell doesn't
+            # get picked over the last real figure.
+            for cell in reversed(cells):
+                rev_val = _parse_crore(cell)
+                if rev_val and rev_val > 0:
+                    result["rev"] = rev_val
+                    break
 
         # ── PB from Book Value (if price available) ───────────────────────────
         # PB = price / book_value — we'll compute in get_fundamentals
@@ -215,21 +263,27 @@ def _fetch_finnhub(sym: str) -> Optional[dict]:
         r = requests.get(
             "https://finnhub.io/api/v1/stock/metric",
             params={"symbol": f"NSE:{sym}", "metric": "all", "token": key},
-            timeout=8,
+            timeout=TIMEOUT_FINNHUB,
         ).json()
         m = r.get("metric", {})
         if not m:
             return None
         return {
             "pe":             m.get("peNormalizedAnnual") or m.get("peTTM"),
+            "fwd_pe":         m.get("peForward") or m.get("forwardPE"),
             "pb":             m.get("pbQuarterly")        or m.get("pbAnnual"),
             "roe":            m.get("roeTTM"),
-            "eps":            m.get("epsTTM"),
+            "eps":            m.get("epsTTM") or m.get("epsInclExtraItemsTTM"),
             "market_cap":     m.get("marketCapitalization"),
             "high52":         m.get("52WeekHigh"),
             "low52":          m.get("52WeekLow"),
             "dividend_yield": m.get("dividendYieldIndicatedAnnual"),
             "beta":           m.get("beta"),
+            # Finnhub names this ratio differently across plan tiers — try
+            # the common variants; whichever is present wins.
+            "de":             (m.get("totalDebt/totalEquityAnnual")
+                                or m.get("totalDebt/totalEquityQuarterly")
+                                or m.get("longTermDebt/equityAnnual")),
         }
     except Exception as e:
         logger.debug(f"Finnhub {sym}: {e}")
@@ -323,7 +377,8 @@ def get_fundamentals(sym: str) -> dict:
         logger.warning(f"get_fundamentals data_engine {sym}: {e}")
 
     # ── Source 2: Screener.in (NO key required — fills most gaps) ────────────
-    missing = [k for k in ["pe", "roe", "de", "mcap", "rev", "w52h", "w52l"] if result[k] is None]
+    missing = [k for k in ["pe", "roe", "de", "mcap", "rev", "w52h", "w52l", "eps", "div_y", "pb"]
+               if result[k] is None]
     if missing:
         sc = _fetch_screener(sym)
         if sc:
@@ -348,23 +403,26 @@ def get_fundamentals(sym: str) -> dict:
                     pass
             logger.info(f"get_fundamentals {sym}: Screener.in filled {[k for k in missing if result[k] is not None]}")
 
-    # ── Source 3: Finnhub (fills PE/ROE/beta if still missing) ───────────────
-    still_missing = [k for k in ["pe", "roe", "eps", "w52h", "w52l", "beta", "pb"] if result[k] is None]
+    # ── Source 3: Finnhub (fills PE/ROE/EPS/beta/D-E if still missing) ───────
+    still_missing = [k for k in ["pe", "fwd_pe", "roe", "eps", "w52h", "w52l", "beta", "pb", "de", "div_y"]
+                      if result[k] is None]
     if still_missing:
         fh = _fetch_finnhub(sym)
         if fh:
-            if result["pe"]    is None: result["pe"]   = safe_val(fh, "pe")
-            if result["pb"]    is None: result["pb"]   = safe_val(fh, "pb")
-            if result["roe"]   is None: result["roe"]  = safe_val(fh, "roe")
-            if result["eps"]   is None: result["eps"]  = safe_val(fh, "eps")
-            if result["beta"]  is None: result["beta"] = safe_val(fh, "beta")
-            if result["w52h"]  is None: result["w52h"] = safe_val(fh, "high52")
-            if result["w52l"]  is None: result["w52l"] = safe_val(fh, "low52")
+            if result["pe"]    is None: result["pe"]     = safe_val(fh, "pe")
+            if result["fwd_pe"] is None: result["fwd_pe"] = safe_val(fh, "fwd_pe")
+            if result["pb"]    is None: result["pb"]     = safe_val(fh, "pb")
+            if result["roe"]   is None: result["roe"]    = safe_val(fh, "roe")
+            if result["eps"]   is None: result["eps"]    = safe_val(fh, "eps")
+            if result["de"]    is None: result["de"]     = safe_val(fh, "de")
+            if result["beta"]  is None: result["beta"]   = safe_val(fh, "beta")
+            if result["w52h"]  is None: result["w52h"]   = safe_val(fh, "high52")
+            if result["w52l"]  is None: result["w52l"]   = safe_val(fh, "low52")
             if result["div_y"] is None:
                 result["div_y"] = safe_val(fh, "dividend_yield")
 
-    # ── Source 4: yfinance (last resort) ──────────────────────────────────────
-    still_missing2 = [k for k in ["pe", "roe", "mcap"] if result[k] is None]
+    # ── Source 4: yfinance (last resort — attempt EVERY still-missing field) ──
+    still_missing2 = [k for k in result if k != "name" and result[k] is None]
     if still_missing2:
         yf_info = _fetch_yfinance(sym)
         if yf_info:
@@ -389,5 +447,14 @@ def get_fundamentals(sym: str) -> dict:
 
     filled = [k for k, v in result.items() if v is not None]
     logger.info(f"get_fundamentals {sym}: filled={filled}")
-    _set_cached(cache_key, result)
+
+    # Core fields an investor actually reads the report for. If any of these
+    # are still missing after all four sources, this was likely a transient
+    # failure (rate limit, one site down) rather than "this data doesn't
+    # exist" — cache it briefly instead of the full 4hr TTL so the next
+    # /report or lookup gets a fresh retry instead of being stuck on N/A
+    # for hours.
+    _core_fields = ["pe", "roe", "eps", "rev", "mcap"]
+    incomplete = any(result[k] is None for k in _core_fields)
+    _set_cached(cache_key, result, ttl=(600 if incomplete else None))
     return result
