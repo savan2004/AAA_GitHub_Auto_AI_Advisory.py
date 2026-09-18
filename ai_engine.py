@@ -1,6 +1,7 @@
-"""AI provider adapter and deterministic report-safe fallbacks."""
+"""AI provider adapter and report-safe fallbacks."""
 import os
 import logging
+import functools
 import requests
 
 logger = logging.getLogger(__name__)
@@ -16,14 +17,36 @@ def ai_available():
     return bool(_key("GROQ_API_KEY") or _key("GEMINI_API_KEY") or _key("OPENAI_KEY") or _key("ASKFUZZ_API_KEY"))
 
 
+def _make_groq_client(api_key):
+    """Create Groq client across httpx versions used by Render."""
+    from groq import Groq
+    try:
+        return Groq(api_key=api_key)
+    except TypeError as exc:
+        if "proxies" not in str(exc).lower():
+            raise
+        import httpx
+        original = httpx.Client.__init__
+
+        @functools.wraps(original)
+        def compatible_init(self, *args, **kwargs):
+            kwargs.pop("proxies", None)
+            return original(self, *args, **kwargs)
+
+        httpx.Client.__init__ = compatible_init
+        try:
+            return Groq(api_key=api_key)
+        finally:
+            httpx.Client.__init__ = original
+
+
 def _call_ai(messages, max_tokens=500, system=""):
     errors = []
     global _groq, _gemini, _openai
     if _key("GROQ_API_KEY"):
         try:
             if _groq is None:
-                from groq import Groq
-                _groq = Groq(api_key=_key("GROQ_API_KEY"))
+                _groq = _make_groq_client(_key("GROQ_API_KEY"))
             payload = ([{"role": "system", "content": system}] if system else []) + messages
             for model in _GROQ_MODELS:
                 try:
@@ -35,6 +58,7 @@ def _call_ai(messages, max_tokens=500, system=""):
                     errors.append(f"GROQ: {str(exc)[:100]}")
         except Exception as exc:
             errors.append(f"GROQ init: {str(exc)[:100]}")
+            logger.warning("Groq initialization failed: %s", exc)
     if _key("GEMINI_API_KEY"):
         try:
             if _gemini is None:
@@ -63,34 +87,31 @@ def _call_ai(messages, max_tokens=500, system=""):
     return "", "\n".join(errors) or "No AI provider configured"
 
 
-def _safe(v):
-    return "N/A" if v is None or str(v).strip() in {"", "None", "Null"} else str(v)
+def _safe(value):
+    return "N/A" if value is None or str(value).strip() in {"", "None", "Null"} else str(value)
 
 
 def _fallback_outlook(symbol, ltp, rsi, macd, trend, pe, roe, atr, sl, target):
     zone = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
     direction = "positive" if macd > 0 else "negative"
-    missing = [label for label, value in (("P/E", pe), ("ROE", roe)) if _safe(value) == "N/A"]
-    constraint = (" Fundamental assessment is constrained because " + ", ".join(missing) + " is unavailable.") if missing else ""
-    return ("---\n"
-            "## 📈 Technical Structure & Momentum Spectrum\n"
-            f"- **Trend Diagnostics:** {symbol} is currently {trend}; price momentum is assessed using the supplied trend and moving-average structure.\n"
-            f"- **Oscillator Readings:** RSI is {_safe(rsi)} ({zone}); MACD is {_safe(macd)} ({direction}). Entry should avoid chasing overbought momentum and wait for confirmation near support.\n"
-            f"- **Volatility Parameters:** ATR is Rs {_safe(atr)}, implying a calculated risk band around the current price.\n\n"
+    return ("---\n## 📈 Technical Structure & Momentum Spectrum\n"
+            f"- **Trend Diagnostics:** {symbol} is currently {_safe(trend)} based on the supplied trend structure.\n"
+            f"- **Oscillator Readings:** RSI is {_safe(rsi)} ({zone}); MACD is {_safe(macd)} ({direction}). Avoid chasing overbought momentum.\n"
+            f"- **Volatility Parameters:** ATR is Rs {_safe(atr)}, defining the available risk-band reference.\n\n"
             "---\n## 🔎 Fundamental Quality & Valuation Framework\n"
-            f"- **Pricing Multiple Assessment:** TTM P/E is {_safe(pe)}; valuation cannot be judged beyond the supplied figure without a reliable sector comparison.{constraint}\n"
-            f"- **Balance Sheet Health:** ROE is {_safe(roe)}%; Debt/Equity was not supplied to this fallback, so leverage quality remains constrained.\n\n"
+            f"- **Pricing Multiple Assessment:** TTM P/E is {_safe(pe)}; a complete valuation conclusion requires sector comparison.\n"
+            f"- **Balance Sheet Health:** ROE is {_safe(roe)}%; leverage assessment is constrained where Debt/Equity is unavailable.\n\n"
             "---\n## 📰 Sentiment & Structural Catalyst Correlation\n"
-            "- **News Sentiment Mapping:** No AI/news synthesis was available; treat the news section as unconfirmed and verify primary sources before acting.\n"
-            "- **Benchmark Contrast:** Relative Nifty alpha was not available in this fallback; no independent outperformance claim is made.\n\n"
+            "- **News Sentiment Mapping:** AI news synthesis was unavailable; verify company announcements and results from primary sources.\n"
+            "- **Benchmark Contrast:** Relative Nifty alpha was unavailable; no outperformance claim is made.\n\n"
             "---\n## 💡 Comprehensive AI Outlook & Guardrails\n"
-            f"- **Strategic Thesis:** The technical bias is {trend}, but conviction is limited until fundamentals, news, and benchmark data are confirmed.\n"
-            f"- **Execution Trajectory:** Reference target is Rs {_safe(target)} and protective stop is Rs {_safe(sl)}. If support is violated, reduce exposure and wait for a confirmed recovery rather than averaging blindly.\n\n"
+            f"- **Strategic Thesis:** The technical bias is {_safe(trend)}, but conviction is limited until fundamentals and news are confirmed.\n"
+            f"- **Execution Trajectory:** Reference target is Rs {_safe(target)} and protective stop is Rs {_safe(sl)}. If support fails, reduce exposure and wait for confirmation.\n\n"
             "---\n*Disclaimer: This report is automatically compiled from public market feeds and a generative intelligence layer. It is not investment advice.*")
 
 
 def ai_insights(symbol, ltp, rsi, macd_line, trend, pe, roe, atr=0.0, sl=0.0, t1=0.0):
-    prompt = (f"Create a concise but detailed Indian equity outlook for {symbol}. Price Rs {ltp:.2f}; RSI {rsi}; MACD {macd_line}; trend {trend}; P/E {_safe(pe)}; ROE {_safe(roe)}; ATR {_safe(atr)}; stop {_safe(sl)}; target {_safe(t1)}. Use Markdown sections Technical, Fundamentals, Risks, Outlook. Never invent missing data.")
+    prompt = f"Create a detailed Indian equity outlook for {symbol}. Price Rs {ltp:.2f}; RSI {rsi}; MACD {macd_line}; trend {trend}; P/E {_safe(pe)}; ROE {_safe(roe)}; ATR {_safe(atr)}; stop {_safe(sl)}; target {_safe(t1)}. Use Markdown sections Technical, Fundamentals, Risks, Outlook. Never invent missing data."
     if ai_available():
         text, error = _call_ai([{"role": "user", "content": prompt}], 700, "Use only supplied values. Output Markdown only.")
         if text:
@@ -116,26 +137,16 @@ def long_term_view(symbol, sector, ltp, pe, roe, de, div_y, ema200, w52h, w52l, 
     return text or ""
 
 
-def get_live_market_context(force=False):
-    return "Live market context unavailable; state missing values explicitly."
-
-
+def get_live_market_context(force=False): return "Live market context unavailable; state missing values explicitly."
 def ai_chat_respond(uid, user_message):
     if not ai_available(): return "⚠️ No AI key configured."
-    text, error = _call_ai([{"role": "user", "content": user_message}], 450, "Indian NSE/BSE analyst. Use supplied data only.")
+    text, _ = _call_ai([{"role": "user", "content": user_message}], 450, "Indian NSE/BSE analyst. Use supplied data only.")
     return text or "⚠️ AI temporarily unavailable."
-
-
-def ai_topic_respond(topic_prompt):
-    return ai_chat_respond(0, topic_prompt)
-
-
+def ai_topic_respond(topic_prompt): return ai_chat_respond(0, topic_prompt)
 def add_to_chat(uid, role, content): pass
-
 def clear_chat(uid): pass
 AI_CHAT_TOPICS = {"🔍 Stock Analysis": "Analyze the supplied stock.", "📊 Nifty Valuation": "Analyze Nifty valuation.", "💎 Fundamental Picks": "Find fundamental picks from supplied data.", "📈 Nifty Update": "Give a Nifty update from supplied data."}
 AI_CHAT_TOPIC_KEYS = set(AI_CHAT_TOPICS)
-
 def test_ai_providers(): return {"GROQ": "CONFIGURED" if _key("GROQ_API_KEY") else "SKIP", "Gemini": "CONFIGURED" if _key("GEMINI_API_KEY") else "SKIP", "OpenAI": "CONFIGURED" if _key("OPENAI_KEY") else "SKIP", "AskFuzz": "SKIP", "_status": "✅ AI CONFIGURED" if ai_available() else "❌ ALL FAILED"}
 def debug_ai_status(): return {"ai_available": ai_available(), "groq_models": _GROQ_MODELS}
 def fetch_news(symbol): return ""
