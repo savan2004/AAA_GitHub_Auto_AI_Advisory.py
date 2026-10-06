@@ -111,7 +111,7 @@ def _fallback_outlook(symbol, ltp, rsi, macd, trend, pe, roe, atr, sl, target):
 
 
 def ai_insights(symbol, ltp, rsi, macd_line, trend, pe, roe, atr=0.0, sl=0.0, t1=0.0):
-    prompt = f"Create a detailed Indian equity outlook for {symbol}. Price Rs {ltp:.2f}; RSI {rsi}; MACD {macd_line}; trend {trend}; P/E {_safe(pe)}; ROE {_safe(roe)}; ATR {_safe(atr)}; stop {_safe(sl)}; target {_safe(t1)}. Use Markdown sections Technical, Fundamentals, Risks, Outlook. Never invent missing data."
+    prompt = f"Create a detailed Indian equity outlook for {symbol}. Price Rs {ltp:.2f}; RSI {rsi}; MACD {macd_line}; trend {trend}; P/E {_safe(pe)}; ROE {_safe(roe)}; ATR {_safe(atr)}; stop {_safe(sl)}; t1 {_safe(t1)}. Use strict Markdown only."
     if ai_available():
         text, error = _call_ai([{"role": "user", "content": prompt}], 700, "Use only supplied values. Output Markdown only.")
         if text:
@@ -120,9 +120,9 @@ def ai_insights(symbol, ltp, rsi, macd_line, trend, pe, roe, atr=0.0, sl=0.0, t1
     return _fallback_outlook(symbol, ltp, rsi, macd_line, trend, pe, roe, atr, sl, t1)
 
 
-def structured_investment_outlook(symbol, company_name, ltp, day_high, day_low, y_high, y_low, trend_signal, rsi_14, macd_value, ema20, ema50, ema200, bb_lower, bb_upper, market_cap, pe_ttm, pe_forward, price_to_book, roe_percent, dividend_yield, debt_equity, nifty_outperformance_pts, news_bullets):
+def structured_investment_outlook(symbol, company_name, ltp, day_high, day_low, y_high, y_low, trend_signal, rsi_14, macd_value, ema20, ema50, ema200, bb_lower, bb_upper, market_cap, pe_ttm, pe_fwd, pb, roe_percent, de_ratio, div_yield, sector, atr, peers_pe, peers_roe):
     if ai_available():
-        prompt = f"Generate a detailed Markdown-only Indian equity report for {company_name} ({symbol}) using only these values: price={_safe(ltp)}, day={_safe(day_low)}-{_safe(day_high)}, 52W={_safe(y_low)}-{_safe(y_high)}, trend={_safe(trend_signal)}, RSI={_safe(rsi_14)}, MACD={_safe(macd_value)}, EMA20/50/200={_safe(ema20)}/{_safe(ema50)}/{_safe(ema200)}, BB={_safe(bb_lower)}-{_safe(bb_upper)}, market cap={_safe(market_cap)}, PE={_safe(pe_ttm)}, forward PE={_safe(pe_forward)}, PB={_safe(price_to_book)}, ROE={_safe(roe_percent)}, dividend={_safe(dividend_yield)}, debt/equity={_safe(debt_equity)}, alpha={_safe(nifty_outperformance_pts)}, news={news_bullets or 'N/A'}. Include Technical Structure & Momentum Spectrum, Fundamental Quality & Valuation Framework, Sentiment & Structural Catalyst Correlation, and Comprehensive AI Outlook & Guardrails. Explicitly state constraints for N/A values and flag momentum-vs-fundamental divergence."
+        prompt = f"Generate a detailed Markdown-only Indian equity report for {company_name} ({symbol}) using only these values: price={_safe(ltp)}, day={_safe(day_low)}-{_safe(day_high)}, 52W={_safe(y_low)}-{_safe(y_high)}, trend={_safe(trend_signal)}, RSI={_safe(rsi_14)}, MACD={_safe(macd_value)}, EMA20/50/200={_safe(ema20)}/{_safe(ema50)}/{_safe(ema200)}, BB={_safe(bb_lower)}-{_safe(bb_upper)}, MCap={_safe(market_cap)}, P/E={_safe(pe_ttm)} (fwd {_safe(pe_fwd)}), P/B={_safe(pb)}, ROE={_safe(roe_percent)}%, D/E={_safe(de_ratio)}, Div={_safe(div_yield)}%, Sector={_safe(sector)}, Peers: PE={_safe(peers_pe)}, ROE={_safe(peers_roe)}%. Use only Markdown, never invent data."
         text, error = _call_ai([{"role": "user", "content": prompt}], 900, "Output only structured Markdown. Never fabricate missing values.")
         if text:
             return text
@@ -137,17 +137,101 @@ def long_term_view(symbol, sector, ltp, pe, roe, de, div_y, ema200, w52h, w52l, 
     return text or ""
 
 
-def get_live_market_context(force=False): return "Live market context unavailable; state missing values explicitly."
+def get_live_market_context(force=False): 
+    return "Live market context unavailable; state missing values explicitly."
+
+
 def ai_chat_respond(uid, user_message):
-    if not ai_available(): return "⚠️ No AI key configured."
+    if not ai_available(): 
+        return "⚠️ No AI key configured."
     text, _ = _call_ai([{"role": "user", "content": user_message}], 450, "Indian NSE/BSE analyst. Use supplied data only.")
     return text or "⚠️ AI temporarily unavailable."
-def ai_topic_respond(topic_prompt): return ai_chat_respond(0, topic_prompt)
-def add_to_chat(uid, role, content): pass
-def clear_chat(uid): pass
-AI_CHAT_TOPICS = {"🔍 Stock Analysis": "Analyze the supplied stock.", "📊 Nifty Valuation": "Analyze Nifty valuation.", "💎 Fundamental Picks": "Find fundamental picks from supplied data.", "📈 Nifty Update": "Give a Nifty update from supplied data."}
+
+
+def ai_topic_respond(topic_prompt): 
+    return ai_chat_respond(0, topic_prompt)
+
+
+def add_to_chat(uid, role, content): 
+    pass
+
+
+def clear_chat(uid): 
+    pass
+
+
+AI_CHAT_TOPICS = {
+    "🔍 Stock Analysis": "Analyze the supplied stock.",
+    "📊 Nifty Valuation": "Analyze Nifty valuation.",
+    "💎 Fundamental Picks": "Find fundamental picks from supplied data.",
+    "📈 Nifty Update": "Give a Nifty update from supplied data."
+}
 AI_CHAT_TOPIC_KEYS = set(AI_CHAT_TOPICS)
-def test_ai_providers(): return {"GROQ": "CONFIGURED" if _key("GROQ_API_KEY") else "SKIP", "Gemini": "CONFIGURED" if _key("GEMINI_API_KEY") else "SKIP", "OpenAI": "CONFIGURED" if _key("OPENAI_KEY") else "SKIP", "AskFuzz": "SKIP", "_status": "✅ AI CONFIGURED" if ai_available() else "❌ ALL FAILED"}
-def debug_ai_status(): return {"ai_available": ai_available(), "groq_models": _GROQ_MODELS}
-def fetch_news(symbol): return ""
-def fetch_market_news(): return ""
+
+
+def get_ai_provider_status():
+    """
+    Returns structured AI provider status for reliable display.
+    
+    Returns:
+        dict: {
+            'groq': {'configured': bool, 'status': 'CONFIGURED' | 'NOT CONFIGURED'},
+            'gemini': {...},
+            'openai': {...},
+            'askfuzz': {'configured': bool, 'status': 'SKIP'},
+            '_overall': '✅ AI CONFIGURED' | '❌ AI NOT CONFIGURED'
+        }
+    """
+    groq_ok = bool(_key("GROQ_API_KEY"))
+    gemini_ok = bool(_key("GEMINI_API_KEY"))
+    openai_ok = bool(_key("OPENAI_KEY"))
+    askfuzz_ok = bool(_key("ASKFUZZ_API_KEY"))
+    
+    any_provider = groq_ok or gemini_ok or openai_ok
+    
+    return {
+        "groq": {
+            "configured": groq_ok,
+            "status": "CONFIGURED" if groq_ok else "NOT CONFIGURED"
+        },
+        "gemini": {
+            "configured": gemini_ok,
+            "status": "CONFIGURED" if gemini_ok else "NOT CONFIGURED"
+        },
+        "openai": {
+            "configured": openai_ok,
+            "status": "CONFIGURED" if openai_ok else "NOT CONFIGURED"
+        },
+        "askfuzz": {
+            "configured": askfuzz_ok,
+            "status": "SKIP"  # Always SKIP per design
+        },
+        "_overall": "✅ AI CONFIGURED" if any_provider else "❌ AI NOT CONFIGURED"
+    }
+
+
+def test_ai_providers():
+    """
+    Legacy compatibility function. Returns flat dict matching main.py expectations.
+    Uses new structured status internally to ensure consistency.
+    """
+    status = get_ai_provider_status()
+    return {
+        "GROQ": status["groq"]["status"],
+        "Gemini": status["gemini"]["status"],
+        "OpenAI": status["openai"]["status"],
+        "AskFuzz": status["askfuzz"]["status"],
+        "_status": status["_overall"]
+    }
+
+
+def debug_ai_status(): 
+    return {"ai_available": ai_available(), "groq_models": _GROQ_MODELS, "provider_status": get_ai_provider_status()}
+
+
+def fetch_news(symbol): 
+    return ""
+
+
+def fetch_market_news(): 
+    return ""
