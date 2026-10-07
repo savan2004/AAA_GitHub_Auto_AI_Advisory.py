@@ -30,9 +30,9 @@ import os
 import logging
 from typing import Optional
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 # HELPER FUNCTIONS
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 
 def _get_env(key: str, default: str = "", required: bool = False) -> str:
     """
@@ -79,9 +79,9 @@ def _get_env_with_fallbacks(primary: str, *fallbacks: str, default: str = "") ->
     return default
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 # TELEGRAM CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 
 TELEGRAM_TOKEN: str = _get_env("TELEGRAM_TOKEN", required=True)
 """
@@ -94,7 +94,7 @@ To get:
   4. Copy token
   5. Set as TELEGRAM_TOKEN environment variable
 
-Example: 6372193741:AAHx8wHwHwHwHw...
+Example: 6372193741:AAHx8wHwHwHw...
 """
 
 WEBHOOK_URL: str = _get_env("WEBHOOK_URL", required=True)
@@ -117,9 +117,9 @@ Path for webhook endpoint. Full URL: {WEBHOOK_URL}{WEBHOOK_PATH}
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 # AI PROVIDER CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 
 GROQ_API_KEY: str = _get_env("GROQ_API_KEY")
 """
@@ -196,9 +196,9 @@ Only used if explicitly configured (won't error if missing)
 Example: ask_...
 """
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 # DATA SOURCE CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 
 FINNHUB_API_KEY: str = _get_env("FINNHUB_API_KEY")
 """
@@ -248,9 +248,9 @@ Optional, used for live market news
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 # INFRASTRUCTURE CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 
 PORT: int = int(_get_env("PORT", "8000"))
 """
@@ -295,9 +295,9 @@ Set to true only for development/troubleshooting
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 # FEATURE FLAGS & LIMITS
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 
 ENABLE_OPENAI: bool = bool(OPENAI_KEY) and _get_env("ENABLE_OPENAI", "true").lower() == "true"
 """
@@ -347,10 +347,54 @@ Default: 1000
 Set higher to allow more users
 """
 
+# ─────────────────────────────────────────────────────────────────
+# RETRY & RATE LIMIT CONFIGURATION
+# ─────────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────────────────────
+RETRY_MAX_ATTEMPTS: int = int(_get_env("RETRY_MAX_ATTEMPTS", "3"))
+"""
+Maximum number of retry attempts for transient errors.
+
+Default: 3
+Used for: HTTP timeouts, 429/503/504 errors with exponential backoff
+"""
+
+RETRY_BASE_DELAY: float = float(_get_env("RETRY_BASE_DELAY", "1.0"))
+"""
+Initial delay (seconds) before first retry.
+
+Default: 1.0
+Increases exponentially: 1s → 2s → 4s for max_attempts=3
+"""
+
+RETRY_BACKOFF: float = float(_get_env("RETRY_BACKOFF", "2.0"))
+"""
+Backoff multiplier for retry delays.
+
+Default: 2.0 (exponential backoff)
+Example: base_delay=1.0, backoff=2.0 → delays: 1s, 2s, 4s, 8s, ...
+"""
+
+RATE_LIMIT_WINDOW: int = int(_get_env("RATE_LIMIT_WINDOW", "60"))
+"""
+Time window (seconds) for rate limiting.
+
+Default: 60
+Used for: Sliding window rate limiter per user
+"""
+
+RATE_LIMIT_MAX_CALLS: int = int(_get_env("RATE_LIMIT_MAX_CALLS", "30"))
+"""
+Maximum API calls per user per RATE_LIMIT_WINDOW.
+
+Default: 30 calls per 60 seconds
+Prevents abuse / runaway costs
+"""
+
+
+# ────────────────────────────────────────────────────────────────
 # VALIDATION & STARTUP CHECKS
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 
 def validate_configuration() -> tuple[bool, list[str]]:
     """
@@ -419,9 +463,9 @@ def print_configuration_status() -> None:
         logger.info("✅ Configuration validation PASSED")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 # EXPORT ALL CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 
 __all__ = [
     # Telegram
@@ -454,6 +498,13 @@ __all__ = [
     "CACHE_TTL_FUNDAMENTALS",
     "CACHE_TTL_NEWS",
     "MAX_USERS_PER_DAY",
+
+    # Retry & Rate Limiting
+    "RETRY_MAX_ATTEMPTS",
+    "RETRY_BASE_DELAY",
+    "RETRY_BACKOFF",
+    "RATE_LIMIT_WINDOW",
+    "RATE_LIMIT_MAX_CALLS",
     
     # Functions
     "validate_configuration",
