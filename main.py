@@ -41,6 +41,7 @@ from swing_trades import get_swing_trades
 from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
+import sector_report
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -616,6 +617,7 @@ def main_keyboard():
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
+    kb.add("🏭 Sector Report")
     return kb
 
 
@@ -658,6 +660,7 @@ def cmd_start(m):
               "👋 <b>AutoAI Advisory Bot v6.2</b>\n\nType any stock name or symbol for analysis.\n"
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
+              "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
               "Use menu buttons below.",
               reply_markup=main_keyboard())
 
@@ -665,7 +668,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
 
 
 def run_report(chat_id, query):
@@ -1146,6 +1149,79 @@ def cmd_buzz(m):
 @bot.message_handler(func=lambda m: m.text == "🔥 Stocks Buzz")
 def buzz_btn(m):
     executor.submit(run_buzz, m.chat.id)
+
+
+# ── 🏭 Index & Sectoral Update report ─────────────────────────────────────────
+_sector_lock = threading.Lock()
+_sector_running = False
+_sector_waiters = set()
+
+
+def _deliver_sector(chat_id, path, summary):
+    with open(path, "rb") as f:
+        bot.send_document(
+            chat_id, f,
+            visible_file_name=f"Index_Sectoral_Update_{datetime.now().strftime('%d%b%Y')}.pdf",
+            caption=("🏭 <b>Index &amp; Sectoral Update</b>\n"
+                     "Performance · rotation map · breadth · Nifty levels · positioning ideas\n\n"
+                     "⚠️ Educational only. Not SEBI-registered advice."),
+            parse_mode="HTML",
+        )
+    if summary:
+        import html as _h
+        safe_send(chat_id, "🧭 <b>Key takeaways</b>\n" + "\n".join(f"• {_h.escape(x, quote=False)}" for x in summary[:6]))
+
+
+def run_sector_report(chat_id):
+    global _sector_running
+    with _sector_lock:
+        _sector_waiters.add(chat_id)
+        if _sector_running:
+            safe_send(chat_id, "⏳ The sector report is already being built — you'll get it here as soon as it's ready.")
+            return
+        _sector_running = True
+
+    safe_send(chat_id, "🏭 Building the <b>Index &amp; Sectoral Update</b>… (~1-3 min: 15 indices + ~250 constituents)")
+    last_ping = [time.time()]
+
+    def _progress(done, total):
+        if time.time() - last_ping[0] > 40:
+            last_ping[0] = time.time()
+            safe_send(chat_id, f"⏳ Downloaded {done}/{total} series…")
+
+    try:
+        ok, result, summary = sector_report.generate_sector_report_pdf(_progress)
+        with _sector_lock:
+            targets = list(_sector_waiters)
+            _sector_waiters.clear()
+        for cid in targets:
+            try:
+                if ok:
+                    _deliver_sector(cid, result, summary)
+                else:
+                    safe_send(cid, f"❌ {result}")
+            except Exception as e:
+                logger.error(f"Sector deliver {cid}: {e}")
+    except Exception as e:
+        logger.error(f"Sector report err: {e}", exc_info=True)
+        with _sector_lock:
+            targets = list(_sector_waiters)
+            _sector_waiters.clear()
+        for cid in targets:
+            safe_send(cid, f"❌ Sector report failed: {e}")
+    finally:
+        with _sector_lock:
+            _sector_running = False
+
+
+@bot.message_handler(commands=["sectors", "sector"])
+def cmd_sectors(m):
+    executor.submit(run_sector_report, m.chat.id)
+
+
+@bot.message_handler(func=lambda m: m.text == "🏭 Sector Report")
+def sector_btn(m):
+    executor.submit(run_sector_report, m.chat.id)
 
 
 @bot.message_handler(func=lambda m: m.text in ("📰 News", "🤖 AI"))
