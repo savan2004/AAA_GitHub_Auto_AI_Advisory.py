@@ -1073,29 +1073,20 @@ def breadth_btn(m):
 @bot.message_handler(func=lambda m: m.text in ["🎯 Swing (Safe)", "🚀 Swing (Agr)"])
 def swing_btn(m):
     mode = "conservative" if "Safe" in m.text else "aggressive"
-    safe_send(m.chat.id, f"⏳ Swing scanning… (~25s)")
-
-    def _ping(chat_id=m.chat.id):
-        time.sleep(15)
-        try:
-            safe_send(chat_id, "⏳ Still scanning…")
-        except Exception:
-            pass
-
-    threading.Thread(target=_ping, daemon=True).start()
+    safe_send(m.chat.id, "⏳ Swing scanning… (~20s first run, instant for 30 min after)")
 
     def _run(chat_id=m.chat.id, md=mode):
         try:
             res = get_swing_trades(mode=md)
             if len(res) <= 3800:
                 safe_send(chat_id, res)
-            else:
+            else:  # split only on blank lines so a trade card is never cut in half
                 chunk = ""
-                for line in res.split("\n"):
-                    if len(chunk) + len(line) + 1 > 3800:
+                for block in res.split("\n\n"):
+                    if chunk and len(chunk) + len(block) + 2 > 3800:
                         safe_send(chat_id, chunk)
                         chunk = ""
-                    chunk += line + "\n"
+                    chunk += ("\n\n" if chunk else "") + block
                 if chunk.strip():
                     safe_send(chat_id, chunk)
         except Exception as e:
