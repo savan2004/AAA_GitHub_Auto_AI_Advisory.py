@@ -1,6 +1,7 @@
 """
-main.py — AI Stock Advisory Telegram Bot (v6.1 - Zero Error Build)
-Fully audited: No type errors, no missing imports, no API breaks.
+main.py — AI Stock Advisory Telegram Bot (v6.2)
+v6.2: removed News + AI chat buttons · added 🔥 Stocks Buzz (top-1000 breakout radar)
+      · institutional-grade research PDF report.
 """
 
 import os
@@ -29,23 +30,17 @@ from technical_indicators import (
 )
 from api_utils import API_RATE_LIMITER
 from config import RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_CALLS
-from market_news import get_market_news, get_stock_news
+from market_news import get_stock_news
 
 from ai_engine import (
     ai_insights as engine_ai_insights,
-    ai_chat_respond,
-    ai_topic_respond,
     ai_available,
-    AI_CHAT_TOPICS,
-    AI_CHAT_TOPIC_KEYS,
-    add_to_chat,
-    clear_chat,
     test_ai_providers,
-    debug_ai_status,
 )
 from swing_trades import get_swing_trades
 from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
+import stocks_buzz
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -566,30 +561,6 @@ def build_breadth():
     return "\n".join(lines) if len(lines) > 2 else "❌ Index data unavailable."
 
 
-# ── Build News ───────────────────────────────────────────────────────────────
-_JUNK = ["Investing.com", "TradingView", "Yahoo Finance", "Stock Price", "NSE India"]
-
-
-def build_news():
-    if TAVILY_KEY:
-        try:
-            r = requests.post(
-                "https://api.tavily.com/search",
-                json={"api_key": TAVILY_KEY, "query": "India NSE stock market news today", "max_results": 8},
-                timeout=10
-            )
-            items = r.json().get("results", [])
-            headlines = [
-                x["title"] for x in items
-                if x.get("title") and len(x["title"]) > 25 and not any(j in x["title"] for j in _JUNK)
-            ][:5]
-            if headlines:
-                return "📰 <b>MARKET NEWS</b>\n━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(f"• {h[:100]}" for h in headlines)
-        except Exception:
-            pass
-    return "📰 News unavailable. Set TAVILY_API_KEY."
-
-
 # ── Build Portfolio Card ─────────────────────────────────────────────────────
 def build_portfolio_card(uid):
     p = portfolio.get(uid)
@@ -641,22 +612,10 @@ def build_portfolio_card(uid):
 # ── Keyboards ────────────────────────────────────────────────────────────────
 def main_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    kb.add("🔍 Analysis", "📊 Breadth", "🤖 AI")
+    kb.add("🔍 Analysis", "📊 Breadth", "🔥 Stocks Buzz")
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
-    kb.add("📰 News", "📈 Chart", "📋 Status")
-    kb.add("📄 Report")
-    return kb
-
-
-def ai_keyboard():
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    topics = list(AI_CHAT_TOPICS.keys())
-    for i in range(0, len(topics) - 1, 2):
-        kb.add(topics[i], topics[i + 1])
-    if len(topics) % 2 == 1:
-        kb.add(topics[-1])
-    kb.add("🔙 Menu")
+    kb.add("📈 Chart", "📄 Report", "📋 Status")
     return kb
 
 
@@ -696,8 +655,9 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
 def cmd_start(m):
     state.clear(m.chat.id)
     safe_send(m.chat.id,
-              "👋 <b>AutoAI Advisory Bot v6.1</b>\n\nType any stock name or symbol for analysis.\n"
-              "Use <code>/report SYMBOL</code> for a downloadable PDF (Technical + Fundamental).\n"
+              "👋 <b>AutoAI Advisory Bot v6.2</b>\n\nType any stock name or symbol for analysis.\n"
+              "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
+              "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "Use menu buttons below.",
               reply_markup=main_keyboard())
 
@@ -705,7 +665,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nPDF Report: <code>/report DLF</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nAI: Tap 🤖 AI\nStatus: <code>/status</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
 
 
 def run_report(chat_id, query):
@@ -714,7 +674,7 @@ def run_report(chat_id, query):
         ticker, cname = resolve_symbol(query)
         sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else query.upper().replace(" ", "")
 
-        safe_send(chat_id, f"📄 Generating full report (Technical + Fundamental + Peers + Long-Term View) for <b>{cname or sym}</b>… (~30-45s)")
+        safe_send(chat_id, f"📄 Building institutional research report for <b>{cname or sym}</b>… (~60-90s: price action, financials, ownership, peers)")
 
         done_event = threading.Event()
 
@@ -728,7 +688,7 @@ def run_report(chat_id, query):
             if done_event.wait(20):
                 return
             try:
-                safe_send(chat_id, "⏳ Almost there — fetching peer comparisons…")
+                safe_send(chat_id, "⏳ Almost there — rendering charts and PDF…")
             except Exception:
                 pass
 
@@ -743,9 +703,9 @@ def run_report(chat_id, query):
                 with open(result, "rb") as f:
                     bot.send_document(
                         chat_id, f,
-                        visible_file_name=f"{sym}_Analysis_Report.pdf",
-                        caption=(f"📄 <b>{name or sym} — Full Analysis Report</b>\n"
-                                 f"Technical + Fundamental + Peer Comparison + Long-Term View\n"
+                        visible_file_name=f"{sym}_Research_Report.pdf",
+                        caption=(f"📄 <b>{name or sym} — Equity Research Report</b>\n"
+                                 f"Stance · Technicals · Fundamentals · Ownership · Peers · Trade plan · Risks\n"
                                  f"Generated {datetime.now().strftime('%d-%b-%Y %H:%M')}\n\n"
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
@@ -870,8 +830,12 @@ def handle_analysis_callback(call):
         executor.submit(_run)
 
     elif action == "pdf":
-        safe_send(chat_id, f"📄 Preparing full report for <b>{sym}</b>…")
+        safe_send(chat_id, f"📄 Preparing research report for <b>{sym}</b>…")
         executor.submit(run_report, chat_id, sym)
+
+    elif action == "menu":
+        safe_send(chat_id, f"What would you like to see for <b>{sym}</b>?",
+                  reply_markup=analysis_choice_keyboard(sym))
 
 
 @bot.message_handler(commands=["status"])
@@ -883,7 +847,7 @@ def cmd_status(m):
         try:
             res = test_ai_providers()
             lines = [
-                f"🤖 <b>STATUS v6.1</b>",
+                f"🤖 <b>STATUS v6.2</b>",
                 "─── ── ── ── ── ──",
                 f"Bot : ✅ Running",
                 f"AI  : {res.get('_status', '?')}",
@@ -1010,16 +974,6 @@ def cmd_portfolio(m):
     executor.submit(_run)
 
 
-@bot.message_handler(commands=["clear"])
-def cmd_clear(m):
-    try:
-        clear_chat(m.chat.id)
-    except Exception:
-        pass
-    state.clear(m.chat.id)
-    safe_send(m.chat.id, "🗑️ AI history cleared.", reply_markup=main_keyboard())
-
-
 # ── Button Handlers ──────────────────────────────────────────────────────────
 @bot.message_handler(func=lambda m: m.text == "🔙 Menu")
 def back_menu(m):
@@ -1035,33 +989,6 @@ def port_btn(m):
 @bot.message_handler(func=lambda m: m.text == "📋 Status")
 def stat_btn(m):
     cmd_status(m)
-
-
-@bot.message_handler(func=lambda m: m.text == "🤖 AI")
-def ai_btn(m):
-    state.set(m.chat.id, "ai")
-    safe_send(m.chat.id, "🤖 <b>AI Mode</b>\n\nAsk about markets/stocks.", reply_markup=ai_keyboard())
-
-
-@bot.message_handler(func=lambda m: m.text in AI_CHAT_TOPIC_KEYS)
-def ai_topic(m):
-    uid = m.chat.id
-    if m.text == "🔍 Stock Analysis":
-        state.set(uid, "ai")
-        safe_send(uid, "🔍 Type stock name to analyze.", reply_markup=ai_keyboard())
-        return
-    tp = AI_CHAT_TOPICS.get(m.text, "")
-    safe_send(uid, "⏳ Fetching…")
-
-    def _run(chat_id=uid, topic_prompt=tp):
-        try:
-            resp = ai_topic_respond(topic_prompt)
-            safe_send(chat_id, resp or "⚠️ AI unavailable.", reply_markup=ai_keyboard())
-        except Exception as e:
-            logger.error(f"Topic err: {e}", exc_info=True)
-            safe_send(chat_id, "⚠️ Error.", reply_markup=ai_keyboard())
-
-    executor.submit(_run)
 
 
 @bot.message_handler(func=lambda m: m.text in ["🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"])
@@ -1128,20 +1055,6 @@ def swing_btn(m):
     executor.submit(_run)
 
 
-@bot.message_handler(func=lambda m: m.text == "📰 News")
-def news_btn(m):
-    safe_send(m.chat.id, "⏳ Fetching…")
-
-    def _run(chat_id=m.chat.id):
-        try:
-            safe_send(chat_id, build_news())
-        except Exception as e:
-            logger.error(f"News err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Error: {e}")
-
-    executor.submit(_run)
-
-
 @bot.message_handler(func=lambda m: m.text == "🔍 Analysis")
 def analysis_btn(m):
     state.set(m.chat.id, "analysis")
@@ -1154,6 +1067,97 @@ def report_btn(m):
     safe_send(m.chat.id, "📄 Type a stock name or symbol for a full PDF report:")
 
 
+# ── 🔥 Stocks Buzz — breakout radar over the top-1000 NSE stocks ─────────────
+_buzz_lock = threading.Lock()
+_buzz_running = False
+_buzz_waiters = set()
+
+
+def _buzz_keyboard(result):
+    """One tap per top breakout → opens the Technical / Fundamental / Chart / PDF menu."""
+    syms = stocks_buzz.top_symbols(result, 5)
+    if not syms:
+        return None
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    kb.add(*[types.InlineKeyboardButton(f"🔎 {s}", callback_data=f"menu|{s}") for s in syms])
+    return kb
+
+
+def _deliver_buzz(chat_id, result):
+    msgs = stocks_buzz.format_buzz(result)
+    kb = _buzz_keyboard(result)
+    for i, m in enumerate(msgs):
+        last = i == len(msgs) - 1
+        safe_send(chat_id, m, reply_markup=kb if (last and kb) else None)
+    if kb:
+        safe_send(chat_id, "👆 Tap a stock for Technical / Fundamental / Chart / full PDF report.")
+
+
+def run_buzz(chat_id):
+    global _buzz_running
+    cached = stocks_buzz.get_cached()
+    if cached:
+        _deliver_buzz(chat_id, cached)
+        return
+
+    with _buzz_lock:
+        _buzz_waiters.add(chat_id)
+        if _buzz_running:
+            safe_send(chat_id, "⏳ A scan is already running — you'll get the results here as soon as it finishes.")
+            return
+        _buzz_running = True
+
+    safe_send(chat_id, "🔥 <b>Stocks Buzz</b> — scanning the top 1000 NSE stocks for breakouts…\n"
+                       "⏱ First scan takes ~2-4 minutes; the next ones are instant (30-min cache).")
+    last_ping = [time.time()]
+
+    def _progress(done, total):
+        if time.time() - last_ping[0] > 40:
+            last_ping[0] = time.time()
+            safe_send(chat_id, f"⏳ Downloaded {done}/{total} stocks…")
+
+    try:
+        result = stocks_buzz.run_scan(progress_cb=_progress)
+        with _buzz_lock:
+            targets = list(_buzz_waiters)
+            _buzz_waiters.clear()
+        for cid in targets:
+            try:
+                _deliver_buzz(cid, result)
+            except Exception as e:
+                logger.error(f"Buzz deliver {cid}: {e}")
+    except Exception as e:
+        logger.error(f"Buzz err: {e}", exc_info=True)
+        with _buzz_lock:
+            targets = list(_buzz_waiters)
+            _buzz_waiters.clear()
+        for cid in targets:
+            safe_send(cid, f"❌ Stocks Buzz failed: {e}")
+    finally:
+        with _buzz_lock:
+            _buzz_running = False
+
+
+@bot.message_handler(commands=["buzz"])
+def cmd_buzz(m):
+    executor.submit(run_buzz, m.chat.id)
+
+
+@bot.message_handler(func=lambda m: m.text == "🔥 Stocks Buzz")
+def buzz_btn(m):
+    executor.submit(run_buzz, m.chat.id)
+
+
+@bot.message_handler(func=lambda m: m.text in ("📰 News", "🤖 AI"))
+def retired_buttons(m):
+    """Old keyboards stay cached in Telegram clients — answer politely and refresh the menu."""
+    state.clear(m.chat.id)
+    safe_send(m.chat.id,
+              "ℹ️ That button has been retired.\n\n🔥 Try <b>Stocks Buzz</b> — it scans the top 1000 NSE "
+              "stocks for fresh breakouts.",
+              reply_markup=main_keyboard())
+
+
 # ── Catch-all Text Handler ───────────────────────────────────────────────────
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_text(m):
@@ -1162,24 +1166,6 @@ def handle_text(m):
 
     if not API_RATE_LIMITER.is_allowed(uid):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
-        return
-
-    if state.get(uid) == "ai":
-        safe_send(uid, "⏳ Thinking…")
-        try:
-            bot.send_chat_action(uid, "typing")
-        except Exception:
-            pass
-
-        def _ai(chat_id=uid, t=text):
-            try:
-                resp = ai_chat_respond(chat_id, t)
-                safe_send(chat_id, resp or "⚠️ AI unavailable.", reply_markup=ai_keyboard())
-            except Exception as e:
-                logger.error(f"AI err: {e}", exc_info=True)
-                safe_send(chat_id, "⚠️ AI error.", reply_markup=ai_keyboard())
-
-        executor.submit(_ai)
         return
 
     if state.get(uid) == "analysis":
@@ -1217,7 +1203,7 @@ def handle_text(m):
 # ── Flask Webhook Routes ─────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ok", "version": "6.1_zero_error"})
+    return jsonify({"status": "ok", "version": "6.2"})
 
 
 @app.route("/api/status", methods=["GET"])
@@ -1252,7 +1238,7 @@ def webhook():
 
 # ── Runner ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    logger.info("🚀 Starting AutoAI Bot v6.1 Zero-Error Build...")
+    logger.info("🚀 Starting AutoAI Bot v6.2...")
     if WEBHOOK_URL:
         bot.set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}")
         logger.info(f"Webhook active: {WEBHOOK_URL}{WEBHOOK_PATH}")
