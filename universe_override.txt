@@ -1,0 +1,8 @@
+# Stocks Buzz universe override  (optional)
+# Rename this file to  universe_override.txt  to pin the exact stock list.
+# One NSE symbol per line (no .NS). Lines starting with # are ignored.
+# Use it if NSE blocks your host's IP and the bot falls back to the ~290-stock built-in list.
+RELIANCE
+TCS
+HDFCBANK
+INFY
