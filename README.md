@@ -5,6 +5,7 @@
 |---|---|
 | ❌ Removed | 📰 **News** button and 🤖 **AI** chat button (plus AI topic keyboard, `/clear`, AI chat state). Old cached keyboards get a polite "retired" reply. |
 | 🔥 Added | **Stocks Buzz** — one tap scans the top ~1000 NSE stocks for fresh, volume-confirmed breakouts. Also `/buzz`. |
+| 🏭 Added | **Sector Report** — Index & Sectoral Update PDF (button or `/sectors`): index performance heatmap, rotation map, sector breadth, leaders/laggards, Nifty technical levels, positioning ideas. |
 | 📄 Rebuilt | `/report SYMBOL` is now an institutional-style research PDF (see below). |
 | 🛠 Fixed | `config.py` was missing 16 constants imported elsewhere (`RSI_PERIOD`, `TIMEOUT_YAHOO`, …) — the project crashed on `import main`. Added with env-overridable defaults. |
 
@@ -20,8 +21,12 @@ Scores are rule-based heuristics and have **not** been back-tested.
 Executive summary (composite score, stance, 3 horizons) · investment view · technical analysis (candles, EMAs, RSI, MACD, S/R, weekly trend, returns vs Nifty) · risk (volatility, drawdown, VaR, beta) · fundamentals (valuation, growth, margins, cash conversion, 10-yr + quarterly tables) · ownership trend · peers · scenarios & trade plan with position sizing · risk matrix · methodology appendix.
 Sections without data are omitted. AI commentary is optional and rejected if it states any figure not in the supplied data.
 
+## 🏭 Index & Sectoral Update
+Modelled on a sell-side sector note (summary → numbered exhibits → scorecard → outlook), built from live data: 15 NSE indices via Yahoo Finance + the 250-stock sector map for breadth and Stocks Buzz breakout counts. Sector "stance" is a rule-based rotation score (3M relative return, RS momentum, trend, breadth) — not an analyst rating or target price. Indices that fail to download are omitted; breadth describes the tracked constituents only. Result cached for 30 minutes.
+
 ## Files
 `stocks_buzz.py` `universe.py` `market_data.py` — Stocks Buzz  
+`sector_report.py` — Index & Sectoral Update  
 `report_generator.py` `research_engine.py` `research_data.py` `report_charts.py` — report  
 
 ## Env vars (new, all optional)
