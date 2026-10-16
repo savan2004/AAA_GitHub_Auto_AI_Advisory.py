@@ -306,7 +306,7 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                 "pe":             raw(sd, "trailingPE")    or raw(pr, "trailingPE"),
                 "pb":             raw(ks, "priceToBook"),
                 "roe":            raw(fd, "returnOnEquity"),
-                "eps":            raw(ks, "trailingEps")   or raw(fd, "revenuePerShare"),
+                "eps":            raw(ks, "trailingEps"),
                 "dividend_yield": raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield"),
                 "high52":         raw(sd, "fiftyTwoWeekHigh"),
                 "low52":          raw(sd, "fiftyTwoWeekLow"),
@@ -324,6 +324,18 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                 "avg_volume":     raw(sd, "averageVolume"),
                 "sector":         sp.get("sector") if isinstance(sp, dict) else None,
             }
+            def scaled(value, factor):
+                try:
+                    import math
+                    v = float(value) * factor
+                    return v if math.isfinite(v) else None
+                except (TypeError, ValueError):
+                    return None
+            out["roe_pct"] = scaled(raw(fd, "returnOnEquity"), 100)
+            out["revenue_growth_pct"] = scaled(raw(fd, "revenueGrowth"), 100)
+            out["debt_equity_ratio"] = scaled(raw(fd, "debtToEquity"), 0.01)
+            out["fetched_at"] = time.time()
+            out["provider"] = "Yahoo quoteSummary"
             if out.get("pe") is not None or out.get("market_cap") is not None:
                 return out
         except Exception as e:
@@ -573,7 +585,7 @@ def get_info(symbol: str) -> dict:
     """
     sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
     yahoo_sym = f"{sym_clean}.NS"
-    cache_key = f"info_{yahoo_sym}"
+    cache_key = f"info_v2_{yahoo_sym}"
 
     cached = cached_get(cache_key, TTL_FUND)
     if cached is not None:
