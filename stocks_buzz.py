@@ -32,7 +32,7 @@ import time
 import html
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
@@ -49,6 +49,7 @@ MIN_BARS = 130
 MAX_AGE = 2                     # breakout may be up to 2 sessions old
 CACHE_TTL = 30 * 60
 
+IST = timezone(timedelta(hours=5, minutes=30))
 _state: Dict = {"result": None, "ts": 0.0}
 _state_lock = threading.Lock()
 
@@ -337,9 +338,9 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
     watch.sort(key=lambda x: x["score"], reverse=True)
 
     result = {
-        "ts": datetime.now(), "elapsed": time.time() - t0,
+        "ts": datetime.now(IST), "elapsed": time.time() - t0,
         "universe_size": len(symbols), "downloaded": len(hist), "liquid": liquid,
-        "source": uni.get("source", "?"), "degraded": uni.get("degraded", False),
+        "source": uni.get("source", "?"), "note": uni.get("note"), "degraded": uni.get("degraded", False),
         "breakouts": breakouts, "watch": watch, "extended": extended,
         "regime": market_regime(nifty),
     }
@@ -392,7 +393,7 @@ def top_symbols(result: dict, n: int = 5) -> List[str]:
 def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
     """Returns a list of Telegram-HTML messages, each safely under the 4096 limit."""
     sep = "━━━━━━━━━━━━━━━━━━━━"
-    ts = result["ts"].strftime("%d-%b-%Y %H:%M")
+    ts = result["ts"].strftime("%d-%b-%Y %H:%M") + " IST"
     head = [
         "🔥 <b>STOCKS BUZZ — Breakout Radar</b>",
         f"📅 {ts}",
@@ -403,7 +404,10 @@ def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
         f"👀 {len(result['watch'])} near-breakout"
         + (f" · 🚫 {result['extended']} extended (skipped — don't chase)" if result.get("extended") else ""),
         f"🧭 {_e(result['regime']['text'])}",
+        f"📚 Universe: {_e(result['source'])}",
     ]
+    if result.get("note"):
+        head.append(f"⚠️ {_e(result['note'])}")
     if result.get("degraded"):
         head.append(f"⚠️ Universe degraded: {_e(result['source'])}. "
                     f"Add a full list in <code>universe_override.txt</code> for complete coverage.")
