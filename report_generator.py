@@ -29,7 +29,7 @@ import os
 import re
 import html as _html
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, wait
 
@@ -409,7 +409,7 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
                 news=inp.get("news") or [], fund=fund,
-                generated=datetime.now().strftime("%d-%b-%Y %H:%M IST"))
+                generated=datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M IST"))
 
 
 # ══════════════════════════════════════════════════════════════════════════
