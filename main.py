@@ -43,6 +43,7 @@ from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
+from research_upgrade import snapshot as research_snapshot, render as render_research
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -1039,7 +1040,15 @@ def scan_btn(m):
 
     def _run(chat_id=m.chat.id, prof=p):
         try:
-            safe_send(chat_id, build_scan(prof))
+            universe = _ALL_NSE_SYMS or sorted({s for group in SCREENER_STOCKS.values() for s in group})
+            priority = sorted({s for g in SCREENER_STOCKS.values() for s in g})
+            snap = research_snapshot(universe, cached_get, get_info, bulk_history, priority=priority)
+            messages, symbols = render_research(prof, snap)
+            kb = types.InlineKeyboardMarkup(row_width=3) if symbols else None
+            if kb is not None:
+                kb.add(*[types.InlineKeyboardButton(s, callback_data=f"menu|{s}") for s in symbols])
+            for index, text in enumerate(messages):
+                safe_send(chat_id, text, reply_markup=kb if index == len(messages)-1 else None)
         except Exception as e:
             logger.error(f"Screener err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
