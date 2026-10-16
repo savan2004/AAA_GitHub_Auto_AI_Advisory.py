@@ -24,8 +24,10 @@ Any field can be None.
 
 import re
 import time
+import calendar
 import logging
 import threading
+from datetime import date, datetime
 from html.parser import HTMLParser
 from typing import Dict, List, Optional
 
@@ -241,6 +243,8 @@ def parse_years(html: str) -> List[dict]:
     ra_hdr, ra = _table_to_rows(ra_tabs[0]) if ra_tabs else ([], {})
 
     borrow = _pick(bs, "Borrowings")
+    t_assets = _pick(bs, "Total Assets")
+    deposits = _pick(bs, "Deposits")
     eq_cap = _pick(bs, "Equity Capital")
     reserves = _pick(bs, "Reserves")
     ocf = _pick(cf, "Cash from Operating Activity")
@@ -265,8 +269,51 @@ def parse_years(html: str) -> List[dict]:
             "net_profit": g(npf), "eps": g(eps),
             "ocf": at(ocf, cf_hdr, lab), "borrowings": at(borrow, bs_hdr, lab),
             "networth": nw, "roce": at(roce, ra_hdr, lab),
+            "total_assets": at(t_assets, bs_hdr, lab), "deposits": at(deposits, bs_hdr, lab),
         })
     return out[-10:]
+
+
+# ── Shareholder label sanitiser ──────────────────────────────────────────
+# In sans-serif fonts a capital I and a lowercase l look identical, so scraped or OCR'd
+# text often turns "FIIs"/"DIIs" into "Fils"/"Dlls" (or "Fll"/"D11"). Everything that
+# touches a holder label goes through here, and only canonical names are ever displayed.
+_FII_RE = re.compile(r"^f[il1|!]{2}s?$")
+_DII_RE = re.compile(r"^d[il1|!]{2}s?$")
+HOLDER_DISPLAY = {"promoters": "Promoters", "fii": "FIIs", "dii": "DIIs", "public": "Public", "gov": "Government"}
+
+
+def normalize_holder_label(raw: str) -> Optional[str]:
+    """Raw row label → canonical key ('promoters'|'fii'|'dii'|'public'|'gov') or None."""
+    t = re.sub(r"[^a-z0-9|!]", "", (raw or "").lower().replace("\xa0", " "))
+    if not t:
+        return None
+    if t.startswith("promoter"):
+        return "promoters"
+    if _FII_RE.match(t) or t.startswith(("foreign", "fpi")):
+        return "fii"
+    if _DII_RE.match(t) or t.startswith("domestic"):
+        return "dii"
+    if t.startswith("public"):
+        return "public"
+    if t.startswith("government") or t == "govt":
+        return "gov"
+    return None
+
+
+def holder_display(key: str) -> str:
+    """Canonical display text — always 'FIIs' / 'DIIs' with capital I's."""
+    return HOLDER_DISPLAY.get(key, key.title())
+
+
+def sanitize_holder_text(text: str) -> str:
+    """
+    Repair corrupted holder names inside free text. Only the exact 4-letter plural forms are
+    touched (F/D + two look-alikes of I/l + 's'), so real words — Fill, Dill, Filing, Dills —
+    are left alone.
+    """
+    text = re.sub(r"\bF[IiLl1|!]{2}s\b", "FIIs", text)
+    return re.sub(r"\bD[IiLl1|!]{2}s\b", "DIIs", text)
 
 
 def parse_shareholding(html: str) -> List[dict]:
@@ -275,18 +322,31 @@ def parse_shareholding(html: str) -> List[dict]:
     if not tabs:
         return []
     hdr, rows = _table_to_rows(tabs[0])
-    pro = _pick(rows, "Promoters")
+    by_key: Dict[str, list] = {}
+    for lab, vals in rows.items():
+        k = normalize_holder_label(lab)
+        if k and k not in by_key:
+            by_key[k] = vals
+    pro = by_key.get("promoters")
     if not hdr or pro is None:
         return []
-    fii = _pick(rows, "FIIs", "FII")
-    dii = _pick(rows, "DIIs", "DII")
-    pub = _pick(rows, "Public")
+    fii, dii, pub = by_key.get("fii"), by_key.get("dii"), by_key.get("public")
     out = []
     for i, lab in enumerate(hdr):
         def g(arr):
             return arr[i] if arr is not None and i < len(arr) else None
         out.append({"label": lab, "promoters": g(pro), "fii": g(fii), "dii": g(dii), "public": g(pub)})
     return out[-8:]
+
+
+def detect_layout(html: str) -> str:
+    """'lender' if Screener shows Financing Profit/Margin rows (NBFCs, banks), else 'corporate'."""
+    for sec in ("quarters", "profit-loss"):
+        for t in _tables_in(_section(html, sec)):
+            for r in t:
+                if r and re.match(r"^\s*(financing profit|financing margin)", r[0].replace("\xa0", " "), re.I):
+                    return "lender"
+    return "corporate"
 
 
 def get_screener_extras(sym: str) -> dict:
@@ -297,6 +357,7 @@ def get_screener_extras(sym: str) -> dict:
     html = _screener_html(sym)
     out: dict = {}
     if html:
+        out["layout"] = detect_layout(html)
         for key, fn in (("growth", parse_growth), ("quarters", parse_quarters),
                         ("years", parse_years), ("shareholding", parse_shareholding)):
             try:
@@ -351,6 +412,7 @@ def _yahoo_statements(sym: str) -> dict:
         ni = _yrow(fin_df, "Net Income", "Net Income Common Stockholders")
         eps = _yrow(fin_df, "Diluted EPS", "Basic EPS")
         debt = _yrow(bs_df, "Total Debt") if bs_df is not None else None
+        tassets = _yrow(bs_df, "Total Assets") if bs_df is not None else None
         eq = _yrow(bs_df, "Stockholders Equity", "Common Stock Equity") if bs_df is not None else None
         ocf = _yrow(cf_df, "Operating Cash Flow", "Cash Flow From Continuing Operating Activities") \
             if cf_df is not None else None
@@ -370,7 +432,7 @@ def _yahoo_statements(sym: str) -> dict:
                 "net_profit": _cr(g(ni)),
                 "eps": (round(float(g(eps)), 2) if g(eps) is not None and g(eps) == g(eps) else None),
                 "ocf": _cr(g(ocf)), "borrowings": _cr(g(debt)), "networth": _cr(g(eq)),
-                "roce": None,
+                "roce": None, "total_assets": _cr(g(tassets)), "deposits": None,
             })
         return out
 
@@ -378,30 +440,127 @@ def _yahoo_statements(sym: str) -> dict:
             "years": build(fin, bs, cf)[-6:], "quarters": build(qf)[-8:]}
 
 
-def get_statements(sym: str) -> Optional[dict]:
-    """Normalised statements. Screener first (10 yrs), Yahoo as fallback."""
+# ══════════════════════════════════════════════════════════════════════════
+# Period parsing & data-freshness policy
+# ══════════════════════════════════════════════════════════════════════════
+_FMTS = ("%b %Y", "%b-%y", "%b-%Y", "%B %Y", "%b'%y", "%b %y")
+
+
+def period_end(label: str) -> Optional[date]:
+    """'Jun 2026' / 'Jun-26' → 30-Jun-2026 (month end). None if unparseable."""
+    lab = (label or "").strip()
+    for f in _FMTS:
+        try:
+            d = datetime.strptime(lab, f)
+            return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+        except ValueError:
+            continue
+    return None
+
+
+def _months_between(a: date, b: date) -> int:
+    return (b.year - a.year) * 12 + (b.month - a.month)
+
+
+def expected_latest_quarter(today: date, grace_days: int = 10) -> date:
+    """
+    Latest quarter whose results should already be public on `today`.
+    SEBI LODR: 45 days after quarter-end (60 days for the March quarter), plus a few
+    days of grace for aggregators to catch up.
+    """
+    y = today.year
+    ends = []
+    for yy in (y - 1, y):
+        for m in (3, 6, 9, 12):
+            ends.append(date(yy, m, calendar.monthrange(yy, m)[1]))
+    for qe in sorted(ends, reverse=True):
+        due = qe.toordinal() + (60 if qe.month == 3 else 45) + grace_days
+        if due <= today.toordinal():
+            return qe
+    return ends[0]
+
+
+def freshness(quarters: List[dict], today: Optional[date] = None, max_age_days: Optional[int] = None) -> dict:
+    """
+    {status: FRESH|LAGGING|STALE|MISSING, latest, expected, lag_quarters, age_days, label}
+      FRESH    latest quarter ≥ the quarter that should already be reported
+      LAGGING  exactly one reporting cycle behind (may be a late filer / slow aggregator)
+      STALE    two or more cycles behind, or older than max_age_days from its quarter-end
+    """
+    if max_age_days is None:
+        try:
+            from config import MAX_QUARTER_AGE_DAYS as max_age_days
+        except Exception:
+            max_age_days = 135
+    today = today or date.today()
+    exp = expected_latest_quarter(today)
+    latest = period_end(quarters[-1]["label"]) if quarters else None
+    if latest is None:
+        return {"status": "MISSING", "latest": None, "expected": exp, "lag_quarters": None,
+                "age_days": None, "label": quarters[-1]["label"] if quarters else None}
+    lag_q = max(0, _months_between(latest, exp) // 3)
+    age = (today - latest).days
+    status = "FRESH" if lag_q == 0 else "LAGGING" if lag_q == 1 else "STALE"
+    if age > max_age_days and status == "FRESH":      # defensive: clock/label oddities
+        status = "LAGGING"
+    if age > max_age_days and lag_q >= 1:
+        status = "STALE" if lag_q >= 2 else status
+    return {"status": status, "latest": latest, "expected": exp, "lag_quarters": lag_q,
+            "age_days": age, "label": quarters[-1]["label"]}
+
+
+def _fresher(a: List[dict], b: List[dict]) -> tuple:
+    """Pick the list whose last period is most recent; tie → longer, then `a`. Returns (list, 'a'|'b')."""
+    ea = period_end(a[-1]["label"]) if a else None
+    eb = period_end(b[-1]["label"]) if b else None
+    if ea is None and eb is None:
+        return (a, "a") if len(a) >= len(b) else (b, "b")
+    if eb is None or (ea is not None and ea > eb):
+        return a, "a"
+    if ea is None or eb > ea:
+        return b, "b"
+    return (a, "a") if len(a) >= len(b) else (b, "b")
+
+
+def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
+    """
+    Normalised statements. Screener first (10 yrs); Yahoo is consulted when Screener is thin
+    or its quarters are not current — and the FRESHER source wins per block (annual / quarterly).
+    The old logic replaced Screener wholesale with Yahoo whenever Screener had < 3 annual
+    periods (typical for recent IPOs), which let Yahoo's stale quarters overwrite fresh ones.
+    """
     sym = sym.upper().replace(".NS", "")
     cached = _cget(f"stm_{sym}")
-    if cached is not None:
+    if cached is not None and today is None:
         return cached or None
 
     ext = get_screener_extras(sym)
-    years, quarters = ext.get("years") or [], ext.get("quarters") or []
-    result = None
-    if years or quarters:
-        result = {"source": "Screener.in", "unit": "₹ Cr", "years": years, "quarters": quarters}
+    s_years, s_quarters = ext.get("years") or [], ext.get("quarters") or []
+    s_fresh = freshness(s_quarters, today) if s_quarters else {"status": "MISSING"}
 
-    if not result or len(result["years"]) < 3:
+    y_years, y_quarters = [], []
+    if len(s_years) < 4 or s_fresh["status"] != "FRESH":
         try:
             y = _yahoo_statements(sym)
-            if y["years"] or y["quarters"]:
-                if result:                             # keep Screener quarters if Yahoo has none
-                    y["quarters"] = y["quarters"] or result["quarters"]
-                result = y
+            y_years, y_quarters = y["years"], y["quarters"]
         except Exception as e:
             logger.info(f"[research_data] yahoo statements {sym}: {str(e)[:100]}")
 
-    _cset(f"stm_{sym}", result or {})
+    years, ysrc = _fresher(s_years, y_years)
+    quarters, qsrc = _fresher(s_quarters, y_quarters)
+    if not years and not quarters:
+        _cset(f"stm_{sym}", {})
+        return None
+    names = {"a": "Screener.in", "b": "Yahoo Finance"}
+    # a Yahoo annual block can't carry lender detail Screener would; keep Screener years if equally fresh
+    result = {
+        "source": names[ysrc] if years else names[qsrc],
+        "sources": {"years": names[ysrc] if years else None, "quarters": names[qsrc] if quarters else None},
+        "unit": "₹ Cr", "years": years, "quarters": quarters, "layout": ext.get("layout", "corporate"),
+    }
+    result["freshness"] = freshness(quarters, today) if quarters else {"status": "MISSING"}
+    if today is None:
+        _cset(f"stm_{sym}", result)
     return result
 
 
