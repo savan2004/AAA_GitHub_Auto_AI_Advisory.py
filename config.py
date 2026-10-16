@@ -424,6 +424,13 @@ CACHE_TTL_LIVE: int = int(_get_env("CACHE_TTL_LIVE", "300"))       # 5 min
 CACHE_TTL_HIST: int = int(_get_env("CACHE_TTL_HIST", "600"))       # 10 min
 CACHE_TTL_FUND: int = int(_get_env("CACHE_TTL_FUND", "14400"))     # 4 h
 
+# ── Report branding & data-freshness policy (added v6.3) ───────────────────
+BRAND_NAME: str = _get_env("BRAND_NAME", "SK AI Auto Advisory")
+# Latest quarterly result may be at most this many days after its quarter-end.
+# Default 135 = 90 days + the 45-day SEBI filing window. A raw "90 days from quarter-end"
+# rule would wrongly flag a current June-quarter as stale from Oct 1 to Nov 14.
+MAX_QUARTER_AGE_DAYS: int = int(_get_env("MAX_QUARTER_AGE_DAYS", "135"))
+
 REVENUE_MAX_MCAP_RATIO: float = float(_get_env("REVENUE_MAX_MCAP_RATIO", "5"))
 
 
