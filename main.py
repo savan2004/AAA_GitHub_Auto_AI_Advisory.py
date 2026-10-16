@@ -23,7 +23,8 @@ import telebot
 from telebot import types
 
 # ── Local Module Imports ──────────────────────────────────────────────────────
-from data_engine import get_hist, get_info, get_live_price, batch_quotes
+from data_engine import get_hist, get_info, get_live_price, batch_quotes, cached_get, cached_set
+from market_data import bulk_history
 from technical_indicators import (
     calc_rsi, calc_ema, calc_macd, calc_atr, calc_asi,
     calc_bollinger, trend_label, swing_signal, rsi_label,
@@ -486,324 +487,98 @@ def build_fundamental_text(sym, cname=None):
     return "\n".join(rows)
 
 
-# ── Recommended Portfolios (🏦 Conservative / ⚖️ Moderate / 🚀 Aggressive) ──────
-# Each button returns exactly 10 validated stocks. Flow (minimum API usage):
-#   1 call  : Nifty 50 history      -> market regime (market_data.index_history)
-#   1 call  : all pool prices (6mo) -> momentum / volatility / liquidity (market_data.bulk_history)
-#   <=~13   : get_info() per stock, in rank order, STOP as soon as 10 pass (cached 60 min)
-# Finished text is cached 3 h and shared by all clients -> repeat presses cost 0 calls.
-# No LLM, no Finnhub, no new scheduler, no new service.
-from html import escape as _esc
-from data_engine import cached_get, cached_set
-
-PORTFOLIO_SIZE = 10
-PORTFOLIO_CACHE_TTL = 3 * 3600      # seconds, result cache shared by all clients
-PORTFOLIO_DEADLINE_SEC = 150        # hard stop for one build -> clear error, never partial
-
-_FIN_SECTORS = {"Banks", "NBFC"}                                   # D/E not meaningful
-_DEFENSIVE = {"FMCG", "Pharma", "Power", "IT", "Mining", "Oil & Gas"}
-
-# Curated candidate pools (disjoint, 16 each = 6 spare per profile). Edit freely.
-PORTFOLIO_POOLS = {
-    "conservative": [
-        ("HINDUNILVR", "FMCG"), ("ITC", "FMCG"), ("NESTLEIND", "FMCG"), ("BRITANNIA", "FMCG"),
-        ("DABUR", "FMCG"), ("TCS", "IT"), ("INFY", "IT"), ("HCLTECH", "IT"),
-        ("HDFCBANK", "Banks"), ("KOTAKBANK", "Banks"), ("POWERGRID", "Power"), ("NTPC", "Power"),
-        ("COALINDIA", "Mining"), ("ONGC", "Oil & Gas"), ("SUNPHARMA", "Pharma"), ("ASIANPAINT", "Paints"),
-    ],
-    "moderate": [
-        ("RELIANCE", "Oil & Gas"), ("LT", "Capital Goods"), ("BHARTIARTL", "Telecom"), ("ICICIBANK", "Banks"),
-        ("AXISBANK", "Banks"), ("BAJFINANCE", "NBFC"), ("MARUTI", "Auto"), ("M&M", "Auto"),
-        ("BAJAJ-AUTO", "Auto"), ("EICHERMOT", "Auto"), ("TITAN", "Consumer"), ("CIPLA", "Pharma"),
-        ("DRREDDY", "Pharma"), ("DIVISLAB", "Pharma"), ("ULTRACEMCO", "Cement"), ("PIDILITIND", "Chemicals"),
-    ],
-    "aggressive": [
-        ("BEL", "Defence"), ("HAL", "Defence"), ("TRENT", "Retail"), ("POLYCAB", "Capital Goods"),
-        ("ABB", "Capital Goods"), ("CUMMINSIND", "Capital Goods"), ("PERSISTENT", "IT"), ("COFORGE", "IT"),
-        ("KPITTECH", "IT"), ("DIXON", "Electronics"), ("CHOLAFIN", "NBFC"), ("MUTHOOTFIN", "NBFC"),
-        ("PFC", "Power Finance"), ("MAXHEALTH", "Healthcare"), ("LUPIN", "Pharma"), ("TVSMOTOR", "Auto"),
-    ],
+# ── Screener Card ─────────────────────────────────────────────────────────
+SCREENER_STOCKS = {
+    "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
+    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
+    "aggressive": ["TMPV", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ETERNAL", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
 }
-
-# Validation rules. mcap in INR, turnover = 20-day avg (price x volume) in INR.
-PORTFOLIO_RULES = {
-    "conservative": dict(label="🏦 CONSERVATIVE PORTFOLIO", min_mcap=5e11, min_price=100, min_turnover=25e7,
-                         max_vol=0.32, max_dd=0.30, max_pe=70, min_roe=12, max_de=1.0, de_required=True,
-                         min_growth=-0.15, max_beta=1.2),
-    "moderate":     dict(label="⚖️ MODERATE PORTFOLIO", min_mcap=1.5e11, min_price=100, min_turnover=15e7,
-                         max_vol=0.42, max_dd=0.35, max_pe=90, min_roe=12, max_de=1.5, de_required=False,
-                         min_growth=-0.15, max_beta=1.5),
-    "aggressive":   dict(label="🚀 AGGRESSIVE PORTFOLIO", min_mcap=5e10, min_price=50, min_turnover=10e7,
-                         max_vol=0.65, max_dd=0.40, max_pe=150, min_roe=10, max_de=2.0, de_required=False,
-                         min_growth=0.0, max_beta=None),
-}
+_SCAN_TTL = 900  # 15 min: shared by all 3 buttons
 
 
-class PortfolioDataError(Exception):
-    """Raised when a complete, validated 10-stock portfolio cannot be produced."""
-
-
-def _pf_num(v):
-    try:
-        f = float(v)
-        return f if f == f else None          # drops NaN
-    except (TypeError, ValueError):
-        return None
-
-
-def _pf_pct(v):
-    """Yahoo ratios arrive as decimals (0.18); convert to % (same rule as nifty500_collector)."""
-    f = _pf_num(v)
-    if f is None:
-        return None
-    return round(f * 100, 1) if abs(f) <= 1.5 else round(f, 1)
-
-
-# ── Market regime (1 call, 30-min memo) ──────────────────────────────────────
-_PF_REGIME = {"ts": 0.0, "val": None}
-
-
-def _pf_regime():
-    now = time.time()
-    if _PF_REGIME["val"] and now - _PF_REGIME["ts"] < 1800:
-        return _PF_REGIME["val"]
-    from market_data import index_history
-    df = index_history("^NSEI", "6mo")
-    if df is None or len(df) < 64:
-        raise PortfolioDataError("Market data (Nifty 50) is unavailable right now.")
-    c = df["Close"].astype(float)
-    last = float(c.iloc[-1])
-    r1 = last / float(c.iloc[-22]) - 1
-    r3 = last / float(c.iloc[-64]) - 1
-    above50 = last > float(c.tail(50).mean())
-    if above50 and r1 >= 0:
-        label = "BULLISH"
-    elif (not above50) and r1 < -0.02:
-        label = "WEAK"
-    else:
-        label = "NEUTRAL"
-    val = {"label": label, "last": last, "r1": r1, "r3": r3, "above50": above50}
-    _PF_REGIME.update(ts=now, val=val)
-    return val
-
-
-# ── Technical / liquidity metrics from the single bulk download (0 extra calls) ─
-def _pf_tech(df):
-    try:
-        if df is None or len(df) < 64:
-            return None
-        c = df["Close"].astype(float)
-        v = df["Volume"].astype(float)
-        last = float(c.iloc[-1])
-        if last <= 0:
-            return None
-        prev = float(c.iloc[-2])
-        vol = float(c.pct_change().dropna().tail(120).std() * (252 ** 0.5))
-        return {
-            "price": last,
-            "chg": (last / prev - 1) * 100 if prev > 0 else 0.0,
-            "r1": last / float(c.iloc[-22]) - 1,
-            "r3": last / float(c.iloc[-64]) - 1,
-            "vol": vol,
-            "above50": last > float(c.tail(50).mean()),
-            "dd": last / float(c.max()) - 1,                       # <= 0
-            "turnover": float((c * v).tail(20).mean()),
-            "vratio": float(v.tail(20).mean() / max(float(v.tail(60).mean()), 1.0)),
-        }
-    except Exception:
-        return None
-
-
-def _pf_prescore(profile, t, sector, regime, sector_r3):
-    r3, r1, vol, dd = t["r3"] * 100, t["r1"] * 100, t["vol"] * 100, abs(t["dd"]) * 100
-    if profile == "conservative":      # stability first; defensives get a bonus when market is not bullish
-        return -vol + 0.2 * r3 - 0.3 * dd + (4 if regime["label"] != "BULLISH" and sector in _DEFENSIVE else 0)
-    if profile == "moderate":          # balanced momentum vs risk
-        return 0.4 * r3 + 0.2 * r1 - 0.4 * vol - 0.2 * dd
-    sec_edge = (sector_r3.get(sector, regime["r3"]) - regime["r3"]) * 100   # sector strength vs Nifty
-    return 0.5 * r3 + 0.3 * r1 + 4 * min(t["vratio"], 2.0) + (5 if t["above50"] else -5) + 0.3 * sec_edge
-
-
-def _pf_tech_gate(profile, rules, t, regime):
-    """Return a reject reason, or None if the stock passes the price/liquidity/risk gate."""
-    if t["price"] < rules["min_price"]:
-        return "penny/low price"
-    if t["turnover"] < rules["min_turnover"]:
-        return "illiquid"
-    if t["vol"] > rules["max_vol"]:
-        return "too volatile"
-    if abs(t["dd"]) > rules["max_dd"]:
-        return "deep drawdown"
-    if profile == "aggressive":
-        if t["r3"] <= -0.05:                                          # clearly broken trend
-            return "negative momentum"
-        if regime["label"] == "WEAK" and not t["above50"] and t["r3"] <= regime["r3"]:
-            return "no relative strength in weak market"
-    return None
-
-
-# ── Fundamentals: get_info() (cached 60 min); Screener only if core fields missing ─
-def _pf_fundamentals(sym):
-    try:
-        info = get_info(sym) or {}
-    except Exception:
-        info = {}
-    price = _pf_num(info.get("price"))
-    mcap = _pf_num(info.get("market_cap"))
-    pe = _pf_num(info.get("pe"))
-    roe = _pf_pct(info.get("roe"))
-    de_raw = _pf_num(info.get("debtToEquity"))
-    de = de_raw / 100.0 if de_raw is not None else None            # Yahoo gives D/E in %
-    div = _pf_pct(info.get("dividend_yield"))
-    growth = _pf_num(info.get("earningsGrowth"))                    # decimal YoY, optional
-    beta = _pf_num(info.get("beta"))
-    name = info.get("name")
-
-    if pe is None or roe is None or mcap is None:                    # Yahoo v10 blocked/incomplete
-        try:
-            from fundamentals import _fetch_screener
-            sc = _fetch_screener(sym) or {}
-        except Exception:
-            sc = {}
-        pe = pe if pe is not None else _pf_num(sc.get("pe"))
-        roe = roe if roe is not None else _pf_num(sc.get("roe"))     # Screener ROE already %
-        mcap = mcap if mcap is not None else _pf_num(sc.get("mcap"))
-        de = de if de is not None else _pf_num(sc.get("de"))         # Screener D/E already a ratio
-        if div is None:
-            div = _pf_num(sc.get("div_y"))
-        name = name if name and name != sym else sc.get("name")
-
-    if div is not None and div > 12:
-        div = None                                                   # unit sanity guard
-    if not price or not mcap or pe is None or pe <= 0 or roe is None:
-        return None                                                  # fundamentals unavailable -> skip
-    return {"price": price, "mcap": mcap, "pe": pe, "roe": roe, "de": de, "div": div,
-            "growth": growth, "beta": beta, "name": name or sym}
-
-
-def _pf_fund_gate(rules, sector, f):
-    if f["mcap"] < rules["min_mcap"]:
-        return "market cap too small"
-    if f["pe"] > rules["max_pe"]:
-        return "PE too high"
-    if f["roe"] < rules["min_roe"]:
-        return "ROE too low"
-    if sector not in _FIN_SECTORS:
-        if f["de"] is None and rules["de_required"]:
-            return "debt data unavailable"
-        if f["de"] is not None and f["de"] > rules["max_de"]:
-            return "debt too high"
-    if f["growth"] is not None and f["growth"] < rules["min_growth"]:
-        return "earnings falling"
-    if rules["max_beta"] and f["beta"] is not None and f["beta"] > rules["max_beta"]:
-        return "high beta"
-    return None
-
-
-def _pf_reason(profile, sector, f, t, regime):
-    cap = "Large-cap" if f["mcap"] >= 1e12 else ("Mid-cap" if f["mcap"] >= 3e11 else "Small/mid-cap")
-    parts = [f"{cap} {sector}", f"ROE {f['roe']:.0f}%"]
-    if f["de"] is not None and sector not in _FIN_SECTORS:
-        parts.append(f"D/E {f['de']:.1f}")
-    if profile == "conservative":
-        if f["div"]:
-            parts.append(f"div {f['div']:.1f}%")
-        parts.append(f"low volatility {t['vol'] * 100:.0f}%")
-    elif profile == "moderate":
-        parts.append(f"3M {t['r3'] * 100:+.0f}%")
-        parts.append(f"volatility {t['vol'] * 100:.0f}%")
-    else:
-        parts.append(f"3M {t['r3'] * 100:+.0f}% vs Nifty {regime['r3'] * 100:+.0f}%")
-        parts.append(f"volume {t['vratio']:.1f}x avg")
-    if f["growth"] is not None:
-        parts.append(f"earnings {f['growth'] * 100:+.0f}% YoY")
-    return " · ".join(parts)
-
-
-def _build_portfolio(profile):
-    from market_data import bulk_history
-    t0 = time.time()
-    rules, pool = PORTFOLIO_RULES[profile], PORTFOLIO_POOLS[profile]
-    sectors = dict(pool)
-    regime = _pf_regime()
-
-    hist = bulk_history([s for s, _ in pool], period="6mo", cache_ttl=1800)    # ONE download
-    tech = {s: m for s, m in ((s, _pf_tech(hist.get(s))) for s, _ in pool) if m}
-    if len(tech) < PORTFOLIO_SIZE:
-        raise PortfolioDataError("Price data is unavailable for too many stocks right now.")
-
-    by_sec = {}
-    for s, m in tech.items():
-        by_sec.setdefault(sectors[s], []).append(m["r3"])
-    sector_r3 = {k: sum(v) / len(v) for k, v in by_sec.items()}
-    score = {s: _pf_prescore(profile, m, sectors[s], regime, sector_r3) for s, m in tech.items()}
-
-    picked = []
-    for s in sorted(tech, key=score.get, reverse=True):
-        if len(picked) >= PORTFOLIO_SIZE or time.time() - t0 > PORTFOLIO_DEADLINE_SEC:
-            break
-        why = _pf_tech_gate(profile, rules, tech[s], regime)
-        f = None
-        if not why:
-            f = _pf_fundamentals(s)
-            why = "fundamentals unavailable" if f is None else _pf_fund_gate(rules, sectors[s], f)
-        if why:
-            logger.info(f"[Portfolio:{profile}] skip {s}: {why}")
-            continue
-        picked.append((s, f, tech[s]))
-
-    if len(picked) < PORTFOLIO_SIZE:
-        raise PortfolioDataError(
-            f"Only {len(picked)} of {PORTFOLIO_SIZE} stocks passed data validation "
-            f"(price/fundamentals missing or failed quality rules).")
-
-    mood = {"BULLISH": "🟢 Bullish", "NEUTRAL": "🟡 Neutral", "WEAK": "🔴 Weak"}[regime["label"]]
-    lines = [
-        f"📊 <b>{rules['label']}</b>",
-        f"📅 {date.today().strftime('%d-%b-%Y')}",
-        f"🌐 Market: {mood} — Nifty {regime['last']:,.0f} ({regime['r1'] * 100:+.1f}% 1M, {regime['r3'] * 100:+.1f}% 3M)",
-        "━━━━━━━━━━━━━━━━━━━━",
-    ]
-    for i, (s, f, t) in enumerate(picked, 1):
-        name = _esc(re.sub(r"\s+(Limited|Ltd\.?)$", "", str(f["name"]), flags=re.I))
-        lines += [
-            f"<b>{i}. {name}</b> ({_esc(s)}) · {_esc(sectors[s])}",
-            f"   ₹{f['price']:,.2f} ({t['chg']:+.2f}%)  |  MCap {fmt_mcap(f['mcap'])}  |  PE {f['pe']:.1f}",
-            f"   💡 {_esc(_pf_reason(profile, sectors[s], f, t, regime))}",
-        ]
-    lines += ["━━━━━━━━━━━━━━━━━━━━", "⚠️ <i>Educational only. Not SEBI-registered advice.</i>"]
-    return "\n".join(lines)
-
-
-_PF_LOCKS = {p: threading.Lock() for p in PORTFOLIO_POOLS}
-
-
-def _pf_key(profile):
-    return f"portfolio_{profile}_{date.today().isoformat()}"
-
-
-def get_portfolio(profile):
-    """Cached text or a fresh build. One build per profile at a time. Raises PortfolioDataError."""
-    hit = cached_get(_pf_key(profile), PORTFOLIO_CACHE_TTL)
+def _scan_bulk():
+    """ONE batched Yahoo download for all 30 symbols, shared by the 3 buttons."""
+    key = "scan_bulk_6mo_v2"
+    hit = cached_get(key, _SCAN_TTL)
     if hit:
         return hit
-    with _PF_LOCKS[profile]:
-        hit = cached_get(_pf_key(profile), PORTFOLIO_CACHE_TTL)      # built while we waited
-        if hit:
-            return hit
-        text = _build_portfolio(profile)
-        cached_set(_pf_key(profile), text, PORTFOLIO_CACHE_TTL)      # errors are never cached
-        return text
+    allsyms = sorted({s for l in SCREENER_STOCKS.values() for s in l})
+    data = bulk_history(allsyms, "6mo", chunk_size=100) or {}
+    if len(data) >= int(len(allsyms) * 0.7):      # don't cache a bad download
+        cached_set(key, data, _SCAN_TTL)
+    return data
 
 
-def _pf_profile_from_text(text):
-    t = (text or "").lower()
-    if "swing" in t or len(t) > 40:                    # buttons only, not free-text sentences
-        return None
-    for key in ("conservative", "moderate", "aggressive"):
-        if key in t:
-            return key
-    return None
+def _scan_row(sym, df):
+    if df is None or df.empty or len(df) < 28:
+        return None, "no/short data"
+    c = df["Close"].dropna()
+    if len(c) < 28:
+        return None, "short close series"
+    ltp = round(float(c.iloc[-1]), 2)
+    prev = float(c.iloc[-2])
+    chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+    rsi_val = calc_rsi(c)
+    trend_val = trend_label(c)
+    return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi_val, "trend": trend_val,
+            "signal": swing_signal(rsi_val, trend_val, chg)}, None
+
+
+def build_scan(profile):
+    syms = SCREENER_STOCKS.get(profile, [])
+    if not syms:
+        return "❌ Unknown profile."
+    t0 = time.time()
+    ck = f"scan_card_{profile}_{date.today().isoformat()}"
+    hit = cached_get(ck, _SCAN_TTL)
+    if hit:
+        logger.info(f"[Portfolio:{profile}] served from cache")
+        return hit
+
+    bulk = _scan_bulk()
+    results, missing = {}, []
+    for s in syms:
+        row, why = _scan_row(s, bulk.get(s))
+        if row:
+            results[s] = row
+        else:
+            missing.append(s)
+            logger.info(f"[Portfolio:{profile}] skip {s}: {why}")
+
+    # Rare fallback: at most 3 single-symbol fetches (throttled path), only for gaps.
+    for s in missing[:3]:
+        try:
+            row, why = _scan_row(s, get_hist(s, "6mo"))
+        except Exception as e:
+            row, why = None, f"fallback error {type(e).__name__}"
+        if row:
+            results[s] = row
+            logger.info(f"[Portfolio:{profile}] {s} recovered via fallback")
+        else:
+            logger.info(f"[Portfolio:{profile}] skip {s}: {why} (fallback)")
+    missing = [s for s in syms if s not in results]
+
+    labels = {"conservative": "🏦 CONSERVATIVE", "moderate": "⚖️ MODERATE", "aggressive": "🚀 AGGRESSIVE"}
+    lines = [f"📊 <b>{labels.get(profile, 'SCREENER')}</b>",
+             f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
+    for s in syms:
+        r = results.get(s)
+        if not r:
+            continue
+        icon = "🟢" if r["chg"] >= 0 else "🔴"
+        rsi_b = "🔴OB" if r["rsi"] > 70 else ("🟢OS" if r["rsi"] < 30 else "🟡")
+        lines.append(f"{icon} <b>{s}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n"
+                     f"   RSI:{r['rsi']} {rsi_b}  |  {r['trend']}  |  <b>{r['signal']}</b>")
+    if not results:
+        lines.append("❌ Data unavailable. Try again in a minute.")
+    elif missing:
+        lines.append(f"⚠️ No data today: {', '.join(missing)}")
+    lines.append("\n⚠️ Educational only.")
+    text = "\n".join(lines)[:4000]
+    logger.info(f"[Portfolio:{profile}] passed {len(results)} / checked {len(syms)} in {time.time()-t0:.1f} sec")
+    if results and not missing:
+        cached_set(ck, text, _SCAN_TTL)
+    return text
 
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
@@ -1257,42 +1032,17 @@ def stat_btn(m):
     cmd_status(m)
 
 
-def _pf_send(chat_id, text):
-    if len(text) <= 3800:
-        safe_send(chat_id, text)
-        return
-    chunk = ""
-    for line in text.split("\n"):
-        if len(chunk) + len(line) + 1 > 3800:
-            safe_send(chat_id, chunk)
-            chunk = ""
-        chunk += line + "\n"
-    if chunk.strip():
-        safe_send(chat_id, chunk)
-
-
-@bot.message_handler(func=lambda m: _pf_profile_from_text(m.text) is not None)
+@bot.message_handler(func=lambda m: m.text in ["🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"])
 def scan_btn(m):
-    prof = _pf_profile_from_text(m.text)
-    chat_id = m.chat.id
-    if cached_get(_pf_key(prof), PORTFOLIO_CACHE_TTL):          # instant, 0 API calls
-        try:
-            _pf_send(chat_id, get_portfolio(prof))
-            return
-        except Exception as e:
-            logger.error(f"Portfolio cache err: {e}", exc_info=True)
-    safe_send(chat_id, f"⏳ Building {PORTFOLIO_RULES[prof]['label'].title()}… "
-                       f"first run takes 1–2 min, then it is instant for 3 hours.")
+    p = {"🏦 Conservative": "conservative", "⚖️ Moderate": "moderate", "🚀 Aggressive": "aggressive"}[m.text]
+    safe_send(m.chat.id, f"⏳ Scanning {m.text}…")
 
-    def _run(cid=chat_id, p=prof):
+    def _run(chat_id=m.chat.id, prof=p):
         try:
-            _pf_send(cid, get_portfolio(p))
-        except PortfolioDataError as e:
-            safe_send(cid, f"❌ <b>Portfolio unavailable</b>\n{_esc(str(e))}\n"
-                           f"No partial list was sent. Please try again in a few minutes.")
+            safe_send(chat_id, build_scan(prof))
         except Exception as e:
-            logger.error(f"Portfolio err: {e}", exc_info=True)
-            safe_send(cid, "❌ Portfolio could not be generated right now. Please try again in a few minutes.")
+            logger.error(f"Screener err: {e}", exc_info=True)
+            safe_send(chat_id, f"❌ Error: {e}")
 
     executor.submit(_run)
 
