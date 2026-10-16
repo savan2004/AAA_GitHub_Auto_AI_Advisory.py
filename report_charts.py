@@ -52,7 +52,8 @@ def _inr(x, _pos=None):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-def chart_technical(df: pd.DataFrame, sym: str, t: dict, bars: int = 150) -> Optional[str]:
+def chart_technical(df: pd.DataFrame, sym: str, t: dict, bars: int = 150, unit: str = "₹") -> Optional[str]:
+    """unit="₹" for stocks, "" for index levels (points)."""
     try:
         d = df.iloc[-bars:].copy()
         c = df["Close"]
@@ -90,25 +91,30 @@ def chart_technical(df: pd.DataFrame, sym: str, t: dict, bars: int = 150) -> Opt
         xr = len(d) + 1
         for s in t.get("supports", [])[:2]:
             ax.axhline(s["price"], color=GREEN, lw=0.8, ls="--", alpha=0.8, zorder=1)
-            ax.text(0.5, s["price"], f"S ₹{s['price']:,.0f}", color=GREEN, fontsize=7, va="bottom",
+            ax.text(0.5, s["price"], f"S {unit}{s['price']:,.0f}", color=GREEN, fontsize=7, va="bottom",
                     bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85), zorder=6)
         for r in t.get("resistances", [])[:2]:
             ax.axhline(r["price"], color=RED, lw=0.8, ls="--", alpha=0.8, zorder=1)
-            ax.text(0.5, r["price"], f"R ₹{r['price']:,.0f}", color=RED, fontsize=7, va="bottom",
+            ax.text(0.5, r["price"], f"R {unit}{r['price']:,.0f}", color=RED, fontsize=7, va="bottom",
                     bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85), zorder=6)
-        ax.text(xr, d["Close"].iloc[-1], f" ₹{d['Close'].iloc[-1]:,.2f}", color="white", fontsize=7.5,
+        ax.text(xr, d["Close"].iloc[-1], f" {unit}{d['Close'].iloc[-1]:,.2f}", color="white", fontsize=7.5,
                 fontweight="bold", va="center",
                 bbox=dict(boxstyle="round,pad=0.25", fc=NAVY, ec="none"))
         ax.set_xlim(-1, len(d) + 11)
-        ax.yaxis.set_major_formatter(FuncFormatter(_inr))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: f"{unit}{v:,.0f}"))
         ax.grid(True, axis="y")
         ax.legend(loc="upper left", ncol=3, frameon=False, fontsize=7.5)
         ax.set_title(f"{sym} — Daily price, moving averages & key levels", loc="left")
         plt.setp(ax.get_xticklabels(), visible=False)
 
-        axv.bar(x, d["Volume"] / 1e5, color=col, width=0.62, alpha=0.75)
-        axv.plot(x, (df["Volume"].rolling(20).mean().iloc[-bars:] / 1e5).values, color=NAVY, lw=0.9)
-        axv.set_ylabel("Vol (L)", fontsize=7)
+        if float(d["Volume"].sum()) > 0:
+            axv.bar(x, d["Volume"] / 1e5, color=col, width=0.62, alpha=0.75)
+            axv.plot(x, (df["Volume"].rolling(20).mean().iloc[-bars:] / 1e5).values, color=NAVY, lw=0.9)
+            axv.set_ylabel("Vol (L)", fontsize=7)
+        else:                                   # indices publish no volume
+            axv.set_yticks([])
+            axv.text(0.5, 0.5, "volume not published for index", transform=axv.transAxes, ha="center", va="center",
+                     fontsize=7, color=GREY)
         plt.setp(axv.get_xticklabels(), visible=False)
 
         axr.plot(x, rsi.values, color=NAVY, lw=1.0)
