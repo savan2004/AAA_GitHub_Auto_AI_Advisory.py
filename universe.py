@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 TARGET_SIZE = int(os.getenv("BUZZ_UNIVERSE_SIZE", "1000"))
 MIN_ACCEPTABLE = 400            # below this a tier is considered "degraded"
+MIN_OVERRIDE = 50               # an override list smaller than this is treated as a mistake
 CACHE_TTL = 12 * 3600
 OVERRIDE_FILE = os.getenv("BUZZ_UNIVERSE_FILE", "universe_override.txt")
 
@@ -68,9 +69,13 @@ def _from_override() -> Dict:
                 s = line.split("#")[0].strip().upper().replace(".NS", "")
                 if _valid_symbol(s) and s not in syms:
                     syms.append(s)
-        if syms:
+        if len(syms) >= MIN_OVERRIDE:
             return {"symbols": syms[:TARGET_SIZE], "source": f"override file ({OVERRIDE_FILE})",
                     "delivery": {}}
+        if syms:
+            logger.warning(f"[universe] {OVERRIDE_FILE} has only {len(syms)} symbols (< {MIN_OVERRIDE}) — ignored")
+            return {"_ignored": f"{OVERRIDE_FILE} has only {len(syms)} symbols (need {MIN_OVERRIDE}+) — ignored; "
+                                f"delete or complete it"}
     except Exception as e:
         logger.warning(f"[universe] override read failed: {e}")
     return {}
@@ -168,13 +173,17 @@ def get_universe(force: bool = False) -> Dict:
             return _cache["data"]
 
     data: Dict = {}
+    note = None
     for loader in (_from_override, _from_bhavcopy, _from_index_csvs):
         data = loader()
+        if data.get("_ignored"):
+            note = data["_ignored"]
         if data and data.get("symbols"):
             break
     if not data or not data.get("symbols"):
         data = _from_builtin()
 
+    data["note"] = note
     is_override = str(data.get("source", "")).startswith("override")
     data["degraded"] = (len(data["symbols"]) < MIN_ACCEPTABLE) and not is_override
     logger.info(f"[universe] {len(data['symbols'])} symbols via {data['source']}")
