@@ -316,6 +316,13 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                 "debtToEquity":   raw(fd, "debtToEquity"),
                 "beta":           raw(ks, "beta"),
                 "forwardPE":      raw(sd, "forwardPE"),
+                # Portfolio feature: price + growth + volume come from the SAME response,
+                # so get_info() no longer needs a second v8 call just for the price.
+                "price":          raw(pr, "regularMarketPrice"),
+                "prev_close":     raw(pr, "regularMarketPreviousClose"),
+                "earningsGrowth": raw(fd, "earningsGrowth"),
+                "revenueGrowth":  raw(fd, "revenueGrowth"),
+                "avg_volume":     raw(sd, "averageVolume"),
             }
             if out.get("pe") is not None or out.get("market_cap") is not None:
                 return out
