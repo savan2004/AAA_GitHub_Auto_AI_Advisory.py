@@ -263,6 +263,15 @@ def compute_risk(df: pd.DataFrame, nifty: Optional[pd.DataFrame]) -> dict:
 # ══════════════════════════════════════════════════════════════════════════
 # FUNDAMENTALS
 # ══════════════════════════════════════════════════════════════════════════
+def _cagr_best(years: List[dict], key: str):
+    """3-year CAGR, or 2-year when only 3 annual periods exist (recent listings). → (value, horizon_years)."""
+    for h in (3, 2):
+        v = series_cagr(years, key, h)
+        if v is not None:
+            return _f(v, 1), h
+    return None, None
+
+
 def _de_ratio(fund: dict, last_year: Optional[dict]) -> Optional[float]:
     """Debt/Equity as a plain ratio. Statements are authoritative; the
     aggregated fund['de'] mixes sources (Yahoo reports it in percent), so only
@@ -277,8 +286,12 @@ def _de_ratio(fund: dict, last_year: Optional[dict]) -> Optional[float]:
 
 
 def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: List[dict],
-                         sector: Optional[str], ltp: float) -> dict:
-    fv: dict = {"fin": is_financial_sector(sector)}
+                         sector: Optional[str], ltp: float, industry: Optional[dict] = None) -> dict:
+    industry = industry or {}
+    lender = bool(industry.get("is_lender")) or (stm or {}).get("layout") == "lender"
+    fin = bool(industry.get("is_financial")) or lender or is_financial_sector(sector)
+    fv: dict = {"fin": fin, "lender": lender, "lender_kind": industry.get("kind"),
+                "industry_reasons": industry.get("reasons") or []}
     years = (stm or {}).get("years") or []
     quarters = (stm or {}).get("quarters") or []
     growth = (extras or {}).get("growth") or {}
@@ -315,6 +328,14 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
         if a.get("net_profit") is not None and b.get("net_profit") and b["net_profit"] > 0:
             fv["q_pat_qoq"] = round((a["net_profit"] / b["net_profit"] - 1) * 100, 1)
 
+    # Stale quarterly data (≥2 reporting cycles behind) must not drive growth scoring or alarms.
+    fr = (stm or {}).get("freshness") or {}
+    fv["freshness"] = fr
+    fv["stale_quarters"] = fr.get("status") == "STALE"
+    fv["lagging_quarters"] = fr.get("status") == "LAGGING"
+    if fv["stale_quarters"]:
+        fv["q_rev_yoy"] = fv["q_pat_yoy"] = fv["q_rev_qoq"] = fv["q_pat_qoq"] = None
+
     # margins
     fv["opm"] = last.get("opm") if last else None
     fv["opm_3y_ago"] = years[-4].get("opm") if len(years) >= 4 else None
@@ -330,6 +351,27 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
         p = [y.get("net_profit") for y in years[-3:]]
         if all(x is not None for x in o + p) and sum(p) > 0:
             fv["ocf_pat"] = round(sum(o) / sum(p), 2)
+
+    # ── lender-specific metrics: balance sheet, not cash flow ──────────────
+    # Under Ind AS, loan disbursements sit in OPERATING cash flow, so a growing lender shows negative
+    # OCF by construction. We therefore never score OCF/PAT for lenders; we measure the book instead.
+    fv.update(assets_cagr3=None, borrow_cagr3=None, nw_cagr3=None, leverage=None, roa=None,
+              book_growth=None, book_growth_src=None, book_growth_yrs=None, lender_ocf_negative=False)
+    if lender and years:
+        fv["assets_cagr3"], h_a = _cagr_best(years, "total_assets")
+        fv["borrow_cagr3"], h_b = _cagr_best(years, "borrowings")
+        fv["nw_cagr3"], _ = _cagr_best(years, "networth")
+        ta, nw, pat = last.get("total_assets"), last.get("networth"), last.get("net_profit")
+        if ta and nw and nw > 0:
+            fv["leverage"] = round(ta / nw, 1)
+        if ta and pat is not None and ta > 0:
+            fv["roa"] = round(pat / ta * 100, 2)
+        if fv["assets_cagr3"] is not None:
+            fv["book_growth"], fv["book_growth_src"], fv["book_growth_yrs"] = fv["assets_cagr3"], "total assets", h_a
+        elif fv["borrow_cagr3"] is not None:
+            fv["book_growth"], fv["book_growth_src"], fv["book_growth_yrs"] = fv["borrow_cagr3"], "borrowings", h_b
+        o = [y.get("ocf") for y in years[-3:]]
+        fv["lender_ocf_negative"] = bool(len(o) >= 2 and all(x is not None for x in o) and sum(o) < 0)
 
     # profit consistency: down-years in last 5 transitions
     fv["down_years"] = None
@@ -347,6 +389,13 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
     peer_pe = _median([p.get("pe") for p in peers if (p.get("pe") or 0) > 0])
     peer_roe = _median([p.get("roe") for p in peers])
     fv["peer_pe"], fv["peer_roe"] = _f(peer_pe, 1), _f(peer_roe, 1)
+    peer_fwd = _median([p.get("fwd_pe") for p in peers if (p.get("fwd_pe") or 0) > 0])
+    peer_pb = _median([p.get("pb") for p in peers if (p.get("pb") or 0) > 0])
+    fv["peer_fwd_pe"], fv["peer_pb"] = _f(peer_fwd, 1), _f(peer_pb, 2)
+    fv["fwd_pe_prem"] = (round((fv["fwd_pe"] / peer_fwd - 1) * 100, 0)
+                         if fv.get("fwd_pe") and fv["fwd_pe"] > 0 and peer_fwd else None)
+    fv["pb_prem"] = (round((fv["pb"] / peer_pb - 1) * 100, 0) if fv.get("pb") and fv["pb"] > 0 and peer_pb else None)
+    fv["n_peers"] = len(peers)
     fv["pe_prem"] = (round((fv["pe"] / peer_pe - 1) * 100, 0)
                      if fv["pe"] and fv["pe"] > 0 and peer_pe else None)
     fv["peg"] = (round(fv["pe"] / fv["pat_cagr3"], 2)
@@ -360,6 +409,10 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
     fv["implied_peer_value"] = round(fv["eps"] * peer_pe, 2) if consistent and peer_pe else None
     fv["implied_upside"] = (round((fv["implied_peer_value"] / ltp - 1) * 100, 1)
                             if fv["implied_peer_value"] and ltp else None)
+    # lenders are valued on book value: implied price at the peer-median P/B (BVPS = price ÷ P/B)
+    fv["implied_pb_value"] = (round(ltp * peer_pb / fv["pb"], 2) if fv["lender"] and fv.get("pb") and fv["pb"] > 0
+                              and peer_pb and ltp else None)
+    fv["implied_pb_upside"] = (round((fv["implied_pb_value"] / ltp - 1) * 100, 1) if fv["implied_pb_value"] else None)
     fv["has_statements"] = bool(years)
     fv["has_quarters"] = bool(quarters)
     return fv
@@ -419,11 +472,17 @@ def _momentum_score(t: dict) -> float:
 
 
 def _quality_score(fv: dict) -> Optional[float]:
-    comps = [
-        _band(fv.get("roe"), [(25, 100), (18, 85), (12, 65), (8, 40), (0.01, 20), (-1e9, 5)]),
-        _band(fv.get("roce"), [(25, 100), (18, 85), (12, 65), (8, 40), (0.01, 20), (-1e9, 5)]),
-    ]
-    if not fv["fin"]:
+    comps = [_band(fv.get("roe"), [(25, 100), (18, 85), (12, 65), (8, 40), (0.01, 20), (-1e9, 5)])]
+    if not fv.get("lender"):                       # ROCE/OCF/D-E are not meaningful for lenders
+        comps.append(_band(fv.get("roce"), [(25, 100), (18, 85), (12, 65), (8, 40), (0.01, 20), (-1e9, 5)]))
+    if fv.get("lender"):
+        bank = fv.get("lender_kind") == "Bank"
+        roa_bands = ([(1.5, 100), (1.2, 85), (1.0, 65), (0.7, 40), (0.01, 20), (-1e9, 5)] if bank else
+                     [(3.5, 100), (2.5, 85), (1.8, 65), (1.0, 40), (0.01, 20), (-1e9, 5)])
+        comps.append(_band(fv.get("roa"), roa_bands))
+        if not bank and fv.get("leverage") is not None:          # banks run 10-13x by design
+            comps.append(_band(-fv["leverage"], [(-3, 100), (-4.5, 80), (-6, 60), (-8, 35), (-1e9, 15)]))
+    elif not fv["fin"]:
         de = fv.get("de")
         comps.append(None if de is None else _band(-de, [(-0.2, 100), (-0.5, 85), (-1, 65), (-2, 35), (-1e9, 10)]))
         comps.append(_band(fv.get("ocf_pat"), [(1.0, 100), (0.8, 80), (0.5, 50), (-1e9, 20)]))
@@ -435,7 +494,8 @@ def _quality_score(fv: dict) -> Optional[float]:
 
 def _growth_score(fv: dict) -> Optional[float]:
     comps = [
-        _band(fv.get("rev_cagr3"), [(20, 100), (12, 80), (6, 55), (0, 30), (-1e9, 10)]),
+        _band(fv.get("book_growth") if fv.get("lender") and fv.get("book_growth") is not None else fv.get("rev_cagr3"),
+              [(20, 100), (12, 80), (6, 55), (0, 30), (-1e9, 10)]),
         _band(fv.get("pat_cagr3"), [(25, 100), (15, 80), (8, 55), (0, 30), (-1e9, 10)]),
         _band(fv.get("q_rev_yoy"), [(20, 100), (10, 80), (0, 55), (-10, 30), (-1e9, 10)]),
         _band(fv.get("q_pat_yoy"), [(20, 100), (10, 80), (0, 55), (-10, 30), (-1e9, 10)]),
@@ -458,6 +518,8 @@ def _valuation_score(fv: dict) -> Optional[float]:
         comps.append(_band(-peg, [(-1, 95), (-1.5, 75), (-2, 55), (-3, 35), (-1e9, 15)]))
     if fv["fin"] and fv.get("pb"):
         comps.append(_band(-fv["pb"], [(-1.5, 85), (-3, 60), (-5, 35), (-1e9, 15)]))
+    if fv.get("lender") and fv.get("pb_prem") is not None:
+        comps.append(_band(-fv["pb_prem"], [(25, 95), (10, 80), (-10, 60), (-30, 40), (-60, 22), (-1e9, 10)]))
     return _avg(comps)
 
 
@@ -660,6 +722,34 @@ def build_flags(t: dict, rk: dict, fv: dict, sh: List[dict], consensus: Optional
           f"P/E is {abs(fv['pe_prem']):.0f}% below peers, but profitability/earnings trend is weak — cheap for a reason until proven otherwise.")
     if fv.get("peg") is not None and fv["peg"] <= 1.0:
         pos.append(f"PEG of {fv['peg']} — price is modest relative to 3-year profit growth.")
+    # lenders: judge the book, not the cash flow
+    if fv.get("lender"):
+        bank = fv.get("lender_kind") == "Bank"
+        lev, roa, bg = fv.get("leverage"), fv.get("roa"), fv.get("book_growth")
+        if lev is not None and not bank:
+            if lev >= 9:
+                R("High", "Very high balance-sheet leverage", f"Total assets are {lev:.1f}× net worth — thin equity cushion if credit costs rise.")
+            elif lev >= 7:
+                R("Medium", "High balance-sheet leverage", f"Total assets are {lev:.1f}× net worth.")
+            elif lev <= 4.5:
+                pos.append(f"Comfortable leverage for a lender — total assets are {lev:.1f}× net worth.")
+        if bg is not None:
+            if bg >= 30:
+                R("Medium", "Very rapid book growth",
+                  f"{fv['book_growth_src'].title()} compounding at {bg:.0f}% ({fv['book_growth_yrs']}-yr) — fast growth strains underwriting; "
+                  f"asset-quality seasoning risk (credit-cost data not available to us).")
+            elif bg >= 15 and (fv.get("roe") or 0) >= 12:
+                pos.append(f"Balance sheet growing {bg:.0f}% a year ({fv['book_growth_src']}, {fv['book_growth_yrs']}-yr) while earning a {fv['roe']:.1f}% ROE.")
+        if roa is not None:
+            floor = 0.8 if bank else 1.5
+            if roa < floor:
+                R("Medium", "Weak return on assets", f"ROA of {roa:.2f}% is below the {floor}% level expected for a {'bank' if bank else 'lender of this type'}.")
+            elif roa >= (1.4 if bank else 3.0):
+                pos.append(f"Strong ROA of {roa:.2f}% for a {'bank' if bank else 'lender'}.")
+        if fv.get("pb_prem") is not None and fv["pb_prem"] >= 40 and (fv.get("roe") or 99) < 14:
+            R("Medium", "Premium P/B without superior ROE",
+              f"P/B of {fv['pb']:.2f}× is {fv['pb_prem']:.0f}% above peers ({fv['peer_pb']}×) while ROE is only {fv['roe']:.1f}%.")
+
     # ownership
     if len(sh) >= 5:
         first, lastq = sh[-5], sh[-1]
@@ -682,9 +772,34 @@ def build_flags(t: dict, rk: dict, fv: dict, sh: List[dict], consensus: Optional
         elif consensus["upside"] <= -5:
             R("Medium", "Trades above analyst consensus", f"Consensus target ₹{consensus['mean']:,.0f} is {consensus['upside']:+.0f}% from the current price.")
 
+    notes: List[str] = []
+    if fv.get("lender"):
+        if fv.get("lender_ocf_negative"):
+            notes.append("Operating cash flow is negative, which is expected for a growing lender: under Ind AS, loan disbursements are "
+                         "classified within operating activities. It is therefore NOT treated as an earnings-quality concern here; "
+                         "balance-sheet growth, leverage, ROE and ROA are used instead.")
+        notes.append("Asset-quality metrics that matter most for lenders — GNPA/NNPA, credit cost, provision coverage, AUM growth and NIM — "
+                     "are not available from our data sources. Verify them in the latest investor presentation before relying on this view.")
+    fr = fv.get("freshness") or {}
+    if fr.get("status") == "STALE":
+        notes.append(f"Quarterly financials stop at {fr.get('label')} but results through "
+                     f"{fr['expected'].strftime('%b %Y') if fr.get('expected') else 'the latest quarter'} should be public. "
+                     f"Latest-quarter growth is excluded from scoring; annual data and ratios are used instead.")
+    elif fr.get("status") == "LAGGING":
+        notes.append(f"Latest quarterly result in our data is {fr.get('label')}, one reporting cycle behind the expected "
+                     f"{fr['expected'].strftime('%b %Y') if fr.get('expected') else 'quarter'} — possibly a late filing or a data-vendor delay.")
+    if sh and fr.get("latest"):
+        try:
+            from research_data import period_end, _months_between
+            sp = period_end(sh[-1]["label"])
+            if sp and _months_between(fr["latest"], sp) >= 6:
+                notes.append(f"Shareholding is as of {sh[-1]['label']} but financials only run to {fr.get('label')}; "
+                             f"the two sections are not on the same reporting date.")
+        except Exception:
+            pass
     order = {"High": 0, "Medium": 1, "Low": 2}
     risks.sort(key=lambda r: order[r["sev"]])
-    return {"strengths": pos, "risks": risks}
+    return {"strengths": pos, "risks": risks, "notes": notes}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -748,7 +863,19 @@ def deterministic_narrative(name: str, sym: str, t: dict, rk: dict, fv: dict, sc
         f_parts.append("The latest quarter showed " + " and ".join(x for x in [
             f"revenue {fv['q_rev_yoy']:+.0f}% YoY" if fv.get("q_rev_yoy") is not None else None,
             f"net profit {fv['q_pat_yoy']:+.0f}% YoY" if fv.get("q_pat_yoy") is not None else None] if x) + ".")
-    if fv.get("de") is not None and not fv["fin"]:
+    if fv.get("lender"):
+        bits = []
+        if fv.get("book_growth") is not None:
+            bits.append(f"the balance sheet ({fv['book_growth_src']}) has compounded at {fv['book_growth']:.0f}% a year over {fv['book_growth_yrs']} years")
+        if fv.get("leverage") is not None and fv.get("lender_kind") != "Bank":
+            bits.append(f"leverage stands at {fv['leverage']:.1f}× assets to net worth")
+        if fv.get("roa") is not None:
+            bits.append(f"ROA is {fv['roa']:.2f}%")
+        if fv.get("pb") and fv.get("pb_prem") is not None:
+            bits.append(f"P/B of {fv['pb']:.2f}× is a {abs(fv['pb_prem']):.0f}% {'premium' if fv['pb_prem'] >= 0 else 'discount'} to peers")
+        if bits:
+            f_parts.append("As a lender it is judged on its book: " + ", ".join(bits) + ".")
+    elif fv.get("de") is not None and not fv["fin"]:
         f_parts.append(f"Leverage is {'low' if fv['de'] <= 0.5 else 'moderate' if fv['de'] <= 1.2 else 'high'} at "
                        f"{fv['de']:.2f}× debt/equity.")
     out["fundamental"] = " ".join(f_parts) if f_parts else ""
@@ -804,6 +931,21 @@ def numbers_grounded(text: str, facts: str, max_unmatched: int = 1) -> bool:
     return True
 
 
+ANALYST_SYSTEM_PROMPT = (
+    "You are a senior equity research analyst at an Indian institutional brokerage. "
+    "Write in a crisp, professional sell-side voice. Use ONLY the facts provided. "
+    "Never invent numbers, news, management commentary, guidance, orders or events. "
+    "Do not add price targets beyond those given. Plain text only — no markdown, no bullets, no headings.\n"
+    "SECTOR RULES: If 'Company type' says lender (NBFC / HFC / Microfinance / Bank): (1) NEVER describe operating cash flow, "
+    "OCF/PAT or debt/equity as a risk or earnings-quality concern — under Ind AS loan disbursements sit in operating cash flow, so "
+    "negative OCF is normal for a growing lender; (2) judge the company on balance-sheet growth, leverage (assets/net worth), ROE, "
+    "ROA, P/B versus peers and trend; (3) state plainly that GNPA/NNPA, credit cost and AUM data are unavailable, rather than guessing them.\n"
+    "DATA RULES: If a fact is 'None' or 'n/a', say it is unavailable. If 'Data freshness' reports STALE or LAGGING quarterly data, "
+    "say the latest results are not reflected and do not draw conclusions from latest-quarter growth. "
+    "Refer to institutional holders only as 'FIIs' and 'DIIs'."
+)
+
+
 def facts_block(name, sym, sector, t, rk, fv, sc, plan, sh) -> str:
     L = [f"Company: {name} ({sym}); sector: {re.sub(r'[^A-Za-z &]', '', sector or 'n/a').strip()}",
          f"Price: {t['ltp']}; 52W high {t['w52h']}; 52W low {t['w52l']}; distance from high {t['dist_high']}%",
@@ -814,7 +956,12 @@ def facts_block(name, sym, sector, t, rk, fv, sc, plan, sh) -> str:
          "Pillar scores: " + ", ".join(f"{k} {v}" for k, v in sc["pillars"].items() if v is not None),
          f"Annual volatility {rk.get('ann_vol')}%; max drawdown {rk.get('max_dd')}%; beta {rk.get('beta')}",
          f"PE {fv.get('pe')}; peer median PE {fv.get('peer_pe')}; PE premium {fv.get('pe_prem')}%; PEG {fv.get('peg')}; P/B {fv.get('pb')}",
-         f"ROE {fv.get('roe')}%; ROCE {fv.get('roce')}%; Debt/Equity {fv.get('de')}; OCF/PAT {fv.get('ocf_pat')}",
+         (f"Company type: {fv.get('lender_kind') or 'lender'} (lender) — OCF and debt/equity are NOT meaningful; "
+          f"balance-sheet growth ({fv.get('book_growth_src')}) {fv.get('book_growth')}% {fv.get('book_growth_yrs')}Y CAGR; leverage {fv.get('leverage')}x assets/net worth; "
+          f"ROA {fv.get('roa')}%; ROE {fv.get('roe')}%; P/B {fv.get('pb')}; peer P/B {fv.get('peer_pb')}; P/B premium {fv.get('pb_prem')}%"
+          if fv.get("lender") else
+          f"Company type: non-financial corporate. ROE {fv.get('roe')}%; ROCE {fv.get('roce')}%; Debt/Equity {fv.get('de')}; OCF/PAT {fv.get('ocf_pat')}"),
+         (f"Data freshness: quarterly data {(fv.get('freshness') or {}).get('status', 'n/a')} (latest {(fv.get('freshness') or {}).get('label')})"),
          f"Sales CAGR 3Y {fv.get('rev_cagr3')}%; 5Y {fv.get('rev_cagr5')}%; Profit CAGR 3Y {fv.get('pat_cagr3')}%; 5Y {fv.get('pat_cagr5')}%",
          f"Latest quarter YoY: revenue {fv.get('q_rev_yoy')}%, profit {fv.get('q_pat_yoy')}%; OPM {fv.get('opm')}%",
          f"Support {plan.get('next_sup')}; resistance {plan.get('next_res')}; stop {plan['sl']}; T1 {plan['t1']}; T2 {plan['t2']}"]
@@ -831,10 +978,7 @@ def ai_analyst_note(name, sym, sector, t, rk, fv, sc, plan, sh) -> str:
         if not ai_available():
             return ""
         facts = facts_block(name, sym, sector, t, rk, fv, sc, plan, sh)
-        system = ("You are a senior equity research analyst at an Indian institutional brokerage. "
-                  "Write in a crisp, professional sell-side voice. Use ONLY the facts provided. "
-                  "Never invent numbers, news, management commentary, guidance, orders or events. "
-                  "Do not add price targets beyond those given. Plain text only — no markdown, no bullets, no headings.")
+        system = ANALYST_SYSTEM_PROMPT
         prompt = (f"FACTS:\n{facts}\n\nWrite exactly three short paragraphs separated by a blank line:\n"
                   f"1) Investment view — what the combination of trend, momentum and fundamentals says.\n"
                   f"2) Business quality and valuation — interpret growth, returns, leverage and valuation vs peers; "
