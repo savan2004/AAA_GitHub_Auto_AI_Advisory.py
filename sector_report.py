@@ -44,6 +44,7 @@ from reportlab.platypus import (
 )
 
 import report_generator as rg
+from config import BRAND_NAME as BRAND
 import report_charts as charts
 import research_engine as eng
 import stocks_buzz
@@ -461,7 +462,7 @@ def _cover(R, story):
                                 ("TOPPADDING", (0, 0), (-1, 0), 13), ("BOTTOMPADDING", (0, 1), (-1, 1), 12),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 13), ("RIGHTPADDING", (0, 0), (-1, -1), 13)]))
     story += [banner, Spacer(1, 3),
-              rg.P(f"Prepared by: <b>Senior Market Analyst Desk</b>, AutoAI Advisory (automated research engine)  ·  {R['generated']}", "small"),
+              rg.P(f"Prepared by: <b>Senior Market Analyst Desk</b>, {BRAND} (automated research engine)  ·  {R['generated']}", "small"),
               Spacer(1, 8), rg.P("Summary", "h1"),
               Table([[""]], colWidths=[W], rowHeights=[1], style=[("LINEABOVE", (0, 0), (-1, 0), 1.2, rg.NAVY)]),
               Spacer(1, 4)]
@@ -514,7 +515,7 @@ def _exhibit_index_table(R, story):
     extra += [("LINEBELOW", (0, n_broad), (-1, n_broad), 1.0, rg.NAVY),
               ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3)]
     story.append(rg.table(data, widths, zebra=False, extra=extra))
-    story.append(rg.P("Source: Yahoo Finance daily closes; AutoAI Advisory calculations. Broad indices listed first, then sectors ranked by 3-month return.", "tiny"))
+    story.append(rg.P(f"Source: Yahoo Finance daily closes; {BRAND} calculations. Broad indices listed first, then sectors ranked by 3-month return.", "tiny"))
 
 
 def _with_chart(story, title, sub, path):
@@ -699,7 +700,7 @@ def build_pdf(R: dict, path: str) -> str:
     _nifty_technical(R, story)
     _outlook(R, story)
     doc = SimpleDocTemplate(path, pagesize=rg.A4, topMargin=19 * mm, bottomMargin=18 * mm, leftMargin=16 * mm, rightMargin=16 * mm,
-                            title="Index & Sectoral Update", author="AutoAI Advisory")
+                            title="Index & Sectoral Update", author=BRAND)
     meta = {"sym": "", "name": "", "generated": R["generated"], "kind": "Sector Report", "right": f"Index & Sectoral Update  ·  {R['asof']}"}
     doc.build(story, canvasmaker=rg.make_canvas(meta))
     return path
