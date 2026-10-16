@@ -1,52 +1,51 @@
 """
-swing_trades.py — Swing Trade Scanner v6.0
-Team Sprint Upgrades:
-  1. Weekly EMA alignment check (+2) — swing trades aligned with weekly trend
-  2. Sector EMA vs Nifty bias check — shows sector context
-  3. ATR-based SL/T1/T2 (1.2×ATR SL, 2×ATR T1, 3.5×ATR T2)
-  4. Signal-sorted selection — picks highest-scoring stocks, not round-robin
-  5. Min score gate: need ≥6/10 for BUY, ≥5/10 for SHORT
-  6. Supertrend(7,3) filter — directional confirmation +1
-  7. Rich trade card with sector, weekly trend, ATR-based levels
-"""
+swing_trades.py — Swing Trade Scanner v7
+────────────────────────────────────────────────────────────────────────────
+What changed vs v6 (accuracy)
+  • Score is /10 with NON-overlapping factors (v6 double-counted trend, MACD,
+    RSI, supertrend and "near highs", and its "/13" label was wrong: max was 14).
+  • Every candidate is tagged Breakout / Pullback (or Breakdown / Rally-fade);
+    v6 rewarded "near 20d high" and "lower-mid Bollinger" at the same time.
+  • Hard gates (not points): liquidity, fresh data, not extended from EMA20,
+    no RSI extreme, weekly trend must not oppose, R:R(T1) >= 1.2.
+  • Volume must confirm DIRECTION (up-day volume for longs, down-day for shorts).
+  • Relative strength vs Nifty (60d) and a Nifty regime filter.
+  • Weekly trend is derived from daily bars (no look-ahead, zero API calls).
+  • Stop-loss is structure-based (recent swing low/high, clamped 1.0–2.0 ATR).
+  • Wilder RSI / ATR / ADX; correct Supertrend dropped (it duplicated EMA/MACD).
+  • Built-in walk-forward backtest of the SAME rules on the same download, so
+    each scan shows how this exact rule performed on the last ~5 months.
 
-import os, logging
+What changed (API cost)
+  v6: ~60 get_hist (throttled 8/min → ~8 min) + up to 60 weekly downloads
+      + watch-list re-fetch.  v7: ONE bulk_history call (<=100 symbols) + ONE
+      Nifty call, cached 30 min and shared by both swing buttons.
+"""
+import html
+import logging
+import threading
+import time
+from collections import Counter
+
 import numpy as np
-from datetime import date
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-from data_engine import get_hist
-from technical_indicators import (
-    calc_rsi, calc_ema, calc_macd, calc_atr, calc_adx, calc_bollinger,
-    ema_series, rsi_series,
-)
-from config import RSI_PERIOD, ADX_PERIOD, ATR_PERIOD, HIST_PERIOD_SWING, TG_CHUNK_SIZE
+from data_engine import cached_get, cached_set
+from market_data import bulk_history, index_history
 
-try:
-    import yfinance as yf
-    _YF_AVAILABLE = True
-except ImportError:
-    _YF_AVAILABLE = False
-
-
-# ── CANDIDATE UNIVERSE ────────────────────────────────────────────────────────
-# Built by round-robin across sectors (one stock per sector per pass) instead
-# of exhausting the cap sector-by-sector in dict order. The old approach hit
-# the 60-stock cap inside the first 3 sectors (Banking, Industrials, IT) —
-# meaning Pharma, FMCG, Auto, Power, Real Estate, and 6 other sectors NEVER
-# appeared in a swing scan, no matter how strong their setup. Round-robin
-# guarantees every sector gets a fair slice of the 60 slots.
+# ── CANDIDATE UNIVERSE (sector round-robin, up to 100 = one bulk chunk) ──────
+CAND_LIMIT = 100
 try:
     from nifty500_collector import SECTOR_STOCKS as _SC
     _seen = set()
     CANDIDATES = []
     CANDIDATE_SECTORS = {}
     _sector_queues = {sector: list(syms) for sector, syms in _SC.items()}
-    while len(CANDIDATES) < 60 and any(_sector_queues.values()):
+    while len(CANDIDATES) < CAND_LIMIT and any(_sector_queues.values()):
         for _sector, _queue in _sector_queues.items():
-            if len(CANDIDATES) >= 60:
+            if len(CANDIDATES) >= CAND_LIMIT:
                 break
             while _queue:
                 _s = _queue.pop(0)
@@ -55,493 +54,389 @@ try:
                     CANDIDATE_SECTORS[f"{_s}.NS"] = _sector
                     _seen.add(_s)
                     break
-    logger.info(f"Swing v6: {len(CANDIDATES)} candidates, {len(set(CANDIDATE_SECTORS.values()))} sectors")
+    logger.info(f"Swing v7: {len(CANDIDATES)} candidates, {len(set(CANDIDATE_SECTORS.values()))} sectors")
 except Exception as _e:
     logger.warning(f"Swing: nifty500_collector unavailable: {_e}")
     CANDIDATES = [
-        "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",
-        "ITC.NS","SBIN.NS","BHARTIARTL.NS","KOTAKBANK.NS","LT.NS",
-        "WIPRO.NS","HCLTECH.NS","ASIANPAINT.NS","MARUTI.NS","TATAMOTORS.NS",
-        "TITAN.NS","SUNPHARMA.NS","ONGC.NS","NTPC.NS","M&M.NS",
-        "BAJFINANCE.NS","AXISBANK.NS","TECHM.NS","DRREDDY.NS","DIVISLAB.NS",
-        "HINDALCO.NS","JSWSTEEL.NS","TATASTEEL.NS","BPCL.NS","EICHERMOT.NS",
+        "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+        "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS", "LT.NS",
+        "WIPRO.NS", "HCLTECH.NS", "ASIANPAINT.NS", "MARUTI.NS", "TATAPOWER.NS",
+        "TITAN.NS", "SUNPHARMA.NS", "ONGC.NS", "NTPC.NS", "M&M.NS",
+        "BAJFINANCE.NS", "AXISBANK.NS", "TECHM.NS", "DRREDDY.NS", "DIVISLAB.NS",
+        "HINDALCO.NS", "JSWSTEEL.NS", "TATASTEEL.NS", "BPCL.NS", "EICHERMOT.NS",
     ]
     CANDIDATE_SECTORS = {}
 
+# ── TUNABLES ─────────────────────────────────────────────────────────────────
+THRESHOLDS = {                       # minimum score /10
+    "conservative": {"LONG": 7, "SHORT": 8},
+    "aggressive":   {"LONG": 6, "SHORT": 7},
+}
+MAX_LONG, MAX_SHORT, MAX_PER_SECTOR = 4, 2, 2
+HOLD_BARS = 10          # max holding period, also used by the backtest
+MIN_TURNOVER = 5e7      # ₹5 Cr average daily traded value (20d)
+MIN_RR1 = 1.2           # reject setups whose T1 reward < 1.2 × risk
+CACHE_KEY, CACHE_TTL = "swing_v7_calc", 1800
+_LOCK = threading.Lock()
 
-def safe_history(ticker, period="6mo", interval="1d"):
-    sym = ticker.replace(".NS","").replace(".NSE","")
-    return get_hist(sym, period=period)
+
+# ── INDICATORS (one pass per symbol) ─────────────────────────────────────────
+def _wilder(s, n=14):
+    return s.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
 
 
-# ── SUPERTREND(7,3) ────────────────────────────────────────────────────────────
-def calc_supertrend(df, period=7, multiplier=3):
-    """Returns last Supertrend direction: +1 bullish, -1 bearish"""
+def _naive(idx):
+    idx = pd.DatetimeIndex(idx)
     try:
-        h, l, c = df["High"].values, df["Low"].values, df["Close"].values
-        if len(c) < period + 2:
-            return 0
-        tr = np.maximum(h[1:]-l[1:], np.maximum(np.abs(h[1:]-c[:-1]), np.abs(l[1:]-c[:-1])))
-        atr = pd.Series(tr).rolling(period).mean().values
-        hl2 = (h[1:] + l[1:]) / 2
-        upper = hl2 + multiplier * atr
-        lower = hl2 - multiplier * atr
-        close = c[1:]
-        direction = np.ones(len(close))
-        for i in range(1, len(close)):
-            if close[i] > upper[i-1]:
-                direction[i] = 1
-            elif close[i] < lower[i-1]:
-                direction[i] = -1
-            else:
-                direction[i] = direction[i-1]
-        return int(direction[-1])
+        return idx.tz_localize(None)
+    except (TypeError, AttributeError):
+        return idx.tz_convert(None)
+
+
+def _prep(df, nifty_close):
+    """OHLCV DataFrame -> dict of numpy arrays, or (None, reason)."""
+    try:
+        d = df[["Open", "High", "Low", "Close", "Volume"]].apply(pd.to_numeric, errors="coerce").dropna()
     except Exception:
-        return 0
+        return None, "bad columns"
+    d.index = _naive(d.index)
+    d = d[~d.index.duplicated(keep="last")].sort_index()
+    d = d[(d.Close > 0) & (d.High >= d.Low) & (d.Volume >= 0)]
+    if len(d) < 130:
+        return None, "short history (<130 bars)"
+    o, h, l, c, v = d.Open, d.High, d.Low, d.Close, d.Volume
 
+    ema20 = c.ewm(span=20, adjust=False).mean()
+    ema50 = c.ewm(span=50, adjust=False).mean()
+    ema200 = c.ewm(span=200, adjust=False).mean()
 
-# ── WEEKLY TREND CHECK ────────────────────────────────────────────────────────
-# Cache weekly trend per symbol to avoid 60+ extra yfinance calls per scan
-_WEEKLY_CACHE: dict = {}
-_WEEKLY_CACHE_TTL = 3600   # 1 hour
+    delta = c.diff()
+    gain, loss = _wilder(delta.clip(lower=0)), _wilder((-delta).clip(lower=0))
+    rsi = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
+    rsi = rsi.where(loss != 0, 100.0)
 
-def get_weekly_trend(sym):
-    """
-    Returns (direction, label):
-      +2 = weekly bullish aligned
-      -2 = weekly bearish confirmed
-       0 = sideways / no data
-    Fix 7: cache results per symbol — prevents 60 extra yfinance calls per swing scan.
-    """
-    import time as _t
-    cached = _WEEKLY_CACHE.get(sym)
-    if cached and _t.time() - cached["ts"] < _WEEKLY_CACHE_TTL:
-        return cached["val"]
-    try:
-        if not _YF_AVAILABLE:
-            return 0, "Weekly: N/A"
-        wdf = yf.download(sym, period="6mo", interval="1wk",
-                          progress=False, auto_adjust=True)
-        if isinstance(wdf.columns, pd.MultiIndex):
-            wdf.columns = wdf.columns.get_level_values(0)
-        wdf = wdf.dropna(subset=["Close"])
-        if len(wdf) < 10:
-            return 0, "Weekly: Insufficient data"
-        wc    = wdf["Close"]
-        we9   = wc.ewm(span=9,  adjust=False).mean()
-        we21  = wc.ewm(span=21, adjust=False).mean()
-        wltp  = float(wc.iloc[-1])
-        we9l  = float(we9.iloc[-1])
-        we21l = float(we21.iloc[-1])
-        if wltp > we9l > we21l:
-            result = +2, "Weekly BULLISH ✓"
-        elif wltp < we9l < we21l:
-            result = -2, "Weekly BEARISH ✓"
-        else:
-            result = 0, "Weekly SIDEWAYS"
-        _WEEKLY_CACHE[sym] = {"val": result, "ts": _t.time()}
-        return result
-    except Exception as e:
-        logger.debug(f"weekly trend {sym}: {e}")
-        return 0, "Weekly: N/A"
+    tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    atr = _wilder(tr)
+    up, dn = h.diff(), -l.diff()
+    pdm = pd.Series(np.where((up > dn) & (up > 0), up, 0.0), index=d.index)
+    mdm = pd.Series(np.where((dn > up) & (dn > 0), dn, 0.0), index=d.index)
+    pdi = 100 * _wilder(pdm) / atr
+    mdi = 100 * _wilder(mdm) / atr
+    adx = _wilder(100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan))
 
+    macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
+    hist = macd - macd.ewm(span=9, adjust=False).mean()
 
-# ── SECTOR BIAS ───────────────────────────────────────────────────────────────
-def get_sector_bias(sector):
-    """
-    Compare sector ETF vs Nifty. Quick heuristic using known ETF tickers.
-    Returns label string for display.
-    """
-    SECTOR_ETF = {
-        "IT":           "^CNXIT",
-        "Banking":      "^NSEBANK",
-        "Pharma":       "PHARMA.NS",
-        "Auto":         "CNXAUTO.NS",
-        "FMCG":         "^CNXFMCG",
-        "Metal":        "^CNXMETAL",
-        "Energy":       "CNXENERGY.NS",
-        "Infrastructure":"CNXINFRA.NS",
-    }
-    etf = SECTOR_ETF.get(sector)
-    if not etf or not _YF_AVAILABLE:
-        return f"Sector: {sector}"
-    try:
-        sd = yf.download(etf, period="1mo", interval="1d", progress=False, auto_adjust=True)
-        if sd.empty or len(sd) < 5:
-            return f"Sector: {sector}"
-        sc    = sd["Close"]
-        se9   = sc.ewm(span=9, adjust=False).mean()
-        sltp  = float(sc.iloc[-1])
-        se9l  = float(se9.iloc[-1])
-        icon  = "↑" if sltp > se9l else "↓"
-        return f"Sector {sector}: {icon} {'Bullish' if sltp>se9l else 'Bearish'}"
-    except Exception:
-        return f"Sector: {sector}"
+    # Weekly trend from completed weekly bars only (ffill => no look-ahead)
+    wc = c.resample("W-FRI").last().dropna()
+    we9, we21 = wc.ewm(span=9, adjust=False).mean(), wc.ewm(span=21, adjust=False).mean()
+    wt = pd.Series(np.where((wc > we9) & (we9 > we21), 1, np.where((wc < we9) & (we9 < we21), -1, 0)),
+                   index=wc.index)
+    wt.iloc[:21] = 0
+    wt_d = wt.reindex(d.index, method="ffill").fillna(0)
 
-
-# ── WEIGHTED SWING SCORE (10 checks) ─────────────────────────────────────────
-def swing_score(df, side="LONG", sym=None):
-    """
-    10-check weighted swing scoring. Max ~13 pts.
-    Min gate: LONG ≥6, SHORT ≥5.
-    """
-    if df.empty or len(df) < 50:
-        return {"score": 0, "details": [], "ltp": None}
-
-    close   = df["Close"]
-    ltp     = float(close.iloc[-1])
-    n       = len(close)
-
-    ema50   = float(ema_series(close, min(50,  n-1)).iloc[-1])
-    ema200  = float(ema_series(close, min(200, n-1)).iloc[-1])
-    bb_mid, bb_upper, bb_lower = calc_bollinger(close, 20, 2)
-    adx_last, plus_di, minus_di = calc_adx(df, ADX_PERIOD)
-    rsi_val = calc_rsi(close, RSI_PERIOD)
-    macd_last, signal_last, hist_last = calc_macd(close)
-    vol_avg  = float(df["Volume"].rolling(20).mean().iloc[-1])
-    vol_last = float(df["Volume"].iloc[-1])
-    recent_high = float(close.rolling(20).max().iloc[-1])
-    recent_low  = float(close.rolling(20).min().iloc[-1])
-
-    h, l, c = df["High"], df["Low"], df["Close"]
-    tr      = pd.concat([(h-l),(h-c.shift()).abs(),(l-c.shift()).abs()], axis=1).max(axis=1)
-    atr_val = float(tr.rolling(14).mean().iloc[-1])
-
-    # RSI momentum (slope)
-    rsi_arr   = rsi_series(close, RSI_PERIOD).values
-    rsi_slope = float(rsi_arr[-1] - rsi_arr[-3]) if len(rsi_arr) >= 3 else 0
-
-    # MACD histogram slope
-    try:
-        from technical_indicators import calc_macd as _cm
-        _m, _s, _h = _cm(close)
-    except Exception:
-        _h = hist_last
-    hist_vals = []
-    try:
-        ema12 = close.ewm(span=12, adjust=False).mean()
-        ema26 = close.ewm(span=26, adjust=False).mean()
-        macd_s = ema12 - ema26
-        sig_s  = macd_s.ewm(span=9, adjust=False).mean()
-        hist_s = (macd_s - sig_s).dropna().values
-        hist_vals = hist_s[-3:].tolist() if len(hist_s) >= 3 else []
-    except Exception:
-        hist_vals = []
-
-    # Supertrend
-    st_dir = calc_supertrend(df)
-
-    # Weekly trend (only if sym given)
-    wk_score, wk_label = 0, "Weekly: skipped"
-    if sym:
-        wk_score, wk_label = get_weekly_trend(sym)
-
-    conditions = []
-    score      = 0
-
-    if side == "LONG":
-        # ── CHECK 1: Trend alignment (EMA structure) ──
-        if ltp > ema50:
-            score += 1
-            conditions.append("Price &gt; EMA 50 ✓")
-            if ema50 > ema200:
-                score += 1
-                conditions.append("EMA50 &gt; EMA200 (Golden cross zone) ✓")
-
-        # ── CHECK 2: MACD slope-aware (+2 expanding, +1 flat-pos) ──
-        if len(hist_vals) >= 3 and hist_vals[-1] > 0:
-            expanding = hist_vals[-1] > hist_vals[-2] > hist_vals[-3]
-            macd_pts  = 2 if expanding else 1
-            score += macd_pts
-            lbl = f"MACD {'Expanding' if expanding else 'Positive'} +{macd_pts}pts"
-            conditions.append(lbl)
-
-        # ── CHECK 3: RSI zone + momentum (+2 if rising, +1 if flat) ──
-        if 40 < rsi_val < 70:
-            rsi_pts = 2 if rsi_slope > 2 else 1
-            score += rsi_pts
-            conditions.append(f"RSI {rsi_val:.1f} zone {'↑' if rsi_slope>2 else '→'} +{rsi_pts}pts")
-
-        # ── CHECK 4: ADX strength ≥25 scored (+1) ──
-        if adx_last > 25 and plus_di > minus_di:
-            score += 1
-            conditions.append(f"ADX {adx_last:.1f} &gt;25, +DI&gt;-DI ✓")
-
-        # ── CHECK 5: Volume confirmation ──
-        if vol_last > 1.5 * vol_avg:
-            score += 1
-            conditions.append(f"Volume {vol_last/1e5:.1f}L = {vol_last/vol_avg:.1f}x avg ✓")
-
-        # ── CHECK 6: Breakout zone ──
-        if ltp > recent_high * 0.97:
-            score += 1
-            conditions.append("Near 20d high — breakout zone ✓")
-
-        # ── CHECK 7: BB position ──
-        if bb_lower < ltp < bb_mid:
-            score += 1
-            conditions.append("BB: price in lower-mid zone (good entry) ✓")
-
-        # ── CHECK 8: Supertrend ──
-        if st_dir == 1:
-            score += 1
-            conditions.append("Supertrend(7,3) BULLISH ✓")
-
-        # ── CHECK 9: Weekly trend alignment (+2) ──
-        if wk_score > 0:
-            score += wk_score
-            conditions.append(f"{wk_label} +{wk_score}pts ✓")
-        elif wk_score < 0:
-            conditions.append(f"{wk_label} ⚠ (against daily)")
-
-        # ── CHECK 10: HH/HL structure ──
-        closes = close.values
-        if len(closes) >= 20:
-            hh = closes[-1] > closes[-10:].max() * 0.98
-            if hh:
-                score += 1
-                conditions.append("Price near recent highs — uptrend structure ✓")
-
-    else:  # SHORT
-        if ltp < ema50:
-            score += 1
-            conditions.append("Price &lt; EMA 50 ✓")
-            if ema50 < ema200:
-                score += 1
-                conditions.append("EMA50 &lt; EMA200 (Death cross zone) ✓")
-
-        if len(hist_vals) >= 3 and hist_vals[-1] < 0:
-            expanding = hist_vals[-1] < hist_vals[-2] < hist_vals[-3]
-            macd_pts  = 2 if expanding else 1
-            score += macd_pts
-            conditions.append(f"MACD {'Expanding -' if expanding else 'Negative'} +{macd_pts}pts")
-
-        if 30 < rsi_val < 60:
-            rsi_pts = 2 if rsi_slope < -2 else 1
-            score += rsi_pts
-            conditions.append(f"RSI {rsi_val:.1f} zone {'↓' if rsi_slope<-2 else '→'} +{rsi_pts}pts")
-
-        if adx_last > 25 and minus_di > plus_di:
-            score += 1
-            conditions.append(f"ADX {adx_last:.1f} &gt;25, -DI&gt;+DI ✓")
-
-        if vol_last > 1.5 * vol_avg:
-            score += 1
-            conditions.append(f"Volume {vol_last/1e5:.1f}L = {vol_last/vol_avg:.1f}x avg ✓")
-
-        if ltp < recent_low * 1.03:
-            score += 1
-            conditions.append("Near 20d low — breakdown zone ✓")
-
-        if bb_mid < ltp < bb_upper:
-            score += 1
-            conditions.append("BB: price in mid-upper zone (short entry) ✓")
-
-        if st_dir == -1:
-            score += 1
-            conditions.append("Supertrend(7,3) BEARISH ✓")
-
-        if wk_score < 0:
-            score += abs(wk_score)
-            conditions.append(f"{wk_label} +{abs(wk_score)}pts ✓")
-        elif wk_score > 0:
-            conditions.append(f"{wk_label} ⚠ (against short)")
-
-        closes = close.values
-        if len(closes) >= 20:
-            ll = closes[-1] < closes[-10:].min() * 1.02
-            if ll:
-                score += 1
-                conditions.append("Price near recent lows — downtrend structure ✓")
-
-    _bb_range  = bb_upper - bb_lower
-    bb_pct_val = round((ltp - bb_lower) / _bb_range, 3) if _bb_range > 0 else 0.5
-
-    return {
-        "score": score, "details": conditions, "ltp": ltp,
-        "ema50": ema50, "ema200": ema200, "adx": adx_last,
-        "rsi": rsi_val, "macd": macd_last, "signal": signal_last,
-        "volume": vol_last, "avg_volume": vol_avg,
-        "bb_mid": bb_mid, "bb_upper": bb_upper, "bb_lower": bb_lower,
-        "recent_high": recent_high, "recent_low": recent_low, "atr_val": atr_val,
-        "bb_pct": bb_pct_val, "supertrend": st_dir,
-        "weekly_label": wk_label, "weekly_score": wk_score,
-    }
-
-
-def ai_call(prompt, max_tokens=400):
-    try:
-        from ai_engine import _call_ai
-        text, _ = _call_ai(
-            [{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            system="You are a concise Indian equity swing analyst. Use only the exact numbers given. No speculation.",
-        )
-        return text or ""
-    except Exception as e:
-        logger.warning(f"ai_call swing: {e}")
-        return ""
-
-
-def _display_sym(sym):
-    return sym.replace(".NS","")
-
-
-def _trade_card(p, side):
-    sym     = _display_sym(p["symbol"])
-    ltp     = p["ltp"]
-    score   = p["score"]
-    atr_val = p.get("atr_val") or ltp * 0.02
-    rsi_v   = round(p["rsi"], 1)
-    adx_v   = round(p["adx"], 1)
-    sector  = CANDIDATE_SECTORS.get(p["symbol"], "")
-    wk_lbl  = p.get("weekly_label", "")
-    wk_sc   = p.get("weekly_score", 0)
-
-    # ── ATR-based levels (team spec) ──────────────────────────────────────────
-    entry_lo = round(ltp * 0.995, 2)
-    entry_hi = round(ltp * 1.005, 2)
-
-    if side == "LONG":
-        sl   = round(ltp - 1.2 * atr_val, 2)   # 1.2× ATR
-        tgt1 = round(ltp + 2.0 * atr_val, 2)   # 2× ATR
-        tgt2 = round(ltp + 3.5 * atr_val, 2)   # 3.5× ATR
-        icon = "🟢"
+    ret60 = c.pct_change(60)
+    if nifty_close is not None and len(nifty_close) > 70:
+        nret = nifty_close.pct_change(60).reindex(d.index, method="ffill")
     else:
-        sl   = round(ltp + 1.2 * atr_val, 2)
-        tgt1 = round(ltp - 2.0 * atr_val, 2)
-        tgt2 = round(ltp - 3.5 * atr_val, 2)
-        icon = "🔴"
+        nret = pd.Series(np.nan, index=d.index)
 
-    risk   = abs(ltp - sl)
-    rw1    = abs(tgt1 - ltp)
-    rw2    = abs(tgt2 - ltp)
-    rr1    = round(rw1 / risk, 1) if risk > 0 else 0
-    rr2    = round(rw2 / risk, 1) if risk > 0 else 0
-    sl_pct = round(risk / ltp * 100, 1)
-    t1_pct = round(rw1  / ltp * 100, 1)
-    t2_pct = round(rw2  / ltp * 100, 1)
+    f = lambda s: s.to_numpy(dtype=float)
+    A = dict(idx=d.index, o=f(o), h=f(h), l=f(l), c=f(c), v=f(v),
+             ema20=f(ema20), ema50=f(ema50), ema200=f(ema200), rsi=f(rsi), atr=f(atr),
+             adx=f(adx), pdi=f(pdi), mdi=f(mdi), hist=f(hist),
+             vavg=f(v.rolling(20).mean().shift(1)),
+             hi20=f(h.rolling(20).max().shift(1)), lo20=f(l.rolling(20).min().shift(1)),
+             turn=f((c * v).rolling(20).mean()), wt=f(wt_d), ret60=f(ret60), nret=f(nret))
+    return A, None
 
-    rsi_lbl  = "🔴 OB" if rsi_v>70 else ("🟢 OS" if rsi_v<30 else ("🟡 Neutral" if rsi_v<50 else "🟠 Elevated"))
-    conds    = "\n".join(f"   ✅ {c}" for c in p["details"])
-    st_icon  = "🟢 Bull" if p.get("supertrend")==1 else ("🔴 Bear" if p.get("supertrend")==-1 else "⚪ Flat")
-    wk_icon  = "🟢" if wk_sc>0 else ("🔴" if wk_sc<0 else "⚪")
 
-    # Sign the % labels by actual price direction, not by side. For a SHORT,
-    # the target is a price DECREASE and the stop-loss is a price INCREASE —
-    # showing them with the same "+target / -stoploss" convention as LONG
-    # (as the previous version did, unconditionally) inverts the meaning and
-    # can mislead a trader reading the card at a glance.
-    t1_sign = "+" if tgt1 >= ltp else "-"
-    t2_sign = "+" if tgt2 >= ltp else "-"
-    sl_sign = "+" if sl >= ltp else "-"
+# ── SIGNAL + LEVELS (same function for live bar and backtest) ────────────────
+def _levels(A, i, side):
+    c, atr = A["c"][i], A["atr"][i]
+    if side == "LONG":
+        dist = c - (A["l"][max(0, i - 6):i + 1].min() - 0.2 * atr)
+        sgn = 1
+    else:
+        dist = (A["h"][max(0, i - 6):i + 1].max() + 0.2 * atr) - c
+        sgn = -1
+    dist = min(max(dist, 1.0 * atr), 2.0 * atr)
+    return dict(sl=c - sgn * dist, t1=c + sgn * 2.0 * atr, t2=c + sgn * 3.5 * atr,
+                rr1=2.0 * atr / dist, rr2=3.5 * atr / dist, atr=atr)
 
+
+def _signal(A, i, side):
+    """-> (result_dict, None) or (None, reason).  Score is 0..10."""
+    sgn = 1 if side == "LONG" else -1
+    c, o = A["c"][i], A["o"][i]
+    atr, rsi, adx = A["atr"][i], A["rsi"][i], A["adx"][i]
+    if not (np.isfinite(atr) and atr > 0 and np.isfinite(rsi) and np.isfinite(adx)):
+        return None, "indicators not ready"
+    if not A["turn"][i] >= MIN_TURNOVER:
+        return None, "illiquid (<₹5Cr/day)"
+    wt = A["wt"][i]
+    if wt == -sgn:
+        return None, "weekly trend opposes"
+    if (c - A["ema20"][i]) * sgn > 2.5 * atr:
+        return None, "extended from EMA20"
+    if (side == "LONG" and rsi > 75) or (side == "SHORT" and rsi < 25):
+        return None, "RSI extreme"
+
+    e20, e50, e200 = A["ema20"][i], A["ema50"][i], A["ema200"][i]
+    trend = int(c * sgn > e50 * sgn) + int(e20 * sgn > e50 * sgn > e200 * sgn)
+
+    hist, rsi3 = A["hist"], A["rsi"][i - 3]
+    mom = int(hist[i] * sgn > 0 and (hist[i] - hist[i - 1]) * sgn > 0)
+    rz = (45 <= rsi <= 68) if side == "LONG" else (32 <= rsi <= 55)
+    mom += int(rz and (rsi - rsi3) * sgn > 0)
+
+    adx_pt = int(adx > 20 and (A["pdi"][i] - A["mdi"][i]) * sgn > 0)
+
+    if side == "LONG":
+        brk = c >= 0.98 * A["hi20"][i] and c > e20
+        pb = (e20 > e50 and c > e50 and abs(c - e20) <= 0.8 * atr and c > o and rsi <= 58)
+        names = ("Breakout", "Pullback")
+    else:
+        brk = c <= 1.02 * A["lo20"][i] and c < e20
+        pb = (e20 < e50 and c < e50 and abs(c - e20) <= 0.8 * atr and c < o and rsi >= 42)
+        names = ("Breakdown", "Rally-fade")
+    setup = names[0] if brk else names[1] if pb else "Trend"
+    setup_pt = int(setup != "Trend")
+
+    vavg = A["vavg"][i]
+    volx = A["v"][i] / vavg if vavg and vavg > 0 else 0.0
+    dir_day = (c - A["c"][i - 1]) * sgn > 0
+    dry = float(np.mean(A["v"][i - 2:i + 1])) < vavg if vavg and vavg > 0 else False
+    vol_pt = int((dir_day and volx >= 1.3) or (setup == names[1] and dry))
+
+    rs = A["ret60"][i] - A["nret"][i]
+    rs_pt = int(np.isfinite(rs) and rs * sgn > 0)
+
+    lv = _levels(A, i, side)
+    if lv["rr1"] < MIN_RR1:
+        return None, "R:R below 1.2 (stop too wide)"
+
+    score = trend + (2 if wt == sgn else 0) + mom + adx_pt + vol_pt + rs_pt + setup_pt
+    return dict(score=score, setup=setup, lv=lv, ltp=c, rsi=rsi, adx=adx, volx=volx,
+                rs=(rs * 100 if np.isfinite(rs) else None),
+                parts=dict(trend=trend, weekly=int(wt == sgn), mom=mom, adx=adx_pt,
+                           vol=vol_pt, rs=rs_pt, setup=setup_pt)), None
+
+
+def _backtest(A):
+    """Walk-forward on the same arrays. Returns [(side, score, R, hit_t1, stopped)]."""
+    n, out = len(A["c"]), []
+    for side in ("LONG", "SHORT"):
+        sgn = 1 if side == "LONG" else -1
+        i = 100
+        while i < n - 1 - HOLD_BARS:
+            res, _ = _signal(A, i, side)
+            if res is None or res["score"] < 5:
+                i += 1
+                continue
+            lv, entry = res["lv"], A["o"][i + 1]
+            sl, t1 = lv["sl"], lv["t1"]
+            risk = (entry - sl) * sgn
+            if risk <= 0 or (entry - t1) * sgn >= 0:        # gapped through stop/target
+                i += 1
+                continue
+            R, hit, stop, end = None, False, False, i + HOLD_BARS
+            for j in range(i + 1, i + HOLD_BARS + 1):
+                lo, hi, op = A["l"][j], A["h"][j], A["o"][j]
+                s_hit = lo <= sl if sgn == 1 else hi >= sl
+                t_hit = hi >= t1 if sgn == 1 else lo <= t1
+                if s_hit:                                   # stop first when both touch (conservative)
+                    px = min(sl, op) if sgn == 1 else max(sl, op)
+                    R, stop, end = (px - entry) * sgn / risk, True, j
+                    break
+                if t_hit:
+                    R, hit, end = (t1 - entry) * sgn / risk, True, j
+                    break
+            if R is None:
+                R = (A["c"][i + HOLD_BARS] - entry) * sgn / risk
+            out.append((side, int(res["score"]), round(float(R), 2), hit, stop))
+            i = end + 1
+    return out
+
+
+# ── MARKET REGIME ────────────────────────────────────────────────────────────
+def _regime(nifty):
+    try:
+        c = pd.to_numeric(nifty["Close"], errors="coerce").dropna()
+        e = c.ewm(span=50, adjust=False).mean()
+        if c.iloc[-1] > e.iloc[-1] and e.iloc[-1] > e.iloc[-6]:
+            return "bull"
+        if c.iloc[-1] < e.iloc[-1] and e.iloc[-1] < e.iloc[-6]:
+            return "bear"
+        return "neutral"
+    except Exception:
+        return "unknown"
+
+
+# ── SCAN (cached 30 min, shared by both swing buttons) ───────────────────────
+def _scan():
+    t0 = time.time()
+    syms = [s[:-3] if s.endswith(".NS") else s for s in CANDIDATES]
+    hist = bulk_history(syms, "1y", chunk_size=100) or {}
+    nifty = index_history("^NSEI", "1y")
+    nclose = None
+    if nifty is not None and not nifty.empty:
+        try:
+            nclose = pd.to_numeric(nifty["Close"], errors="coerce").dropna()
+            nclose.index = _naive(nclose.index)
+        except Exception:
+            nclose = None
+
+    rows, trades, asofs, scanned = [], [], [], 0
+    for s in syms:
+        df = hist.get(s)
+        if df is None or len(df) == 0:
+            logger.info(f"[Swing] skip {s}: no data")
+            continue
+        A, why = _prep(df, nclose)
+        if A is None:
+            logger.info(f"[Swing] skip {s}: {why}")
+            continue
+        last = A["idx"][-1]
+        if (pd.Timestamp.now().normalize() - last).days > 6:
+            logger.info(f"[Swing] skip {s}: stale data (last bar {last.date()})")
+            continue
+        scanned += 1
+        asofs.append(last)
+        n, fails = len(A["c"]), []
+        for side in ("LONG", "SHORT"):
+            res, reason = _signal(A, n - 1, side)
+            if res:
+                lv = res["lv"]
+                rows.append(dict(sym=s, side=side, score=int(res["score"]), setup=res["setup"],
+                                 ltp=float(res["ltp"]), rsi=float(res["rsi"]), adx=float(res["adx"]),
+                                 volx=float(res["volx"]), rs=res["rs"], parts=res["parts"],
+                                 sector=CANDIDATE_SECTORS.get(f"{s}.NS", ""),
+                                 sl=float(lv["sl"]), t1=float(lv["t1"]), t2=float(lv["t2"]),
+                                 rr1=float(lv["rr1"]), rr2=float(lv["rr2"]), atr=float(lv["atr"])))
+            else:
+                fails.append(f"{side}:{reason}")
+        if len(fails) == 2:
+            logger.info(f"[Swing] skip {s}: {'; '.join(fails)}")
+        try:
+            trades.extend(_backtest(A))
+        except Exception as e:
+            logger.warning(f"[Swing] backtest {s}: {e}")
+
+    data = dict(asof=(max(asofs).strftime("%d-%b-%Y") if asofs else "n/a"), rows=rows, trades=trades,
+                regime=_regime(nifty) if nifty is not None and not nifty.empty else "unknown",
+                scanned=scanned, total=len(syms), secs=round(time.time() - t0, 1))
+    logger.info(f"[Swing] scanned {scanned}/{len(syms)}, signals {len(rows)}, backtest trades {len(trades)} "
+                f"in {data['secs']} sec (regime {data['regime']})")
+    if scanned >= int(len(syms) * 0.7):
+        cached_set(CACHE_KEY, data, CACHE_TTL)
+    return data
+
+
+def _load():
+    hit = cached_get(CACHE_KEY, CACHE_TTL)
+    if hit:
+        return hit
+    with _LOCK:                                   # one scan even if both buttons are pressed together
+        hit = cached_get(CACHE_KEY, CACHE_TTL)
+        return hit or _scan()
+
+
+# ── OUTPUT ───────────────────────────────────────────────────────────────────
+esc = lambda x: html.escape(str(x), quote=False)
+
+
+def _bt_line(trades, side, thr):
+    t = [x for x in trades if x[0] == side and x[1] >= thr]
+    if not t:
+        return f"{side} ≥{thr}: no historical signals"
+    n = len(t)
+    hit = sum(1 for x in t if x[3]) / n * 100
+    stp = sum(1 for x in t if x[4]) / n * 100
+    avg = sum(x[2] for x in t) / n
+    small = " (small sample)" if n < 15 else ""
+    return f"{side} ≥{thr}: {n} trades · T1 hit {hit:.0f}% · stopped {stp:.0f}% · avg {avg:+.2f}R{small}"
+
+
+def _card(p):
+    icon = "🟢" if p["side"] == "LONG" else "🔴"
+    c, sgn = p["ltp"], (1 if p["side"] == "LONG" else -1)
+    lo, hi = c - 0.25 * p["atr"], c + 0.25 * p["atr"]
+    pc = lambda x: f"{(x - c) / c * 100:+.1f}%"
+    pt = p["parts"]
+    rs = f"RS {p['rs']:+.1f}%" if p["rs"] is not None else "RS n/a"
     lines = [
-        f"{icon} <b>{sym}</b>  [{side}]  Score: <b>{score}/13</b>",
+        f"{icon} <b>{esc(p['sym'])}</b> · {p['side']} · {p['setup']} · <b>{p['score']}/10</b>",
+        f"{esc(p['sector'] or '—')} · ₹{c:,.2f} · RSI {p['rsi']:.0f} · ADX {p['adx']:.0f} · Vol {p['volx']:.1f}×",
+        f"📥 Entry ₹{min(lo, hi):,.2f}–₹{max(lo, hi):,.2f}",
+        f"🛑 SL ₹{p['sl']:,.2f} ({pc(p['sl'])})",
+        f"🎯 T1 ₹{p['t1']:,.2f} ({pc(p['t1'])}) 1:{p['rr1']:.1f} · T2 ₹{p['t2']:,.2f} ({pc(p['t2'])}) 1:{p['rr2']:.1f}",
+        f"✓ Trend {pt['trend']}/2 · Weekly {'✓' if pt['weekly'] else '–'} · Mom {pt['mom']}/2 · "
+        f"ADX {'✓' if pt['adx'] else '–'} · Vol {'✓' if pt['vol'] else '–'} · {rs}",
     ]
-    if sector:
-        lines.append(f"   🏭 Sector   : {sector}")
-    lines += [
-        f"   💰 LTP      : ₹{ltp:,.2f}",
-        f"   📊 RSI      : {rsi_v}  {rsi_lbl}",
-        f"   📈 ADX      : {adx_v}",
-        f"   🌊 Supertrend: {st_icon}",
-        f"   📅 Weekly   : {wk_icon} {wk_lbl}",
-        f"   ···",
-        f"   📥 Entry    : ₹{entry_lo:,.2f} – ₹{entry_hi:,.2f}",
-        f"   🎯 Target 1 : ₹{tgt1:,.2f}  ({t1_sign}{t1_pct}%)  R:R 1:{rr1}",
-        f"   🎯 Target 2 : ₹{tgt2:,.2f}  ({t2_sign}{t2_pct}%)  R:R 1:{rr2}",
-        f"   🛑 Stop Loss: ₹{sl:,.2f}  ({sl_sign}{sl_pct}%)  ATR×1.2",
-        f"   ···",
-        f"   <b>Signals ({len(p['details'])}):</b>",
-        conds,
-    ]
+    if p["side"] == "SHORT":
+        lines.append("⚠ Short = intraday / F&O only (no delivery shorting)")
     return "\n".join(lines)
+
+
+def _pick(rows, side, thr, limit):
+    rs = sorted((r for r in rows if r["side"] == side and r["score"] >= thr),
+                key=lambda r: (-r["score"], -r["rr1"], r["sym"]))
+    out, per = [], Counter()
+    for r in rs:
+        if per[r["sector"]] >= MAX_PER_SECTOR:
+            continue
+        per[r["sector"]] += 1
+        out.append(r)
+        if len(out) == limit:
+            break
+    return out
 
 
 def get_swing_trades(mode="conservative"):
-    """
-    Scan all CANDIDATES, score each, sort by score desc — no round-robin.
-    Min gate: LONG ≥7, SHORT ≥6 for conservative. Aggressive: LONG ≥5, SHORT ≥4.
-    """
-    threshold_long  = 7 if mode == "conservative" else 5
-    threshold_short = 6 if mode == "conservative" else 4
-    today     = date.today().strftime("%d-%b-%Y")
-    all_picks = []
+    """Returns ONE string; blocks are separated by blank lines so main.py can split safely."""
+    mode = mode if mode in THRESHOLDS else "conservative"
+    thr = dict(THRESHOLDS[mode])
+    data = _load()
+    if not data["scanned"]:
+        return "❌ Market data unavailable right now. Try again in a minute."
 
-    for sym in CANDIDATES:
-        try:
-            df = safe_history(sym, period="1y", interval="1d")
-            if df.empty or len(df) < 60:
-                continue
-            for side, thresh in [("LONG", threshold_long), ("SHORT", threshold_short)]:
-                result = swing_score(df, side, sym=sym)
-                if result["ltp"] and result["score"] >= thresh:
-                    result["symbol"] = sym
-                    result["side"]   = side
-                    all_picks.append(result)
-        except Exception as e:
-            logger.warning(f"swing {sym}: {e}")
+    reg = data["regime"]
+    if reg == "bear":
+        thr["LONG"] += 1
+    elif reg == "bull":
+        thr["SHORT"] += 1
+    reg_txt = {"bull": "🟢 Nifty uptrend (shorts need +1 score)",
+               "bear": "🔴 Nifty downtrend (longs need +1 score)",
+               "neutral": "🟡 Nifty neutral", "unknown": "⚪ Nifty regime unknown"}[reg]
 
-    # Sort by score descending — best picks first (team fix: no round-robin)
-    all_picks.sort(key=lambda x: x["score"], reverse=True)
-    long_picks  = [p for p in all_picks if p["side"] == "LONG"]
-    short_picks = [p for p in all_picks if p["side"] == "SHORT"]
+    rows = data["rows"]
+    longs = _pick(rows, "LONG", thr["LONG"], MAX_LONG)
+    shorts = _pick(rows, "SHORT", thr["SHORT"], MAX_SHORT)
 
-    label = f"Conservative (L≥{threshold_long}/S≥{threshold_short})" if mode=="conservative" \
-            else f"Aggressive (L≥{threshold_long}/S≥{threshold_short})"
-    lines = [
-        f"📈 <b>Swing Trades — {label}</b>",
-        f"📅 {today}  |  Universe: {len(CANDIDATES)} stocks  |  ATR-based SL/TP\n",
-    ]
+    head = (f"📈 <b>Swing Trades — {mode.title()}</b>\n"
+            f"📅 Last candle {data['asof']} · scanned {data['scanned']}/{data['total']} · "
+            f"hold ≤{HOLD_BARS} sessions\n{reg_txt}")
+    bt = (f"🧪 <b>Same rules, last ~5M (backtest)</b>\n{_bt_line(data['trades'], 'LONG', thr['LONG'])}\n"
+          f"{_bt_line(data['trades'], 'SHORT', thr['SHORT'])}\n"
+          f"<i>Entry next open, stop-first if both touched, no costs. Past results don't guarantee future.</i>")
+    foot = "⚠️ Educational only. Not SEBI-registered advice. Size so a stop-out costs ≤1% of capital."
 
-    # Sector breakdown of today's setups — a quick market-regime read (e.g.
-    # "5 of 7 setups are in Banking & IT" signals sector-driven momentum
-    # rather than isolated single-stock moves). Uses the CANDIDATE_SECTORS
-    # map already built above, so this is free — no extra fetches.
-    if all_picks:
-        from collections import Counter
-        sector_counts = Counter(CANDIDATE_SECTORS.get(p["symbol"], "Other") for p in all_picks)
-        top_sectors = sector_counts.most_common(3)
-        breakdown = ", ".join(f"{s} ({c})" for s, c in top_sectors)
-        lines.append(f"🏭 <b>Setups by sector:</b> {breakdown}\n")
-
-    if not long_picks and not short_picks:
-        # Watchlist — best approaching stocks
-        watch = []
-        for sym in CANDIDATES:
-            try:
-                df = safe_history(sym, period="1y", interval="1d")
-                if df.empty or len(df) < 60: continue
-                for side in ["LONG","SHORT"]:
-                    r = swing_score(df, side)
-                    if r["ltp"]:
-                        r["symbol"] = sym; r["side"] = side
-                        watch.append(r)
-            except Exception:
-                continue
-        watch.sort(key=lambda x: x["score"], reverse=True)
-        lines.append(f"⚠️ No setups met threshold today.\n")
-        lines.append("📊 <b>Watch List (approaching threshold):</b>")
-        for p in watch[:6]:
-            lines.append(
-                f"  • <b>{_display_sym(p['symbol'])}</b> ({p['side']}) "
-                f"Score:{p['score']}/13 | ₹{p['ltp']:.2f} | RSI:{round(p['rsi'],1)}"
-            )
-        lines.append("\n⚠️ Educational only. Not SEBI-registered advice.")
-        return "\n".join(lines)
-
-    if long_picks:
-        lines.append("🟢 <b>LONG SETUPS</b>")
-        for p in long_picks[:4]:
-            lines.append(_trade_card(p, "LONG"))
-            lines.append("")
-
-    if short_picks:
-        lines.append("🔴 <b>SHORT SETUPS</b>")
-        for p in short_picks[:3]:
-            lines.append(_trade_card(p, "SHORT"))
-            lines.append("")
-
-    lines.append("⚠️ Educational only. Not SEBI-registered advice.")
-    return "\n".join(lines)
+    blocks = [head, bt]
+    if longs:
+        blocks.append("🟢 <b>LONG SETUPS</b>")
+        blocks += [_card(p) for p in longs]
+    if shorts:
+        blocks.append("🔴 <b>SHORT SETUPS</b>")
+        blocks += [_card(p) for p in shorts]
+    if not longs and not shorts:
+        near = sorted(rows, key=lambda r: (-r["score"], r["sym"]))[:6]
+        w = ["⚠️ <b>No setup met the threshold today.</b>",
+             f"Need LONG ≥{thr['LONG']} / SHORT ≥{thr['SHORT']}. Closest:"]
+        for r in near:
+            w.append(f"• <b>{esc(r['sym'])}</b> {r['side']} {r['score']}/10 · {r['setup']} · ₹{r['ltp']:,.2f}")
+        if not near:
+            w.append("• none passed the liquidity / trend / R:R gates")
+        blocks.append("\n".join(w))
+    blocks.append(foot)
+    return "\n\n".join(blocks)
