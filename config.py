@@ -396,6 +396,37 @@ Prevents abuse / runaway costs
 # VALIDATION & STARTUP CHECKS
 # ────────────────────────────────────────────────────────────────
 
+# ────────────────────────────────────────────────────────────────
+# INDICATOR / TIMEOUT / CACHE SETTINGS  (added in v6.2)
+# ────────────────────────────────────────────────────────────────
+# These names were imported by technical_indicators, swing_trades,
+# data_engine and fundamentals but were missing from this file, which made
+# `import main` crash with ImportError. Defaults mirror what the code
+# already assumes (Wilder RSI/ATR/ADX 14, MACD 12/26/9, data_engine TTLs).
+# All can be overridden via environment variables.
+
+RSI_PERIOD: int = int(_get_env("RSI_PERIOD", "14"))
+ATR_PERIOD: int = int(_get_env("ATR_PERIOD", "14"))
+ADX_PERIOD: int = int(_get_env("ADX_PERIOD", "14"))
+MACD_FAST: int = int(_get_env("MACD_FAST", "12"))
+MACD_SLOW: int = int(_get_env("MACD_SLOW", "26"))
+MACD_SIGNAL: int = int(_get_env("MACD_SIGNAL", "9"))
+
+HIST_PERIOD_SWING: str = _get_env("HIST_PERIOD_SWING", "6mo")
+TG_CHUNK_SIZE: int = int(_get_env("TG_CHUNK_SIZE", "3800"))   # Telegram hard limit is 4096
+
+TIMEOUT_YAHOO: int = int(_get_env("TIMEOUT_YAHOO", "10"))
+TIMEOUT_NSE: int = int(_get_env("TIMEOUT_NSE", "10"))
+TIMEOUT_SCREENER: int = int(_get_env("TIMEOUT_SCREENER", "8"))
+TIMEOUT_FINNHUB: int = int(_get_env("TIMEOUT_FINNHUB", "8"))
+
+CACHE_TTL_LIVE: int = int(_get_env("CACHE_TTL_LIVE", "300"))       # 5 min
+CACHE_TTL_HIST: int = int(_get_env("CACHE_TTL_HIST", "600"))       # 10 min
+CACHE_TTL_FUND: int = int(_get_env("CACHE_TTL_FUND", "14400"))     # 4 h
+
+REVENUE_MAX_MCAP_RATIO: float = float(_get_env("REVENUE_MAX_MCAP_RATIO", "5"))
+
+
 def validate_configuration() -> tuple[bool, list[str]]:
     """
     Validate that all required configuration is set correctly.
