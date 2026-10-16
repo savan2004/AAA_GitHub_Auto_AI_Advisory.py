@@ -270,7 +270,7 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
     Tries both query1 and query2 endpoints — Yahoo periodically blocks one.
     """
     _wait_for_rate_slot()
-    modules = "summaryDetail,defaultKeyStatistics,financialData,price"
+    modules = "summaryDetail,defaultKeyStatistics,financialData,price,summaryProfile"
     for host in ["query2", "query1"]:
         url = (
             f"https://{host}.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
@@ -296,6 +296,7 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
             ks = result.get("defaultKeyStatistics",  {})
             fd = result.get("financialData",         {})
             pr = result.get("price",                 {})
+            sp = result.get("summaryProfile",        {})
 
             def raw(d, key):
                 v = d.get(key)
@@ -316,13 +317,12 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                 "debtToEquity":   raw(fd, "debtToEquity"),
                 "beta":           raw(ks, "beta"),
                 "forwardPE":      raw(sd, "forwardPE"),
-                # Portfolio feature: price + growth + volume come from the SAME response,
-                # so get_info() no longer needs a second v8 call just for the price.
                 "price":          raw(pr, "regularMarketPrice"),
-                "prev_close":     raw(pr, "regularMarketPreviousClose"),
+                "prev_close":     raw(pr, "regularMarketPreviousClose") or raw(sd, "previousClose"),
                 "earningsGrowth": raw(fd, "earningsGrowth"),
                 "revenueGrowth":  raw(fd, "revenueGrowth"),
                 "avg_volume":     raw(sd, "averageVolume"),
+                "sector":         sp.get("sector") if isinstance(sp, dict) else None,
             }
             if out.get("pe") is not None or out.get("market_cap") is not None:
                 return out
