@@ -207,7 +207,7 @@ def chart_scorecard(pillars: dict, composite: int, sym: str) -> Optional[str]:
         return None
 
 
-def chart_financials(years: List[dict], sym: str, unit: str = "₹ Cr") -> Optional[str]:
+def chart_financials(years: List[dict], sym: str, unit: str = "₹ Cr", lender: bool = False) -> Optional[str]:
     try:
         yrs = [y for y in years if y.get("revenue") is not None]
         if len(yrs) < 3:
@@ -229,7 +229,7 @@ def chart_financials(years: List[dict], sym: str, unit: str = "₹ Cr") -> Optio
 
         opm = [y.get("opm") for y in yrs]
         if any(v is not None for v in opm):
-            a2.plot(x, [v if v is not None else np.nan for v in opm], color=GREEN, lw=1.6, marker="o", ms=3.5, label="Operating margin %")
+            a2.plot(x, [v if v is not None else np.nan for v in opm], color=GREEN, lw=1.6, marker="o", ms=3.5, label="Financing margin %" if lender else "Operating margin %")
         roce = [y.get("roce") for y in yrs]
         if any(v is not None for v in roce):
             a2.plot(x, [v if v is not None else np.nan for v in roce], color=AMBER, lw=1.4, marker="s", ms=3, label="ROCE %")
@@ -254,8 +254,8 @@ def chart_shareholding(sh: List[dict], sym: str) -> Optional[str]:
             return None
         labs = [r["label"] for r in rows]
         x = np.arange(len(rows))
-        series = [("Promoters", "promoters", NAVY), ("FII", "fii", ACCENT),
-                  ("DII", "dii", GREEN), ("Public", "public", "#B8C0CC")]
+        series = [("Promoters", "promoters", NAVY), ("FIIs", "fii", ACCENT),
+                  ("DIIs", "dii", GREEN), ("Public", "public", "#B8C0CC")]
         fig, ax = plt.subplots(figsize=(7.4, 2.6))
         bottom = np.zeros(len(rows))
         for nm, key, colr in series:
@@ -270,7 +270,8 @@ def chart_shareholding(sh: List[dict], sym: str) -> Optional[str]:
         ax.set_xticklabels(labs, fontsize=7, rotation=20, ha="right")
         ax.set_ylim(0, 100)
         ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}%"))
-        ax.legend(ncol=4, frameon=False, fontsize=7.5, loc="upper center", bbox_to_anchor=(0.5, 1.14))
+        ax.legend(ncol=4, frameon=False, fontsize=7.5, loc="upper center", bbox_to_anchor=(0.5, 1.14),
+                  prop={"family": "DejaVu Sans Mono", "size": 7.5})   # serifed I: "FIIs" can't read as "Fils"
         return _save(fig, f"{sym}_sh.png")
     except Exception as e:
         logger.warning(f"[charts] shareholding failed: {e}")
