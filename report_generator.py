@@ -352,6 +352,25 @@ def _find_peers(sym: str, kind: Optional[str], mcap: Optional[float], sector_lab
     return label, peers, method
 
 
+_QUOTE_PAGE_RE = re.compile(r"(share|stock)\s*(/\s*stock\s*)?price|live\s+nse|nse\s*/\s*bse|technical analysis and", re.I)
+
+
+def _clean_sector(s) -> str:
+    s = strip_emoji(s or "").strip()
+    return "" if (not s or "others" in s.lower()) else s
+
+
+def _asof(df) -> str:
+    ix = df.index[-1]
+    return ix.strftime("%d-%b-%Y") if hasattr(ix, "strftime") else str(ix)
+
+
+def _business(inp) -> Optional[str]:
+    info = inp.get("info") or {}
+    txt = info.get("longBusinessSummary") or info.get("business_summary") or info.get("summary")
+    return str(txt).strip()[:600] if txt else None
+
+
 def _real_news(sym: str) -> List[str]:
     """Headlines only — drops the generic placeholder text market_news falls back to."""
     from market_news import get_stock_news
@@ -361,13 +380,18 @@ def _real_news(sym: str) -> List[str]:
     except Exception:
         fb_vals = set()
     raw = get_stock_news(sym, 5) or ""
-    out = []
+    out, seen = [], set()
     for line in raw.split("\n"):
         line = _html.unescape(re.sub(r"<[^>]+>", "", line))
         line = strip_emoji(line).lstrip("• ").strip()
         if (not line or "Recommend checking company announcements" in line
-                or line.startswith("Latest market conditions") or line in fb_vals):
+                or line.startswith("Latest market conditions") or line in fb_vals
+                or _QUOTE_PAGE_RE.search(line)):
             continue
+        key = re.sub(r"[^a-z0-9]+", " ", line.lower()).strip()
+        if key in seen:
+            continue
+        seen.add(key)
         out.append(line)
     return out[:5]
 
@@ -449,11 +473,14 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         "fin": charts.chart_financials(years, sym, lender=fv["lender"]) if years else None,
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
-    return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc,
+    return dict(sym=sym, name=name, sector=_clean_sector(inp.get("sector")), t=t, rk=rk, fv=fv, sc=sc,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"), industry=ind,
                 peer_label=inp.get("peer_label"), peer_method=inp.get("peer_method"),
                 news=inp.get("news") or [], fund=fund,
+                asof=_asof(df), market_ctx=eng.market_context(nifty if has_nifty else None),
+                completeness=eng.data_completeness(fv, inp.get("stm"), sh, peers, inp.get("consensus")),
+                business=_business(inp), selection=inp.get("selection"),
                 generated=datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M IST"))
 
 
@@ -461,7 +488,7 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
 # STAGE 3 — build the PDF
 # ══════════════════════════════════════════════════════════════════════════
 def _stance_color(stance):
-    return (GREEN_H if stance.startswith(("HIGH", "CONSTRUCTIVE")) else AMBER_H if stance.startswith("NEUTRAL")
+    return (GREEN_H if stance.startswith(("HIGH", "CONSTRUCTIVE")) else AMBER_H if stance.startswith(("NEUTRAL", "QUALITY"))
             else RED_H)
 
 
@@ -469,11 +496,23 @@ def _bias_color(b):
     return GREEN_H if b in ("BULLISH", "FAVOURABLE") else RED_H if b in ("BEARISH", "UNFAVOURABLE") else AMBER_H
 
 
+def _split_view(R):
+    sc, hz = R["sc"], R["sc"]["horizons"]
+    lt, st = hz["Long term (1–3 yrs)"], hz["Short term (1–4 wks)"]
+    mc = R.get("market_ctx")
+    mkt = (f"Market context: {mc['bench']} in a <b>{mc['regime'].lower()}</b> (close {mc['asof']}; "
+           f"1M {n(mc['ret_1m'], 1, '%')}, 3M {n(mc['ret_3m'], 1, '%')})." if mc else "Market context: benchmark data unavailable.")
+    miss = R["completeness"]["missing_optional"]
+    return callout(f"<b>Fundamental assessment:</b> {lt[0].title()} (score {lt[1] if lt[1] is not None else 'n/a'})  ·  "
+                   f"<b>Technical timing:</b> {st[0].title()} (score {st[1] if st[1] is not None else 'n/a'}). {mkt} "
+                   + (f"Optional data not available: {esc(', '.join(miss))}." if miss else ""), NAVY_H)
+
+
 def _cover(R, story):
     t, sc, fv, rk = R["t"], R["sc"], R["fv"], R["rk"]
     chg_hex = "#7FE0B0" if t["chg"] >= 0 else "#FF9A9A"
     kind = R["industry"].get("kind") if R.get("industry") else None
-    tag = (f"  ·  {esc(R['sector'])}" if R["sector"] else "") + (f"  ·  {esc(kind)}" if kind and kind not in (R["sector"] or "") else "")
+    tag = (f"  ·  {esc(R['sector'])}" if R["sector"] else "  ·  Sector unavailable") + (f"  ·  {esc(kind)}" if kind and kind not in (R["sector"] or "") else "")
     banner = Table([
         [P(esc(BRAND.upper()) + "  |  EQUITY RESEARCH", "brand"), ""],
         [P(esc(R["name"]), "title"), P(inr(t["ltp"]), "px")],
@@ -486,11 +525,12 @@ def _cover(R, story):
                                 ("LEFTPADDING", (0, 0), (-1, -1), 13), ("RIGHTPADDING", (0, 0), (-1, -1), 13)]))
     story += [banner, Spacer(1, 3),
               P(f"Prepared by: <b>Senior Market Analyst Desk</b>, {BRAND} (automated research engine)  ·  "
-                f"{R['generated']}  ·  Prices as of last available close", "small"), Spacer(1, 8)]
+                f"{R['generated']}  ·  Price: close of last completed session ({R['asof']}), not live", "small"), Spacer(1, 8)]
 
     sc_hex = _stance_color(sc["stance"])
     left = [P("COMPOSITE SCORE", "lab"), P(f"{sc['composite']}<font size=11 color='{GREY_H}'> / 100</font>", "big"),
-            P(f"Data coverage {sc['coverage']}%", "tiny")]
+            P(f"Pillar coverage {sc['pillar_coverage']}% ({sc['n_pillars']}/6)", "tiny"),
+            P(f"Mandatory data {R['completeness']['mandatory_ok']}/{R['completeness']['mandatory_total']}", "tiny")]
     mid = [P("ANALYST STANCE", "lab"), P(colored(esc(sc["stance"]), sc_hex), "stance"), Spacer(1, 2), P(esc(sc["action"]))]
     box = Table([[left, mid]], colWidths=[W * 0.24, W * 0.76])
     box.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.8, NAVY), ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F9FC")),
@@ -517,7 +557,7 @@ def _cover(R, story):
     ht = Table([cells], colWidths=[W / 3] * 3)
     ht.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, BORDER), ("INNERGRID", (0, 0), (-1, -1), 0.5, BORDER),
                             ("LEFTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
-    story += [ht, Spacer(1, 6)]
+    story += [ht, Spacer(1, 4), _split_view(R), Spacer(1, 6)]
 
     risk_hex = {"Low": GREEN_H, "Moderate": AMBER_H, "High": RED_H}.get(rk.get("level"), GREY_H)
     story.append(kv([
@@ -549,6 +589,13 @@ def _cover(R, story):
 def _investment_view(R, story):
     fv = R["fv"]
     story += section("Investment View", "Analyst commentary, bull vs bear case and valuation cross-check")
+    ind_ = R.get("industry") or {}
+    story += [callout("<b>Business overview:</b> " + (esc(R["business"]) if R.get("business") else
+              f"{esc(R['name'])} (NSE: {esc(R['sym'])}); sector: {esc(R['sector']) if R['sector'] else 'not available'}; "
+              f"classification: {esc(ind_.get('kind') or 'non-lender corporate')}; market cap {mcap_txt(fv.get('mcap'))}. "
+              f"No further business description is available from the configured data sources."), NAVY_H), Spacer(1, 4)]
+    if R.get("selection"):
+        story += [callout("<b>Why selected:</b> " + esc(R["selection"].get("why", "")), GREEN_H, "#F1FAF5"), Spacer(1, 4)]
     if R["ai_note"]:
         story.append(P(colored("Analyst commentary", NAVY_H) + "  <font size=7 color='#5A6472'>(AI-assisted; every figure verified against the data in this report)</font>", "h2"))
         for para in [p.strip() for p in R["ai_note"].split("\n") if p.strip()]:
@@ -556,9 +603,6 @@ def _investment_view(R, story):
     else:
         story.append(P(colored("Analyst commentary", NAVY_H), "h2"))
         story += [P(R["nar"]["outlook"], "just"), Spacer(1, 3)]
-        for k in ("technical", "fundamental"):
-            if R["nar"].get(k):
-                story += [P(R["nar"][k], "just"), Spacer(1, 3)]
 
     fl = R["flags"]
     if len(fl["strengths"]) > 4 or len(fl["risks"]) > 4:
@@ -593,11 +637,10 @@ def _investment_view(R, story):
 
 def _technical(R, story):
     t = R["t"]
-    story += section("Technical Analysis", "Multi-timeframe trend, momentum, volume and key price levels")
-    if R["ch"].get("tech"):
-        im = img(R["ch"]["tech"], W)
-        if im:
-            story.append(im)
+    _head = [f for f in section("Technical Analysis", "Multi-timeframe trend, momentum, volume and key price levels")
+             if not isinstance(f, CondPageBreak)]
+    _im = img(R["ch"]["tech"], W) if R["ch"].get("tech") else None
+    story.append(KeepTogether(_head + ([_im] if _im else [])))
     story += [Spacer(1, 5), P(R["nar"]["technical"], "just"), Spacer(1, 6)]
 
     def trend_cell(lab):
@@ -652,11 +695,10 @@ def _risk(R, story):
     rk = R["rk"]
     if not rk.get("ann_vol"):
         return
-    story += section("Risk & Relative Performance", "How much the stock moves, how deep it falls, and how it tracks the market")
-    if R["ch"].get("rel"):
-        im = img(R["ch"]["rel"], W)
-        if im:
-            story.append(im)
+    _head = [f for f in section("Risk & Relative Performance", "How much the stock moves, how deep it falls, and how it tracks the market")
+             if not isinstance(f, CondPageBreak)]
+    _im = img(R["ch"]["rel"], W) if R["ch"].get("rel") else None
+    story.append(KeepTogether(_head + ([_im] if _im else [])))
     story.append(Spacer(1, 5))
     story.append(kv([
         ["Annualised volatility", f"{rk['ann_vol']}%", "Downside volatility", n(rk.get("downside_vol"), 1, "%")],
@@ -675,6 +717,20 @@ def _fin_table(rows_def, periods, label_w=40 * mm):
             continue
         data.append([P(lab, "cellb")] + [P(fmt(y.get(key)) if y.get(key) is not None else "—", "cellr") for y in periods])
     return data, [label_w] + [(W - label_w) / len(periods)] * len(periods)
+
+
+def _basis_note(fv) -> str:
+    bits = []
+    for k, lab in (("rev_cagr3", "Sales 3Y"), ("rev_cagr5", "Sales 5Y"), ("pat_cagr3", "Profit 3Y"), ("pat_cagr5", "Profit 5Y")):
+        b = (fv.get("cagr_basis") or {}).get(k)
+        if b:
+            bits.append(f"{lab}: {b}")
+        elif (fv.get("cagr_notes") or {}).get(k):
+            bits.append(f"{lab}: {fv['cagr_notes'][k]}")
+    out = "Basis — annual figures are fiscal-year, reported basis, ₹ Cr; quarterly figures are labelled by quarter. " + "; ".join(bits) + "."
+    if fv.get("eps_note"):
+        out += " EPS TTM " + fv["eps_note"] + "."
+    return out
 
 
 def _fundamentals(R, story):
@@ -705,7 +761,7 @@ def _fundamentals(R, story):
          colored(f"{prem:+.0f}%", sgn_color(prem, good_pos=False)) if prem is not None else "—"],
         ["P/B  /  peer-median P/B", f"{n(fv.get('pb'), 2, '×')}  /  {n(fv.get('peer_pb'), 2, '×')}", "P/B premium / (discount)",
          colored(f"{fv['pb_prem']:+.0f}%", sgn_color(fv["pb_prem"], good_pos=False)) if fv.get("pb_prem") is not None else "—"],
-        ["EPS (TTM)", inr(fv.get("eps")), "Earnings yield", n(fv.get("earn_yield"), 1, "%")],
+        ["EPS (TTM, derived)" if fv.get("eps_src") == "derived" else "EPS (TTM)", inr(fv.get("eps")), "Earnings yield", n(fv.get("earn_yield"), 1, "%")],
         ["ROE", n(fv.get("roe"), 1, "%"), "ROCE", n(fv.get("roce"), 1, "%")],
         ["Dividend yield", n(fv.get("div_y"), 2, "%"), "PEG (P/E ÷ 3Y profit CAGR)", n(fv.get("peg"), 2)],
         (["ROA (PAT ÷ year-end assets)", n(fv.get("roa"), 2, "%"), "Leverage (assets ÷ net worth)", n(fv.get("leverage"), 1, "×")] if fv.get("lender")
@@ -714,18 +770,21 @@ def _fundamentals(R, story):
 
     if fv["has_statements"] or fv["has_quarters"]:
         story += [Spacer(1, 6), P("Growth & earnings quality", "h2"), kv([
-            ["Sales CAGR 3Y / 5Y", f"{n(fv.get('rev_cagr3'), 1, '%')}  /  {n(fv.get('rev_cagr5'), 1, '%')}",
-             "Profit CAGR 3Y / 5Y", f"{n(fv.get('pat_cagr3'), 1, '%')}  /  {n(fv.get('pat_cagr5'), 1, '%')}"],
+            ["Sales CAGR 3Y / 5Y (annual)", f"{n(fv.get('rev_cagr3'), 1, '%')}  /  {n(fv.get('rev_cagr5'), 1, '%')}",
+             "Profit CAGR 3Y / 5Y (annual)", f"{n(fv.get('pat_cagr3'), 1, '%')}  /  {n(fv.get('pat_cagr5'), 1, '%')}"],
             ["Latest qtr revenue YoY / QoQ", f"{n(fv.get('q_rev_yoy'), 1, '%')}  /  {n(fv.get('q_rev_qoq'), 1, '%')}",
              "Latest qtr profit YoY / QoQ", f"{n(fv.get('q_pat_yoy'), 1, '%')}  /  {n(fv.get('q_pat_qoq'), 1, '%')}"],
-            ["Financing margin (latest)" if fv.get("lender") else "Operating margin (latest)", n(fv.get("opm"), 1, "%"), "Change vs 3 years ago",
-             f"{fv['opm_delta']:+.1f} pts" if fv.get("opm_delta") is not None else "—"],
+            [f"{'Financing' if fv.get('lender') else 'Operating'} margin, FY ({fv.get('opm_label') or 'n/a'})",
+             n(fv.get("opm"), 1, "%") + (f"  ({fv['opm_delta']:+.1f} pts vs 3 FYs ago)" if fv.get("opm_delta") is not None else ""),
+             f"Latest-quarter margin ({fv.get('opm_q_label') or 'n/a'})", n(fv.get("opm_q"), 1, "%")],
             ([f"Balance-sheet growth {fv.get('book_growth_yrs') or 3}Y CAGR", f"{n(fv.get('book_growth'), 1, '%')} ({fv.get('book_growth_src') or 'n/a'})",
               "Net worth / borrowings CAGR", f"{n(fv.get('nw_cagr3'), 1, '%')}  /  {n(fv.get('borrow_cagr3'), 1, '%')}"] if fv.get("lender") else
              ["Cash conversion (3Y OCF ÷ PAT)", n(fv.get("ocf_pat"), 2, "×") if not fv["fin"] else "n.m. (financial)",
               "Profit-decline years (last 5)", n(fv.get("down_years"), 0)]),
         ])]
 
+    if fv["has_statements"] or fv["has_quarters"]:
+        story.append(P(_basis_note(fv), "tiny"))
     if R["ch"].get("fin"):
         im = img(R["ch"]["fin"], W)
         if im:
@@ -785,7 +844,8 @@ def _ownership_peers(R, story):
             good = d >= 0 if key != "public" else d <= 0
             rows.append([P(lab, "cellb"), P(f"{a[key]:.1f}%", "cellr"), P(f"{b[key]:.1f}%", "cellr"),
                          P(colored(f"{d:+.1f}", GREEN_H if good else RED_H), "cellr")])
-        story += [Spacer(1, 4), table([hdr] + rows, [50 * mm, 40 * mm, 40 * mm, 48 * mm])]
+        story += [Spacer(1, 4), KeepTogether([table([hdr] + rows, [50 * mm, 40 * mm, 40 * mm, 48 * mm]),
+                  P('Pledged-share data is not available from the configured sources and is not shown.', 'tiny')])]
 
     if peers:
         title = R.get("peer_label") or R["sector"]
@@ -866,19 +926,26 @@ def _plan(R, story):
                         f"(≈ {inr(sz['value'], 0)}, {sz['pct_capital']}% of capital). Scale to your own capital and risk tolerance.", "just")]
     else:
         recl = plan.get("reclaim")
-        story.append(P(f"<b>Re-entry condition:</b> a daily close above {inr(recl) if recl else 'the 50-day EMA'} "
-                       f"with RSI back above 50 and above-average volume. <b>Further downside risk</b> opens below {inr(plan['bear_trigger'])}.", "just"))
+        story.append(P(f"<b>Watchlist view — no entry, stop or target levels are given.</b> A <b>confirmed</b> re-entry needs a daily close above "
+                       f"{inr(plan['confirm_level'])} with RSI back above 50 and above-average volume. "
+                       f"<b>Further downside risk</b> opens below {inr(plan['bear_trigger'])}.", "just"))
 
-    story += [Spacer(1, 7), P("Decision triggers", "h2")]
+    _trig_head = [Spacer(1, 7), P("Decision triggers", "h2")]
     res, sup = t["resistances"], t["supports"]
     bull_obj = inr(res[1]["price"]) if len(res) > 1 else inr(plan["t2"])
     bear_obj = inr(sup[1]["price"]) if len(sup) > 1 else inr(t["ema200"] or t["w52l"])
-    rows = [
-        [P(colored("Bull", GREEN_H), "cellb"), P(f"Daily close above {inr(plan['bull_trigger'])} on ≥1.5× average volume"), P(f"Next resistance {bull_obj}")],
-        [P(colored("Base", AMBER_H), "cellb"), P(f"Consolidation between {inr(plan['bear_trigger'])} and {inr(plan['bull_trigger'])}"), P("Range-bound; wait for resolution")],
-        [P(colored("Bear", RED_H), "cellb"), P(f"Daily close below {inr(plan['bear_trigger'])}"), P(f"Next support {bear_obj}")],
-    ]
-    story.append(table([[P("Scenario", "th"), P("Condition", "th"), P("Objective", "th")]] + rows, [24 * mm, 94 * mm, 60 * mm]))
+    base = [P(colored("Base", AMBER_H), "cellb"), P(f"Consolidation between {inr(plan['bear_trigger'])} and {inr(plan['bull_trigger'])}"), P("Range-bound; wait for resolution")]
+    bear = [P(colored("Bear", RED_H), "cellb"), P(f"Daily close below {inr(plan['bear_trigger'])}"), P(f"Next support {bear_obj}")]
+    if plan["mode"] == "DEFENSIVE":
+        rows = []
+        if plan["confirm_level"] > plan["early_trigger"] + 1e-9:
+            rows.append([P(colored("Early recovery", AMBER_H), "cellb"), P(f"Daily close above {inr(plan['early_trigger'])} — not a confirmed entry"),
+                         P(f"Next resistance {bull_obj}; still inside a downtrend")])
+        rows += [[P(colored("Confirmed re-entry", GREEN_H), "cellb"),
+                  P(f"Daily close above {inr(plan['confirm_level'])}, RSI above 50, above-average volume"), P("Re-assess for a long setup")], base, bear]
+    else:
+        rows = [[P(colored("Bull", GREEN_H), "cellb"), P(f"Daily close above {inr(plan['bull_trigger'])} on ≥1.5× average volume"), P(f"Next resistance {bull_obj}")], base, bear]
+    story.append(KeepTogether(_trig_head + [table([[P("Scenario", "th"), P("Condition", "th"), P("Objective", "th")]] + rows, [34 * mm, 90 * mm, 54 * mm])]))
     r1 = plan.get("range_1m")
     if r1:
         story += [Spacer(1, 6), P("One-month statistical range (from realised volatility)", "h2"),
@@ -899,9 +966,10 @@ def _risks_catalysts(R, story):
     notes = R["flags"].get("notes") or []
     if notes:
         story += [Spacer(1, 8), P("Analyst notes & data limitations", "h2")] + bullets([esc(x) for x in notes], AMBER_H)
-    if R["news"]:
+    news = [x for x in (R["news"] or []) if isinstance(x, dict) and x.get("title") and x.get("source") and x.get("date")]
+    if news:
         story += [Spacer(1, 8), P("Recent headlines", "h2")]
-        story += bullets([esc(x) for x in R["news"]])
+        story += bullets([f"{esc(x['title'])} — {esc(x['source'])}, {esc(x['date'])}" for x in news[:5]])
         story.append(P("Headlines are listed for context only and have not been used in the scoring.", "tiny"))
 
 
@@ -918,19 +986,32 @@ def _appendix(R, story):
     }
     rows = [[P(k, "cellb"), P(f"{int(w * 100)}%", "cellr"), P(desc[k])] for k, w in eng.WEIGHTS.items()]
     story.append(table([[P("Pillar", "th"), P("Weight", "thr"), P("What it measures", "th")]] + rows, [28 * mm, 20 * mm, 130 * mm]))
-    story.append(P("Pillars without data are excluded and the remaining weights re-normalised (see 'Data coverage' on page 1). "
+    sc_, cm = R["sc"], R["completeness"]
+    arith = " + ".join(f"{k} {sc_['pillars'][k]}×{sc_['weights_eff'][k]:.1f}%" for k in sc_["weights_eff"])
+    story.append(P(f"<b>Composite arithmetic:</b> {arith} = {sc_['composite_raw']} → rounded half-up to <b>{sc_['composite']}</b> "
+                   f"(the stance band uses the rounded value). "
+                   + ("All six pillars were available, so no re-weighting was needed." if sc_["n_pillars"] == 6 else
+                      f"Missing pillars ({', '.join(sc_['missing_pillars'])}) were excluded and the other weights re-normalised to 100%."), "tiny"))
+    story.append(P("Cost-of-equity hurdle used in the low-ROE flag: " + f"{R['fv'].get('coe', eng.COE_ASSUMED):.0f}% — a fixed assumption, not a CAPM estimate. "
+                   "Pillars without data are excluded and the remaining weights re-normalised (see 'Pillar coverage' on page 1). "
                    "Stance bands: 75+ high-conviction constructive · 62–74 constructive · 48–61 neutral/wait · 35–47 cautious · below 35 negative. "
                    "A technical veto caps the stance at neutral when the trend pillar is below 35. "
                    "The framework is a structured summary of the data, not a forecast and not a back-tested trading system.", "tiny"))
 
     story += [Spacer(1, 8), P("Data sources & completeness", "h2")]
     stm = R["stm"]
-    n_core = sum(1 for k in ("pe", "roe", "eps", "pb", "de", "mcap") if R["fund"].get(k) is not None)
+    cm = R["completeness"]
     items = [
         f"Prices & volume: Yahoo Finance / NSE / Stooq daily candles ({R['t']['bars']} sessions); benchmark Nifty 50.",
         (f"Financial statements: {esc(stm['source'])} — {len(stm.get('years') or [])} annual periods, "
          f"{len(stm.get('quarters') or [])} quarters.") if stm else "Financial statements: not available.",
-        f"Ratios aggregated from Screener.in / Yahoo / Finnhub: {n_core}/6 core fields available.",
+        f"Field completeness — mandatory: {cm['mandatory_ok']}/{cm['mandatory_total']}"
+        + (f" (missing: {esc(', '.join(cm['missing_mandatory']))})" if cm["missing_mandatory"] else "")
+        + f"; optional: {cm['optional_ok']}/{cm['optional_total']}"
+        + (f" (not available: {esc(', '.join(cm['missing_optional']))})" if cm["missing_optional"] else "")
+        + f". Pillar coverage: {R['sc']['n_pillars']}/6.",
+        f"Price timestamp: close of {R['asof']} (last completed session, not live). Benchmark: Nifty 50"
+        + (f", observation to {R['market_ctx']['asof']}." if R.get("market_ctx") else " (benchmark data unavailable)."),
         f"Shareholding: Screener.in, {len(R['sh'])} quarters." if R["sh"] else "Shareholding: not available.",
         (f"Peers: {len(R['peers'])} companies from the '{rg_clean(R.get('peer_label'))}' group ({esc(R.get('peer_method') or '')})."
          if R["peers"] else "Peers: no peer group could be resolved or no peer returned data."),
