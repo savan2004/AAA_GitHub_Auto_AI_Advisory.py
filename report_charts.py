@@ -51,6 +51,23 @@ def _inr(x, _pos=None):
     return f"₹{x:,.0f}"
 
 
+def _px(v, unit="₹"):
+    """Price label that keeps decimals for sub-₹1000 prices (₹22.02 must not become ₹22)."""
+    return f"{unit}{v:,.2f}" if abs(v) < 1000 else f"{unit}{v:,.0f}"
+
+
+def _level_labels(levels, atr, min_gap_frac=0.6):
+    """Nudge S/R label y-positions apart so they never overlap (lines stay at the true price)."""
+    out, last = [], None
+    for kind, price in sorted(levels, key=lambda x: x[1]):
+        y = price
+        if last is not None and atr and (y - last) < atr * min_gap_frac:
+            y = last + atr * min_gap_frac
+        out.append((kind, price, y))
+        last = y
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════
 def chart_technical(df: pd.DataFrame, sym: str, t: dict, bars: int = 150, unit: str = "₹") -> Optional[str]:
     """unit="₹" for stocks, "" for index levels (points)."""
@@ -89,19 +106,17 @@ def chart_technical(df: pd.DataFrame, sym: str, t: dict, bars: int = 150, unit: 
             ax.plot(x, e200.values, color="#7B1FA2", lw=1.2, label="EMA 200", zorder=4)
 
         xr = len(d) + 1
-        for s in t.get("supports", [])[:2]:
-            ax.axhline(s["price"], color=GREEN, lw=0.8, ls="--", alpha=0.8, zorder=1)
-            ax.text(0.5, s["price"], f"S {unit}{s['price']:,.0f}", color=GREEN, fontsize=7, va="bottom",
-                    bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85), zorder=6)
-        for r in t.get("resistances", [])[:2]:
-            ax.axhline(r["price"], color=RED, lw=0.8, ls="--", alpha=0.8, zorder=1)
-            ax.text(0.5, r["price"], f"R {unit}{r['price']:,.0f}", color=RED, fontsize=7, va="bottom",
+        _lv = [("S", s["price"]) for s in t.get("supports", [])[:2]] + [("R", r["price"]) for r in t.get("resistances", [])[:2]]
+        for kind, price, ypos in _level_labels(_lv, t.get("atr")):
+            col = GREEN if kind == "S" else RED
+            ax.axhline(price, color=col, lw=0.8, ls="--", alpha=0.8, zorder=1)
+            ax.text(0.5, ypos, f"{kind} {_px(price, unit)}", color=col, fontsize=7, va="bottom",
                     bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85), zorder=6)
         ax.text(xr, d["Close"].iloc[-1], f" {unit}{d['Close'].iloc[-1]:,.2f}", color="white", fontsize=7.5,
                 fontweight="bold", va="center",
                 bbox=dict(boxstyle="round,pad=0.25", fc=NAVY, ec="none"))
         ax.set_xlim(-1, len(d) + 11)
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: f"{unit}{v:,.0f}"))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: _px(v, unit)))
         ax.grid(True, axis="y")
         ax.legend(loc="upper left", ncol=3, frameon=False, fontsize=7.5)
         ax.set_title(f"{sym} — Daily price, moving averages & key levels", loc="left")
