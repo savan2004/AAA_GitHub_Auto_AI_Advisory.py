@@ -20,7 +20,6 @@ The scoring is a transparent rule set (documented in the PDF appendix). It is a
 structured way to summarise the data — not a forecast and not a backtested edge.
 """
 
-import os
 import re
 import math
 import logging
@@ -286,111 +285,6 @@ def _de_ratio(fund: dict, last_year: Optional[dict]) -> Optional[float]:
     return round(de / 100.0, 2) if de > 8 else round(float(de), 2)
 
 
-COE_ASSUMED = float(os.getenv("ASSUMED_COST_OF_EQUITY", "12"))   # disclosed hurdle, NOT a CAPM estimate
-
-
-def _label_end(label):
-    try:
-        from research_data import period_end
-        return period_end(label)
-    except Exception:
-        return None
-
-
-def _cagr_checked(rows: List[dict], key: str, yrs: int):
-    """Annual-table CAGR with explicit zero/negative handling -> (value|None, note|None, start_label, end_label)."""
-    vals = [r.get(key) for r in rows]
-    if len(vals) <= yrs:
-        return None, "not enough annual periods", None, None
-    a, b = vals[-(yrs + 1)], vals[-1]
-    sl, el = rows[-(yrs + 1)].get("label"), rows[-1].get("label")
-    if a is None or b is None:
-        return None, "start or end value missing", sl, el
-    if a <= 0:
-        return None, f"n.m. - starting value ({a:g}) is zero or negative", sl, el
-    if b <= 0:
-        return None, f"n.m. - ending value ({b:g}) is zero or negative", sl, el
-    return round(((b / a) ** (1.0 / yrs) - 1) * 100, 1), None, sl, el
-
-
-def _eps_ttm_from_quarters(quarters, years, pe, ltp, fresh_status):
-    """EPS TTM = sum of last 4 *consecutive* quarterly EPS. Rejected when periods are not contiguous,
-    the data is stale, it disagrees with annual EPS (split/bonus/restatement) or with price/PE."""
-    if fresh_status == "STALE" or len(quarters) < 4:
-        return None
-    q = quarters[-4:]
-    eps = [x.get("eps") for x in q]
-    if any(e is None for e in eps):
-        return None
-    ends = [_label_end(x.get("label")) for x in q]
-    if any(e is None for e in ends):
-        return None
-    if any(not 80 <= (b - a).days <= 100 for a, b in zip(ends, ends[1:])):
-        return None
-    val = round(sum(eps), 2)
-    if val <= 0:
-        return None
-    if years and ends[-1].month == 3 and years[-1].get("eps") and years[-1]["eps"] > 0:
-        if abs(val / years[-1]["eps"] - 1) > 0.10:
-            return None
-    if pe and pe > 0 and ltp and abs(val * pe / ltp - 1) > 0.30:
-        return None
-    return {"value": val, "note": f"derived: sum of last 4 quarterly EPS ({q[0].get('label')} to {q[-1].get('label')}) as "
-                                  f"reported by the source; not independently adjusted for splits/bonus"}
-
-
-def data_completeness(fv: dict, stm: Optional[dict], sh: list, peers: list, consensus=None) -> dict:
-    """Mandatory fields gate publication; optional ones only enrich the report."""
-    years = (stm or {}).get("years") or []
-    mand = [("Market cap", fv.get("mcap")), ("P/E (TTM)", fv.get("pe")), ("ROE", fv.get("roe")),
-            ("Annual statements (4+ periods)", True if len(years) >= 4 else None)]
-    if fv.get("lender"):
-        mand.append(("P/B", fv.get("pb")))
-    opt = [("EPS (TTM)", fv.get("eps")), ("Forward P/E", fv.get("fwd_pe")), ("Peer-median P/E", fv.get("peer_pe")),
-           ("Shareholding history", sh or None), ("Street consensus", consensus)]
-    if not fv.get("lender"):
-        opt.insert(1, ("P/B", fv.get("pb")))
-        opt.insert(2, ("Debt / Equity", fv.get("de") if not fv.get("fin") else True))
-    return {"mandatory_total": len(mand), "mandatory_ok": sum(1 for _, v in mand if v is not None),
-            "missing_mandatory": [k for k, v in mand if v is None],
-            "optional_total": len(opt), "optional_ok": sum(1 for _, v in opt if v is not None),
-            "missing_optional": [k for k, v in opt if v is None]}
-
-
-def market_context(nifty) -> Optional[dict]:
-    """Rule-based benchmark regime from the Nifty 50 daily series already fetched for the report."""
-    try:
-        if nifty is None or len(nifty) < 60:
-            return None
-        c = nifty["Close"].astype(float)
-        last = float(c.iloc[-1])
-        e50 = float(c.ewm(span=50, adjust=False).mean().iloc[-1])
-        e200 = float(c.ewm(span=200, adjust=False).mean().iloc[-1]) if len(c) >= 200 else None
-        a50, a200 = last > e50, (last > e200 if e200 else None)
-        regime = "UPTREND" if a50 and a200 is not False else "DOWNTREND" if (not a50 and a200 is not True) else "MIXED"
-        ret = lambda n_: round((last / float(c.iloc[-1 - n_]) - 1) * 100, 1) if len(c) > n_ else None
-        ix = c.index[-1]
-        return {"bench": "Nifty 50", "asof": ix.strftime("%d-%b-%Y") if hasattr(ix, "strftime") else str(ix),
-                "ret_1m": ret(21), "ret_3m": ret(63), "above_ema50": a50, "above_ema200": a200,
-                "regime": regime, "sessions": len(c)}
-    except Exception:
-        return None
-
-
-def _trigger_sentence(plan: dict) -> str:
-    bt, br = plan.get("bull_trigger"), plan.get("bear_trigger")
-    if not (bt and br):
-        return ""
-    if plan.get("mode") == "DEFENSIVE":
-        conf = plan.get("confirm_level") or bt
-        early = (f"A close above ₹{bt:,.2f} would be only an early recovery signal inside a downtrend, not a confirmed entry. "
-                 if conf > bt + 1e-9 else "")
-        return (f"There is no confirmed long setup. {early}A confirmed re-entry needs a daily close above ₹{conf:,.2f} "
-                f"with RSI above 50 and above-average volume; a close below ₹{br:,.2f} would extend the decline.")
-    return (f"A close above ₹{bt:,.2f} on strong volume would confirm upside continuation; "
-            f"a close below ₹{br:,.2f} would weaken the constructive case.")
-
-
 def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: List[dict],
                          sector: Optional[str], ltp: float, industry: Optional[dict] = None) -> dict:
     industry = industry or {}
@@ -406,23 +300,18 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
     def g(title, period):
         return (growth.get(title) or {}).get(period)
 
-    # CAGR is computed from the SAME annual table printed in the report, so text and table always agree.
-    # The vendor's own (TTM-based, rounded) figure is only a fallback and is labelled as such.
-    fv["cagr_notes"], fv["cagr_basis"], fv["cagr_vendor"] = {}, {}, {}
-    for k_, ttl_, key_, yrs_ in (("rev_cagr3", "Compounded Sales Growth", "revenue", 3),
-                                 ("rev_cagr5", "Compounded Sales Growth", "revenue", 5),
-                                 ("pat_cagr3", "Compounded Profit Growth", "net_profit", 3),
-                                 ("pat_cagr5", "Compounded Profit Growth", "net_profit", 5)):
-        vendor = g(ttl_, f"{yrs_} Years")
-        val_, note_, sl_, el_ = _cagr_checked(years, key_, yrs_)
-        fv["cagr_vendor"][k_] = vendor
-        if val_ is not None:
-            fv[k_], fv["cagr_basis"][k_] = val_, f"annual table {sl_} to {el_}"
-        else:
-            fv[k_] = vendor
-            fv["cagr_basis"][k_] = "vendor figure (Screener, TTM basis)" if vendor is not None else None
-            if note_:
-                fv["cagr_notes"][k_] = note_
+    fv["rev_cagr3"] = g("Compounded Sales Growth", "3 Years")
+    fv["rev_cagr5"] = g("Compounded Sales Growth", "5 Years")
+    fv["pat_cagr3"] = g("Compounded Profit Growth", "3 Years")
+    fv["pat_cagr5"] = g("Compounded Profit Growth", "5 Years")
+    if fv["rev_cagr3"] is None:
+        fv["rev_cagr3"] = _f(series_cagr(years, "revenue", 3), 1)
+    if fv["rev_cagr5"] is None:
+        fv["rev_cagr5"] = _f(series_cagr(years, "revenue", 5), 1)
+    if fv["pat_cagr3"] is None:
+        fv["pat_cagr3"] = _f(series_cagr(years, "net_profit", 3), 1)
+    if fv["pat_cagr5"] is None:
+        fv["pat_cagr5"] = _f(series_cagr(years, "net_profit", 5), 1)
 
     # latest quarter YoY / QoQ
     fv["q_rev_yoy"] = fv["q_pat_yoy"] = fv["q_rev_qoq"] = fv["q_pat_qoq"] = None
@@ -449,13 +338,6 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
 
     # margins
     fv["opm"] = last.get("opm") if last else None
-    fv["opm_label"] = last.get("label") if last else None
-    _q = quarters[-1] if quarters else None
-    fv["opm_q"] = None
-    if _q and not fv["stale_quarters"]:
-        fv["opm_q"] = _q.get("opm") if _q.get("opm") is not None else (
-            round(_q["op_profit"] / _q["revenue"] * 100, 1) if _q.get("op_profit") is not None and _q.get("revenue") else None)
-    fv["opm_q_label"] = _q.get("label") if _q else None
     fv["opm_3y_ago"] = years[-4].get("opm") if len(years) >= 4 else None
     fv["opm_delta"] = (round(fv["opm"] - fv["opm_3y_ago"], 1)
                        if fv["opm"] is not None and fv["opm_3y_ago"] is not None else None)
@@ -502,11 +384,6 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
     fv["de"] = None if fv["fin"] else _de_ratio(fund, last)
     fv["pe"], fv["fwd_pe"], fv["pb"] = fund.get("pe"), fund.get("fwd_pe"), fund.get("pb")
     fv["eps"], fv["div_y"], fv["mcap"], fv["rev_ttm"] = fund.get("eps"), fund.get("div_y"), fund.get("mcap"), fund.get("rev")
-    fv["eps_src"], fv["eps_note"], fv["coe"] = ("reported" if fv["eps"] is not None else None), None, COE_ASSUMED
-    if fv["eps"] is None:
-        d_ = _eps_ttm_from_quarters(quarters, years, fv.get("pe"), ltp, fr.get("status"))
-        if d_:
-            fv["eps"], fv["eps_src"], fv["eps_note"] = d_["value"], "derived", d_["note"]
 
     # ── valuation vs peers ──────────────────────────────────────────────
     peer_pe = _median([p.get("pe") for p in peers if (p.get("pe") or 0) > 0])
@@ -667,8 +544,7 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
     }
     avail = {k: v for k, v in s.items() if v is not None}
     wsum = sum(WEIGHTS[k] for k in avail)
-    comp_raw = sum(WEIGHTS[k] * v for k, v in avail.items()) / wsum if wsum else 0.0
-    comp = float(int(comp_raw + 0.5))   # displayed number == number used for the stance band
+    comp = sum(WEIGHTS[k] * v for k, v in avail.items()) / wsum if wsum else 0.0
     coverage = round(wsum * 100)
 
     fund_missing = all(s[k] is None for k in ("Quality", "Valuation", "Growth"))
@@ -685,7 +561,7 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
 
     veto = False
     if s["Trend"] < 35 and comp >= 48:
-        stance, action, veto = "QUALITY WATCHLIST / WAIT", ("Fundamentals/valuation are not the problem — price trend is. "
+        stance, action, veto = "NEUTRAL / WAIT", ("Fundamentals/valuation are not the problem — price trend is. "
                                                   "Wait for a reclaim of the 50-day EMA before committing."), True
 
     def hz(vals, hi, lo, names):
@@ -700,13 +576,7 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
         "Long term (1–3 yrs)": hz(["Quality", "Valuation", "Growth"], 65, 45, ("FAVOURABLE", "NEUTRAL", "UNFAVOURABLE")),
     }
     return {"pillars": {k: (round(v) if v is not None else None) for k, v in s.items()},
-            "composite": int(comp), "composite_raw": round(comp_raw, 2), "coverage": coverage,
-            "pillar_coverage": coverage, "n_pillars": len(avail), "missing_pillars": [k for k in s if s[k] is None],
-            "weights_eff": {k: round(WEIGHTS[k] / wsum * 100, 1) for k in avail} if wsum else {},
-            "contrib": {k: round(WEIGHTS[k] / wsum * v, 2) for k, v in avail.items()} if wsum else {},
-            "fund_avg": _avg([s[k] for k in ("Quality", "Valuation", "Growth")]),
-            "tech_avg": _avg([s["Trend"], s["Momentum"]]),
-            "stance": stance, "action": action,
+            "composite": round(comp), "coverage": coverage, "stance": stance, "action": action,
             "veto": veto, "tech_only": fund_missing, "horizons": horizons}
 
 
@@ -748,15 +618,85 @@ def build_trade_plan(t: dict, rk: dict, scores: dict) -> dict:
     plan["bull_trigger"] = (res[0] if res else t["w52h"])
     plan["bear_trigger"] = (sup[0] if sup else t["ema50"])
     plan["reclaim"] = t["ema50"] if ltp < t["ema50"] else (t["ema200"] if t.get("ema200") and ltp < t["ema200"] else None)
-    plan["early_trigger"] = plan["bull_trigger"]
-    plan["confirm_level"] = (max(plan["reclaim"], plan["bull_trigger"]) if (plan["reclaim"] and plan["bull_trigger"])
-                             else (plan["reclaim"] or plan["bull_trigger"]))
 
     sig = (rk.get("ann_vol") or 0) / 100 * math.sqrt(21 / 252)
     plan["range_1m"] = {"s1_lo": round(ltp * (1 - sig), 2), "s1_hi": round(ltp * (1 + sig), 2),
                         "s2_lo": round(ltp * (1 - 2 * sig), 2), "s2_hi": round(ltp * (1 + 2 * sig), 2),
                         "sigma_pct": round(sig * 100, 1)} if sig else None
     return plan
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CLIENT HOLDING VIEW (portfolio reports)
+# ══════════════════════════════════════════════════════════════════════════
+def holding_audit(buy: float, ltp: float) -> tuple:
+    """(flag, note). Catches unadjusted cost bases after splits / bonuses / demergers."""
+    if not buy or buy <= 0:
+        return "ZERO COST", "Buy price is zero — treated as a gifted/demerged holding; P&L % is not meaningful."
+    pnl_pct = (ltp / buy - 1) * 100
+    if pnl_pct <= -50:
+        return "VERIFY COST BASIS", (f"Loss of {abs(pnl_pct):.0f}% — if this stock had a split, bonus or demerger, "
+                                     f"the buy price may be unadjusted. Verify before acting.")
+    if pnl_pct >= 400:
+        return "VERIFY COST BASIS", f"Gain of {pnl_pct:.0f}% — confirm the buy price (possible bonus/split adjustment)."
+    return "NORMAL", "Cost basis is within a plausible range of the current price."
+
+
+def holding_view(composite: int, trend_pts: int, qty: float, buy: float, ltp: float, weight_pct: float,
+                 plan: dict, t: dict, max_weight: float = 15.0) -> dict:
+    """
+    Rule-based verdict for a client's position: score → base verdict, technical veto, concentration cap.
+    Returns {verdict, action, severity (0 = act now … 3 = fine), audit_flag, audit_note}.
+    """
+    flag, note = holding_audit(buy, ltp)
+    if composite >= 75:
+        verdict, sev = "ACCUMULATE — HIGH CONVICTION", 3
+    elif composite >= 62:
+        verdict, sev = "ACCUMULATE", 3
+    elif composite >= 48:
+        verdict, sev = "HOLD", 2
+    elif composite >= 35:
+        verdict, sev = "TRIM / REDUCE", 1
+    else:
+        verdict, sev = "EXIT / AVOID ADDING", 0
+    # Adding capital is a higher-stakes call than a stance label, so holdings use a stricter trend gate
+    # (45) than the stock-report veto (35): never "accumulate" into a broken chart on fundamentals alone.
+    vetoed = False
+    if trend_pts < 45 and sev == 3:
+        verdict, sev, vetoed = "HOLD — wait for trend repair", 2, True
+
+    sup = (t.get("supports") or [{}])[0].get("price")
+    res = (t.get("resistances") or [{}])[0].get("price")
+    stop = plan.get("sl")
+    pnl_pct = (ltp / buy - 1) * 100 if buy else 0.0
+    fm = lambda x: f"₹{x:,.2f}" if x else "—"
+    over = weight_pct > max_weight
+    if over and composite >= 48:
+        verdict, sev = f"HOLD / TRIM CONCENTRATION ({weight_pct:.1f}% weight)", min(sev, 1)
+        action = (f"This position is {weight_pct:.1f}% of the portfolio, above the {max_weight:.0f}% single-stock guideline. "
+                  f"Avoid adding capital; consider trimming toward the limit, ideally into strength near {fm(res)}, "
+                  f"and keep a protective stop near {fm(stop)}.")
+    elif over:
+        verdict, sev = f"TRIM / EXIT — CONCENTRATED ({weight_pct:.1f}% weight)", 0
+        action = (f"Weak score and {weight_pct:.1f}% of the portfolio in one stock. Reducing exposure is the priority — "
+                  f"watch {fm(res)} as the first area to sell into and {fm(sup)} as the line that should not break.")
+    elif sev == 3:
+        action = (f"Hold {qty:,.0f} shares (avg {fm(buy)}, {pnl_pct:+.1f}%). Add only in tranches near support {fm(sup)}; "
+                  f"protective stop near {fm(stop)}.")
+    elif sev == 2 and vetoed:
+        e50 = t.get("ema50")
+        action = (f"The composite score is constructive, but price is {abs(t.get('dist_high', 0)):.0f}% below its 52-week high and the trend pillar is only "
+                  f"{trend_pts}/100. Hold {qty:,.0f} shares; add only after a close above the 50-day EMA ({fm(e50)}). "
+                  f"Protective stop near {fm(stop)}.")
+    elif sev == 2:
+        action = (f"Hold {qty:,.0f} shares; no fresh capital until trend/valuation improve. "
+                  f"Protective stop near {fm(stop)}; upside needs a close above {fm(res)} on volume.")
+    elif sev == 1:
+        action = (f"Score is weak. Consider reducing on strength near {fm(res)}; a close below {fm(sup)} would argue for a larger cut.")
+    else:
+        action = (f"Score is very weak ({composite}/100). Avoid adding; consider exiting on bounces near {fm(res)} "
+                  f"and redeploying into stronger holdings.")
+    return {"verdict": verdict, "action": action, "severity": sev, "audit_flag": flag, "audit_note": note}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -805,10 +745,8 @@ def build_flags(t: dict, rk: dict, fv: dict, sh: List[dict], consensus: Optional
     if fv.get("roe") is not None:
         if fv["roe"] >= 18:
             pos.append(f"High return on equity of {fv['roe']:.1f}% (above the 15% quality benchmark).")
-        elif fv["roe"] < fv.get("coe", COE_ASSUMED):
-            R("Medium", "Low return on equity",
-              f"ROE of {fv['roe']:.1f}% is below the {fv.get('coe', COE_ASSUMED):.0f}% cost-of-equity hurdle assumed in this report "
-              f"(a fixed assumption, not a CAPM estimate).")
+        elif fv["roe"] < 8:
+            R("Medium", "Low return on equity", f"ROE of {fv['roe']:.1f}% is below the cost of equity.")
     if fv.get("roce") is not None and fv["roce"] >= 20:
         pos.append(f"ROCE of {fv['roce']:.1f}% indicates efficient capital deployment.")
     if fv.get("de") is not None and not fv["fin"]:
@@ -965,15 +903,14 @@ def deterministic_narrative(name: str, sym: str, t: dict, rk: dict, fv: dict, sc
     parts = [f"The stock closed at ₹{ltp:,.2f}, {abs(t['dist_high']):.1f}% below its 52-week high of ₹{t['w52h']:,.2f} "
              f"and sits at the {_ordinal(t['pos52'])} percentile of its annual range." if t.get("pos52") is not None else
              f"The stock closed at ₹{ltp:,.2f}."]
-    parts.append(f"By EMA alignment and price position, the daily trend reads <b>{t['trend'].lower()}</b>"
+    parts.append(f"The daily trend reads <b>{t['trend'].lower()}</b>"
                  + (f", and the weekly chart shows "
                     f"{ {'UPTREND': 'an uptrend', 'DOWNTREND': 'a downtrend'}.get(t['weekly_trend'], 'a sideways pattern') }"
                     if t.get("weekly_trend") else "") + ".")
     rsi_txt = ("overbought" if t["rsi"] > 70 else "oversold" if t["rsi"] < 30 else
                "firm" if t["rsi"] >= 55 else "soft" if t["rsi"] < 45 else "neutral")
     parts.append(f"RSI(14) of {t['rsi']} is {rsi_txt}; MACD histogram is {'positive' if t['macd_hist'] > 0 else 'negative'}. "
-                 f"ADX of {t['adx']} measures trend strength, not direction, and is {'strong' if t['adx'] >= 25 else 'weak (below 25)'}; "
-                 f"direction comes from the EMAs and +DI/-DI.")
+                 f"ADX of {t['adx']} indicates a {'trending' if t['adx'] >= 25 else 'weakly trending / range-bound'} market.")
     r3 = (t.get("returns") or {}).get("3M") or {}
     if r3.get("rel") is not None:
         parts.append(f"Over three months the stock has {'outperformed' if r3['rel'] >= 0 else 'underperformed'} "
@@ -1021,7 +958,7 @@ def deterministic_narrative(name: str, sym: str, t: dict, rk: dict, fv: dict, sc
         bits = []
         for k, nm in (("promoters", "Promoters"), ("fii", "FIIs"), ("dii", "DIIs")):
             if a.get(k) is not None and b.get(k) is not None:
-                bits.append(f"{nm} {b[k]:.1f}% ({b[k] - a[k]:+.1f} pts vs {a['label']})")
+                bits.append(f"{nm} {b[k]:.1f}% ({b[k] - a[k]:+.1f} pts)")
         out["ownership"] = ("Shareholding as of " + b["label"] + ": " + ", ".join(bits) + ".") if bits else ""
     else:
         out["ownership"] = ""
@@ -1030,7 +967,9 @@ def deterministic_narrative(name: str, sym: str, t: dict, rk: dict, fv: dict, sc
     out["outlook"] = (f"Short-term bias is <b>{hz['Short term (1–4 wks)'][0].lower()}</b>, medium-term "
                       f"<b>{hz['Medium term (3–6 mths)'][0].lower()}</b> and the long-term fundamental picture is "
                       f"<b>{hz['Long term (1–3 yrs)'][0].lower()}</b>. "
-                      + _trigger_sentence(plan))
+                      + (f"A close above ₹{plan['bull_trigger']:,.2f} on strong volume would confirm upside continuation; "
+                         f"a close below ₹{plan['bear_trigger']:,.2f} would invalidate the constructive case."
+                         if plan.get("bull_trigger") and plan.get("bear_trigger") else ""))
     return out
 
 
