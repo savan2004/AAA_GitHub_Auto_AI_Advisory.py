@@ -23,8 +23,7 @@ import telebot
 from telebot import types
 
 # ── Local Module Imports ──────────────────────────────────────────────────────
-from data_engine import get_hist, get_info, get_live_price, batch_quotes, cached_get, cached_set
-from market_data import bulk_history
+from data_engine import get_hist, get_info, get_live_price, batch_quotes
 from technical_indicators import (
     calc_rsi, calc_ema, calc_macd, calc_atr, calc_asi,
     calc_bollinger, trend_label, swing_signal, rsi_label,
@@ -43,7 +42,7 @@ from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
-from research_upgrade import snapshot as research_snapshot, render as render_research
+import portfolio_report
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -492,94 +491,57 @@ def build_fundamental_text(sym, cname=None):
 SCREENER_STOCKS = {
     "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
     "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
-    "aggressive": ["TMPV", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ETERNAL", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
+    "aggressive": ["TATAMOTORS", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ZOMATO", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
 }
-_SCAN_TTL = 900  # 15 min: shared by all 3 buttons
-
-
-def _scan_bulk():
-    """ONE batched Yahoo download for all 30 symbols, shared by the 3 buttons."""
-    key = "scan_bulk_6mo_v2"
-    hit = cached_get(key, _SCAN_TTL)
-    if hit:
-        return hit
-    allsyms = sorted({s for l in SCREENER_STOCKS.values() for s in l})
-    data = bulk_history(allsyms, "6mo", chunk_size=100) or {}
-    if len(data) >= int(len(allsyms) * 0.7):      # don't cache a bad download
-        cached_set(key, data, _SCAN_TTL)
-    return data
-
-
-def _scan_row(sym, df):
-    if df is None or df.empty or len(df) < 28:
-        return None, "no/short data"
-    c = df["Close"].dropna()
-    if len(c) < 28:
-        return None, "short close series"
-    ltp = round(float(c.iloc[-1]), 2)
-    prev = float(c.iloc[-2])
-    chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
-    rsi_val = calc_rsi(c)
-    trend_val = trend_label(c)
-    return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi_val, "trend": trend_val,
-            "signal": swing_signal(rsi_val, trend_val, chg)}, None
 
 
 def build_scan(profile):
     syms = SCREENER_STOCKS.get(profile, [])
     if not syms:
         return "❌ Unknown profile."
-    t0 = time.time()
-    ck = f"scan_card_{profile}_{date.today().isoformat()}"
-    hit = cached_get(ck, _SCAN_TTL)
-    if hit:
-        logger.info(f"[Portfolio:{profile}] served from cache")
-        return hit
-
-    bulk = _scan_bulk()
-    results, missing = {}, []
-    for s in syms:
-        row, why = _scan_row(s, bulk.get(s))
-        if row:
-            results[s] = row
-        else:
-            missing.append(s)
-            logger.info(f"[Portfolio:{profile}] skip {s}: {why}")
-
-    # Rare fallback: at most 3 single-symbol fetches (throttled path), only for gaps.
-    for s in missing[:3]:
-        try:
-            row, why = _scan_row(s, get_hist(s, "6mo"))
-        except Exception as e:
-            row, why = None, f"fallback error {type(e).__name__}"
-        if row:
-            results[s] = row
-            logger.info(f"[Portfolio:{profile}] {s} recovered via fallback")
-        else:
-            logger.info(f"[Portfolio:{profile}] skip {s}: {why} (fallback)")
-    missing = [s for s in syms if s not in results]
-
     labels = {"conservative": "🏦 CONSERVATIVE", "moderate": "⚖️ MODERATE", "aggressive": "🚀 AGGRESSIVE"}
-    lines = [f"📊 <b>{labels.get(profile, 'SCREENER')}</b>",
-             f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
+    lines = [f"📊 <b>{labels.get(profile, 'SCREENER')}</b>", f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
+
+    def _fetch(sym):
+        try:
+            df = get_hist(sym, "6mo")
+            if df is None or df.empty or len(df) < 28:
+                return None
+            c = df["Close"]
+            ltp = round(float(c.iloc[-1]), 2)
+            prev = float(c.iloc[-2])
+            chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+            rsi_val = calc_rsi(c)
+            trend_val = trend_label(c)
+            signal_val = swing_signal(rsi_val, trend_val, chg)
+            return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi_val, "trend": trend_val, "signal": signal_val}
+        except Exception:
+            return None
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futs = {pool.submit(_fetch, s): s for s in syms}
+        for f in as_completed(futs, timeout=15):
+            sym = futs[f]
+            try:
+                r = f.result()
+                if r:
+                    results[sym] = r
+            except Exception:
+                pass
+
     for s in syms:
         r = results.get(s)
         if not r:
             continue
         icon = "🟢" if r["chg"] >= 0 else "🔴"
         rsi_b = "🔴OB" if r["rsi"] > 70 else ("🟢OS" if r["rsi"] < 30 else "🟡")
-        lines.append(f"{icon} <b>{s}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n"
-                     f"   RSI:{r['rsi']} {rsi_b}  |  {r['trend']}  |  <b>{r['signal']}</b>")
+        lines.append(f"{icon} <b>{s}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n   RSI:{r['rsi']} {rsi_b}  |  {r['trend']}  |  <b>{r['signal']}</b>")
+
     if not results:
-        lines.append("❌ Data unavailable. Try again in a minute.")
-    elif missing:
-        lines.append(f"⚠️ No data today: {', '.join(missing)}")
+        lines.append("❌ Data unavailable.")
     lines.append("\n⚠️ Educational only.")
-    text = "\n".join(lines)[:4000]
-    logger.info(f"[Portfolio:{profile}] passed {len(results)} / checked {len(syms)} in {time.time()-t0:.1f} sec")
-    if results and not missing:
-        cached_set(ck, text, _SCAN_TTL)
-    return text
+    return "\n".join(lines)
 
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
@@ -656,7 +618,7 @@ def main_keyboard():
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
-    kb.add("🏭 Sector Report")
+    kb.add("🏭 Sector Report", "🧾 Portfolio Report")
     return kb
 
 
@@ -700,6 +662,7 @@ def cmd_start(m):
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
+              "🧾 <b>Portfolio Report</b> = upload Symbol/Qty/Buy Price → health report + 8-page report per holding.\n"
               "Use menu buttons below.",
               reply_markup=main_keyboard())
 
@@ -875,6 +838,12 @@ def handle_analysis_callback(call):
         safe_send(chat_id, f"📄 Preparing research report for <b>{sym}</b>…")
         executor.submit(run_report, chat_id, sym)
 
+    elif action == "pftemplate":
+        import io as _io
+        buf = _io.BytesIO(portfolio_report.TEMPLATE_CSV.encode("utf-8"))
+        buf.name = "portfolio_template.csv"
+        bot.send_document(chat_id, buf, caption="📥 Fill in Symbol, Qty and Buy Price (NSE tickers), then send the file back here.")
+
     elif action == "menu":
         safe_send(chat_id, f"What would you like to see for <b>{sym}</b>?",
                   reply_markup=analysis_choice_keyboard(sym))
@@ -1040,15 +1009,7 @@ def scan_btn(m):
 
     def _run(chat_id=m.chat.id, prof=p):
         try:
-            universe = _ALL_NSE_SYMS or sorted({s for group in SCREENER_STOCKS.values() for s in group})
-            priority = sorted({s for g in SCREENER_STOCKS.values() for s in g})
-            snap = research_snapshot(universe, cached_get, get_info, bulk_history, priority=priority)
-            messages, symbols = render_research(prof, snap)
-            kb = types.InlineKeyboardMarkup(row_width=3) if symbols else None
-            if kb is not None:
-                kb.add(*[types.InlineKeyboardButton(s, callback_data=f"menu|{s}") for s in symbols])
-            for index, text in enumerate(messages):
-                safe_send(chat_id, text, reply_markup=kb if index == len(messages)-1 else None)
+            safe_send(chat_id, build_scan(prof))
         except Exception as e:
             logger.error(f"Screener err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
@@ -1073,20 +1034,29 @@ def breadth_btn(m):
 @bot.message_handler(func=lambda m: m.text in ["🎯 Swing (Safe)", "🚀 Swing (Agr)"])
 def swing_btn(m):
     mode = "conservative" if "Safe" in m.text else "aggressive"
-    safe_send(m.chat.id, "⏳ Swing scanning… (~20s first run, instant for 30 min after)")
+    safe_send(m.chat.id, f"⏳ Swing scanning… (~25s)")
+
+    def _ping(chat_id=m.chat.id):
+        time.sleep(15)
+        try:
+            safe_send(chat_id, "⏳ Still scanning…")
+        except Exception:
+            pass
+
+    threading.Thread(target=_ping, daemon=True).start()
 
     def _run(chat_id=m.chat.id, md=mode):
         try:
             res = get_swing_trades(mode=md)
             if len(res) <= 3800:
                 safe_send(chat_id, res)
-            else:  # split only on blank lines so a trade card is never cut in half
+            else:
                 chunk = ""
-                for block in res.split("\n\n"):
-                    if chunk and len(chunk) + len(block) + 2 > 3800:
+                for line in res.split("\n"):
+                    if len(chunk) + len(line) + 1 > 3800:
                         safe_send(chat_id, chunk)
                         chunk = ""
-                    chunk += ("\n\n" if chunk else "") + block
+                    chunk += line + "\n"
                 if chunk.strip():
                     safe_send(chat_id, chunk)
         except Exception as e:
@@ -1262,6 +1232,134 @@ def sector_btn(m):
     executor.submit(run_sector_report, m.chat.id)
 
 
+# ── 🧾 Client Portfolio Report ─────────────────────────────────────────────────
+_pf_sem = threading.Semaphore(1)            # one heavy job at a time; others queue
+_pf_lock = threading.Lock()
+_pf_active = set()
+
+
+def _pf_resolver(query):
+    """Company name → NSE ticker (used only for uploads that contain names instead of tickers)."""
+    sym = resolve_symbol(query)[0]
+    return sym.replace(".NS", "").replace(".BO", "") if sym else None
+
+
+def _pf_prompt(chat_id):
+    state.set(chat_id, "pf_upload")
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📥 Get CSV template", callback_data="pftemplate|x"))
+    safe_send(chat_id,
+              "🧾 <b>Portfolio Report</b>\n\n"
+              "Send your holdings as either:\n"
+              "• a <b>CSV or Excel (.xlsx)</b> file with columns <b>Symbol, Qty, Buy Price</b> (broker exports work), or\n"
+              "• pasted lines like <code>RELIANCE 50 1250</code>\n\n"
+              f"You'll receive a <b>Portfolio Health PDF</b> plus an <b>8-page research report</b> for each of your largest "
+              f"{portfolio_report.MAX_ANALYZE} holdings, with your own quantity, P&amp;L, weight and verdict built in.\n"
+              "⏱ Roughly a minute per stock. 🔒 Holdings are processed in memory and not stored. Send /cancel to stop.",
+              reply_markup=kb)
+
+
+def _pf_worker(chat_id, holdings, client_name):
+    import tempfile, shutil
+    if not _pf_sem.acquire(blocking=False):
+        safe_send(chat_id, "⏳ Another portfolio report is being built — yours is queued and will start automatically.")
+        _pf_sem.acquire()
+    out_dir = tempfile.mkdtemp(prefix="pf_")
+    try:
+        job = portfolio_report.run_job(holdings, out_dir, client_name, progress=lambda msg: safe_send(chat_id, msg))
+        recs = job["recs"]
+        scored = [r for r in recs if r.get("R")]
+        with open(job["summary"], "rb") as f:
+            bot.send_document(chat_id, f, visible_file_name="Portfolio_Health_Report.pdf",
+                              caption=(f"🧾 <b>Portfolio Health Report</b>\n{len(recs)} holdings · {len(scored)} analysed in full\n\n"
+                                       "⚠️ Educational only. Not SEBI-registered advice."), parse_mode="HTML")
+        for sym, path in job["stocks"]:
+            hv = next((r["R"]["holding"] for r in recs if r["symbol"] == sym and r.get("R")), None)
+            with open(path, "rb") as f:
+                bot.send_document(chat_id, f, visible_file_name=f"{sym}_Research_Report.pdf",
+                                  caption=f"📄 <b>{sym}</b>" + (f" — {hv['verdict']}" if hv else ""), parse_mode="HTML")
+        if job["notes"]:
+            import html as _h
+            safe_send(chat_id, "ℹ️ <b>Notes</b>\n" + "\n".join(f"• {_h.escape(n, quote=False)}" for n in job["notes"][:6]))
+    except ValueError as e:
+        safe_send(chat_id, f"❌ {e}")
+    except Exception as e:
+        logger.error(f"Portfolio job failed: {type(e).__name__}", exc_info=False)
+        safe_send(chat_id, "❌ Something went wrong while building the report. Please try again in a few minutes.")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        _pf_sem.release()
+        with _pf_lock:
+            _pf_active.discard(chat_id)
+
+
+def start_portfolio_job(chat_id, holdings, issues, client_name=""):
+    import html as _h
+    if not holdings:
+        msg = "❌ I couldn't read any holdings.\n" + "\n".join(f"• {_h.escape(i, quote=False)}" for i in issues[:6])
+        safe_send(chat_id, msg + "\n\nExpected: <code>SYMBOL QTY BUYPRICE</code> per line, or a CSV/XLSX with those columns.")
+        return False
+    with _pf_lock:
+        if chat_id in _pf_active:
+            safe_send(chat_id, "⏳ Your portfolio report is already being built.")
+            return False
+        _pf_active.add(chat_id)
+    state.clear(chat_id)
+    shown = "\n".join(f"• {_h.escape(h['symbol'])}  {h['qty']:g} @ ₹{h['buy']:,.2f}" for h in holdings[:25])
+    more = f"\n… and {len(holdings) - 25} more" if len(holdings) > 25 else ""
+    warn = ("\n\n⚠️ <b>Please check:</b>\n" + "\n".join(f"• {_h.escape(i, quote=False)}" for i in issues[:8])) if issues else ""
+    safe_send(chat_id, f"✅ Read <b>{len(holdings)}</b> holdings:\n{shown}{more}{warn}\n\n🔬 Building your reports…")
+    threading.Thread(target=_pf_worker, args=(chat_id, holdings, client_name), daemon=True).start()
+    return True
+
+
+def _client_name(m):
+    try:
+        return re.sub(r"[^\w .'-]", "", m.from_user.first_name or "")[:40]
+    except Exception:
+        return ""
+
+
+@bot.message_handler(commands=["portfolioreport", "pfreport"])
+def cmd_pf(m):
+    _pf_prompt(m.chat.id)
+
+
+@bot.message_handler(func=lambda m: m.text == "🧾 Portfolio Report")
+def pf_btn(m):
+    _pf_prompt(m.chat.id)
+
+
+@bot.message_handler(commands=["cancel"])
+def cmd_cancel(m):
+    state.clear(m.chat.id)
+    safe_send(m.chat.id, "Cancelled.", reply_markup=main_keyboard())
+
+
+@bot.message_handler(content_types=["document"])
+def pf_document(m):
+    uid = m.chat.id
+    name = (m.document.file_name or "").lower()
+    if not name.endswith((".csv", ".xlsx", ".xlsm", ".xls", ".txt")):
+        if state.get(uid) == "pf_upload":
+            safe_send(uid, "Please send a <b>.csv</b> or <b>.xlsx</b> file with columns Symbol, Qty, Buy Price.")
+        return
+    if not API_RATE_LIMITER.is_allowed(uid):
+        safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
+        return
+    if (m.document.file_size or 0) > portfolio_report.MAX_FILE_BYTES:
+        safe_send(uid, "❌ File is too large (limit 1 MB).")
+        return
+    try:
+        info = bot.get_file(m.document.file_id)
+        data = bot.download_file(info.file_path)
+    except Exception:
+        safe_send(uid, "❌ Couldn't download that file. Please try again.")
+        return
+    holdings, issues = portfolio_report.parse_file(name, data, _pf_resolver)
+    start_portfolio_job(uid, holdings, issues, _client_name(m))
+
+
 @bot.message_handler(func=lambda m: m.text in ("📰 News", "🤖 AI"))
 def retired_buttons(m):
     """Old keyboards stay cached in Telegram clients — answer politely and refresh the menu."""
@@ -1280,6 +1378,11 @@ def handle_text(m):
 
     if not API_RATE_LIMITER.is_allowed(uid):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
+        return
+
+    if state.get(uid) == "pf_upload":
+        holdings, issues = portfolio_report.parse_text(text, _pf_resolver)
+        start_portfolio_job(uid, holdings, issues, _client_name(m))
         return
 
     if state.get(uid) == "analysis":
