@@ -26,6 +26,7 @@ import logging
 import threading
 import time
 from collections import Counter
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -80,6 +81,61 @@ CACHE_KEY, CACHE_TTL = "swing_v7_calc", 1800
 _LOCK = threading.Lock()
 
 
+UNIVERSE_LIMIT = 200    # liquid universe = 2 bulk chunks (only used when NSE turnover ranking is available)
+
+
+# ── ACCURACY GUARDS ──────────────────────────────────────────────────────────
+def _now_ist():
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
+
+
+def _session_open(now=None):
+    """True 09:15-15:45 IST on weekdays: today's daily candle is still forming (partial price AND volume)."""
+    n = now or _now_ist()
+    m = n.hour * 60 + n.minute
+    return n.weekday() < 5 and 9 * 60 + 15 <= m < 15 * 60 + 45
+
+
+def _drop_forming(d, now=None):
+    """Drop today's incomplete candle so LIVE signals use the same completed bars the backtest uses.
+    (A half-day volume bar can never confirm a breakout, and its 'close' is just the live price.)"""
+    n = now or _now_ist()
+    try:
+        if len(d) and _session_open(n) and d.index[-1].date() == n.date():
+            return d.iloc[:-1]
+    except Exception:
+        pass
+    return d
+
+
+def _ckey():
+    return f"{CACHE_KEY}_{'live' if _session_open() else 'final'}"     # never serve pre-close data after close
+
+
+def _sector_of(sym):
+    s = CANDIDATE_SECTORS.get(f"{sym}.NS")
+    if not s:
+        try:
+            from nifty500_collector import get_stock_sector
+            s = get_stock_sector(sym)
+        except Exception:
+            s = ""
+    s = (s or "").strip()
+    return sym if s in ("", "Others", "Other") else s                  # unknown sector -> own bucket (no false cap)
+
+
+def _scan_universe():
+    """Top-liquidity stocks (NSE bhavcopy ranking) when available, else the built-in sector round-robin list."""
+    try:
+        from universe import get_universe
+        u = get_universe()
+        if str(u.get("source", "")).startswith("NSE bhavcopy") and len(u.get("symbols") or []) >= 100:
+            return list(u["symbols"])[:UNIVERSE_LIMIT]
+    except Exception as e:
+        logger.info(f"[Swing] universe unavailable, using built-in list: {e}")
+    return [s[:-3] if s.endswith(".NS") else s for s in CANDIDATES]
+
+
 # ── INDICATORS (one pass per symbol) ─────────────────────────────────────────
 def _wilder(s, n=14):
     return s.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
@@ -102,6 +158,7 @@ def _prep(df, nifty_close):
     d.index = _naive(d.index)
     d = d[~d.index.duplicated(keep="last")].sort_index()
     d = d[(d.Close > 0) & (d.High >= d.Low) & (d.Volume >= 0)]
+    d = _drop_forming(d)
     if len(d) < 130:
         return None, "short history (<130 bars)"
     o, h, l, c, v = d.Open, d.High, d.Low, d.Close, d.Volume
@@ -276,9 +333,11 @@ def _regime(nifty):
 # ── SCAN (cached 30 min, shared by both swing buttons) ───────────────────────
 def _scan():
     t0 = time.time()
-    syms = [s[:-3] if s.endswith(".NS") else s for s in CANDIDATES]
+    syms = _scan_universe()
     hist = bulk_history(syms, "1y", chunk_size=100) or {}
     nifty = index_history("^NSEI", "1y")
+    if nifty is not None and not nifty.empty:
+        nifty = _drop_forming(nifty)
     nclose = None
     if nifty is not None and not nifty.empty:
         try:
@@ -311,7 +370,7 @@ def _scan():
                 rows.append(dict(sym=s, side=side, score=int(res["score"]), setup=res["setup"],
                                  ltp=float(res["ltp"]), rsi=float(res["rsi"]), adx=float(res["adx"]),
                                  volx=float(res["volx"]), rs=res["rs"], parts=res["parts"],
-                                 sector=CANDIDATE_SECTORS.get(f"{s}.NS", ""),
+                                 sector=_sector_of(s),
                                  sl=float(lv["sl"]), t1=float(lv["t1"]), t2=float(lv["t2"]),
                                  rr1=float(lv["rr1"]), rr2=float(lv["rr2"]), atr=float(lv["atr"])))
             else:
@@ -329,16 +388,16 @@ def _scan():
     logger.info(f"[Swing] scanned {scanned}/{len(syms)}, signals {len(rows)}, backtest trades {len(trades)} "
                 f"in {data['secs']} sec (regime {data['regime']})")
     if scanned >= int(len(syms) * 0.7):
-        cached_set(CACHE_KEY, data, CACHE_TTL)
+        cached_set(_ckey(), data, CACHE_TTL)
     return data
 
 
 def _load():
-    hit = cached_get(CACHE_KEY, CACHE_TTL)
+    hit = cached_get(_ckey(), CACHE_TTL)
     if hit:
         return hit
     with _LOCK:                                   # one scan even if both buttons are pressed together
-        hit = cached_get(CACHE_KEY, CACHE_TTL)
+        hit = cached_get(_ckey(), CACHE_TTL)
         return hit or _scan()
 
 
@@ -415,9 +474,10 @@ def get_swing_trades(mode="conservative"):
     shorts = _pick(rows, "SHORT", thr["SHORT"], MAX_SHORT)
 
     head = (f"📈 <b>Swing Trades — {mode.title()}</b>\n"
-            f"📅 Last candle {data['asof']} · scanned {data['scanned']}/{data['total']} · "
-            f"hold ≤{HOLD_BARS} sessions\n{reg_txt}")
-    bt = (f"🧪 <b>Same rules, last ~5M (backtest)</b>\n{_bt_line(data['trades'], 'LONG', thr['LONG'])}\n"
+            f"📅 Last completed candle {data['asof']} · scanned {data['scanned']}/{data['total']} · "
+            f"hold ≤{HOLD_BARS} sessions\n{reg_txt}"
+            + ("\n⏱ Market is open: signals use the last COMPLETED daily candle (today's is still forming)." if _session_open() else ""))
+    bt = (f"🧪 <b>Same rules, last ~6M (backtest)</b>\n{_bt_line(data['trades'], 'LONG', thr['LONG'])}\n"
           f"{_bt_line(data['trades'], 'SHORT', thr['SHORT'])}\n"
           f"<i>Entry next open, stop-first if both touched, no costs. Past results don't guarantee future.</i>")
     foot = "⚠️ Educational only. Not SEBI-registered advice. Size so a stop-out costs ≤1% of capital."
