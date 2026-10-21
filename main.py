@@ -487,61 +487,354 @@ def build_fundamental_text(sym, cname=None):
     return "\n".join(rows)
 
 
-# ── Screener Card ─────────────────────────────────────────────────────────
-SCREENER_STOCKS = {
-    "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
-    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
-    "aggressive": ["TATAMOTORS", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ZOMATO", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
+# ── Recommended Portfolios (🏦 Conservative / ⚖️ Moderate / 🚀 Aggressive) ──────
+# Each button returns exactly 10 validated stocks chosen from the Nifty-500-sized universe
+# (universe.get_universe(): top-500 by liquidity / Nifty 500 list, cached 12 h, shared with Stocks Buzz).
+# Flow (minimum API usage):
+#   0 calls : universe list (already cached by Stocks Buzz, else 1 NSE file)
+#   1 call  : Nifty 50 history        -> market regime (market_data.index_history)
+#   ~5 bulk : 500 stock prices (6mo)  -> momentum / volatility / liquidity (market_data.bulk_history,
+#                                        not throttled by data_engine; cached 30 min, shared by all 3 buttons)
+#   <=30    : get_info() per stock in rank order, STOP as soon as 10 pass (cached 60 min)
+# Finished text is cached 3 h and shared by all clients -> repeat presses cost 0 calls.
+# No LLM, no Finnhub, no new scheduler, no new service.
+from html import escape as _esc
+from data_engine import cached_get, cached_set
+
+PORTFOLIO_SIZE = 10
+PORTFOLIO_UNIVERSE_SIZE = 500
+PORTFOLIO_CACHE_TTL = 3 * 3600      # seconds, result cache shared by all clients
+PORTFOLIO_DEADLINE_SEC = 240        # hard stop for one build -> clear error, never partial
+PORTFOLIO_MAX_FUND_CALLS = 30       # cap on get_info() lookups per build (8 Yahoo calls/min limiter)
+
+# Liquidity-rank band of the universe each profile may draw from (0 = most traded).
+PORTFOLIO_BANDS = {"conservative": (0, 120), "moderate": (15, 300), "aggressive": (30, 500)}
+_DEFENSIVE_KEYS = ("FMCG", "Pharma", "Power", "IT &", "Agriculture", "Telecom")
+
+try:
+    from nifty500_collector import get_stock_sector as _static_sector
+except Exception:                                                   # pragma: no cover
+    def _static_sector(sym):
+        return "Other"
+
+
+def _pf_clean_sector(label):
+    """'🛍️ Consumer & FMCG' -> 'Consumer & FMCG'; unknown -> 'Other'."""
+    txt = re.sub(r"^[^A-Za-z]+", "", str(label or "")).strip()
+    return "Other" if not txt or txt == "Others" else txt
+
+
+def _is_fin(sector):
+    s = (sector or "").lower()
+    return any(k in s for k in ("financ", "bank", "insur", "nbfc"))
+
+
+# Validation rules. mcap in INR, turnover = 20-day avg (price x volume) in INR.
+PORTFOLIO_RULES = {
+    "conservative": dict(label="🏦 CONSERVATIVE PORTFOLIO", min_mcap=5e11, min_price=100, min_turnover=25e7,
+                         max_vol=0.32, max_dd=0.30, max_pe=70, min_roe=12, max_de=1.0, de_required=True,
+                         min_growth=-0.15, max_beta=1.2),
+    "moderate":     dict(label="⚖️ MODERATE PORTFOLIO", min_mcap=1.5e11, min_price=100, min_turnover=15e7,
+                         max_vol=0.42, max_dd=0.35, max_pe=90, min_roe=12, max_de=1.5, de_required=False,
+                         min_growth=-0.15, max_beta=1.5),
+    "aggressive":   dict(label="🚀 AGGRESSIVE PORTFOLIO", min_mcap=5e10, min_price=50, min_turnover=10e7,
+                         max_vol=0.65, max_dd=0.40, max_pe=150, min_roe=10, max_de=2.0, de_required=False,
+                         min_growth=0.0, max_beta=None),
 }
 
 
-def build_scan(profile):
-    syms = SCREENER_STOCKS.get(profile, [])
-    if not syms:
-        return "❌ Unknown profile."
-    labels = {"conservative": "🏦 CONSERVATIVE", "moderate": "⚖️ MODERATE", "aggressive": "🚀 AGGRESSIVE"}
-    lines = [f"📊 <b>{labels.get(profile, 'SCREENER')}</b>", f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
+class PortfolioDataError(Exception):
+    """Raised when a complete, validated 10-stock portfolio cannot be produced."""
 
-    def _fetch(sym):
-        try:
-            df = get_hist(sym, "6mo")
-            if df is None or df.empty or len(df) < 28:
-                return None
-            c = df["Close"]
-            ltp = round(float(c.iloc[-1]), 2)
-            prev = float(c.iloc[-2])
-            chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
-            rsi_val = calc_rsi(c)
-            trend_val = trend_label(c)
-            signal_val = swing_signal(rsi_val, trend_val, chg)
-            return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi_val, "trend": trend_val, "signal": signal_val}
-        except Exception:
+
+def _pf_num(v):
+    try:
+        f = float(v)
+        return f if f == f else None          # drops NaN
+    except (TypeError, ValueError):
+        return None
+
+
+def _pf_pct(v):
+    """Yahoo ratios arrive as decimals (0.18); convert to % (same rule as nifty500_collector)."""
+    f = _pf_num(v)
+    if f is None:
+        return None
+    return round(f * 100, 1) if abs(f) <= 1.5 else round(f, 1)
+
+
+# ── Market regime (1 call, 30-min memo) ──────────────────────────────────────
+_PF_REGIME = {"ts": 0.0, "val": None}
+
+
+def _pf_regime():
+    now = time.time()
+    if _PF_REGIME["val"] and now - _PF_REGIME["ts"] < 1800:
+        return _PF_REGIME["val"]
+    from market_data import index_history
+    df = index_history("^NSEI", "6mo")
+    if df is None or len(df) < 64:
+        raise PortfolioDataError("Market data (Nifty 50) is unavailable right now.")
+    c = df["Close"].astype(float)
+    last = float(c.iloc[-1])
+    r1 = last / float(c.iloc[-22]) - 1
+    r3 = last / float(c.iloc[-64]) - 1
+    above50 = last > float(c.tail(50).mean())
+    if above50 and r1 >= 0:
+        label = "BULLISH"
+    elif (not above50) and r1 < -0.02:
+        label = "WEAK"
+    else:
+        label = "NEUTRAL"
+    val = {"label": label, "last": last, "r1": r1, "r3": r3, "above50": above50}
+    _PF_REGIME.update(ts=now, val=val)
+    return val
+
+
+# ── Technical / liquidity metrics from the single bulk download (0 extra calls) ─
+def _pf_tech(df):
+    try:
+        if df is None or len(df) < 64:
             return None
+        c = df["Close"].astype(float)
+        v = df["Volume"].astype(float)
+        last = float(c.iloc[-1])
+        if last <= 0:
+            return None
+        prev = float(c.iloc[-2])
+        vol = float(c.pct_change().dropna().tail(120).std() * (252 ** 0.5))
+        return {
+            "price": last,
+            "chg": (last / prev - 1) * 100 if prev > 0 else 0.0,
+            "r1": last / float(c.iloc[-22]) - 1,
+            "r3": last / float(c.iloc[-64]) - 1,
+            "vol": vol,
+            "above50": last > float(c.tail(50).mean()),
+            "dd": last / float(c.max()) - 1,                       # <= 0
+            "turnover": float((c * v).tail(20).mean()),
+            "vratio": float(v.tail(20).mean() / max(float(v.tail(60).mean()), 1.0)),
+        }
+    except Exception:
+        return None
 
-    results = {}
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        futs = {pool.submit(_fetch, s): s for s in syms}
-        for f in as_completed(futs, timeout=15):
-            sym = futs[f]
-            try:
-                r = f.result()
-                if r:
-                    results[sym] = r
-            except Exception:
-                pass
 
-    for s in syms:
-        r = results.get(s)
-        if not r:
+def _pf_prescore(profile, t, sector, regime, sector_r3):
+    r3, r1, vol, dd = t["r3"] * 100, t["r1"] * 100, t["vol"] * 100, abs(t["dd"]) * 100
+    if profile == "conservative":      # stability first; defensives get a bonus when market is not bullish
+        defensive = any(k in sector for k in _DEFENSIVE_KEYS)
+        return -vol + 0.2 * r3 - 0.3 * dd + (4 if regime["label"] != "BULLISH" and defensive else 0)
+    if profile == "moderate":          # balanced momentum vs risk
+        return 0.4 * r3 + 0.2 * r1 - 0.4 * vol - 0.2 * dd
+    sec_edge = (sector_r3.get(sector, regime["r3"]) - regime["r3"]) * 100   # sector strength vs Nifty
+    return 0.5 * r3 + 0.3 * r1 + 4 * min(t["vratio"], 2.0) + (5 if t["above50"] else -5) + 0.3 * sec_edge
+
+
+def _pf_tech_gate(profile, rules, t, regime):
+    """Return a reject reason, or None if the stock passes the price/liquidity/risk gate."""
+    if t["price"] < rules["min_price"]:
+        return "penny/low price"
+    if t["turnover"] < rules["min_turnover"]:
+        return "illiquid"
+    if t["vol"] > rules["max_vol"]:
+        return "too volatile"
+    if abs(t["dd"]) > rules["max_dd"]:
+        return "deep drawdown"
+    if profile == "aggressive":
+        if t["r3"] <= -0.05:                                          # clearly broken trend
+            return "negative momentum"
+        if regime["label"] == "WEAK" and not t["above50"] and t["r3"] <= regime["r3"]:
+            return "no relative strength in weak market"
+    return None
+
+
+# ── Fundamentals: get_info() (cached 60 min); Screener only if core fields missing ─
+def _pf_fundamentals(sym):
+    try:
+        info = get_info(sym) or {}
+    except Exception:
+        info = {}
+    price = _pf_num(info.get("price"))
+    mcap = _pf_num(info.get("market_cap"))
+    pe = _pf_num(info.get("pe"))
+    roe = _pf_pct(info.get("roe"))
+    de_raw = _pf_num(info.get("debtToEquity"))
+    de = de_raw / 100.0 if de_raw is not None else None            # Yahoo gives D/E in %
+    div = _pf_pct(info.get("dividend_yield"))
+    growth = _pf_num(info.get("earningsGrowth"))                    # decimal YoY, optional
+    beta = _pf_num(info.get("beta"))
+    name = info.get("name")
+    sector = info.get("sector")
+
+    if pe is None or roe is None or mcap is None:                    # Yahoo v10 blocked/incomplete
+        try:
+            from fundamentals import _fetch_screener
+            sc = _fetch_screener(sym) or {}
+        except Exception:
+            sc = {}
+        pe = pe if pe is not None else _pf_num(sc.get("pe"))
+        roe = roe if roe is not None else _pf_num(sc.get("roe"))     # Screener ROE already %
+        mcap = mcap if mcap is not None else _pf_num(sc.get("mcap"))
+        de = de if de is not None else _pf_num(sc.get("de"))         # Screener D/E already a ratio
+        if div is None:
+            div = _pf_num(sc.get("div_y"))
+        name = name if name and name != sym else sc.get("name")
+
+    if div is not None and div > 12:
+        div = None                                                   # unit sanity guard
+    if not price or not mcap or pe is None or pe <= 0 or roe is None:
+        return None                                                  # fundamentals unavailable -> skip
+    return {"price": price, "mcap": mcap, "pe": pe, "roe": roe, "de": de, "div": div,
+            "growth": growth, "beta": beta, "name": name or sym, "sector": sector}
+
+
+def _pf_fund_gate(rules, sector, f):
+    if f["mcap"] < rules["min_mcap"]:
+        return "market cap too small"
+    if f["pe"] > rules["max_pe"]:
+        return "PE too high"
+    if f["roe"] < rules["min_roe"]:
+        return "ROE too low"
+    if not _is_fin(sector):
+        if f["de"] is None and rules["de_required"]:
+            return "debt data unavailable"
+        if f["de"] is not None and f["de"] > rules["max_de"]:
+            return "debt too high"
+    if f["growth"] is not None and f["growth"] < rules["min_growth"]:
+        return "earnings falling"
+    if rules["max_beta"] and f["beta"] is not None and f["beta"] > rules["max_beta"]:
+        return "high beta"
+    return None
+
+
+def _pf_reason(profile, sector, f, t, regime):
+    cap = "Large-cap" if f["mcap"] >= 1e12 else ("Mid-cap" if f["mcap"] >= 3e11 else "Small/mid-cap")
+    parts = [f"{cap} {sector}", f"ROE {f['roe']:.0f}%"]
+    if f["de"] is not None and not _is_fin(sector):
+        parts.append(f"D/E {f['de']:.1f}")
+    if profile == "conservative":
+        if f["div"]:
+            parts.append(f"div {f['div']:.1f}%")
+        parts.append(f"low volatility {t['vol'] * 100:.0f}%")
+    elif profile == "moderate":
+        parts.append(f"3M {t['r3'] * 100:+.0f}%")
+        parts.append(f"volatility {t['vol'] * 100:.0f}%")
+    else:
+        parts.append(f"3M {t['r3'] * 100:+.0f}% vs Nifty {regime['r3'] * 100:+.0f}%")
+        parts.append(f"volume {t['vratio']:.1f}x avg")
+    if f["growth"] is not None:
+        parts.append(f"earnings {f['growth'] * 100:+.0f}% YoY")
+    return " · ".join(parts)
+
+
+def _pf_taken(profile):
+    """Symbols already picked (today) by the OTHER two portfolios -> never repeated."""
+    out = set()
+    for p in PORTFOLIO_RULES:
+        if p != profile:
+            out.update(cached_get(_pf_key(p) + "_syms", PORTFOLIO_CACHE_TTL) or [])
+    return out
+
+
+def _build_portfolio(profile):
+    from market_data import bulk_history
+    from universe import get_universe
+    t0 = time.time()
+    rules = PORTFOLIO_RULES[profile]
+    regime = _pf_regime()
+
+    uni = list(get_universe().get("symbols") or [])[:PORTFOLIO_UNIVERSE_SIZE]
+    if len(uni) < 100:
+        raise PortfolioDataError("Stock universe (Nifty 500 list) is unavailable right now.")
+
+    hist = bulk_history(uni, period="6mo", cache_ttl=1800)            # chunks of 100, shared by all 3 buttons
+    tech = {s: m for s, m in ((s, _pf_tech(hist.get(s))) for s in uni) if m}
+    if len(tech) < 100:
+        raise PortfolioDataError("Price data is unavailable for too many stocks right now.")
+
+    # liquidity rank -> profile band (large/liquid for Conservative, broader for Aggressive)
+    by_liq = sorted(tech, key=lambda s: tech[s]["turnover"], reverse=True)
+    lo, hi = PORTFOLIO_BANDS[profile]
+    taken = _pf_taken(profile)
+    cand = [s for s in by_liq[lo:hi] if s not in taken]
+
+    sectors = {s: _pf_clean_sector(_static_sector(s)) for s in cand}
+    by_sec = {}
+    for s in tech:
+        by_sec.setdefault(_pf_clean_sector(_static_sector(s)), []).append(tech[s]["r3"])
+    sector_r3 = {k: sum(v) / len(v) for k, v in by_sec.items() if k != "Other" and len(v) >= 3}
+    score = {s: _pf_prescore(profile, tech[s], sectors[s], regime, sector_r3) for s in cand}
+
+    picked, calls = [], 0
+    for s in sorted(cand, key=score.get, reverse=True):
+        if len(picked) >= PORTFOLIO_SIZE or time.time() - t0 > PORTFOLIO_DEADLINE_SEC:
+            break
+        why = _pf_tech_gate(profile, rules, tech[s], regime)
+        f = None
+        if not why:
+            if calls >= PORTFOLIO_MAX_FUND_CALLS:
+                break
+            calls += 1
+            f = _pf_fundamentals(s)
+            why = "fundamentals unavailable" if f is None else _pf_fund_gate(rules, f.get("sector") or sectors[s], f)
+        if why:
+            logger.info(f"[Portfolio:{profile}] skip {s}: {why}")
             continue
-        icon = "🟢" if r["chg"] >= 0 else "🔴"
-        rsi_b = "🔴OB" if r["rsi"] > 70 else ("🟢OS" if r["rsi"] < 30 else "🟡")
-        lines.append(f"{icon} <b>{s}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n   RSI:{r['rsi']} {rsi_b}  |  {r['trend']}  |  <b>{r['signal']}</b>")
+        picked.append((s, f, tech[s]))
 
-    if not results:
-        lines.append("❌ Data unavailable.")
-    lines.append("\n⚠️ Educational only.")
+    if len(picked) < PORTFOLIO_SIZE:
+        raise PortfolioDataError(
+            f"Only {len(picked)} of {PORTFOLIO_SIZE} stocks passed data validation "
+            f"(price/fundamentals missing or failed quality rules).")
+
+    mood = {"BULLISH": "🟢 Bullish", "NEUTRAL": "🟡 Neutral", "WEAK": "🔴 Weak"}[regime["label"]]
+    lines = [
+        f"📊 <b>{rules['label']}</b>",
+        f"📅 {date.today().strftime('%d-%b-%Y')}",
+        f"🌐 Market: {mood} — Nifty {regime['last']:,.0f} ({regime['r1'] * 100:+.1f}% 1M, {regime['r3'] * 100:+.1f}% 3M)",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+    for i, (s, f, t) in enumerate(picked, 1):
+        sec = f.get("sector") or sectors[s]
+        name = _esc(re.sub(r"\s+(Limited|Ltd\.?)$", "", str(f["name"]), flags=re.I))
+        lines += [
+            f"<b>{i}. {name}</b> ({_esc(s)}) · {_esc(sec)}",
+            f"   ₹{f['price']:,.2f} ({t['chg']:+.2f}%)  |  MCap {fmt_mcap(f['mcap'])}  |  PE {f['pe']:.1f}",
+            f"   💡 {_esc(_pf_reason(profile, sec, f, t, regime))}",
+        ]
+    lines += ["━━━━━━━━━━━━━━━━━━━━", "⚠️ <i>Educational only. Not SEBI-registered advice.</i>"]
+    cached_set(_pf_key(profile) + "_syms", [p[0] for p in picked], PORTFOLIO_CACHE_TTL)
     return "\n".join(lines)
+
+
+_PF_LOCKS = {p: threading.Lock() for p in PORTFOLIO_RULES}
+
+
+def _pf_key(profile):
+    return f"portfolio_{profile}_{date.today().isoformat()}"
+
+
+def get_portfolio(profile):
+    """Cached text or a fresh build. One build per profile at a time. Raises PortfolioDataError."""
+    hit = cached_get(_pf_key(profile), PORTFOLIO_CACHE_TTL)
+    if hit:
+        return hit
+    with _PF_LOCKS[profile]:
+        hit = cached_get(_pf_key(profile), PORTFOLIO_CACHE_TTL)      # built while we waited
+        if hit:
+            return hit
+        text = _build_portfolio(profile)
+        cached_set(_pf_key(profile), text, PORTFOLIO_CACHE_TTL)      # errors are never cached
+        return text
+
+
+def _pf_profile_from_text(text):
+    t = (text or "").lower()
+    if "swing" in t or len(t) > 40:                    # buttons only, not free-text sentences
+        return None
+    for key in ("conservative", "moderate", "aggressive"):
+        if key in t:
+            return key
+    return None
 
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
@@ -866,7 +1159,8 @@ def cmd_status(m):
             ]
             for p_name in ["GROQ", "Gemini", "OpenAI", "AskFuzz"]:
                 v = res.get(p_name, "SKIP")
-                ic = "✅" if str(v).startswith("OK") else ("⚪" if str(v) == "SKIP" else "❌")
+                sv = str(v).upper()
+                ic = "✅" if (sv.startswith("OK") or sv == "CONFIGURED") else ("⚪" if sv in ("SKIP", "NOT CONFIGURED") else "❌")
                 lines.append(f"  {ic} {p_name}: {str(v)[:35]}")
             safe_send(chat_id, "\n".join(lines), reply_markup=main_keyboard())
         except Exception as e:
@@ -1002,17 +1296,42 @@ def stat_btn(m):
     cmd_status(m)
 
 
-@bot.message_handler(func=lambda m: m.text in ["🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"])
-def scan_btn(m):
-    p = {"🏦 Conservative": "conservative", "⚖️ Moderate": "moderate", "🚀 Aggressive": "aggressive"}[m.text]
-    safe_send(m.chat.id, f"⏳ Scanning {m.text}…")
+def _pf_send(chat_id, text):
+    if len(text) <= 3800:
+        safe_send(chat_id, text)
+        return
+    chunk = ""
+    for line in text.split("\n"):
+        if len(chunk) + len(line) + 1 > 3800:
+            safe_send(chat_id, chunk)
+            chunk = ""
+        chunk += line + "\n"
+    if chunk.strip():
+        safe_send(chat_id, chunk)
 
-    def _run(chat_id=m.chat.id, prof=p):
+
+@bot.message_handler(func=lambda m: _pf_profile_from_text(m.text) is not None)
+def scan_btn(m):
+    prof = _pf_profile_from_text(m.text)
+    chat_id = m.chat.id
+    if cached_get(_pf_key(prof), PORTFOLIO_CACHE_TTL):          # instant, 0 API calls
         try:
-            safe_send(chat_id, build_scan(prof))
+            _pf_send(chat_id, get_portfolio(prof))
+            return
         except Exception as e:
-            logger.error(f"Screener err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Error: {e}")
+            logger.error(f"Portfolio cache err: {e}", exc_info=True)
+    safe_send(chat_id, f"⏳ Building {PORTFOLIO_RULES[prof]['label'].title()}… "
+                       f"first run takes 1–3 min, then it is instant for 3 hours.")
+
+    def _run(cid=chat_id, p=prof):
+        try:
+            _pf_send(cid, get_portfolio(p))
+        except PortfolioDataError as e:
+            safe_send(cid, f"❌ <b>Portfolio unavailable</b>\n{_esc(str(e))}\n"
+                           f"No partial list was sent. Please try again in a few minutes.")
+        except Exception as e:
+            logger.error(f"Portfolio err: {e}", exc_info=True)
+            safe_send(cid, "❌ Portfolio could not be generated right now. Please try again in a few minutes.")
 
     executor.submit(_run)
 
