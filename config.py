@@ -6,7 +6,7 @@ No secrets should be hardcoded in this file.
 
 Environment Variables Required:
     TELEGRAM_TOKEN          - Bot authentication token from @BotFather
-    WEBHOOK_URL            - Your Render/hosting service HTTPS endpoint
+    WEBHOOK_URL            - Optional: your hosting HTTPS endpoint for webhook mode
 
 Environment Variables Optional (AI Providers):
     GROQ_API_KEY           - GROQ LLM (recommended primary)
@@ -97,7 +97,7 @@ To get:
 Example: 6372193741:AAHx8wHwHwHw...
 """
 
-WEBHOOK_URL: str = _get_env("WEBHOOK_URL", required=True)
+WEBHOOK_URL: str = _get_env("WEBHOOK_URL")
 """
 Your Render/hosting service HTTPS endpoint.
 
@@ -111,7 +111,7 @@ To set in Render:
   3. Add to Render Environment Variables
 """
 
-WEBHOOK_PATH: str = "/webhook"
+WEBHOOK_PATH: str = "/webhook/telegram"
 """
 Path for webhook endpoint. Full URL: {WEBHOOK_URL}{WEBHOOK_PATH}
 """
@@ -424,13 +424,6 @@ CACHE_TTL_LIVE: int = int(_get_env("CACHE_TTL_LIVE", "300"))       # 5 min
 CACHE_TTL_HIST: int = int(_get_env("CACHE_TTL_HIST", "600"))       # 10 min
 CACHE_TTL_FUND: int = int(_get_env("CACHE_TTL_FUND", "14400"))     # 4 h
 
-# ── Report branding & data-freshness policy (added v6.3) ───────────────────
-BRAND_NAME: str = _get_env("BRAND_NAME", "SK AI Auto Advisory")
-# Latest quarterly result may be at most this many days after its quarter-end.
-# Default 135 = 90 days + the 45-day SEBI filing window. A raw "90 days from quarter-end"
-# rule would wrongly flag a current June-quarter as stale from Oct 1 to Nov 14.
-MAX_QUARTER_AGE_DAYS: int = int(_get_env("MAX_QUARTER_AGE_DAYS", "135"))
-
 REVENUE_MAX_MCAP_RATIO: float = float(_get_env("REVENUE_MAX_MCAP_RATIO", "5"))
 
 
@@ -446,8 +439,8 @@ def validate_configuration() -> tuple[bool, list[str]]:
     # Check required variables
     if not TELEGRAM_TOKEN:
         issues.append("❌ CRITICAL: TELEGRAM_TOKEN not set")
-    if not WEBHOOK_URL:
-        issues.append("❌ CRITICAL: WEBHOOK_URL not set")
+    if WEBHOOK_URL and not _get_env("TELEGRAM_WEBHOOK_SECRET"):
+        issues.append("❌ CRITICAL: TELEGRAM_WEBHOOK_SECRET missing for webhook mode")
     
     # Check AI providers
     ai_providers = [GROQ_API_KEY, GEMINI_API_KEY, OPENAI_KEY, ASKFUZZ_API_KEY]
