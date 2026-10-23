@@ -1,34 +1,46 @@
-"""Fixed News & Fundamentals Fetching"""
+"""Safe optional data fetches. Never present fallback text as verified market news."""
+import logging
+import math
+
+logger = logging.getLogger(__name__)
+
 
 def get_stock_news_robust(sym):
-    """Enhanced news fetch with better error handling & fallback"""
+    """Return source text when available, or empty string (not invented news)."""
     try:
         from market_news import get_stock_news
         news = get_stock_news(sym, n=3)
-        if news and len(news) > 10:  # Non-empty
-            return news
-    except Exception as e:
-        logger.warning(f"Stock news error for {sym}: {e}")
-    
-    # Fallback: generic news
-    return "📰 Market conditions favorable. Check company announcements for latest updates."
+        if isinstance(news, str) and news.strip():
+            fallback_markers = ("Market conditions favorable", "Latest market conditions",
+                                "Recommend checking company announcements")
+            if not any(marker in news for marker in fallback_markers):
+                return news
+    except Exception as exc:
+        logger.warning("Stock news error for %s: %s", sym, exc)
+    return ""
+
 
 def get_fundamentals_safe(sym):
-    """Get fundamentals with validation"""
+    """A missing provider response is never replaced with synthetic ratios."""
     try:
         from fundamentals import get_fundamentals
-        fund = get_fundamentals(sym) or {}
-        return fund
-    except Exception as e:
-        logger.warning(f"Fundamentals error for {sym}: {e}")
+        data = get_fundamentals(sym)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.warning("Fundamentals error for %s: %s", sym, exc)
         return {}
 
+
 def validate_fundamental(sym, field, value):
-    """Check if value is valid (not N/A, not None, not zero)"""
-    if value is None or value == "N/A":
+    """Accept finite numbers including legitimate zero; absent values return None."""
+    if value is None or isinstance(value, bool):
         return None
     try:
-        v = float(value)
-        return v if v != 0 else None
+        text = str(value).strip().replace(",", "").replace("₹", "").replace("%", "")
+        if not text or text.upper() in {"N/A", "NA", "NONE", "NULL", "-"}:
+            return None
+        number = float(text)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
+        logger.debug("Invalid fundamental %s %s: %r", sym, field, value)
         return None
