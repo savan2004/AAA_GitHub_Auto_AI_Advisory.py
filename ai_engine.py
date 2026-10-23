@@ -12,7 +12,6 @@ All functions return safe, non-empty responses regardless of provider availabili
 """
 import os
 import logging
-import functools
 import requests
 from datetime import date, timedelta
 from typing import Tuple, Dict, List, Optional
@@ -75,34 +74,21 @@ def ai_available() -> bool:
 
 
 def _make_groq_client(api_key: str):
-    """
-    Create Groq client with compatibility handling for different httpx versions.
-    
-    Args:
-        api_key: GROQ API key
-        
-    Returns:
-        Groq client instance
+    """Initialize Groq safely without global monkey-patches to httpx.
+
+    The surrounding provider fallback catches a compatibility failure and
+    tries the next configured provider rather than affecting other threads.
     """
     from groq import Groq
     try:
-        return Groq(api_key=api_key)
+        return Groq(api_key=api_key, timeout=15.0, max_retries=1)
     except TypeError as exc:
-        if "proxies" not in str(exc).lower():
-            raise
-        import httpx
-        original = httpx.Client.__init__
-
-        @functools.wraps(original)
-        def compatible_init(self, *args, **kwargs):
-            kwargs.pop("proxies", None)
-            return original(self, *args, **kwargs)
-
-        httpx.Client.__init__ = compatible_init
-        try:
-            return Groq(api_key=api_key)
-        finally:
-            httpx.Client.__init__ = original
+        if "proxies" in str(exc).lower():
+            raise RuntimeError(
+                "Installed Groq/httpx dependency versions are incompatible. "
+                "Update pinned dependencies in a tested release; no global patch applied."
+            ) from exc
+        raise
 
 
 def _call_ai(
