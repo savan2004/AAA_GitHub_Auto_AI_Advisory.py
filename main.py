@@ -14,6 +14,7 @@ from datetime import datetime, date
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import hmac
 
 import requests
 import pandas as pd
@@ -42,7 +43,6 @@ from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
-import portfolio_report
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -62,9 +62,14 @@ if not TOKEN:
 
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 TAVILY_KEY = os.getenv("TAVILY_API_KEY")
-WEBHOOK_PATH = f"/webhook/{TOKEN}"
+# An independent secret is mandatory whenever webhook mode is used.
+WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+if WEBHOOK_URL and (len(WEBHOOK_SECRET) < 16 or not WEBHOOK_SECRET.replace("_", "").replace("-", "").isalnum()):
+    raise RuntimeError("Set TELEGRAM_WEBHOOK_SECRET (16+ letters/digits/_/-) before webhook deployment")
+WEBHOOK_PATH = "/webhook/telegram"
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 256_000
 bot = telebot.TeleBot(TOKEN, threaded=False)
 executor = ThreadPoolExecutor(max_workers=20)
 
@@ -150,6 +155,9 @@ class StateManager:
 
 state = StateManager()
 _processed_updates = deque(maxlen=1000)
+_processed_updates_set = set()
+_webhook_lock = threading.Lock()
+_webhook_slots = threading.BoundedSemaphore(value=40)
 
 
 # ── Thread-Safe Portfolio Manager ────────────────────────────────────────────
@@ -487,354 +495,61 @@ def build_fundamental_text(sym, cname=None):
     return "\n".join(rows)
 
 
-# ── Recommended Portfolios (🏦 Conservative / ⚖️ Moderate / 🚀 Aggressive) ──────
-# Each button returns exactly 10 validated stocks chosen from the Nifty-500-sized universe
-# (universe.get_universe(): top-500 by liquidity / Nifty 500 list, cached 12 h, shared with Stocks Buzz).
-# Flow (minimum API usage):
-#   0 calls : universe list (already cached by Stocks Buzz, else 1 NSE file)
-#   1 call  : Nifty 50 history        -> market regime (market_data.index_history)
-#   ~5 bulk : 500 stock prices (6mo)  -> momentum / volatility / liquidity (market_data.bulk_history,
-#                                        not throttled by data_engine; cached 30 min, shared by all 3 buttons)
-#   <=30    : get_info() per stock in rank order, STOP as soon as 10 pass (cached 60 min)
-# Finished text is cached 3 h and shared by all clients -> repeat presses cost 0 calls.
-# No LLM, no Finnhub, no new scheduler, no new service.
-from html import escape as _esc
-from data_engine import cached_get, cached_set
-
-PORTFOLIO_SIZE = 10
-PORTFOLIO_UNIVERSE_SIZE = 500
-PORTFOLIO_CACHE_TTL = 3 * 3600      # seconds, result cache shared by all clients
-PORTFOLIO_DEADLINE_SEC = 240        # hard stop for one build -> clear error, never partial
-PORTFOLIO_MAX_FUND_CALLS = 30       # cap on get_info() lookups per build (8 Yahoo calls/min limiter)
-
-# Liquidity-rank band of the universe each profile may draw from (0 = most traded).
-PORTFOLIO_BANDS = {"conservative": (0, 120), "moderate": (15, 300), "aggressive": (30, 500)}
-_DEFENSIVE_KEYS = ("FMCG", "Pharma", "Power", "IT &", "Agriculture", "Telecom")
-
-try:
-    from nifty500_collector import get_stock_sector as _static_sector
-except Exception:                                                   # pragma: no cover
-    def _static_sector(sym):
-        return "Other"
-
-
-def _pf_clean_sector(label):
-    """'🛍️ Consumer & FMCG' -> 'Consumer & FMCG'; unknown -> 'Other'."""
-    txt = re.sub(r"^[^A-Za-z]+", "", str(label or "")).strip()
-    return "Other" if not txt or txt == "Others" else txt
-
-
-def _is_fin(sector):
-    s = (sector or "").lower()
-    return any(k in s for k in ("financ", "bank", "insur", "nbfc"))
-
-
-# Validation rules. mcap in INR, turnover = 20-day avg (price x volume) in INR.
-PORTFOLIO_RULES = {
-    "conservative": dict(label="🏦 CONSERVATIVE PORTFOLIO", min_mcap=5e11, min_price=100, min_turnover=25e7,
-                         max_vol=0.32, max_dd=0.30, max_pe=70, min_roe=12, max_de=1.0, de_required=True,
-                         min_growth=-0.15, max_beta=1.2),
-    "moderate":     dict(label="⚖️ MODERATE PORTFOLIO", min_mcap=1.5e11, min_price=100, min_turnover=15e7,
-                         max_vol=0.42, max_dd=0.35, max_pe=90, min_roe=12, max_de=1.5, de_required=False,
-                         min_growth=-0.15, max_beta=1.5),
-    "aggressive":   dict(label="🚀 AGGRESSIVE PORTFOLIO", min_mcap=5e10, min_price=50, min_turnover=10e7,
-                         max_vol=0.65, max_dd=0.40, max_pe=150, min_roe=10, max_de=2.0, de_required=False,
-                         min_growth=0.0, max_beta=None),
+# ── Screener Card ─────────────────────────────────────────────────────────
+SCREENER_STOCKS = {
+    "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
+    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
+    "aggressive": ["TATAMOTORS", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ZOMATO", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
 }
 
 
-class PortfolioDataError(Exception):
-    """Raised when a complete, validated 10-stock portfolio cannot be produced."""
+def build_scan(profile):
+    syms = SCREENER_STOCKS.get(profile, [])
+    if not syms:
+        return "❌ Unknown profile."
+    labels = {"conservative": "🏦 CONSERVATIVE", "moderate": "⚖️ MODERATE", "aggressive": "🚀 AGGRESSIVE"}
+    lines = [f"📊 <b>{labels.get(profile, 'SCREENER')}</b>", f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
 
-
-def _pf_num(v):
-    try:
-        f = float(v)
-        return f if f == f else None          # drops NaN
-    except (TypeError, ValueError):
-        return None
-
-
-def _pf_pct(v):
-    """Yahoo ratios arrive as decimals (0.18); convert to % (same rule as nifty500_collector)."""
-    f = _pf_num(v)
-    if f is None:
-        return None
-    return round(f * 100, 1) if abs(f) <= 1.5 else round(f, 1)
-
-
-# ── Market regime (1 call, 30-min memo) ──────────────────────────────────────
-_PF_REGIME = {"ts": 0.0, "val": None}
-
-
-def _pf_regime():
-    now = time.time()
-    if _PF_REGIME["val"] and now - _PF_REGIME["ts"] < 1800:
-        return _PF_REGIME["val"]
-    from market_data import index_history
-    df = index_history("^NSEI", "6mo")
-    if df is None or len(df) < 64:
-        raise PortfolioDataError("Market data (Nifty 50) is unavailable right now.")
-    c = df["Close"].astype(float)
-    last = float(c.iloc[-1])
-    r1 = last / float(c.iloc[-22]) - 1
-    r3 = last / float(c.iloc[-64]) - 1
-    above50 = last > float(c.tail(50).mean())
-    if above50 and r1 >= 0:
-        label = "BULLISH"
-    elif (not above50) and r1 < -0.02:
-        label = "WEAK"
-    else:
-        label = "NEUTRAL"
-    val = {"label": label, "last": last, "r1": r1, "r3": r3, "above50": above50}
-    _PF_REGIME.update(ts=now, val=val)
-    return val
-
-
-# ── Technical / liquidity metrics from the single bulk download (0 extra calls) ─
-def _pf_tech(df):
-    try:
-        if df is None or len(df) < 64:
-            return None
-        c = df["Close"].astype(float)
-        v = df["Volume"].astype(float)
-        last = float(c.iloc[-1])
-        if last <= 0:
-            return None
-        prev = float(c.iloc[-2])
-        vol = float(c.pct_change().dropna().tail(120).std() * (252 ** 0.5))
-        return {
-            "price": last,
-            "chg": (last / prev - 1) * 100 if prev > 0 else 0.0,
-            "r1": last / float(c.iloc[-22]) - 1,
-            "r3": last / float(c.iloc[-64]) - 1,
-            "vol": vol,
-            "above50": last > float(c.tail(50).mean()),
-            "dd": last / float(c.max()) - 1,                       # <= 0
-            "turnover": float((c * v).tail(20).mean()),
-            "vratio": float(v.tail(20).mean() / max(float(v.tail(60).mean()), 1.0)),
-        }
-    except Exception:
-        return None
-
-
-def _pf_prescore(profile, t, sector, regime, sector_r3):
-    r3, r1, vol, dd = t["r3"] * 100, t["r1"] * 100, t["vol"] * 100, abs(t["dd"]) * 100
-    if profile == "conservative":      # stability first; defensives get a bonus when market is not bullish
-        defensive = any(k in sector for k in _DEFENSIVE_KEYS)
-        return -vol + 0.2 * r3 - 0.3 * dd + (4 if regime["label"] != "BULLISH" and defensive else 0)
-    if profile == "moderate":          # balanced momentum vs risk
-        return 0.4 * r3 + 0.2 * r1 - 0.4 * vol - 0.2 * dd
-    sec_edge = (sector_r3.get(sector, regime["r3"]) - regime["r3"]) * 100   # sector strength vs Nifty
-    return 0.5 * r3 + 0.3 * r1 + 4 * min(t["vratio"], 2.0) + (5 if t["above50"] else -5) + 0.3 * sec_edge
-
-
-def _pf_tech_gate(profile, rules, t, regime):
-    """Return a reject reason, or None if the stock passes the price/liquidity/risk gate."""
-    if t["price"] < rules["min_price"]:
-        return "penny/low price"
-    if t["turnover"] < rules["min_turnover"]:
-        return "illiquid"
-    if t["vol"] > rules["max_vol"]:
-        return "too volatile"
-    if abs(t["dd"]) > rules["max_dd"]:
-        return "deep drawdown"
-    if profile == "aggressive":
-        if t["r3"] <= -0.05:                                          # clearly broken trend
-            return "negative momentum"
-        if regime["label"] == "WEAK" and not t["above50"] and t["r3"] <= regime["r3"]:
-            return "no relative strength in weak market"
-    return None
-
-
-# ── Fundamentals: get_info() (cached 60 min); Screener only if core fields missing ─
-def _pf_fundamentals(sym):
-    try:
-        info = get_info(sym) or {}
-    except Exception:
-        info = {}
-    price = _pf_num(info.get("price"))
-    mcap = _pf_num(info.get("market_cap"))
-    pe = _pf_num(info.get("pe"))
-    roe = _pf_pct(info.get("roe"))
-    de_raw = _pf_num(info.get("debtToEquity"))
-    de = de_raw / 100.0 if de_raw is not None else None            # Yahoo gives D/E in %
-    div = _pf_pct(info.get("dividend_yield"))
-    growth = _pf_num(info.get("earningsGrowth"))                    # decimal YoY, optional
-    beta = _pf_num(info.get("beta"))
-    name = info.get("name")
-    sector = info.get("sector")
-
-    if pe is None or roe is None or mcap is None:                    # Yahoo v10 blocked/incomplete
+    def _fetch(sym):
         try:
-            from fundamentals import _fetch_screener
-            sc = _fetch_screener(sym) or {}
+            df = get_hist(sym, "6mo")
+            if df is None or df.empty or len(df) < 28:
+                return None
+            c = df["Close"]
+            ltp = round(float(c.iloc[-1]), 2)
+            prev = float(c.iloc[-2])
+            chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+            rsi_val = calc_rsi(c)
+            trend_val = trend_label(c)
+            signal_val = swing_signal(rsi_val, trend_val, chg)
+            return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi_val, "trend": trend_val, "signal": signal_val}
         except Exception:
-            sc = {}
-        pe = pe if pe is not None else _pf_num(sc.get("pe"))
-        roe = roe if roe is not None else _pf_num(sc.get("roe"))     # Screener ROE already %
-        mcap = mcap if mcap is not None else _pf_num(sc.get("mcap"))
-        de = de if de is not None else _pf_num(sc.get("de"))         # Screener D/E already a ratio
-        if div is None:
-            div = _pf_num(sc.get("div_y"))
-        name = name if name and name != sym else sc.get("name")
+            return None
 
-    if div is not None and div > 12:
-        div = None                                                   # unit sanity guard
-    if not price or not mcap or pe is None or pe <= 0 or roe is None:
-        return None                                                  # fundamentals unavailable -> skip
-    return {"price": price, "mcap": mcap, "pe": pe, "roe": roe, "de": de, "div": div,
-            "growth": growth, "beta": beta, "name": name or sym, "sector": sector}
+    results = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futs = {pool.submit(_fetch, s): s for s in syms}
+        for f in as_completed(futs, timeout=15):
+            sym = futs[f]
+            try:
+                r = f.result()
+                if r:
+                    results[sym] = r
+            except Exception:
+                pass
 
-
-def _pf_fund_gate(rules, sector, f):
-    if f["mcap"] < rules["min_mcap"]:
-        return "market cap too small"
-    if f["pe"] > rules["max_pe"]:
-        return "PE too high"
-    if f["roe"] < rules["min_roe"]:
-        return "ROE too low"
-    if not _is_fin(sector):
-        if f["de"] is None and rules["de_required"]:
-            return "debt data unavailable"
-        if f["de"] is not None and f["de"] > rules["max_de"]:
-            return "debt too high"
-    if f["growth"] is not None and f["growth"] < rules["min_growth"]:
-        return "earnings falling"
-    if rules["max_beta"] and f["beta"] is not None and f["beta"] > rules["max_beta"]:
-        return "high beta"
-    return None
-
-
-def _pf_reason(profile, sector, f, t, regime):
-    cap = "Large-cap" if f["mcap"] >= 1e12 else ("Mid-cap" if f["mcap"] >= 3e11 else "Small/mid-cap")
-    parts = [f"{cap} {sector}", f"ROE {f['roe']:.0f}%"]
-    if f["de"] is not None and not _is_fin(sector):
-        parts.append(f"D/E {f['de']:.1f}")
-    if profile == "conservative":
-        if f["div"]:
-            parts.append(f"div {f['div']:.1f}%")
-        parts.append(f"low volatility {t['vol'] * 100:.0f}%")
-    elif profile == "moderate":
-        parts.append(f"3M {t['r3'] * 100:+.0f}%")
-        parts.append(f"volatility {t['vol'] * 100:.0f}%")
-    else:
-        parts.append(f"3M {t['r3'] * 100:+.0f}% vs Nifty {regime['r3'] * 100:+.0f}%")
-        parts.append(f"volume {t['vratio']:.1f}x avg")
-    if f["growth"] is not None:
-        parts.append(f"earnings {f['growth'] * 100:+.0f}% YoY")
-    return " · ".join(parts)
-
-
-def _pf_taken(profile):
-    """Symbols already picked (today) by the OTHER two portfolios -> never repeated."""
-    out = set()
-    for p in PORTFOLIO_RULES:
-        if p != profile:
-            out.update(cached_get(_pf_key(p) + "_syms", PORTFOLIO_CACHE_TTL) or [])
-    return out
-
-
-def _build_portfolio(profile):
-    from market_data import bulk_history
-    from universe import get_universe
-    t0 = time.time()
-    rules = PORTFOLIO_RULES[profile]
-    regime = _pf_regime()
-
-    uni = list(get_universe().get("symbols") or [])[:PORTFOLIO_UNIVERSE_SIZE]
-    if len(uni) < 100:
-        raise PortfolioDataError("Stock universe (Nifty 500 list) is unavailable right now.")
-
-    hist = bulk_history(uni, period="6mo", cache_ttl=1800)            # chunks of 100, shared by all 3 buttons
-    tech = {s: m for s, m in ((s, _pf_tech(hist.get(s))) for s in uni) if m}
-    if len(tech) < 100:
-        raise PortfolioDataError("Price data is unavailable for too many stocks right now.")
-
-    # liquidity rank -> profile band (large/liquid for Conservative, broader for Aggressive)
-    by_liq = sorted(tech, key=lambda s: tech[s]["turnover"], reverse=True)
-    lo, hi = PORTFOLIO_BANDS[profile]
-    taken = _pf_taken(profile)
-    cand = [s for s in by_liq[lo:hi] if s not in taken]
-
-    sectors = {s: _pf_clean_sector(_static_sector(s)) for s in cand}
-    by_sec = {}
-    for s in tech:
-        by_sec.setdefault(_pf_clean_sector(_static_sector(s)), []).append(tech[s]["r3"])
-    sector_r3 = {k: sum(v) / len(v) for k, v in by_sec.items() if k != "Other" and len(v) >= 3}
-    score = {s: _pf_prescore(profile, tech[s], sectors[s], regime, sector_r3) for s in cand}
-
-    picked, calls = [], 0
-    for s in sorted(cand, key=score.get, reverse=True):
-        if len(picked) >= PORTFOLIO_SIZE or time.time() - t0 > PORTFOLIO_DEADLINE_SEC:
-            break
-        why = _pf_tech_gate(profile, rules, tech[s], regime)
-        f = None
-        if not why:
-            if calls >= PORTFOLIO_MAX_FUND_CALLS:
-                break
-            calls += 1
-            f = _pf_fundamentals(s)
-            why = "fundamentals unavailable" if f is None else _pf_fund_gate(rules, f.get("sector") or sectors[s], f)
-        if why:
-            logger.info(f"[Portfolio:{profile}] skip {s}: {why}")
+    for s in syms:
+        r = results.get(s)
+        if not r:
             continue
-        picked.append((s, f, tech[s]))
+        icon = "🟢" if r["chg"] >= 0 else "🔴"
+        rsi_b = "🔴OB" if r["rsi"] > 70 else ("🟢OS" if r["rsi"] < 30 else "🟡")
+        lines.append(f"{icon} <b>{s}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n   RSI:{r['rsi']} {rsi_b}  |  {r['trend']}  |  <b>{r['signal']}</b>")
 
-    if len(picked) < PORTFOLIO_SIZE:
-        raise PortfolioDataError(
-            f"Only {len(picked)} of {PORTFOLIO_SIZE} stocks passed data validation "
-            f"(price/fundamentals missing or failed quality rules).")
-
-    mood = {"BULLISH": "🟢 Bullish", "NEUTRAL": "🟡 Neutral", "WEAK": "🔴 Weak"}[regime["label"]]
-    lines = [
-        f"📊 <b>{rules['label']}</b>",
-        f"📅 {date.today().strftime('%d-%b-%Y')}",
-        f"🌐 Market: {mood} — Nifty {regime['last']:,.0f} ({regime['r1'] * 100:+.1f}% 1M, {regime['r3'] * 100:+.1f}% 3M)",
-        "━━━━━━━━━━━━━━━━━━━━",
-    ]
-    for i, (s, f, t) in enumerate(picked, 1):
-        sec = f.get("sector") or sectors[s]
-        name = _esc(re.sub(r"\s+(Limited|Ltd\.?)$", "", str(f["name"]), flags=re.I))
-        lines += [
-            f"<b>{i}. {name}</b> ({_esc(s)}) · {_esc(sec)}",
-            f"   ₹{f['price']:,.2f} ({t['chg']:+.2f}%)  |  MCap {fmt_mcap(f['mcap'])}  |  PE {f['pe']:.1f}",
-            f"   💡 {_esc(_pf_reason(profile, sec, f, t, regime))}",
-        ]
-    lines += ["━━━━━━━━━━━━━━━━━━━━", "⚠️ <i>Educational only. Not SEBI-registered advice.</i>"]
-    cached_set(_pf_key(profile) + "_syms", [p[0] for p in picked], PORTFOLIO_CACHE_TTL)
+    if not results:
+        lines.append("❌ Data unavailable.")
+    lines.append("\n⚠️ Educational only.")
     return "\n".join(lines)
-
-
-_PF_LOCKS = {p: threading.Lock() for p in PORTFOLIO_RULES}
-
-
-def _pf_key(profile):
-    return f"portfolio_{profile}_{date.today().isoformat()}"
-
-
-def get_portfolio(profile):
-    """Cached text or a fresh build. One build per profile at a time. Raises PortfolioDataError."""
-    hit = cached_get(_pf_key(profile), PORTFOLIO_CACHE_TTL)
-    if hit:
-        return hit
-    with _PF_LOCKS[profile]:
-        hit = cached_get(_pf_key(profile), PORTFOLIO_CACHE_TTL)      # built while we waited
-        if hit:
-            return hit
-        text = _build_portfolio(profile)
-        cached_set(_pf_key(profile), text, PORTFOLIO_CACHE_TTL)      # errors are never cached
-        return text
-
-
-def _pf_profile_from_text(text):
-    t = (text or "").lower()
-    if "swing" in t or len(t) > 40:                    # buttons only, not free-text sentences
-        return None
-    for key in ("conservative", "moderate", "aggressive"):
-        if key in t:
-            return key
-    return None
 
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
@@ -911,7 +626,7 @@ def main_keyboard():
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
-    kb.add("🏭 Sector Report", "🧾 Portfolio Report")
+    kb.add("🏭 Sector Report")
     return kb
 
 
@@ -955,7 +670,6 @@ def cmd_start(m):
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
-              "🧾 <b>Portfolio Report</b> = upload Symbol/Qty/Buy Price → health report + 8-page report per holding.\n"
               "Use menu buttons below.",
               reply_markup=main_keyboard())
 
@@ -1131,12 +845,6 @@ def handle_analysis_callback(call):
         safe_send(chat_id, f"📄 Preparing research report for <b>{sym}</b>…")
         executor.submit(run_report, chat_id, sym)
 
-    elif action == "pftemplate":
-        import io as _io
-        buf = _io.BytesIO(portfolio_report.TEMPLATE_CSV.encode("utf-8"))
-        buf.name = "portfolio_template.csv"
-        bot.send_document(chat_id, buf, caption="📥 Fill in Symbol, Qty and Buy Price (NSE tickers), then send the file back here.")
-
     elif action == "menu":
         safe_send(chat_id, f"What would you like to see for <b>{sym}</b>?",
                   reply_markup=analysis_choice_keyboard(sym))
@@ -1159,8 +867,7 @@ def cmd_status(m):
             ]
             for p_name in ["GROQ", "Gemini", "OpenAI", "AskFuzz"]:
                 v = res.get(p_name, "SKIP")
-                sv = str(v).upper()
-                ic = "✅" if (sv.startswith("OK") or sv == "CONFIGURED") else ("⚪" if sv in ("SKIP", "NOT CONFIGURED") else "❌")
+                ic = "✅" if str(v).startswith("OK") else ("⚪" if str(v) == "SKIP" else "❌")
                 lines.append(f"  {ic} {p_name}: {str(v)[:35]}")
             safe_send(chat_id, "\n".join(lines), reply_markup=main_keyboard())
         except Exception as e:
@@ -1296,42 +1003,17 @@ def stat_btn(m):
     cmd_status(m)
 
 
-def _pf_send(chat_id, text):
-    if len(text) <= 3800:
-        safe_send(chat_id, text)
-        return
-    chunk = ""
-    for line in text.split("\n"):
-        if len(chunk) + len(line) + 1 > 3800:
-            safe_send(chat_id, chunk)
-            chunk = ""
-        chunk += line + "\n"
-    if chunk.strip():
-        safe_send(chat_id, chunk)
-
-
-@bot.message_handler(func=lambda m: _pf_profile_from_text(m.text) is not None)
+@bot.message_handler(func=lambda m: m.text in ["🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"])
 def scan_btn(m):
-    prof = _pf_profile_from_text(m.text)
-    chat_id = m.chat.id
-    if cached_get(_pf_key(prof), PORTFOLIO_CACHE_TTL):          # instant, 0 API calls
-        try:
-            _pf_send(chat_id, get_portfolio(prof))
-            return
-        except Exception as e:
-            logger.error(f"Portfolio cache err: {e}", exc_info=True)
-    safe_send(chat_id, f"⏳ Building {PORTFOLIO_RULES[prof]['label'].title()}… "
-                       f"first run takes 1–3 min, then it is instant for 3 hours.")
+    p = {"🏦 Conservative": "conservative", "⚖️ Moderate": "moderate", "🚀 Aggressive": "aggressive"}[m.text]
+    safe_send(m.chat.id, f"⏳ Scanning {m.text}…")
 
-    def _run(cid=chat_id, p=prof):
+    def _run(chat_id=m.chat.id, prof=p):
         try:
-            _pf_send(cid, get_portfolio(p))
-        except PortfolioDataError as e:
-            safe_send(cid, f"❌ <b>Portfolio unavailable</b>\n{_esc(str(e))}\n"
-                           f"No partial list was sent. Please try again in a few minutes.")
+            safe_send(chat_id, build_scan(prof))
         except Exception as e:
-            logger.error(f"Portfolio err: {e}", exc_info=True)
-            safe_send(cid, "❌ Portfolio could not be generated right now. Please try again in a few minutes.")
+            logger.error(f"Screener err: {e}", exc_info=True)
+            safe_send(chat_id, f"❌ Error: {e}")
 
     executor.submit(_run)
 
@@ -1551,134 +1233,6 @@ def sector_btn(m):
     executor.submit(run_sector_report, m.chat.id)
 
 
-# ── 🧾 Client Portfolio Report ─────────────────────────────────────────────────
-_pf_sem = threading.Semaphore(1)            # one heavy job at a time; others queue
-_pf_lock = threading.Lock()
-_pf_active = set()
-
-
-def _pf_resolver(query):
-    """Company name → NSE ticker (used only for uploads that contain names instead of tickers)."""
-    sym = resolve_symbol(query)[0]
-    return sym.replace(".NS", "").replace(".BO", "") if sym else None
-
-
-def _pf_prompt(chat_id):
-    state.set(chat_id, "pf_upload")
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("📥 Get CSV template", callback_data="pftemplate|x"))
-    safe_send(chat_id,
-              "🧾 <b>Portfolio Report</b>\n\n"
-              "Send your holdings as either:\n"
-              "• a <b>CSV or Excel (.xlsx)</b> file with columns <b>Symbol, Qty, Buy Price</b> (broker exports work), or\n"
-              "• pasted lines like <code>RELIANCE 50 1250</code>\n\n"
-              f"You'll receive a <b>Portfolio Health PDF</b> plus an <b>8-page research report</b> for each of your largest "
-              f"{portfolio_report.MAX_ANALYZE} holdings, with your own quantity, P&amp;L, weight and verdict built in.\n"
-              "⏱ Roughly a minute per stock. 🔒 Holdings are processed in memory and not stored. Send /cancel to stop.",
-              reply_markup=kb)
-
-
-def _pf_worker(chat_id, holdings, client_name):
-    import tempfile, shutil
-    if not _pf_sem.acquire(blocking=False):
-        safe_send(chat_id, "⏳ Another portfolio report is being built — yours is queued and will start automatically.")
-        _pf_sem.acquire()
-    out_dir = tempfile.mkdtemp(prefix="pf_")
-    try:
-        job = portfolio_report.run_job(holdings, out_dir, client_name, progress=lambda msg: safe_send(chat_id, msg))
-        recs = job["recs"]
-        scored = [r for r in recs if r.get("R")]
-        with open(job["summary"], "rb") as f:
-            bot.send_document(chat_id, f, visible_file_name="Portfolio_Health_Report.pdf",
-                              caption=(f"🧾 <b>Portfolio Health Report</b>\n{len(recs)} holdings · {len(scored)} analysed in full\n\n"
-                                       "⚠️ Educational only. Not SEBI-registered advice."), parse_mode="HTML")
-        for sym, path in job["stocks"]:
-            hv = next((r["R"]["holding"] for r in recs if r["symbol"] == sym and r.get("R")), None)
-            with open(path, "rb") as f:
-                bot.send_document(chat_id, f, visible_file_name=f"{sym}_Research_Report.pdf",
-                                  caption=f"📄 <b>{sym}</b>" + (f" — {hv['verdict']}" if hv else ""), parse_mode="HTML")
-        if job["notes"]:
-            import html as _h
-            safe_send(chat_id, "ℹ️ <b>Notes</b>\n" + "\n".join(f"• {_h.escape(n, quote=False)}" for n in job["notes"][:6]))
-    except ValueError as e:
-        safe_send(chat_id, f"❌ {e}")
-    except Exception as e:
-        logger.error(f"Portfolio job failed: {type(e).__name__}", exc_info=False)
-        safe_send(chat_id, "❌ Something went wrong while building the report. Please try again in a few minutes.")
-    finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
-        _pf_sem.release()
-        with _pf_lock:
-            _pf_active.discard(chat_id)
-
-
-def start_portfolio_job(chat_id, holdings, issues, client_name=""):
-    import html as _h
-    if not holdings:
-        msg = "❌ I couldn't read any holdings.\n" + "\n".join(f"• {_h.escape(i, quote=False)}" for i in issues[:6])
-        safe_send(chat_id, msg + "\n\nExpected: <code>SYMBOL QTY BUYPRICE</code> per line, or a CSV/XLSX with those columns.")
-        return False
-    with _pf_lock:
-        if chat_id in _pf_active:
-            safe_send(chat_id, "⏳ Your portfolio report is already being built.")
-            return False
-        _pf_active.add(chat_id)
-    state.clear(chat_id)
-    shown = "\n".join(f"• {_h.escape(h['symbol'])}  {h['qty']:g} @ ₹{h['buy']:,.2f}" for h in holdings[:25])
-    more = f"\n… and {len(holdings) - 25} more" if len(holdings) > 25 else ""
-    warn = ("\n\n⚠️ <b>Please check:</b>\n" + "\n".join(f"• {_h.escape(i, quote=False)}" for i in issues[:8])) if issues else ""
-    safe_send(chat_id, f"✅ Read <b>{len(holdings)}</b> holdings:\n{shown}{more}{warn}\n\n🔬 Building your reports…")
-    threading.Thread(target=_pf_worker, args=(chat_id, holdings, client_name), daemon=True).start()
-    return True
-
-
-def _client_name(m):
-    try:
-        return re.sub(r"[^\w .'-]", "", m.from_user.first_name or "")[:40]
-    except Exception:
-        return ""
-
-
-@bot.message_handler(commands=["portfolioreport", "pfreport"])
-def cmd_pf(m):
-    _pf_prompt(m.chat.id)
-
-
-@bot.message_handler(func=lambda m: m.text == "🧾 Portfolio Report")
-def pf_btn(m):
-    _pf_prompt(m.chat.id)
-
-
-@bot.message_handler(commands=["cancel"])
-def cmd_cancel(m):
-    state.clear(m.chat.id)
-    safe_send(m.chat.id, "Cancelled.", reply_markup=main_keyboard())
-
-
-@bot.message_handler(content_types=["document"])
-def pf_document(m):
-    uid = m.chat.id
-    name = (m.document.file_name or "").lower()
-    if not name.endswith((".csv", ".xlsx", ".xlsm", ".xls", ".txt")):
-        if state.get(uid) == "pf_upload":
-            safe_send(uid, "Please send a <b>.csv</b> or <b>.xlsx</b> file with columns Symbol, Qty, Buy Price.")
-        return
-    if not API_RATE_LIMITER.is_allowed(uid):
-        safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
-        return
-    if (m.document.file_size or 0) > portfolio_report.MAX_FILE_BYTES:
-        safe_send(uid, "❌ File is too large (limit 1 MB).")
-        return
-    try:
-        info = bot.get_file(m.document.file_id)
-        data = bot.download_file(info.file_path)
-    except Exception:
-        safe_send(uid, "❌ Couldn't download that file. Please try again.")
-        return
-    holdings, issues = portfolio_report.parse_file(name, data, _pf_resolver)
-    start_portfolio_job(uid, holdings, issues, _client_name(m))
-
-
 @bot.message_handler(func=lambda m: m.text in ("📰 News", "🤖 AI"))
 def retired_buttons(m):
     """Old keyboards stay cached in Telegram clients — answer politely and refresh the menu."""
@@ -1697,11 +1251,6 @@ def handle_text(m):
 
     if not API_RATE_LIMITER.is_allowed(uid):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
-        return
-
-    if state.get(uid) == "pf_upload":
-        holdings, issues = portfolio_report.parse_text(text, _pf_resolver)
-        start_portfolio_job(uid, holdings, issues, _client_name(m))
         return
 
     if state.get(uid) == "analysis":
@@ -1758,17 +1307,38 @@ def _process_webhook(data_str):
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    data = request.get_data(as_text=True)
+    # Telegram sends this header when webhook is registered with secret_token.
+    supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not WEBHOOK_SECRET or not hmac.compare_digest(supplied, WEBHOOK_SECRET):
+        return "unauthorized", 403
+    if request.content_length is not None and request.content_length > 256_000:
+        return "payload too large", 413
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or not isinstance(payload.get("update_id"), int):
+        return "invalid Telegram update", 400
+    uid = payload["update_id"]
+    if not _webhook_slots.acquire(blocking=False):
+        return "server busy", 503  # Telegram retries non-2xx.
     try:
-        payload = json.loads(data)
-        uid = payload.get("update_id")
-        if uid is not None:
-            if uid in _processed_updates:
+        with _webhook_lock:
+            if uid in _processed_updates_set:
                 return "ok", 200
+            if len(_processed_updates) == _processed_updates.maxlen:
+                _processed_updates_set.discard(_processed_updates[0])
             _processed_updates.append(uid)
-    except (json.JSONDecodeError, TypeError):
-        pass
-    executor.submit(_process_webhook, data)
+            _processed_updates_set.add(uid)
+        future = executor.submit(_process_webhook, json.dumps(payload))
+        future.add_done_callback(lambda _: _webhook_slots.release())
+    except Exception:
+        with _webhook_lock:
+            _processed_updates_set.discard(uid)
+            try:
+                _processed_updates.remove(uid)
+            except ValueError:
+                pass
+        _webhook_slots.release()
+        logger.exception("Unable to schedule webhook update")
+        return "busy", 503
     return "ok", 200
 
 
@@ -1776,7 +1346,7 @@ def webhook():
 if __name__ == "__main__":
     logger.info("🚀 Starting AutoAI Bot v6.2...")
     if WEBHOOK_URL:
-        bot.set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}")
+        bot.set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}", secret_token=WEBHOOK_SECRET)
         logger.info(f"Webhook active: {WEBHOOK_URL}{WEBHOOK_PATH}")
         app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
     else:
