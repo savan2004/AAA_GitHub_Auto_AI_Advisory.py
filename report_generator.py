@@ -49,11 +49,8 @@ from reportlab.platypus import (
 )
 
 import research_engine as eng
+from research_reasoning import build_reasoning
 import report_charts as charts
-import industry as industry_mod
-import peer_groups
-import research_data as rd
-from config import BRAND_NAME as BRAND
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +70,6 @@ try:
     pdfmetrics.registerFont(TTFont("DV-BI", os.path.join(_fd, "DejaVuSans-BoldOblique.ttf")))
     pdfmetrics.registerFontFamily("DV", normal="DV", bold="DV-B", italic="DV-I", boldItalic="DV-BI")
     FONT, BOLD, OBLQ, HAS_RUPEE = "DV", "DV-B", "DV-I", True
-    # Monospace has a serifed capital I and a curved-tail l, so "FIIs"/"DIIs" can never be misread as "Fils"/"Dlls".
-    pdfmetrics.registerFont(TTFont("DVM", os.path.join(_fd, "DejaVuSansMono-Bold.ttf")))
 except Exception as _e:                                       # pragma: no cover
     logger.warning(f"[Report] DejaVu fonts unavailable, falling back to Helvetica: {_e}")
 
@@ -95,21 +90,8 @@ def esc(s) -> str:
     return _html.escape(str(s), quote=False)
 
 
-def holder(key: str) -> str:
-    """Canonical, typographically unambiguous holder label (FIIs / DIIs always capital I)."""
-    name = rd.holder_display(key)
-    return f"<font name='DVM'>{name}</font>" if key in ("fii", "dii") and HAS_RUPEE else name
-
-
-_HOLDER_RE = re.compile(r"(?<![>\w])(FIIs|DIIs)(?![\w<])")
-
-
 def _rs(text: str) -> str:
-    """Final text pass for every paragraph: ₹ fallback, and FIIs/DIIs in the serifed-I monospace face
-    so a capital I can never be misread as a lowercase l ('Fils', 'Dlls')."""
-    if HAS_RUPEE:
-        return _HOLDER_RE.sub(lambda m: f"<font name='DVM'>{m.group(1)}</font>", text)
-    return text.replace("₹", "Rs ")
+    return text if HAS_RUPEE else text.replace("₹", "Rs ")
 
 
 _EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\u2B50\u2705\u26A0\uFE0F]+")
@@ -176,7 +158,6 @@ def S():
         "h2": ps("h2", fontName=BOLD, fontSize=9.4, leading=13, textColor=NAVY, spaceBefore=6, spaceAfter=2),
         "title": ps("title", fontName=BOLD, fontSize=19, leading=23, textColor=colors.white),
         "sub": ps("sub", fontSize=8.8, leading=12, textColor=colors.HexColor("#C6D4E8")),
-        "brand": ps("brand", fontName=BOLD, fontSize=7.8, leading=10, textColor=colors.HexColor("#8FB4E3")),
         "px": ps("px", fontName=BOLD, fontSize=17, leading=21, textColor=colors.white, alignment=TA_RIGHT),
         "pxs": ps("pxs", fontSize=8.8, leading=12, textColor=colors.white, alignment=TA_RIGHT),
         "cell": ps("cell", fontSize=8, leading=10.6),
@@ -284,7 +265,7 @@ def make_canvas(meta: dict):
             self.rect(0, h - 13, w, 13, fill=1, stroke=0)
             self.setFillColor(colors.white)
             self.setFont(BOLD, 7.6)
-            self.drawString(16 * mm, h - 9, f"{BRAND}  |  {meta.get('kind', 'Equity Research')}")
+            self.drawString(16 * mm, h - 9, f"AutoAI Advisory  |  {meta.get('kind', 'Equity Research')}")
             self.setFont(FONT, 7.6)
             self.drawRightString(w - 16 * mm, h - 9, meta.get("right") or f"{meta['name'][:40]}  ·  NSE: {meta['sym']}")
             self.setStrokeColor(BORDER)
@@ -292,7 +273,7 @@ def make_canvas(meta: dict):
             self.line(16 * mm, 13 * mm, w - 16 * mm, 13 * mm)
             self.setFillColor(GREY)
             self.setFont(FONT, 6.8)
-            self.drawString(16 * mm, 9 * mm, f"{BRAND}  ·  Generated {meta['generated']}  ·  Automated research for educational use. Not SEBI-registered advice.")
+            self.drawString(16 * mm, 9 * mm, f"Generated {meta['generated']}  ·  Automated research for educational use. Not SEBI-registered advice.")
             self.drawRightString(w - 16 * mm, 9 * mm, f"Page {self._pageNumber} of {total}")
             self.restoreState()
     return NumberedCanvas
@@ -309,39 +290,28 @@ def _safe(fn, *a, default=None, **k):
         return default
 
 
-def _find_peers(sym: str, kind: Optional[str], mcap: Optional[float], sector_label: Optional[str],
-                max_peers: int = 6, timeout: int = 25):
-    """
-    → (group label, peers, method). Resolution: curated lender groups (SBFC etc.) →
-    lender kind + size → the bot's sector map. Peers are the `max_peers` closest in market cap.
-    """
-    from nifty500_collector import SECTOR_STOCKS
+def _find_peers(sym: str, max_peers: int = 5, timeout: int = 25):
+    from nifty500_collector import get_stock_sector, SECTOR_STOCKS
     from fundamentals import get_fundamentals
     from market_data import bulk_history
-    label, cands, method = peer_groups.resolve(sym, kind, mcap)
-    if not cands:
-        if sector_label and "Others" not in sector_label and sector_label in SECTOR_STOCKS:
-            label, cands, method = sector_label, [c for c in SECTOR_STOCKS[sector_label] if c != sym], "sector map"
-        else:
-            return None, [], "none"
-    cands = cands[: max_peers + 6]
+    sector = get_stock_sector(sym)
+    if not sector or "Others" in sector:
+        return sector, []
+    cands = [s for s in SECTOR_STOCKS.get(sector, []) if s != sym][: max_peers + 4]
     peers = []
     pool = ThreadPoolExecutor(max_workers=min(6, max(1, len(cands))))
     try:
         futs = {pool.submit(_safe, get_fundamentals, c): c for c in cands}
         done, _ = wait(futs.keys(), timeout=timeout)
         for f in done:
-            c, d = futs[f], f.result()
+            c = futs[f]
+            d = f.result()
             if d and d.get("mcap"):
-                peers.append({"sym": c, "name": d.get("name") or c, "mcap": d["mcap"], "pe": d.get("pe"),
-                              "fwd_pe": d.get("fwd_pe"), "pb": d.get("pb"), "roe": d.get("roe")})
+                peers.append({"sym": c, "name": d.get("name") or c, "mcap": d["mcap"],
+                              "pe": d.get("pe"), "roe": d.get("roe")})
     finally:
         pool.shutdown(wait=False)
-    if mcap:
-        import math
-        peers.sort(key=lambda p: abs(math.log((p["mcap"] or 1) / mcap)))
-    else:
-        peers.sort(key=lambda p: p["mcap"] or 0, reverse=True)
+    peers.sort(key=lambda p: p["mcap"] or 0, reverse=True)
     peers = peers[:max_peers]
     if peers:
         hist = _safe(bulk_history, [p["sym"] for p in peers], "1y", default={}) or {}
@@ -349,7 +319,7 @@ def _find_peers(sym: str, kind: Optional[str], mcap: Optional[float], sector_lab
             df = hist.get(p["sym"])
             p["ret_1y"] = (round((float(df["Close"].iloc[-1]) / float(df["Close"].iloc[0]) - 1) * 100, 1)
                            if df is not None and len(df) > 100 else None)
-    return label, peers, method
+    return sector, peers
 
 
 def _real_news(sym: str) -> List[str]:
@@ -376,50 +346,37 @@ def collect_inputs(sym: str) -> dict:
     from data_engine import get_hist, get_info
     from fundamentals import get_fundamentals
     from market_data import index_history
-    from nifty500_collector import get_stock_sector
+    import research_data as rd
 
     df = get_hist(sym, "1y")
     if df is None or df.empty or len(df) < 60:
         raise ValueError(f"Not enough price history for {sym} (need at least 60 sessions).")
     ltp = float(df["Close"].iloc[-1])
 
-    # Stage A — independent fetches in parallel
     with ThreadPoolExecutor(max_workers=8) as pool:
         f_nifty = pool.submit(_safe, index_history, "^NSEI", "1y")
         f_fund = pool.submit(_safe, get_fundamentals, sym, default={})
         f_info = pool.submit(_safe, get_info, sym, default={})
         f_stm = pool.submit(_safe, rd.get_statements, sym)
         f_ext = pool.submit(_safe, rd.get_screener_extras, sym, default={})
+        f_peer = pool.submit(_safe, _find_peers, sym, default=(None, []))
         f_cons = pool.submit(_safe, rd.get_consensus, sym, ltp)
         f_news = pool.submit(_safe, _real_news, sym, default=[])
-        f_yind = pool.submit(_safe, industry_mod.fetch_yahoo_industry, sym, default={})
         inputs = dict(
             sym=sym, df=df, nifty=f_nifty.result(), fund=f_fund.result() or {},
             info=f_info.result() or {}, stm=f_stm.result(), extras=f_ext.result() or {},
             consensus=f_cons.result(), news=f_news.result() or [],
         )
-        yahoo_ind = f_yind.result() or {}
+        sector, peers = f_peer.result() or (None, [])
+    inputs.update(sector=sector, peers=peers)
     inputs["name"] = inputs["fund"].get("name") or inputs["info"].get("name") or sym
-    sector = get_stock_sector(sym)
-    inputs["sector"] = sector
-
-    # Stage B — classify (lender vs corporate) BEFORE peers/scoring, since both depend on it
-    ind = industry_mod.classify(inputs["name"], sector, yahoo_ind, inputs["stm"])
-    inputs["industry"] = ind
-    label, peers, method = _safe(_find_peers, sym, ind.get("kind"), inputs["fund"].get("mcap"), sector,
-                                 default=(None, [], "none"))
-    inputs.update(peers=peers, peer_label=label, peer_method=method)
-    if ind.get("is_lender") and (not sector or "Others" in sector):
-        inputs["sector"] = {"Bank": "🏦 Banking", "HFC": "🏠 Housing Finance", "Microfinance": "🏦 Microfinance"}.get(
-            ind["kind"], "🏦 NBFC / Lending")
     return inputs
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # STAGE 2 — assemble (engine + charts)
 # ══════════════════════════════════════════════════════════════════════════
-def assemble(inp: dict, use_ai: bool = True, holding: Optional[dict] = None) -> dict:
-    """holding = {'qty', 'buy', 'weight_pct'} adds the client's position view (portfolio reports)."""
+def assemble(inp: dict, use_ai: bool = True) -> dict:
     sym, name, df = inp["sym"], inp["name"], inp["df"]
     nifty, fund, peers = inp.get("nifty"), inp.get("fund") or {}, inp.get("peers") or []
     sh = (inp.get("extras") or {}).get("shareholding") or []
@@ -427,13 +384,16 @@ def assemble(inp: dict, use_ai: bool = True, holding: Optional[dict] = None) -> 
 
     t = eng.compute_technicals(df, nifty)
     rk = eng.compute_risk(df, nifty)
-    ind = inp.get("industry") or industry_mod.classify(name, inp.get("sector"), None, inp.get("stm"))
-    fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"], ind)
+    fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
     sc = eng.compute_scores(t, rk, fv)
     plan = eng.build_trade_plan(t, rk, sc)
+    reasoning = build_reasoning(nifty, t, fv, sc, inp.get("sector"))
     fl = eng.build_flags(t, rk, fv, sh, inp.get("consensus"))
     nar = eng.deterministic_narrative(name, sym, t, rk, fv, sc, plan, sh)
-    ai_note = eng.ai_analyst_note(name, sym, inp.get("sector"), t, rk, fv, sc, plan, sh) if use_ai else ""
+    # LLM commentary is opt-in until its qualitative claims can be verified.
+    ai_note = eng.ai_analyst_note(name, sym, inp.get("sector"), t, rk, fv, sc, plan, sh) if (use_ai and
+        os.getenv("ALLOW_UNVERIFIED_AI_NARRATIVE", "0") == "1" and
+        not sc.get("insufficient_evidence")) else ""
 
     buzz = None
     try:
@@ -442,27 +402,17 @@ def assemble(inp: dict, use_ai: bool = True, holding: Optional[dict] = None) -> 
     except Exception as e:
         logger.debug(f"buzz status skipped: {e}")
 
-    hv = None
-    if holding and holding.get("qty"):
-        ltp, qty, buy = t["ltp"], float(holding["qty"]), float(holding.get("buy") or 0)
-        view = eng.holding_view(sc["composite"], sc["pillars"]["Trend"], qty, buy, ltp,
-                                float(holding.get("weight_pct") or 0), plan, t, float(holding.get("max_weight", 15.0)))
-        hv = dict(view, qty=qty, buy=buy, ltp=ltp, invested=qty * buy, value=qty * ltp, pnl=qty * (ltp - buy),
-                  pnl_pct=((ltp / buy - 1) * 100) if buy else 0.0, weight_pct=float(holding.get("weight_pct") or 0),
-                  composite=sc["composite"], stance=sc["stance"])
-
     years = (inp.get("stm") or {}).get("years") or []
     ch = {
         "tech": charts.chart_technical(df, sym, t),
         "rel": charts.chart_relative_and_drawdown(df["Close"], nifty["Close"] if has_nifty else None, sym),
         "score": charts.chart_scorecard(sc["pillars"], sc["composite"], sym),
-        "fin": charts.chart_financials(years, sym, lender=fv["lender"]) if years else None,
+        "fin": charts.chart_financials(years, sym) if years else None,
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
-    return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc,
+    return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
-                stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"), industry=ind, holding=hv,
-                peer_label=inp.get("peer_label"), peer_method=inp.get("peer_method"),
+                stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
                 news=inp.get("news") or [], fund=fund,
                 generated=datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M IST"))
 
@@ -482,35 +432,21 @@ def _bias_color(b):
 def _cover(R, story):
     t, sc, fv, rk = R["t"], R["sc"], R["fv"], R["rk"]
     chg_hex = "#7FE0B0" if t["chg"] >= 0 else "#FF9A9A"
-    kind = R["industry"].get("kind") if R.get("industry") else None
-    tag = (f"  ·  {esc(R['sector'])}" if R["sector"] else "") + (f"  ·  {esc(kind)}" if kind and kind not in (R["sector"] or "") else "")
     banner = Table([
-        [P(esc(BRAND.upper()) + "  |  EQUITY RESEARCH", "brand"), ""],
         [P(esc(R["name"]), "title"), P(inr(t["ltp"]), "px")],
-        [P(f"NSE: {esc(R['sym'])}{tag}", "sub"),
+        [P(f"NSE: {esc(R['sym'])}" + (f"  ·  {esc(R['sector'])}" if R["sector"] else "") + "  ·  Equity Research", "sub"),
          P(f"<font color='{chg_hex}'>{t['chg']:+.2f}% today</font>", "pxs")],
     ], colWidths=[W * 0.66, W * 0.34])
     banner.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), NAVY), ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                                ("TOPPADDING", (0, 0), (-1, 0), 11), ("BOTTOMPADDING", (0, 0), (-1, 0), 0),
-                                ("TOPPADDING", (0, 1), (-1, 1), 2), ("BOTTOMPADDING", (0, 2), (-1, 2), 12),
+                                ("TOPPADDING", (0, 0), (-1, 0), 13), ("BOTTOMPADDING", (0, 1), (-1, 1), 12),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 13), ("RIGHTPADDING", (0, 0), (-1, -1), 13)]))
     story += [banner, Spacer(1, 3),
-              P(f"Prepared by: <b>Senior Market Analyst Desk</b>, {BRAND} (automated research engine)  ·  "
+              P(f"Prepared by: <b>Senior Market Analyst Desk</b>, AutoAI Advisory (automated research engine)  ·  "
                 f"{R['generated']}  ·  Prices as of last available close", "small"), Spacer(1, 8)]
 
-    hv = R.get("holding")
-    if hv:
-        sev_hex = {0: RED_H, 1: AMBER_H, 2: AMBER_H, 3: GREEN_H}[hv["severity"]]
-        pnl_txt = colored("{} ({:+.1f}%)".format(inr(hv["pnl"], 0), hv["pnl_pct"]), GREEN_H if hv["pnl"] >= 0 else RED_H)
-        line1 = "<b>CLIENT HOLDING AUDIT</b> &nbsp;·&nbsp; Verdict: " + colored(esc(hv["verdict"]), sev_hex)
-        line2 = ("Qty <b>{:,.0f}</b> &nbsp;|&nbsp; Avg buy <b>{}</b> &nbsp;|&nbsp; Invested <b>{}</b> &nbsp;|&nbsp; Value <b>{}</b> "
-                 "&nbsp;|&nbsp; P&amp;L <b>{}</b> &nbsp;|&nbsp; Portfolio weight <b>{:.1f}%</b>").format(
-            hv["qty"], inr(hv["buy"]), inr(hv["invested"], 0), inr(hv["value"], 0), pnl_txt, hv["weight_pct"])
-        line3 = "<font size=7 color='{}'>Audit: {}</font>".format(GREY_H, esc(hv["audit_note"]))
-        story += [callout(line1 + "<br/>" + line2 + "<br/>" + line3, NAVY_H, "#EFF6FF"), Spacer(1, 6)]
-
     sc_hex = _stance_color(sc["stance"])
-    left = [P("COMPOSITE SCORE", "lab"), P(f"{sc['composite']}<font size=11 color='{GREY_H}'> / 100</font>", "big"),
+    score_display = ("N/R" if sc.get("insufficient_evidence") else f"{sc['composite']}<font size=11 color='{GREY_H}'> / 100</font>")
+    left = [P("COMPOSITE SCORE", "lab"), P(score_display, "big"),
             P(f"Data coverage {sc['coverage']}%", "tiny")]
     mid = [P("ANALYST STANCE", "lab"), P(colored(esc(sc["stance"]), sc_hex), "stance"), Spacer(1, 2), P(esc(sc["action"]))]
     box = Table([[left, mid]], colWidths=[W * 0.24, W * 0.76])
@@ -519,15 +455,11 @@ def _cover(R, story):
                              ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
                              ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8)]))
     story += [box, Spacer(1, 5)]
-    if sc["veto"]:
+    if sc.get("insufficient_evidence"):
+        story += [P(colored("INSUFFICIENT VERIFIED FINANCIAL DATA:", RED_H) +
+                    " No investment rating or trade plan. Review the underlying filings before action.", "small"), Spacer(1, 3)]
+    elif sc["veto"]:
         story += [P(colored("Technical veto applied:", AMBER_H) + " composite would read constructive, but price is below key moving averages.", "small"), Spacer(1, 3)]
-    fr = fv.get("freshness") or {}
-    if fr.get("status") in ("STALE", "LAGGING"):
-        story += [P(colored("Data freshness:", AMBER_H) + f" latest quarterly results in our data are {esc(fr.get('label'))}"
-                    + (" — latest-quarter growth excluded from scoring." if fr["status"] == "STALE" else " — one reporting cycle behind."), "small"), Spacer(1, 3)]
-    if fv.get("lender"):
-        story += [P(colored("Lender framework:", NAVY_H) + " scored on balance-sheet growth, leverage, ROE/ROA and P/B — "
-                    "operating cash flow is not used (disbursements sit in operating cash flow).", "small"), Spacer(1, 3)]
     if sc["tech_only"]:
         story += [P(colored("Technical-only view:", RED_H) + " fundamental data could not be retrieved for this stock.", "small"), Spacer(1, 3)]
 
@@ -559,7 +491,7 @@ def _cover(R, story):
                             ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 4),
                             ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
     story += [sr, Spacer(1, 6)]
-    if R["ch"].get("score"):
+    if R["ch"].get("score") and not sc.get("insufficient_evidence"):
         im = img(R["ch"]["score"], W)
         if im:
             story.append(im)
@@ -570,6 +502,27 @@ def _cover(R, story):
 def _investment_view(R, story):
     fv = R["fv"]
     story += section("Investment View", "Analyst commentary, bull vs bear case and valuation cross-check")
+    reasoning = R.get("reasoning") or {}
+    story.append(P(colored("RESEARCH METHOD: TOP-DOWN + BOTTOM-UP", NAVY_H), "h2"))
+    story.append(P("<b>Top-down:</b> " + esc(reasoning.get("market_regime", "NOT VERIFIED")), "small"))
+    for line in reasoning.get("top_down_evidence", [])[:5]:
+        story.append(P("• " + esc(line), "small"))
+    story.append(P("<b>Bottom-up:</b> observed company evidence", "small"))
+    for line in reasoning.get("bottom_up_evidence", [])[:6]:
+        story.append(P("• " + esc(line), "small"))
+    for line in reasoning.get("counter_thesis", [])[:5]:
+        story.append(P(colored("Risk: ", RED_H) + esc(line), "small"))
+    gaps = reasoning.get("data_gaps") or []
+    if gaps:
+        story.append(P("<b>Unverified or missing:</b> " + esc("; ".join(gaps[:7])), "tiny"))
+    story.append(P(colored("AUTOMATED PUBLICATION NOT APPROVED: ", RED_H) +
+                   esc(reasoning.get("publication_reason", "source verification incomplete")), "tiny"))
+    story.append(Spacer(1, 6))
+    if R["sc"].get("insufficient_evidence"):
+        story.append(P("<b>Investment conclusion withheld:</b> current verified financial coverage "
+                       "is insufficient for a company recommendation. The evidence and missing "
+                       "inputs above are provided for educational due diligence only.", "just"))
+        return
     if R["ai_note"]:
         story.append(P(colored("Analyst commentary", NAVY_H) + "  <font size=7 color='#5A6472'>(AI-assisted; every figure verified against the data in this report)</font>", "h2"))
         for para in [p.strip() for p in R["ai_note"].split("\n") if p.strip()]:
@@ -593,11 +546,7 @@ def _investment_view(R, story):
         story += [Spacer(1, 4), sr]
 
     rows = []
-    if fv.get("implied_pb_value"):
-        rows.append([P("Peer P/B cross-check"),
-                     P(f"BVPS (price ÷ P/B) × peer-median P/B {fv['peer_pb']}× = <b>{inr(fv['implied_pb_value'])}</b>"),
-                     P(colored(f"{fv['implied_pb_upside']:+.1f}% vs CMP", sgn_color(fv["implied_pb_upside"])))])
-    if fv.get("implied_peer_value") and not fv.get("lender"):
+    if fv.get("implied_peer_value"):
         rows.append([P("Peer-multiple cross-check"),
                      P(f"EPS {inr(fv['eps'])} × peer-median P/E {fv['peer_pe']}× = <b>{inr(fv['implied_peer_value'])}</b>"),
                      P(colored(f"{fv['implied_upside']:+.1f}% vs CMP", sgn_color(fv["implied_upside"])))])
@@ -609,7 +558,7 @@ def _investment_view(R, story):
     if rows:
         story += [Spacer(1, 6), P("Valuation reference points", "h2"),
                   table([[P("Method", "th"), P("Derivation", "th"), P("Implied", "th")]] + rows, [40 * mm, 98 * mm, 40 * mm]),
-                  P("Illustrative references only — a peer-multiple value assumes the stock deserves the peer-median multiple; it is not a price target.", "tiny")]
+                  P("Illustrative references only — a peer-multiple value assumes the stock deserves the sector median multiple; it is not a price target.", "tiny")]
 
 
 def _technical(R, story):
@@ -702,19 +651,7 @@ def _fundamentals(R, story):
     fv, stm = R["fv"], R["stm"]
     if not (any(fv.get(k) is not None for k in ("pe", "roe", "pb", "eps")) or fv["has_statements"]):
         return
-    story += section("Fundamental Analysis", "Valuation, growth, profitability and balance sheet" if fv.get("lender")
-                     else "Valuation, growth, profitability, balance sheet and cash flow")
-    ind = R.get("industry") or {}
-    if fv.get("lender"):
-        story += [callout(f"<b>Company type: {esc(ind.get('kind') or 'Lender')}.</b> Analysed on balance-sheet growth, leverage, ROE/ROA and P/B. "
-                          f"Operating cash flow and debt/equity are deliberately not scored — loan disbursements are classified in operating "
-                          f"cash flow under Ind AS, so a growing lender normally shows negative OCF.", NAVY_H), Spacer(1, 5)]
-    fr = fv.get("freshness") or {}
-    if fr.get("status") in ("STALE", "LAGGING"):
-        story += [callout(f"<b>Data freshness:</b> quarterly results in our data end at <b>{esc(fr.get('label'))}</b>; "
-                          f"{'results through ' + fr['expected'].strftime('%b %Y') + ' should be public.' if fr.get('expected') else ''} "
-                          + ("Latest-quarter growth is excluded from scoring." if fr["status"] == "STALE" else "Possibly a late filing or vendor delay."),
-                          AMBER_H, "#FFF9E8"), Spacer(1, 5)]
+    story += section("Fundamental Analysis", "Valuation, growth, profitability, balance sheet and cash flow")
     if R["nar"].get("fundamental"):
         story += [P(R["nar"]["fundamental"], "just"), Spacer(1, 6)]
 
@@ -722,15 +659,12 @@ def _fundamentals(R, story):
     prem = fv.get("pe_prem")
     story.append(kv([
         ["P/E (TTM)", n(fv.get("pe"), 1, "×"), "Forward P/E", n(fv.get("fwd_pe"), 1, "×")],
-        ["Peer-median P/E  /  Fwd P/E", f"{n(fv.get('peer_pe'), 1, '×')}  /  {n(fv.get('peer_fwd_pe'), 1, '×')}", "P/E premium / (discount)",
+        ["Peer-median P/E", n(fv.get("peer_pe"), 1, "×"), "Premium / (discount)",
          colored(f"{prem:+.0f}%", sgn_color(prem, good_pos=False)) if prem is not None else "—"],
-        ["P/B  /  peer-median P/B", f"{n(fv.get('pb'), 2, '×')}  /  {n(fv.get('peer_pb'), 2, '×')}", "P/B premium / (discount)",
-         colored(f"{fv['pb_prem']:+.0f}%", sgn_color(fv["pb_prem"], good_pos=False)) if fv.get("pb_prem") is not None else "—"],
+        ["P/B", n(fv.get("pb"), 2, "×"), "PEG (P/E ÷ 3Y profit CAGR)", n(fv.get("peg"), 2)],
         ["EPS (TTM)", inr(fv.get("eps")), "Earnings yield", n(fv.get("earn_yield"), 1, "%")],
         ["ROE", n(fv.get("roe"), 1, "%"), "ROCE", n(fv.get("roce"), 1, "%")],
-        ["Dividend yield", n(fv.get("div_y"), 2, "%"), "PEG (P/E ÷ 3Y profit CAGR)", n(fv.get("peg"), 2)],
-        (["ROA (PAT ÷ year-end assets)", n(fv.get("roa"), 2, "%"), "Leverage (assets ÷ net worth)", n(fv.get("leverage"), 1, "×")] if fv.get("lender")
-         else ["Debt / Equity", n(fv.get("de"), 2, "×") if not fv["fin"] else "n.m. (financial)", "", ""]),
+        ["Dividend yield", n(fv.get("div_y"), 2, "%"), "Debt / Equity", n(fv.get("de"), 2, "×") if not fv["fin"] else "n.m. (financial)"],
     ]))
 
     if fv["has_statements"] or fv["has_quarters"]:
@@ -739,12 +673,10 @@ def _fundamentals(R, story):
              "Profit CAGR 3Y / 5Y", f"{n(fv.get('pat_cagr3'), 1, '%')}  /  {n(fv.get('pat_cagr5'), 1, '%')}"],
             ["Latest qtr revenue YoY / QoQ", f"{n(fv.get('q_rev_yoy'), 1, '%')}  /  {n(fv.get('q_rev_qoq'), 1, '%')}",
              "Latest qtr profit YoY / QoQ", f"{n(fv.get('q_pat_yoy'), 1, '%')}  /  {n(fv.get('q_pat_qoq'), 1, '%')}"],
-            ["Financing margin (latest)" if fv.get("lender") else "Operating margin (latest)", n(fv.get("opm"), 1, "%"), "Change vs 3 years ago",
+            ["Operating margin (latest)", n(fv.get("opm"), 1, "%"), "Change vs 3 years ago",
              f"{fv['opm_delta']:+.1f} pts" if fv.get("opm_delta") is not None else "—"],
-            ([f"Balance-sheet growth {fv.get('book_growth_yrs') or 3}Y CAGR", f"{n(fv.get('book_growth'), 1, '%')} ({fv.get('book_growth_src') or 'n/a'})",
-              "Net worth / borrowings CAGR", f"{n(fv.get('nw_cagr3'), 1, '%')}  /  {n(fv.get('borrow_cagr3'), 1, '%')}"] if fv.get("lender") else
-             ["Cash conversion (3Y OCF ÷ PAT)", n(fv.get("ocf_pat"), 2, "×") if not fv["fin"] else "n.m. (financial)",
-              "Profit-decline years (last 5)", n(fv.get("down_years"), 0)]),
+            ["Cash conversion (3Y OCF ÷ PAT)", n(fv.get("ocf_pat"), 2, "×") if not fv["fin"] else "n.m. (financial)",
+             "Profit-decline years (last 5)", n(fv.get("down_years"), 0)],
         ])]
 
     if R["ch"].get("fin"):
@@ -755,21 +687,18 @@ def _fundamentals(R, story):
     years = (stm or {}).get("years") or []
     if len(years) >= 3:
         ann_head = [Spacer(1, 6), P(f"Annual financials ({stm['unit']}; source: {esc(stm['source'])})", "h2")]
-        lend = fv.get("lender")
-        rows_def = [("Revenue", "revenue", cr), ("Financing profit" if lend else "Operating profit", "op_profit", cr),
-                    ("Financing margin %" if lend else "OPM %", "opm", lambda v: n(v, 1)), ("Net profit", "net_profit", cr),
-                    ("EPS (₹)", "eps", lambda v: n(v, 2))]
-        rows_def += ([("Total assets", "total_assets", cr), ("Borrowings", "borrowings", cr), ("Net worth", "networth", cr)] if lend else
-                     [("Operating cash flow", "ocf", cr), ("Borrowings", "borrowings", cr), ("Net worth", "networth", cr),
-                      ("ROCE %", "roce", lambda v: n(v, 1))])
-        data, widths = _fin_table(rows_def, years[-6:])
+        data, widths = _fin_table([("Revenue", "revenue", cr), ("Operating profit", "op_profit", cr),
+                                   ("OPM %", "opm", lambda v: n(v, 1)), ("Net profit", "net_profit", cr),
+                                   ("EPS (₹)", "eps", lambda v: n(v, 2)), ("Operating cash flow", "ocf", cr),
+                                   ("Borrowings", "borrowings", cr), ("Net worth", "networth", cr),
+                                   ("ROCE %", "roce", lambda v: n(v, 1))], years[-6:])
         story.append(KeepTogether(ann_head + [table(data, widths)]))
 
     qs = (stm or {}).get("quarters") or []
     if len(qs) >= 4:
         last6 = qs[-6:]
-        data, widths = _fin_table([("Revenue", "revenue", cr), ("Financing profit" if fv.get("lender") else "Operating profit", "op_profit", cr),
-                                   ("Financing margin %" if fv.get("lender") else "OPM %", "opm", lambda v: n(v, 1)), ("Net profit", "net_profit", cr),
+        data, widths = _fin_table([("Revenue", "revenue", cr), ("Operating profit", "op_profit", cr),
+                                   ("OPM %", "opm", lambda v: n(v, 1)), ("Net profit", "net_profit", cr),
                                    ("EPS (₹)", "eps", lambda v: n(v, 2))], last6)
         for lab, key in (("Revenue YoY", "revenue"), ("Net profit YoY", "net_profit")):
             cells, ok = [], False
@@ -799,7 +728,7 @@ def _ownership_peers(R, story):
         a, b = (sh[-5] if len(sh) >= 5 else sh[0]), sh[-1]
         hdr = [P("Holder", "th"), P(esc(a["label"]), "thr"), P(esc(b["label"]), "thr"), P("Change (pts)", "thr")]
         rows = []
-        for key, lab in (("promoters", holder("promoters")), ("fii", holder("fii")), ("dii", holder("dii")), ("public", holder("public"))):
+        for key, lab in (("promoters", "Promoters"), ("fii", "FIIs"), ("dii", "DIIs"), ("public", "Public")):
             if a.get(key) is None or b.get(key) is None:
                 continue
             d = b[key] - a[key]
@@ -809,51 +738,40 @@ def _ownership_peers(R, story):
         story += [Spacer(1, 4), table([hdr] + rows, [50 * mm, 40 * mm, 40 * mm, 48 * mm])]
 
     if peers:
-        title = R.get("peer_label") or R["sector"]
-        story += section(f"Peer Comparison — {rg_clean(title)}" if title else "Peer Comparison",
-                         "Closest listed peers by market capitalisation  ·  group source: " + (R.get("peer_method") or "sector map"))
-        hdr = [P("Company", "th"), P("Mkt cap", "thr"), P("P/E", "thr"), P("Fwd P/E", "thr"), P("P/B", "thr"),
-               P("ROE %", "thr"), P("1Y return", "thr")]
+        story += section(f"Peer Comparison — {R['sector']}" if R["sector"] else "Peer Comparison",
+                         "Same-sector companies ranked by market capitalisation")
+        hdr = [P("Company", "th"), P("Mkt cap", "thr"), P("P/E", "thr"), P("ROE %", "thr"), P("1Y return", "thr")]
         r1 = (R["t"].get("returns") or {}).get("1Y") or {}
-        pct1 = lambda v: f"{v:+.1f}%" if v is not None else "—"
         me = [P(f"<b>{esc(R['name'])}</b> (this stock)", "cell"), P(mcap_txt(fv.get("mcap")), "cellrb"),
-              P(n(fv.get("pe"), 1), "cellrb"), P(n(fv.get("fwd_pe"), 1), "cellrb"), P(n(fv.get("pb"), 2), "cellrb"),
-              P(n(fv.get("roe"), 1), "cellrb"), P(pct1(r1.get("stock")), "cellrb")]
+              P(n(fv.get("pe"), 1), "cellrb"), P(n(fv.get("roe"), 1), "cellrb"),
+              P(f"{r1['stock']:+.1f}%" if r1.get("stock") is not None else "—", "cellrb")]
         rows = [me]
         for p in peers:
             rows.append([P(esc(p["name"]), "cell"), P(mcap_txt(p["mcap"]), "cellr"), P(n(p.get("pe"), 1), "cellr"),
-                         P(n(p.get("fwd_pe"), 1), "cellr"), P(n(p.get("pb"), 2), "cellr"), P(n(p.get("roe"), 1), "cellr"),
-                         P(pct1(p.get("ret_1y")), "cellr")])
+                         P(n(p.get("roe"), 1), "cellr"), P(f"{p['ret_1y']:+.1f}%" if p.get("ret_1y") is not None else "—", "cellr")])
         med_ret = eng._median([p.get("ret_1y") for p in peers])
         rows.append([P("<b>Peer median</b>", "cell"), P("—", "cellr"), P(n(fv.get("peer_pe"), 1), "cellrb"),
-                     P(n(fv.get("peer_fwd_pe"), 1), "cellrb"), P(n(fv.get("peer_pb"), 2), "cellrb"),
-                     P(n(fv.get("peer_roe"), 1), "cellrb"), P(pct1(med_ret), "cellrb")])
+                     P(n(fv.get("peer_roe"), 1), "cellrb"), P(f"{med_ret:+.1f}%" if med_ret is not None else "—", "cellrb")])
         extra = [("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#E4ECF7")),
                  ("BACKGROUND", (0, len(rows)), (-1, len(rows)), colors.HexColor("#EEF1F6"))]
-        story.append(table([hdr] + rows, [50 * mm, 26 * mm, 17 * mm, 18 * mm, 16 * mm, 19 * mm, 32 * mm], extra=extra))
+        story.append(table([hdr] + rows, [58 * mm, 30 * mm, 24 * mm, 26 * mm, 40 * mm], extra=extra))
         notes = []
         if fv.get("pe_prem") is not None:
             notes.append(f"trades at a {abs(fv['pe_prem']):.0f}% {'premium' if fv['pe_prem'] >= 0 else 'discount'} to the peer-median P/E")
-        if fv.get("lender") and fv.get("pb_prem") is not None:
-            notes.append(f"a {abs(fv['pb_prem']):.0f}% {'premium' if fv['pb_prem'] >= 0 else 'discount'} to peer-median P/B")
         if fv.get("roe") is not None and fv.get("peer_roe") is not None:
             notes.append(f"its ROE is {'above' if fv['roe'] >= fv['peer_roe'] else 'below'} the peer median ({fv['roe']:.1f}% vs {fv['peer_roe']:.1f}%)")
         if notes:
             story += [Spacer(1, 4), P(f"{esc(R['name'])} " + " and ".join(notes) + ".", "just")]
-        if len(peers) < 3:
-            story.append(P(f"Only {len(peers)} peer(s) returned data — treat peer medians with caution.", "tiny"))
-    elif R.get("peer_label"):
-        story += section("Peer Comparison", "Peer lookup")
-        story.append(callout(f"A peer group was identified ({esc(R['peer_label'])}, {esc(R.get('peer_method') or '')}) but none of its members "
-                             f"returned valuation data right now. Peer-relative valuation is therefore omitted from scoring.", AMBER_H, "#FFF9E8"))
-
-
-def rg_clean(x: str) -> str:
-    return esc(strip_emoji(x or ""))
 
 
 def _plan(R, story):
     t, plan = R["t"], R["plan"]
+    if R["sc"].get("insufficient_evidence") or plan.get("mode") == "NO_TRADE":
+        story += section("Research Eligibility", "Insufficient evidence — trading levels suppressed")
+        story.append(P("<b>No trade recommendation.</b> At least two fundamental pillars and "
+                       "70% weighted research coverage are required. Financial data must be independently "
+                       "verified before publishing an actionable idea.", "just"))
+        return
     story += section("Scenarios & Trade Plan", "Rule-based levels derived from ATR, support/resistance and realised volatility")
     label, hexcol, bg, msg = {
         "ACTIVE": ("Active setup", GREEN_H, "#F1FAF5", "Trend and momentum support a long setup. Use staggered entries near the zone below and respect the stop."),
@@ -890,12 +808,6 @@ def _plan(R, story):
         story.append(P(f"<b>Re-entry condition:</b> a daily close above {inr(recl) if recl else 'the 50-day EMA'} "
                        f"with RSI back above 50 and above-average volume. <b>Further downside risk</b> opens below {inr(plan['bear_trigger'])}.", "just"))
 
-    hv = R.get("holding")
-    if hv:
-        sev_hex = {0: RED_H, 1: AMBER_H, 2: AMBER_H, 3: GREEN_H}[hv["severity"]]
-        story += [Spacer(1, 6), callout(
-            f"<b>Your position — {hv['qty']:,.0f} shares @ {inr(hv['buy'])} (weight {hv['weight_pct']:.1f}%):</b> "
-            f"{colored(esc(hv['verdict']), sev_hex)}<br/>{esc(hv['action'])}", sev_hex, "#F7F9FC")]
     story += [Spacer(1, 7), P("Decision triggers", "h2")]
     res, sup = t["resistances"], t["supports"]
     bull_obj = inr(res[1]["price"]) if len(res) > 1 else inr(plan["t2"])
@@ -923,9 +835,6 @@ def _risks_catalysts(R, story):
         story.append(table([[P("Severity", "th"), P("Risk", "th"), P("Evidence", "th")]] + rows, [22 * mm, 46 * mm, 110 * mm]))
     else:
         story.append(callout("No major red flags were triggered by the available price, risk and fundamental data.", GREEN_H, "#F1FAF5"))
-    notes = R["flags"].get("notes") or []
-    if notes:
-        story += [Spacer(1, 8), P("Analyst notes & data limitations", "h2")] + bullets([esc(x) for x in notes], AMBER_H)
     if R["news"]:
         story += [Spacer(1, 8), P("Recent headlines", "h2")]
         story += bullets([esc(x) for x in R["news"]])
@@ -959,13 +868,7 @@ def _appendix(R, story):
          f"{len(stm.get('quarters') or [])} quarters.") if stm else "Financial statements: not available.",
         f"Ratios aggregated from Screener.in / Yahoo / Finnhub: {n_core}/6 core fields available.",
         f"Shareholding: Screener.in, {len(R['sh'])} quarters." if R["sh"] else "Shareholding: not available.",
-        (f"Peers: {len(R['peers'])} companies from the '{rg_clean(R.get('peer_label'))}' group ({esc(R.get('peer_method') or '')})."
-         if R["peers"] else "Peers: no peer group could be resolved or no peer returned data."),
-        ("Company classification: " + esc((R.get("industry") or {}).get("kind") or "non-lender corporate")
-         + (" — detected via " + "; ".join(esc(x) for x in (R["industry"].get("reasons") or [])) if (R.get("industry") or {}).get("reasons") else "") + "."),
-        (f"Quarterly data freshness: {R['fv']['freshness'].get('status')} (latest {esc(R['fv']['freshness'].get('label'))}; "
-         f"sources — annual: {esc((stm or {}).get('sources', {}).get('years') or 'n/a')}, quarterly: {esc((stm or {}).get('sources', {}).get('quarters') or 'n/a')})."
-         if (R["fv"].get("freshness") or {}).get("status") else "Quarterly data freshness: not available."),
+        f"Peers: {len(R['peers'])} same-sector companies." if R["peers"] else "Peers: not available for this stock.",
         "Analyst commentary: " + ("AI-assisted, with every figure checked against the data above." if R["ai_note"] else "rule-generated (no AI text used)."),
     ]
     story += bullets(items)
@@ -997,7 +900,7 @@ def build_pdf(R: dict, output_path: str) -> str:
 
     doc = SimpleDocTemplate(output_path, pagesize=A4, topMargin=19 * mm, bottomMargin=18 * mm,
                             leftMargin=16 * mm, rightMargin=16 * mm,
-                            title=f"{strip_emoji(R['name'])} — Equity Research Report", author=BRAND)
+                            title=f"{strip_emoji(R['name'])} — Equity Research Report", author="AutoAI Advisory")
     meta = {"sym": R["sym"], "name": strip_emoji(R["name"]), "generated": R["generated"]}
     doc.build(story, canvasmaker=make_canvas(meta))
     return output_path
