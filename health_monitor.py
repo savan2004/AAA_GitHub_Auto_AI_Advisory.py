@@ -87,11 +87,10 @@ def check_webhook_endpoint() -> Tuple[str, str]:
     try:
         from config import WEBHOOK_URL, WEBHOOK_PATH
         
-        # Webhook is local, so just verify it's configured
+        # Configuration alone is not proof that Telegram delivered updates.
         if WEBHOOK_URL and WEBHOOK_PATH:
-            return HealthStatus.OK, f"Webhook configured: {WEBHOOK_URL}{WEBHOOK_PATH}"
-        else:
-            return HealthStatus.ERROR, "Webhook URL not configured"
+            return HealthStatus.UNKNOWN, "Webhook configured but delivery not independently verified"
+        return HealthStatus.UNKNOWN, "Polling mode: webhook is not required"
     
     except Exception as exc:
         return HealthStatus.ERROR, f"Webhook check failed: {str(exc)[:80]}"
