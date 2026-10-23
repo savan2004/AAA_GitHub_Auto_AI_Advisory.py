@@ -1,29 +1,37 @@
-from flask import Flask, jsonify
+"""Separate HTTP health probe. Do not mistake it for the Telegram worker's health."""
+import os
 import time
+from flask import Flask, jsonify
 
 app = Flask(__name__)
+_STARTED_MONOTONIC = time.monotonic()
 
-@app.route('/health', methods=['GET'])
+
+@app.get("/health")
 def health_check():
-    return jsonify({'status': 'healthy'}), 200
+    # This only confirms the health API process is responding.
+    return jsonify({"status": "alive", "component": "health-api", "telegram_worker_verified": False}), 200
 
-@app.route('/status', methods=['GET'])
+
+@app.get("/status")
 def status():
-    return jsonify({'status': 'running', 'version': '1.0.0'}), 200
+    return jsonify({"status": "alive", "component": "health-api", "telegram_worker_verified": False}), 200
 
-@app.route('/uptime', methods=['GET'])
+
+@app.get("/uptime")
 def uptime():
-    start_time = time.time()
-    uptime_duration = time.time() - start_time  # Placeholder logic
-    return jsonify({'uptime': uptime_duration}), 200
+    return jsonify({"uptime_seconds": round(time.monotonic() - _STARTED_MONOTONIC, 2)}), 200
 
-@app.route('/logs', methods=['GET'])
+
+@app.get("/logs")
 def logs():
-    return jsonify({'logs': 'No logs available'}), 200
+    return jsonify({"error": "Logs are not exposed publicly. Use hosting log access."}), 501
 
-@app.route('/restart', methods=['POST'])
+
+@app.post("/restart")
 def restart():
-    return jsonify({'message': 'Service is restarting'}), 200
+    return jsonify({"error": "Restart endpoint disabled. Use hosting process supervisor."}), 501
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=int(os.getenv("HEALTH_PORT", "5001")))
