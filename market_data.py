@@ -46,28 +46,28 @@ def from_yahoo(ticker: str) -> str:
 
 
 def _clean_frame(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Keep only OHLCV, drop rows with no close, make index tz-naive."""
-    if df is None or df.empty:
+    """Reject incomplete OHLCV; never synthesize candles from close prices."""
+    if df is None or df.empty or not all(col in df.columns for col in _OHLCV):
         return None
-    cols = [c for c in _OHLCV if c in df.columns]
-    if "Close" not in cols:
-        return None
-    out = df[cols].copy()
-    out = out.dropna(subset=["Close"])
+    out = df[_OHLCV].copy()
+    for col in _OHLCV:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.replace([float("inf"), float("-inf")], float("nan"))
+    out = out.dropna(subset=_OHLCV)
     if out.empty:
         return None
-    for c in ("Open", "High", "Low"):
-        if c not in out.columns:
-            out[c] = out["Close"]
-    if "Volume" not in out.columns:
-        out["Volume"] = 0.0
-    out = out[_OHLCV]
+    valid = (out["Open"] > 0) & (out["High"] > 0) & (out["Low"] > 0) & (out["Close"] > 0)
+    valid &= (out["Volume"] >= 0)
+    valid &= (out["High"] >= out[["Open", "Close", "Low"]].max(axis=1))
+    valid &= (out["Low"] <= out[["Open", "Close", "High"]].min(axis=1))
+    out = out.loc[valid]
+    if out.empty:
+        return None
     try:
         if getattr(out.index, "tz", None) is not None:
             out.index = out.index.tz_localize(None)
-    except Exception:
+    except (AttributeError, TypeError):
         pass
-    out["Volume"] = out["Volume"].fillna(0.0)
     return out
 
 
