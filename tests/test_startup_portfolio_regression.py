@@ -53,5 +53,105 @@ class WebhookSecurityTests(unittest.TestCase):
         self.assertIn('WEBHOOK_PATH = "/webhook/telegram"', source)
 
 
+
+class PortfolioMigrationSafetyTests(unittest.TestCase):
+    """Offline checks: no Telegram credentials, network, or live user data."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = self.root / "legacy.json"
+        self.database = self.root / "holdings.sqlite3"
+        self.expected = {
+            "100": {"SBIN": {"qty": 2, "avg": 500.25}},
+            "201": {"RELIANCE": {"qty": 3, "avg": 2400}},
+        }
+        self.source.write_text(json.dumps(self.expected), encoding="utf-8")
+
+    def test_dry_run_never_creates_database_or_changes_source(self):
+        from portfolio_migration import migrate_legacy_holdings
+        original = self.source.read_bytes()
+        self.assertEqual(migrate_legacy_holdings(self.source, self.database),
+                         {"status": "dry-run", "positions": 2})
+        self.assertFalse(self.database.exists())
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_import_retains_holdings_after_database_reopen(self):
+        import sqlite3
+        from portfolio_migration import migrate_legacy_holdings
+        original = self.source.read_bytes()
+        self.assertEqual(migrate_legacy_holdings(
+            self.source, self.database, apply=True)["status"], "imported")
+        with sqlite3.connect(self.database) as db:
+            rows = db.execute(
+                "SELECT uid, symbol, qty, avg FROM holdings ORDER BY uid"
+            ).fetchall()
+        self.assertEqual(rows, [
+            (100, "SBIN", 2.0, 500.25),
+            (201, "RELIANCE", 3.0, 2400.0),
+        ])
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_repeated_identical_import_does_not_duplicate_lots(self):
+        import sqlite3
+        from portfolio_migration import migrate_legacy_holdings
+        migrate_legacy_holdings(self.source, self.database, apply=True)
+        second = migrate_legacy_holdings(self.source, self.database, apply=True)
+        self.assertEqual(second["status"], "already-imported")
+        with sqlite3.connect(self.database) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM holdings").fetchone()[0], 2)
+
+    def test_existing_different_positions_are_not_overwritten(self):
+        import sqlite3
+        from portfolio_migration import PortfolioMigrationError, migrate_legacy_holdings
+        migrate_legacy_holdings(self.source, self.database, apply=True)
+        with sqlite3.connect(self.database) as db:
+            db.execute("UPDATE holdings SET avg=999 WHERE uid=100")
+        with self.assertRaisesRegex(PortfolioMigrationError, "no overwrite"):
+            migrate_legacy_holdings(self.source, self.database, apply=True)
+        with sqlite3.connect(self.database) as db:
+            self.assertEqual(db.execute(
+                "SELECT avg FROM holdings WHERE uid=100"
+            ).fetchone()[0], 999)
+
+    def test_invalid_legacy_data_rejected_before_db_created(self):
+        from portfolio_migration import PortfolioMigrationError, migrate_legacy_holdings
+        invalid_inputs = (
+            '{"100":{"SBIN":{"qty":1,"avg":2},"SBIN":{"qty":4,"avg":5}}}',
+            '{"001":{"SBIN":{"qty":1,"avg":2}}}',
+            '{"100":{"SBIN":{"qty":-1,"avg":2}}}',
+            '{"100":{"SBIN":{"qty":true,"avg":2}}}',
+            '{"100":{"SBIN":{"qty":1,"avg":NaN}}}',
+            '{"100":{"SBIN":{"qty":1,"avg":2,"extra":42}}}',
+        )
+        for payload in invalid_inputs:
+            with self.subTest(payload=payload):
+                self.source.write_text(payload, encoding="utf-8")
+                with self.assertRaises(PortfolioMigrationError):
+                    migrate_legacy_holdings(self.source, self.database, apply=True)
+                self.assertFalse(self.database.exists())
+
+    def test_backup_restores_positions_and_never_overwrites(self):
+        import sqlite3
+        from portfolio_migration import (
+            PortfolioMigrationError, backup_sqlite_database, migrate_legacy_holdings,
+        )
+        migrate_legacy_holdings(self.source, self.database, apply=True)
+        backup = self.root / "snapshot.sqlite3"
+        backup_sqlite_database(self.database, backup)
+        with sqlite3.connect(backup) as restored:
+            self.assertEqual(restored.execute(
+                "SELECT COUNT(*) FROM holdings"
+            ).fetchone()[0], 2)
+            self.assertEqual(restored.execute("PRAGMA integrity_check").fetchone(), ("ok",))
+        with self.assertRaises(PortfolioMigrationError):
+            backup_sqlite_database(self.database, backup)
+        with sqlite3.connect(backup) as restored:
+            self.assertEqual(restored.execute(
+                "SELECT qty FROM holdings WHERE uid=100 AND symbol='SBIN'"
+            ).fetchone()[0], 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()
