@@ -1352,7 +1352,9 @@ if __name__ == "__main__":
             raise RuntimeError("WEBHOOK_URL must not contain TELEGRAM_TOKEN")
         bot.set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}", secret_token=WEBHOOK_SECRET)
         logger.info("Webhook registered at %s%s", WEBHOOK_URL, WEBHOOK_PATH)
-        app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+        from waitress import serve
+        logger.info("Production HTTP server listening on port %s", os.getenv("PORT", "8000"))
+        serve(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), threads=12, connection_limit=200)
     else:
         logger.info("Running in polling mode...")
         bot.infinity_polling()
