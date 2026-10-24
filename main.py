@@ -1,5 +1,5 @@
 """
-main.py — AI Stock Advisory Telegram Bot (v6.2)
+main.py — MSK Bot (v6.3)
 v6.2: removed News + AI chat buttons · added 🔥 Stocks Buzz (top-1000 breakout radar)
       · institutional-grade research PDF report.
 """
@@ -667,7 +667,7 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
 def cmd_start(m):
     state.clear(m.chat.id)
     safe_send(m.chat.id,
-              "👋 <b>AutoAI Advisory Bot v6.2</b>\n\nType any stock name or symbol for analysis.\n"
+              "👋 <b>MSK Bot</b>\n\nType any stock name or symbol for analysis.\n"
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
@@ -791,7 +791,7 @@ def handle_analysis_callback(call):
         action, sym = "", ""
     chat_id = call.message.chat.id
 
-    if not action or not sym:
+    if not action or not sym or not re.fullmatch(r"[A-Za-z0-9&_.-]{1,30}", sym):
         try:
             bot.answer_callback_query(call.id)
         except Exception:
@@ -849,6 +849,8 @@ def handle_analysis_callback(call):
     elif action == "menu":
         safe_send(chat_id, f"What would you like to see for <b>{sym}</b>?",
                   reply_markup=analysis_choice_keyboard(sym))
+    else:
+        safe_send(chat_id, "⚠️ This button is no longer supported. Use /start to refresh the MSK Bot menu.")
 
 
 @bot.message_handler(commands=["status"])
@@ -860,7 +862,7 @@ def cmd_status(m):
         try:
             res = test_ai_providers()
             lines = [
-                f"🤖 <b>STATUS v6.2</b>",
+                f"🤖 <b>MSK Bot — STATUS</b>",
                 "─── ── ── ── ── ──",
                 f"Bot : ✅ Running",
                 f"AI  : {res.get('_status', '?')}",
@@ -1289,7 +1291,7 @@ def handle_text(m):
 # ── Flask Webhook Routes ─────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ok", "version": "6.2"})
+    return jsonify({"status": "ok", "name": "MSK Bot", "version": "6.3"})
 
 
 @app.route("/api/status", methods=["GET"])
@@ -1323,6 +1325,7 @@ def webhook():
     try:
         with _webhook_lock:
             if uid in _processed_updates_set:
+                _webhook_slots.release()
                 return "ok", 200
             if len(_processed_updates) == _processed_updates.maxlen:
                 _processed_updates_set.discard(_processed_updates[0])
@@ -1345,7 +1348,7 @@ def webhook():
 
 # ── Runner ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    logger.info("🚀 Starting AutoAI Bot v6.2...")
+    logger.info("🚀 Starting MSK Bot v6.3...")
     if WEBHOOK_URL:
         # The webhook destination must never contain the bot credential.
         if TOKEN in WEBHOOK_URL:
