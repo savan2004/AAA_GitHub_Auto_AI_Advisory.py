@@ -53,5 +53,176 @@ class WebhookSecurityTests(unittest.TestCase):
         self.assertIn('WEBHOOK_PATH = "/webhook/telegram"', source)
 
 
+
+class TelegramMockSessionTests(unittest.TestCase):
+    """One offline mock Telegram webhook session; never uses real Bot API."""
+
+    def test_one_mock_session_webhook_start_buy_portfolio_fundamental_sell(self):
+        import concurrent.futures
+        import copy
+        from collections import deque
+        from datetime import date
+        import hmac
+        import re
+        from types import SimpleNamespace
+
+        source = MAIN_FILE.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        selected = {
+            "StateManager", "PortfolioManager", "safe_send",
+            "cmd_start", "cmd_help", "cmd_buy", "cmd_sell",
+            "cmd_portfolio", "build_portfolio_card",
+            "handle_analysis_callback", "_process_webhook", "webhook",
+        }
+        nodes = []
+        for node in tree.body:
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in selected:
+                isolated = copy.deepcopy(node)
+                if isinstance(isolated, ast.FunctionDef):
+                    isolated.decorator_list = []  # No Flask or Telegram registration.
+                nodes.append(isolated)
+        self.assertEqual({n.name for n in nodes}, selected)
+
+        class ImmediateExecutor:
+            def submit(self, fn, *args, **kwargs):
+                future = concurrent.futures.Future()
+                try:
+                    future.set_result(fn(*args, **kwargs))
+                except Exception as exc:
+                    future.set_exception(exc)
+                return future
+
+        class MockBot:
+            """Telegram API spy/dispatcher: records output, never connects."""
+
+            def __init__(self):
+                self.sent = []
+                self.acknowledged = []
+                self.processed = []
+
+            def send_message(self, chat_id, text, **kwargs):
+                self.sent.append((chat_id, text, kwargs))
+
+            def answer_callback_query(self, callback_id, **kwargs):
+                self.acknowledged.append((callback_id, kwargs))
+
+            def process_new_updates(self, updates):
+                for update in updates:
+                    self.processed.append(update["update_id"])
+                    if "message" in update:
+                        body = update["message"]
+                        message = SimpleNamespace(
+                            chat=SimpleNamespace(id=body["chat"]["id"]),
+                            text=body["text"],
+                        )
+                        handlers = {
+                            "/start": namespace["cmd_start"],
+                            "/help": namespace["cmd_help"],
+                            "/buy": namespace["cmd_buy"],
+                            "/portfolio": namespace["cmd_portfolio"],
+                            "/sell": namespace["cmd_sell"],
+                        }
+                        handlers[message.text.split()[0]](message)
+                    elif "callback_query" in update:
+                        body = update["callback_query"]
+                        callback = SimpleNamespace(
+                            id=body["id"],
+                            data=body["data"],
+                            message=SimpleNamespace(
+                                chat=SimpleNamespace(
+                                    id=body["message"]["chat"]["id"]
+                                )
+                            ),
+                        )
+                        namespace["handle_analysis_callback"](callback)
+
+        secret = "mock-only-secret-123456789"
+        bot = MockBot()
+        namespace = {
+            "os": os, "json": json, "threading": threading,
+            "re": re, "hmac": hmac, "date": date,
+            "logger": logging.getLogger("telegram-mock-smoke"),
+            "deque": deque, "bot": bot,
+            "executor": ImmediateExecutor(),
+            "telebot": SimpleNamespace(
+                types=SimpleNamespace(
+                    Update=SimpleNamespace(de_json=staticmethod(json.loads))
+                )
+            ),
+            "WEBHOOK_SECRET": secret,
+            "main_keyboard": lambda: "MOCK_KEYBOARD",
+            "analysis_choice_keyboard": lambda sym: f"MOCK_ACTIONS_{sym}",
+            "resolve_symbol": lambda sym: (sym.upper() + ".NS", "Mock Company"),
+            "get_live_price": lambda sym: 525.0,  # fixture, not market data
+            "build_fundamental_text":
+                lambda sym, company: f"MOCK FUNDAMENTAL {sym}: NOT INVESTMENT DATA",
+            "_webhook_lock": threading.Lock(),
+            "_webhook_slots": threading.BoundedSemaphore(40),
+            "_processed_updates": deque(maxlen=1000),
+            "_processed_updates_set": set(),
+        }
+        exec(compile(ast.fix_missing_locations(
+            ast.Module(body=nodes, type_ignores=[])
+        ), str(MAIN_FILE), "exec"), namespace)
+        mock_chat_id = 987654321  # Synthetic user; never an actual recipient.
+        with tempfile.TemporaryDirectory() as folder:
+            positions = str(Path(folder) / "fake_positions.json")
+            namespace["state"] = namespace["StateManager"]()
+            namespace["portfolio"] = namespace["PortfolioManager"](positions)
+            namespace["state"].set(mock_chat_id, "old_state")
+
+            def fake_update(update_id, *, text=None, callback=None, token=secret):
+                if text is not None:
+                    body = {"update_id": update_id, "message": {
+                        "chat": {"id": mock_chat_id}, "text": text
+                    }}
+                else:
+                    body = {"update_id": update_id, "callback_query": {
+                        "id": "fake-callback-id", "data": callback,
+                        "message": {"chat": {"id": mock_chat_id}}
+                    }}
+                namespace["request"] = SimpleNamespace(
+                    headers={"X-Telegram-Bot-Api-Secret-Token": token},
+                    content_length=len(json.dumps(body)),
+                    get_json=lambda silent=True: body,
+                )
+                return namespace["webhook"]()
+
+            # Reject an unauthenticated Telegram-like request.
+            self.assertEqual(fake_update(500, text="/start", token="wrong"), ("unauthorized", 403))
+            self.assertEqual(bot.sent, [])
+
+            self.assertEqual(fake_update(501, text="/start"), ("ok", 200))
+            self.assertIsNone(namespace["state"].get(mock_chat_id))
+            self.assertIn("MSK Bot", bot.sent[-1][1])
+
+            self.assertEqual(fake_update(502, text="/help"), ("ok", 200))
+            self.assertIn("/buy", bot.sent[-1][1])
+
+            self.assertEqual(fake_update(503, text="/buy SBIN 2 500"), ("ok", 200))
+            self.assertEqual(namespace["portfolio"].get(mock_chat_id)["SBIN"],
+                             {"qty": 2, "avg": 500.0})
+            before_duplicate = len(bot.sent)
+            self.assertEqual(fake_update(503, text="/buy SBIN 2 500"), ("ok", 200))
+            self.assertEqual(len(bot.sent), before_duplicate)
+            self.assertEqual(namespace["portfolio"].get(mock_chat_id)["SBIN"]["qty"], 2)
+
+            self.assertEqual(fake_update(504, text="/portfolio"), ("ok", 200))
+            self.assertTrue(any("SBIN" in msg and "Qty:2" in msg for _, msg, _ in bot.sent))
+
+            # Fundamental callback output is a fixed synthetic fixture; no LLM/API call.
+            self.assertEqual(fake_update(505, callback="fund|SBIN"), ("ok", 200))
+            self.assertTrue(any("MOCK FUNDAMENTAL SBIN" in msg for _, msg, _ in bot.sent))
+            before_bad_callback = len(bot.sent)
+            self.assertEqual(fake_update(506, callback="fund|SBIN;DROP"), ("ok", 200))
+            self.assertEqual(len(bot.sent), before_bad_callback)
+            self.assertGreaterEqual(len(bot.acknowledged), 2)
+
+            self.assertEqual(fake_update(507, text="/sell SBIN"), ("ok", 200))
+            self.assertEqual(namespace["portfolio"].get(mock_chat_id), {})
+            self.assertEqual(len(bot.processed), 7)
+            self.assertTrue(all(uid == mock_chat_id for uid, _, _ in bot.sent))
+            self.assertEqual(namespace["PortfolioManager"](positions).get(mock_chat_id), {})
+
 if __name__ == "__main__":
     unittest.main()
