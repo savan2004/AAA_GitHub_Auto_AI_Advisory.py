@@ -10,3 +10,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: WEBHOOK_URL
+        value: https://aaa-github-auto-ai-advisory-py.onrender.com
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      - key: TELEGRAM_TOKEN
+        sync: false
