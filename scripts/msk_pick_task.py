@@ -1,12 +1,30 @@
 """Zero-cost task selector; no API calls to paid AI services."""
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 
 
 def gh(*args):
     return json.loads(subprocess.check_output(["gh", *args], text=True))
+
+
+def _covered_by_open_pr(issue_number, prs):
+    """Avoid repeated AI work when an existing open PR already covers the issue."""
+    issue_title = re.compile(rf"\\bissue\\s*#\\s*{issue_number}\\b", re.IGNORECASE)
+    closing_ref = re.compile(
+        rf"\\b(?:closes|fixes|resolves|implements|for)\\s+(?:issue\\s*)?#\\s*{issue_number}\\b",
+        re.IGNORECASE,
+    )
+    for pr in prs:
+        if pr.get("state", "OPEN").upper() != "OPEN":
+            continue
+        if issue_title.search(pr.get("title") or ""):
+            return True
+        if closing_ref.search(pr.get("body") or ""):
+            return True
+    return False
 
 
 def choose(environ, now, issues, prs):
@@ -24,7 +42,7 @@ def choose(environ, now, issues, prs):
             continue
         if "msk-codex-blocked" in labels:
             continue
-        if any(f"Issue #{issue['number']} implementation" in pr.get("title", "") for pr in prs):
+        if _covered_by_open_pr(issue["number"], prs):
             continue
         return issue["number"]
     return None
@@ -41,7 +59,7 @@ def main():
     issue = None
     if all(env[k] == "true" for k in ("ENABLED", "ACK_COSTS", "API_KEY_SET")):
         issues = gh("issue", "list", "--state", "open", "--limit", "100", "--json", "number,labels")
-        prs = gh("pr", "list", "--state", "all", "--limit", "100", "--json", "title")
+        prs = gh("pr", "list", "--state", "open", "--limit", "100", "--json", "title,body,state")
         issue = choose(env, datetime.now(timezone.utc), issues, prs)
     with open(out, "a", encoding="utf-8") as f:
         f.write(f"execute={'true' if issue else 'false'}\n")
