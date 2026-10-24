@@ -108,10 +108,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_startup_portfolio_regression.py' -v
           python -m unittest discover -s tests -p 'test_msk_menu_audit.py' -v
           git add -A -- . ':!.msk-task.txt'
-          git diff --cached --name-only | grep -v '^.msk-task.txt -m "Codex: propose implementation for issue #$ISSUE_NUMBER"
-          git push origin "$BRANCH"
-          gh pr create --base main --head "$BRANCH" --draft --title "Codex: Issue #$ISSUE_NUMBER implementation" --body "Automated proposal for #$ISSUE_NUMBER. Requires human review and full CI before merge. No deployment was performed."
- >/dev/null
+          if git diff --cached --quiet; then echo 'Nothing to commit'; exit 1; fi
           git commit -m "Codex: propose implementation for issue #$ISSUE_NUMBER"
           git push origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" --draft --title "Codex: Issue #$ISSUE_NUMBER implementation" --body "Automated proposal for #$ISSUE_NUMBER. Requires human review and full CI before merge. No deployment was performed."
