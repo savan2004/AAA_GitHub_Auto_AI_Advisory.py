@@ -201,11 +201,12 @@ class PortfolioManager:
 
     def remove(self, uid, sym):
         with self._lock:
-            if uid in self._data and sym in self._data[uid]:
-                del self._data[uid][sym]
-                self._save()
-                return True
-        return False
+            if uid not in self._data or sym not in self._data[uid]:
+                return False
+            del self._data[uid][sym]
+        # _save acquires the same lock; never call it while holding the lock.
+        self._save()
+        return True
 
 
 portfolio = PortfolioManager()
@@ -1346,9 +1347,14 @@ def webhook():
 if __name__ == "__main__":
     logger.info("🚀 Starting AutoAI Bot v6.2...")
     if WEBHOOK_URL:
+        # The webhook destination must never contain the bot credential.
+        if TOKEN in WEBHOOK_URL:
+            raise RuntimeError("WEBHOOK_URL must not contain TELEGRAM_TOKEN")
         bot.set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}", secret_token=WEBHOOK_SECRET)
-        logger.info(f"Webhook active: {WEBHOOK_URL}{WEBHOOK_PATH}")
-        app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+        logger.info("Webhook registered at %s%s", WEBHOOK_URL, WEBHOOK_PATH)
+        from waitress import serve
+        logger.info("Production HTTP server listening on port %s", os.getenv("PORT", "8000"))
+        serve(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), threads=12, connection_limit=200)
     else:
         logger.info("Running in polling mode...")
         bot.infinity_polling()
