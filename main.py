@@ -12,7 +12,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, date
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 import threading
 import hmac
 
@@ -43,6 +43,7 @@ from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
+from monthly_outlook import load_outlook, format_outlook
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -530,14 +531,19 @@ def build_scan(profile):
     results = {}
     with ThreadPoolExecutor(max_workers=10) as pool:
         futs = {pool.submit(_fetch, s): s for s in syms}
-        for f in as_completed(futs, timeout=15):
-            sym = futs[f]
+        done, pending = wait(futs, timeout=20)
+        for future in pending:
+            future.cancel()
+        if pending:
+            logger.warning("Screener %s: %d/%d symbol requests exceeded batch deadline",
+                           profile, len(pending), len(futs))
+        for future in done:
             try:
-                r = f.result()
-                if r:
-                    results[sym] = r
+                result = future.result()
+                if result:
+                    results[futs[future]] = result
             except Exception:
-                pass
+                logger.exception("Screener symbol lookup failed")
 
     for s in syms:
         r = results.get(s)
@@ -627,7 +633,7 @@ def main_keyboard():
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
-    kb.add("🏭 Sector Report")
+    kb.add("🏭 Sector Report", "📅 Monthly Outlook")
     return kb
 
 
@@ -678,7 +684,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nMonthly outlook: <code>/outlook</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
 
 
 def run_report(chat_id, query):
@@ -1229,6 +1235,23 @@ def run_sector_report(chat_id):
 @bot.message_handler(commands=["sectors", "sector"])
 def cmd_sectors(m):
     executor.submit(run_sector_report, m.chat.id)
+
+
+@bot.message_handler(commands=["outlook"])
+def cmd_outlook(m):
+    from datetime import datetime
+    month = datetime.now().strftime("%Y-%m")
+    try:
+        report = load_outlook(month)
+        safe_send(m.chat.id, format_outlook(report, month))
+    except Exception:
+        logger.exception("Monthly Outlook read failed")
+        safe_send(m.chat.id, "⚠️ Monthly Outlook is temporarily unavailable.")
+
+
+@bot.message_handler(func=lambda m: m.text == "📅 Monthly Outlook")
+def outlook_btn(m):
+    cmd_outlook(m)
 
 
 @bot.message_handler(func=lambda m: m.text == "🏭 Sector Report")
