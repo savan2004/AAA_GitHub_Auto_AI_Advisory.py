@@ -16,13 +16,13 @@ concurrency:
 
 jobs:
   select:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       execute: ${{ steps.choose.outputs.execute }}
       issue: ${{ steps.choose.outputs.issue }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: choose
         env:
           GH_TOKEN: ${{ github.token }}
@@ -36,13 +36,13 @@ jobs:
   implement:
     needs: select
     if: needs.select.outputs.execute == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
       issues: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Prepare task brief
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,14 +80,14 @@ jobs:
   publish:
     needs: [select, implement]
     if: needs.implement.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
       issues: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           name: msk-proposed-patch
