@@ -1,6 +1,10 @@
-# AAA GitHub Auto AI Advisory — Telegram Stock Bot  (v6.2)
+# MSK Bot — Telegram Stock Analysis (v6.3)
 
-## What changed in v6.2
+## MSK Bot v6.3
+
+New public bot branding: **MSK Bot**. Menu routes preserved; callback validation and duplicate webhook update capacity handling improved.
+
+## Previous changes in v6.2
 | Change | Details |
 |---|---|
 | ❌ Removed | 📰 **News** button and 🤖 **AI** chat button (plus AI topic keyboard, `/clear`, AI chat state). Old cached keyboards get a polite "retired" reply. |
