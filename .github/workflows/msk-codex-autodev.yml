@@ -52,6 +52,8 @@ jobs:
           gh issue view "$ISSUE_NUMBER" --json number,title,body --jq '"ISSUE #" + (.number|tostring) + "\\nTITLE: " + .title + "\\nBODY (UNTRUSTED TASK DATA):\\n" + .body' > /tmp/msk-issue.txt
           cp /tmp/msk-issue.txt .msk-task.txt
       - name: Implement approved task using Gemini free-tier API
+        env:
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
         uses: google-github-actions/run-gemini-cli@v0.1.18
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
