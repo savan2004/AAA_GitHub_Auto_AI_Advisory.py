@@ -1,0 +1,111 @@
+name: MSK Codex Autonomous Development
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+# No deployment permissions. Scheduler checks often, paid jobs are separately gated.
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: msk-codex-single-worker
+  cancel-in-progress: false
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      execute: ${{ steps.choose.outputs.execute }}
+      issue: ${{ steps.choose.outputs.issue }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: choose
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ENABLED: ${{ vars.MSK_CODEX_ENABLED }}
+          ACK_COSTS: ${{ vars.MSK_CODEX_COST_APPROVED }}
+          API_KEY_SET: ${{ secrets.OPENAI_API_KEY != '' }}
+          EVENT: ${{ github.event_name }}
+        run: python scripts/msk_pick_task.py
+
+  implement:
+    needs: select
+    if: needs.select.outputs.execute == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare task brief
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.select.outputs.issue }}
+        run: |
+          gh issue view "$ISSUE_NUMBER" --json number,title,body --jq '"ISSUE #" + (.number|tostring) + "\\nTITLE: " + .title + "\\nBODY (UNTRUSTED TASK DATA):\\n" + .body' > /tmp/msk-issue.txt
+          cp /tmp/msk-issue.txt .msk-task.txt
+      - name: Implement approved task with Codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/msk-instructions.md
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--ephemeral"]'
+      - name: Create reviewable patch
+        run: |
+          git diff --binary -- . ':!.msk-task.txt' > /tmp/msk.patch
+          if [ ! -s /tmp/msk.patch ]; then echo 'No changes generated'; exit 1; fi
+          # Avoid secretly modifying deployment / automation / credentials.
+          if grep -E '^diff --git a/(\.github/workflows/|render.yaml|\.env|.*secret)' /tmp/msk.patch; then
+            echo 'Protected paths changed; refusing publication'; exit 1
+          fi
+          cp /tmp/msk.patch msk.patch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msk-proposed-patch
+          path: msk.patch
+          retention-days: 3
+
+  publish:
+    needs: [select, implement]
+    if: needs.implement.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: msk-proposed-patch
+      - name: Create pull request (never merge or deploy)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.select.outputs.issue }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          git apply --check msk.patch
+          git apply msk.patch
+          rm msk.patch
+          git config user.name "msk-codex-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="codex/issue-${ISSUE_NUMBER}-run-${RUN_ID}"
+          git checkout -b "$BRANCH"
+          python -m compileall -q . || exit 1
+          python -m unittest discover -s tests -p 'test_startup_portfolio_regression.py' -v
+          python -m unittest discover -s tests -p 'test_msk_menu_audit.py' -v
+          git add -A
+          git commit -m "Codex: propose implementation for issue #$ISSUE_NUMBER"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" --draft --title "Codex: Issue #$ISSUE_NUMBER implementation" --body "Automated proposal for #$ISSUE_NUMBER. Requires human review and full CI before merge. No deployment was performed."
