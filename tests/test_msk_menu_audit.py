@@ -18,7 +18,7 @@ class MenuAudit(unittest.TestCase):
             if not label or label == "3":
                 continue
             self.assertIn('m.text', MAIN, "reply-button handler logic missing")
-            self.assertIn(label, MAIN.split("# ── Button Handlers", 1)[1], f"Unrouted reply button {label}")
+            self.assertIn(label, MAIN.split("def analysis_choice_keyboard", 1)[1], f"Unrouted reply button {label}")
 
     def test_inline_action_handlers(self):
         actions = re.findall(r'callback_data=f"([a-z]+)\|', MAIN)
