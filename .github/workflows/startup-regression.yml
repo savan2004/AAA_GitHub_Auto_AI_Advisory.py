@@ -13,4 +13,4 @@ jobs:
         with:
           python-version: '3.11'
       - name: Run isolated regression suite
-        run: python -m unittest discover -s tests -p 'test_startup_portfolio_regression.py' -v
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
