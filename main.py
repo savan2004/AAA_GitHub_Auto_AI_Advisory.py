@@ -30,6 +30,7 @@ from technical_indicators import (
     calc_bollinger, trend_label, swing_signal, rsi_label,
 )
 from api_utils import API_RATE_LIMITER
+from postgres_portfolio import build_portfolio_backend
 from config import RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_CALLS
 from market_news import get_stock_news
 
@@ -209,7 +210,7 @@ class PortfolioManager:
         return True
 
 
-portfolio = PortfolioManager()
+portfolio = build_portfolio_backend(PortfolioManager)
 
 
 # ── Safe Formatting Helpers ──────────────────────────────────────────────────
