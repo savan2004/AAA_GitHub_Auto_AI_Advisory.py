@@ -205,3 +205,26 @@ def build_portfolio_backend(legacy_factory, *, environ=None, connector=None):
     return PostgresPortfolioStore(
         env.get("PORTFOLIO_DATABASE_URL"), connector=connector
     )
+
+def main():
+    """Operator-only command: use a secret environment variable, never a CLI DSN."""
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(
+        description="Safely import a frozen legacy JSON portfolio into PostgreSQL"
+    )
+    parser.add_argument("legacy_json", type=Path)
+    parser.add_argument("--apply", action="store_true",
+                        help="Perform the import (default is read-only dry-run)")
+    args = parser.parse_args()
+    dsn = os.getenv("PORTFOLIO_DATABASE_URL")
+    outcome = import_legacy_to_postgres(
+        args.legacy_json, dsn, apply=args.apply
+    )
+    # Emit aggregate counters only; never emit credentials or client holdings.
+    print(json.dumps(outcome, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
