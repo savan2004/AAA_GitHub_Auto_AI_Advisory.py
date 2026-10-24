@@ -13,3 +13,4 @@ matplotlib==3.9.0
 mplfinance==0.12.10b0
 reportlab==4.2.5
 chardet==5.2.0  # requests 2.32.3 compatibility when chardet is installed
+waitress==3.0.2
