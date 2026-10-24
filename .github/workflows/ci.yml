@@ -1,0 +1,18 @@
+name: Python reliability tests
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q .
+      - run: TELEGRAM_TOKEN=test-token python -m unittest discover -s tests -v

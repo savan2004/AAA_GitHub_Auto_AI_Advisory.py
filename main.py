@@ -15,6 +15,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import hmac
+import sqlite3
 
 import requests
 import pandas as pd
@@ -72,6 +73,8 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256_000
 bot = telebot.TeleBot(TOKEN, threaded=False)
 executor = ThreadPoolExecutor(max_workers=20)
+_worker_last_success = 0.0
+_worker_last_error = ""
 
 # ── Smart Symbol Resolver (yfinance version-safe) ────────────────────────────
 _SYMBOL_MAP = {}
@@ -162,50 +165,42 @@ _webhook_slots = threading.BoundedSemaphore(value=40)
 
 # ── Thread-Safe Portfolio Manager ────────────────────────────────────────────
 class PortfolioManager:
-    def __init__(self, file_path="portfolio_data.json"):
-        self._data = {}
-        self._file = file_path
-        self._lock = threading.Lock()
-        self._load()
+    """Transaction-safe, persistent portfolio store (set PORTFOLIO_DB_PATH)."""
 
-    def _load(self):
-        try:
-            if os.path.exists(self._file):
-                with open(self._file) as f:
-                    self._data = {int(k): v for k, v in json.load(f).items()}
-        except Exception as e:
-            logger.warning(f"Portfolio load error: {e}")
+    def __init__(self, file_path=None):
+        self._file = file_path or os.getenv("PORTFOLIO_DB_PATH", "portfolio_data.sqlite3")
+        self._lock = threading.RLock()
+        with self._connect() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS holdings (uid INTEGER NOT NULL, symbol TEXT NOT NULL, qty REAL NOT NULL, avg REAL NOT NULL, PRIMARY KEY(uid, symbol))")
 
-    def _save(self):
-        try:
-            with self._lock:
-                with open(self._file, "w") as f:
-                    json.dump(self._data, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Portfolio save error: {e}")
+    def _connect(self):
+        conn = sqlite3.connect(self._file, timeout=30)
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
 
     def get(self, uid):
-        with self._lock:
-            return self._data.setdefault(uid, {}).copy()
+        with self._connect() as conn:
+            rows = conn.execute("SELECT symbol, qty, avg FROM holdings WHERE uid=?", (uid,)).fetchall()
+        return {symbol: {"qty": qty, "avg": avg} for symbol, qty, avg in rows}
 
     def add(self, uid, sym, qty, price):
-        with self._lock:
-            p = self._data.setdefault(uid, {})
-            if sym in p:
-                oq, oa = p[sym]["qty"], p[sym]["avg"]
-                nq = oq + qty
-                p[sym] = {"qty": nq, "avg": round((oq * oa + qty * price) / nq, 2)}
+        if qty <= 0 or price < 0:
+            raise ValueError("Quantity must be positive and price nonnegative")
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT qty, avg FROM holdings WHERE uid=? AND symbol=?", (uid, sym)).fetchone()
+            if row:
+                old_qty, old_avg = row
+                new_qty = old_qty + qty
+                avg = round((old_qty * old_avg + qty * price) / new_qty, 2)
             else:
-                p[sym] = {"qty": qty, "avg": round(price, 2)}
-        self._save()
+                new_qty, avg = qty, round(price, 2)
+            conn.execute("INSERT INTO holdings(uid, symbol, qty, avg) VALUES(?,?,?,?) ON CONFLICT(uid,symbol) DO UPDATE SET qty=excluded.qty, avg=excluded.avg", (uid, sym, new_qty, avg))
 
     def remove(self, uid, sym):
-        with self._lock:
-            if uid in self._data and sym in self._data[uid]:
-                del self._data[uid][sym]
-                self._save()
-                return True
-        return False
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute("DELETE FROM holdings WHERE uid=? AND symbol=?", (uid, sym))
+            return cursor.rowcount > 0
 
 
 portfolio = PortfolioManager()
@@ -1288,21 +1283,25 @@ def handle_text(m):
 # ── Flask Webhook Routes ─────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ok", "version": "6.2"})
+    return jsonify({"status": "alive", "version": "6.2", "telegram_worker_verified": False})
 
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
-    return jsonify({"bot": "running", "ai": "available" if ai_available() else "no keys"})
+    return jsonify({"process": "alive", "telegram_recently_processed": bool(_worker_last_success and time.time() - _worker_last_success < 300), "last_success_unix": _worker_last_success or None, "ai": "available" if ai_available() else "no keys"})
 
 
 def _process_webhook(data_str):
+    global _worker_last_success, _worker_last_error
     try:
         update = telebot.types.Update.de_json(data_str)
         if update:
             bot.process_new_updates([update])
+            _worker_last_success = time.time()
     except Exception as e:
-        logger.error(f"Webhook process err: {e}")
+        _worker_last_error = str(e)
+        logger.exception("Webhook processing failed")
+        raise
 
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
@@ -1320,26 +1319,22 @@ def webhook():
     if not _webhook_slots.acquire(blocking=False):
         return "server busy", 503  # Telegram retries non-2xx.
     try:
+        # Process before acknowledging; Telegram retries failed deliveries.
+        # Serialize to protect the non-threaded TeleBot handler state.
         with _webhook_lock:
             if uid in _processed_updates_set:
                 return "ok", 200
+            try:
+                _process_webhook(json.dumps(payload))
+            except Exception:
+                return "processing failed", 503
             if len(_processed_updates) == _processed_updates.maxlen:
                 _processed_updates_set.discard(_processed_updates[0])
             _processed_updates.append(uid)
             _processed_updates_set.add(uid)
-        future = executor.submit(_process_webhook, json.dumps(payload))
-        future.add_done_callback(lambda _: _webhook_slots.release())
-    except Exception:
-        with _webhook_lock:
-            _processed_updates_set.discard(uid)
-            try:
-                _processed_updates.remove(uid)
-            except ValueError:
-                pass
+        return "ok", 200
+    finally:
         _webhook_slots.release()
-        logger.exception("Unable to schedule webhook update")
-        return "busy", 503
-    return "ok", 200
 
 
 # ── Runner ───────────────────────────────────────────────────────────────────
