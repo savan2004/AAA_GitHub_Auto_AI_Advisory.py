@@ -9,7 +9,7 @@ import json
 import re
 
 ARCHIVE = Path(__file__).resolve().parent / "data" / "monthly_outlook"
-MONTH_PATTERN = re.compile(r"^\\d{4}-(0[1-9]|1[0-2])$")
+MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 def load_outlook(month=None, root=None):
