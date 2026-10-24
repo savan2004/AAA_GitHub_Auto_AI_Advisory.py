@@ -12,9 +12,9 @@ def gh(*args):
 
 def _covered_by_open_pr(issue_number, prs):
     """Avoid repeated AI work when an existing open PR already covers the issue."""
-    issue_title = re.compile(rf"\\bissue\\s*#\\s*{issue_number}\\b", re.IGNORECASE)
+    issue_title = re.compile(rf"\bissue\s*#\s*{issue_number}\b", re.IGNORECASE)
     closing_ref = re.compile(
-        rf"\\b(?:closes|fixes|resolves|implements|for)\\s+(?:issue\\s*)?#\\s*{issue_number}\\b",
+        rf"\b(?:closes|fixes|resolves|implements|for)\s+(?:issue\s*)?#\s*{issue_number}\b",
         re.IGNORECASE,
     )
     for pr in prs:
