@@ -66,6 +66,13 @@ class BreadthTests(unittest.TestCase):
         r.update(source='Sample <test>',fetched='now')
         self.assertIn('Sample &lt;test&gt;',format_breadth(r))
 
+    def test_partial_download_retries_only_missing_symbols_serially(self):
+        import market_data as md
+        with patch('yfinance.download',return_value=pd.DataFrame()) as download,patch.object(md,'_split_multi',side_effect=[{'A.NS':frame()},{'B.NS':frame()}]),patch.object(md.time,'sleep'):
+            got=md._download_chunk(['A.NS','B.NS'],'1mo',retries=1,adjusted=True)
+        self.assertEqual(set(got),{'A.NS','B.NS'})
+        self.assertEqual(download.call_args_list[1].kwargs['tickers'],'B.NS')
+        self.assertFalse(download.call_args_list[1].kwargs['threads'])
     def test_adjusted_cache_separated(self):
         import market_data as md
         md._cache.clear()

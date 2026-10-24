@@ -10,7 +10,7 @@
 
 ## Breadth contract
 
-Current Nifty 500 membership comes from the NSE constituent CSV. If unavailable, use the existing built-in stock sample and label it explicitly; never call that sample full Nifty 500. Prices use adjusted daily OHLCV; other features retain unadjusted downloads. Adjustment mode is included in cache keys.
+Current Nifty 500 membership comes from the NSE constituent CSV. If unavailable, use the existing built-in stock sample and label it explicitly; never call that sample full Nifty 500. Prices use adjusted daily OHLCV; other features retain unadjusted downloads. Adjustment mode is included in cache keys. Separate bulk download callers are serialized; partial results retry only missing symbols, serially, within the existing retry bound.
 
 Before 16:00 IST, discard the current date's bar. After the buffer, use the latest available Nifty 50 session, including weekends/holidays. Require both exact benchmark sessions for advance/decline classification. Missing or stale constituents do not count as unchanged. An unchanged move is within 0.005% of the previous close.
 
@@ -47,6 +47,6 @@ TELEGRAM_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi WEBHOOK_URL= MPLBAC
 
 Product tests cover exact-session alignment, intraday exclusion, missing constituents, per-measure denominators, fixed cohorts, divergence, stale sessions, adjusted-cache separation, current-value weights, unknown prices, nonfinite values, stale/future statements, dated CAGR/quarter continuity, lender exclusions, duplicate lots/XLSX, all-holding analysis, failed-analysis handling, private delivery, invalid-upload rejection, temporary cleanup and the saved-holding deadlock.
 
-The synthetic PDF was generated, rendered and visually inspected. No live Telegram messages or Render deployment were performed.
+The synthetic PDF was generated, rendered and visually inspected. Live public-feed probing retrieved 501 Nifty 500 constituent entries and benchmark history; one concurrent stock request encountered a Yahoo cache database lock, motivating bounded serial retries for missing symbols. Full 500-stock production coverage remains unverified. No live Telegram messages or Render deployment were performed.
 
 Baseline comparison: the existing reliability/fundamental-pipeline suite runs 45 tests with 11 failures, 15 errors and 1 skip on both the unchanged base and this branch; failing/error test identities are identical. Existing failures include missing research-result fields (`asof`, `completeness`, `eps_src`, etc.) and are outside this feature change. This is a review branch, not a claim that the repository-wide suite is green.

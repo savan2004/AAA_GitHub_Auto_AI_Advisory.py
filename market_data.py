@@ -28,6 +28,7 @@ _OHLCV = ["Open", "High", "Low", "Close", "Volume"]
 
 _cache: Dict[str, dict] = {}
 _cache_lock = threading.Lock()
+_download_lock = threading.Lock()
 
 
 def to_yahoo(sym: str) -> str:
@@ -113,25 +114,32 @@ def _split_multi(raw: pd.DataFrame, tickers: List[str]) -> Dict[str, pd.DataFram
 
 def _download_chunk(tickers: List[str], period: str, retries: int = 2, adjusted: bool = False) -> Dict[str, pd.DataFrame]:
     import yfinance as yf
+    result = {}
+    pending = list(dict.fromkeys(tickers))
     last_err = None
     for attempt in range(retries + 1):
         try:
-            raw = yf.download(
-                tickers=tickers if len(tickers) > 1 else tickers[0],
-                period=period, interval="1d",
-                group_by="ticker", auto_adjust=adjusted,
-                progress=False, threads=True, timeout=30,
-            )
-            got = _split_multi(raw, tickers)
-            if got or attempt == retries:
-                return got
-        except Exception as e:                       # network / throttling
+            # yfinance shares download/cache state. Serialize separate callers,
+            # but retain its internal parallelism on the initial bulk request.
+            with _download_lock:
+                raw = yf.download(
+                    tickers=pending if len(pending) > 1 else pending[0],
+                    period=period, interval="1d",
+                    group_by="ticker", auto_adjust=adjusted,
+                    progress=False, threads=(attempt == 0 and len(pending) > 1), timeout=30,
+                )
+            result.update(_split_multi(raw, pending))
+            pending = [t for t in pending if t not in result]
+            if not pending:
+                return result
+        except Exception as e:
             last_err = e
             logger.warning(f"[market_data] chunk attempt {attempt + 1} failed: {str(e)[:120]}")
-        time.sleep(2.0 * (attempt + 1))
+        if attempt < retries:
+            time.sleep(2.0 * (attempt + 1))
     if last_err:
-        logger.warning(f"[market_data] chunk gave up: {str(last_err)[:120]}")
-    return {}
+        logger.warning(f"[market_data] chunk incomplete: {str(last_err)[:120]}")
+    return result
 
 
 def bulk_history(
