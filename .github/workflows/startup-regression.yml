@@ -16,3 +16,4 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_startup_portfolio_regression.py' -v
           python -m unittest discover -s tests -p 'test_msk_menu_audit.py' -v
+          python -m unittest discover -s tests -p 'test_msk_codex_controller.py' -v
