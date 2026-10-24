@@ -1,5 +1,5 @@
 """
-Configuration module for AutoAiAdvisory Bot.
+Configuration module for MSK Bot.
 
 All configuration is loaded from environment variables (secure, 12-factor app compliant).
 No secrets should be hardcoded in this file.
@@ -111,7 +111,7 @@ To set in Render:
   3. Add to Render Environment Variables
 """
 
-BRAND_NAME: str = _get_env("BRAND_NAME", "AutoAI Advisory")
+BRAND_NAME: str = _get_env("BRAND_NAME", "MSK Bot")
 """Public report branding; can be overridden using the BRAND_NAME environment variable."""
 
 WEBHOOK_PATH: str = "/webhook/telegram"
