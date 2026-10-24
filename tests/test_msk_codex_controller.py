@@ -40,5 +40,18 @@ class SelectorTests(unittest.TestCase):
         self.assertIsNone(module.choose(ENV, CLOCK, blocked, []))
 
 
+    def test_selects_lowest_numbered_eligible_issue_skipping_blocked_and_covered(self):
+        labels = APPROVED[0]["labels"]
+        # Deliberately unsorted: selection must be by issue number, not API order.
+        issues = [
+            {"number": 25, "labels": labels},
+            {"number": 3, "labels": labels + [{"name": "msk-codex-blocked"}]},
+            {"number": 13, "labels": labels},
+            {"number": 5, "labels": labels},
+            {"number": 1, "labels": [{"name": "msk-codex-ready"}]},
+        ]
+        existing_prs = [{"title": "Codex: Issue #5 implementation"}]
+        self.assertEqual(module.choose(ENV, CLOCK, issues, existing_prs), 13)
+
 if __name__ == "__main__":
     unittest.main()
