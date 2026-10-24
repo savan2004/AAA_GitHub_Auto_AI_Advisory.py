@@ -15,6 +15,9 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import hmac
+import math
+import tempfile
+import html
 
 import requests
 import pandas as pd
@@ -165,7 +168,7 @@ class PortfolioManager:
     def __init__(self, file_path="portfolio_data.json"):
         self._data = {}
         self._file = file_path
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._load()
 
     def _load(self):
@@ -179,14 +182,21 @@ class PortfolioManager:
     def _save(self):
         try:
             with self._lock:
-                with open(self._file, "w") as f:
-                    json.dump(self._data, f, indent=2)
+                directory = os.path.dirname(os.path.abspath(self._file))
+                with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as f:
+                    temp_path = f.name
+                    json.dump(self._data, f, indent=2, allow_nan=False)
+                try:
+                    os.replace(temp_path, self._file)
+                finally:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
         except Exception as e:
             logger.warning(f"Portfolio save error: {e}")
 
     def get(self, uid):
         with self._lock:
-            return self._data.setdefault(uid, {}).copy()
+            return {sym: dict(pos) for sym,pos in self._data.get(uid, {}).items()}
 
     def add(self, uid, sym, qty, price):
         with self._lock:
@@ -554,69 +564,18 @@ def build_scan(profile):
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
 def build_breadth():
-    lines = ["📊 <b>MARKET BREADTH</b>", "━━━━━━━━━━━━━━━━━━━━"]
-    indices = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "NIFTY IT": "^CNXIT", "NIFTY MIDCAP": "^NSEMDCP50"}
-    for name, tick in indices.items():
-        try:
-            d = yf.Ticker(tick).history(period="1mo")
-            if d is None or len(d) < 5:
-                continue
-            l = round(float(d["Close"].iloc[-1]), 2)
-            p = round(float(d["Close"].iloc[-2]), 2)
-            c = round((l - p) / p * 100, 2) if p > 0 else 0.0
-            icon = "🟢" if c >= 0 else "🔴"
-            lines.append(f"{icon} <b>{name}</b>: {l:,.2f} ({c:+.2f}%)")
-        except Exception:
-            pass
-    return "\n".join(lines) if len(lines) > 2 else "❌ Index data unavailable."
+    from market_breadth import get_breadth, format_breadth
+    return format_breadth(get_breadth())
 
 
-# ── Build Portfolio Card ─────────────────────────────────────────────────────
 def build_portfolio_card(uid):
+    from portfolio_report import price_holdings
+    from portfolio_analytics import format_card
     p = portfolio.get(uid)
     if not p:
-        return "📂 <b>Portfolio Empty</b>\n\nAdd: <code>/buy RELIANCE 10 2500</code>"
-
-    t_inv = 0.0
-    t_cur = 0.0
-    rows = []
-    winners = []
-    losers = []
-
-    for sym, pos in p.items():
-        qty, avg = pos["qty"], pos["avg"]
-        try:
-            ltp_raw = get_live_price(sym)
-            ltp = round(float(ltp_raw), 2) if ltp_raw is not None else avg
-        except Exception:
-            ltp = avg
-
-        inv = qty * avg
-        cur = qty * ltp
-        pnl = round(cur - inv, 2)
-        pct = round((ltp - avg) / avg * 100, 2) if avg > 0 else 0.0
-        rows.append({"sym": sym, "qty": qty, "avg": avg, "ltp": ltp, "inv": inv, "cur": cur, "pnl": pnl, "pct": pct})
-        t_inv += inv
-        t_cur += cur
-        (winners if pnl >= 0 else losers).append((sym, pnl, pct))
-
-    t_pnl = round(t_cur - t_inv, 2)
-    t_pct = round((t_cur - t_inv) / t_inv * 100, 2) if t_inv > 0 else 0.0
-    icon = "🟢" if t_pnl >= 0 else "🔴"
-
-    lines = [f"<b>━━━ 💼 PORTFOLIO ━━━</b>", f"📅 {date.today().strftime('%d-%b-%Y')}  |  {len(rows)} holdings", "", "<b>── HOLDINGS ──</b>"]
-
-    for r in sorted(rows, key=lambda x: x["pnl"], reverse=True):
-        wt = round(r["inv"] / t_inv * 100, 1) if t_inv > 0 else 0
-        lines += [
-            f"{'🟢' if r['pnl'] >= 0 else '🔴'} <b>{r['sym']}</b>",
-            f"   Qty:{r['qty']} ({wt}%)  Avg:₹{r['avg']:,.2f} → LTP:₹{r['ltp']:,.2f}",
-            f"   P&L: ₹{r['pnl']:+,.2f} ({r['pct']:+.2f}%)",
-            "   ···"
-        ]
-
-    lines += ["", f"{icon} <b>Total P&L: ₹{t_pnl:+,.2f} ({t_pct:+.2f}%)</b>", "─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM", "⚠️ <i>Educational only.</i>"]
-    return "\n".join(lines)
+        return "📂 Portfolio empty. Add: <code>/buy RELIANCE 10 2500</code> or /portfolio_upload"
+    rows, _ = price_holdings([{"symbol": sym, "qty": pos["qty"], "buy": pos["avg"]} for sym,pos in p.items()])
+    return format_card(rows)
 
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
@@ -626,7 +585,7 @@ def main_keyboard():
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
-    kb.add("🏭 Sector Report")
+    kb.add("🏭 Sector Report", "📋 Portfolio Review")
     return kb
 
 
@@ -677,7 +636,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nPortfolio review: <code>/portfolio_review</code>\nUpload CSV/XLSX: <code>/portfolio_upload</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
 
 
 def run_report(chat_id, query):
@@ -938,8 +897,124 @@ def chart_button(m):
     executor.submit(_run)
 
 
+# Portfolio uploads are private, opt-in, bounded, and never saved as holdings.
+_portfolio_slot = threading.BoundedSemaphore(1)
+_breadth_slot = threading.BoundedSemaphore(1)
+
+
+def _private_portfolio(m):
+    if getattr(m.chat, "type", "private") != "private":
+        safe_send(m.chat.id, "Open a private chat with the bot for portfolio information.")
+        return False
+    return True
+
+
+def _send_product_text(chat_id, text):
+    # Each line is self-contained HTML, so splitting between lines preserves markup.
+    chunk = ""
+    for line in text.splitlines():
+        if len(chunk) + len(line) + 1 > 3500:
+            safe_send(chat_id, chunk)
+            chunk = ""
+        chunk += line + "\n"
+    if chunk.strip():
+        safe_send(chat_id, chunk)
+
+
+def _run_portfolio_review(chat_id, holdings=None, document=None):
+    try:
+        from portfolio_report import run_job, parse_file, MAX_FILE_BYTES
+        if document is not None:
+            info = bot.get_file(document.file_id)
+            data = bot.download_file(info.file_path)
+            if len(data) > MAX_FILE_BYTES:
+                raise ValueError("File exceeds the 1 MB limit.")
+            holdings, issues = parse_file(document.file_name or "", data)
+            # Never silently review only the valid subset of an invalid upload.
+            errors = [issue for issue in issues if "duplicate symbol row(s) were merged" not in issue]
+            if errors:
+                _send_product_text(chat_id, "Please correct the upload:\n" + html.escape("\n".join(issues)))
+                return
+            if issues:
+                _send_product_text(chat_id, html.escape("\n".join(issues)))
+        if not holdings:
+            safe_send(chat_id, "No holdings. Use /buy SYM QTY PRICE or /portfolio_upload.")
+            return
+        last_ping = [0.0]
+        def progress(text):
+            if time.time() - last_ping[0] >= 20:
+                safe_send(chat_id, html.escape(text))
+                last_ping[0] = time.time()
+        # Independent request directory prevents report leakage between clients.
+        with tempfile.TemporaryDirectory(prefix="portfolio_review_") as directory:
+            result = run_job(holdings, directory, progress=progress, use_ai=False)
+            with open(result["summary"], "rb") as f:
+                bot.send_document(chat_id, f, visible_file_name="Portfolio_Fundamental_Review.pdf",
+                                  caption="Business quality • growth • valuation • concentration. Technical timing shown separately. Educational review.")
+    except Exception as exc:
+        logger.error("Portfolio review failed: %s", type(exc).__name__)
+        safe_send(chat_id, "Review could not be completed. Check the holding symbols or retry later; no investment conclusion was generated.")
+    finally:
+        _portfolio_slot.release()
+
+
+def _queue_portfolio_review(m, holdings=None, document=None):
+    if not _private_portfolio(m):
+        return
+    if not _portfolio_slot.acquire(blocking=False):
+        safe_send(m.chat.id, "A portfolio review is running. Please retry after it finishes.")
+        return
+    safe_send(m.chat.id, "Building the fundamental review. Each holding is checked; this can take several minutes.")
+    try:
+        executor.submit(_run_portfolio_review, m.chat.id, holdings, document)
+    except Exception:
+        _portfolio_slot.release()
+        raise
+
+
+@bot.message_handler(commands=["portfolio_review"])
+def cmd_portfolio_review(m):
+    if not _private_portfolio(m):
+        return
+    p = portfolio.get(m.chat.id)
+    holdings = [{"symbol":sym,"qty":pos["qty"],"buy":pos["avg"]} for sym,pos in p.items()]
+    _queue_portfolio_review(m, holdings=holdings)
+
+
+@bot.message_handler(func=lambda m: m.text == "📋 Portfolio Review")
+def portfolio_review_button(m):
+    cmd_portfolio_review(m)
+
+
+@bot.message_handler(commands=["portfolio_upload"])
+def cmd_portfolio_upload(m):
+    if not _private_portfolio(m):
+        return
+    state.set(m.chat.id, ("portfolio_upload", time.time()))
+    safe_send(m.chat.id, "Send a CSV or XLSX within 10 minutes (1 MB, up to 50 holdings). Columns: Symbol, Qty, Buy Price (NSE symbols). The upload is used for this report only. /start cancels.")
+
+
+@bot.message_handler(content_types=["document"], func=lambda m: isinstance(state.get(m.chat.id), tuple) and state.get(m.chat.id)[0] == "portfolio_upload")
+def portfolio_upload_document(m):
+    if not _private_portfolio(m):
+        return
+    pending = state.get(m.chat.id)
+    if not pending or time.time() - pending[1] > 600:
+        state.clear(m.chat.id)
+        safe_send(m.chat.id, "Upload request expired. Use /portfolio_upload again.")
+        return
+    doc = m.document
+    if not (doc.file_name or "").lower().endswith((".csv", ".xlsx")) or not doc.file_size or doc.file_size > 1_000_000:
+        safe_send(m.chat.id, "Send a CSV or XLSX file no larger than 1 MB.")
+        return
+    state.clear(m.chat.id)
+    _queue_portfolio_review(m, document=doc)
+
+
 @bot.message_handler(commands=["buy"])
 def cmd_buy(m):
+    if not _private_portfolio(m):
+        return
     parts = m.text.strip().split()
     if len(parts) != 4:
         safe_send(m.chat.id, "Usage: <code>/buy SYM QTY PRICE</code>")
@@ -950,17 +1025,26 @@ def cmd_buy(m):
     except ValueError:
         safe_send(m.chat.id, "❌ Invalid format.")
         return
-    if qty <= 0 or price <= 0:
+    if qty <= 0 or not math.isfinite(price) or price <= 0:
         safe_send(m.chat.id, "❌ Must be positive.")
         return
     ticker, _ = resolve_symbol(parts[1])
     sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else parts[1].upper().replace(".NS", "")
+    if not re.fullmatch(r"[A-Z0-9&-]{1,20}", sym):
+        safe_send(m.chat.id, "Use a valid NSE trading symbol.")
+        return
+    existing = portfolio.get(m.chat.id)
+    if sym not in existing and len(existing) >= 50:
+        safe_send(m.chat.id, "A portfolio supports up to 50 holdings per review.")
+        return
     portfolio.add(m.chat.id, sym, qty, price)
     safe_send(m.chat.id, f"✅ Added <b>{qty}×{sym}</b> @ ₹{price:.2f}")
 
 
 @bot.message_handler(commands=["sell"])
 def cmd_sell(m):
+    if not _private_portfolio(m):
+        return
     parts = m.text.strip().split()
     if len(parts) < 2:
         safe_send(m.chat.id, "Usage: <code>/sell SYM</code>")
@@ -974,11 +1058,13 @@ def cmd_sell(m):
 
 @bot.message_handler(commands=["portfolio"])
 def cmd_portfolio(m):
+    if not _private_portfolio(m):
+        return
     safe_send(m.chat.id, "⏳ Loading…")
 
     def _run(chat_id=m.chat.id):
         try:
-            safe_send(chat_id, build_portfolio_card(chat_id))
+            _send_product_text(chat_id, build_portfolio_card(chat_id))
         except Exception as e:
             logger.error(f"Portfolio err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
@@ -1018,18 +1104,26 @@ def scan_btn(m):
     executor.submit(_run)
 
 
+@bot.message_handler(commands=["breadth"])
 @bot.message_handler(func=lambda m: m.text == "📊 Breadth")
 def breadth_btn(m):
-    safe_send(m.chat.id, "⏳ Fetching…")
-
+    if not _breadth_slot.acquire(blocking=False):
+        safe_send(m.chat.id, "Breadth scan is running. Please retry shortly for the cached result.")
+        return
+    safe_send(m.chat.id, "Scanning completed-session stock participation…")
     def _run(chat_id=m.chat.id):
         try:
-            safe_send(chat_id, build_breadth())
-        except Exception as e:
-            logger.error(f"Breadth err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Error: {e}")
-
-    executor.submit(_run)
+            _send_product_text(chat_id, build_breadth())
+        except Exception as exc:
+            logger.error("Breadth failed: %s", type(exc).__name__)
+            safe_send(chat_id, "Completed-session breadth data unavailable. No market-wide conclusion generated.")
+        finally:
+            _breadth_slot.release()
+    try:
+        executor.submit(_run)
+    except Exception:
+        _breadth_slot.release()
+        raise
 
 
 @bot.message_handler(func=lambda m: m.text in ["🎯 Swing (Safe)", "🚀 Swing (Agr)"])
@@ -1352,3 +1446,4 @@ if __name__ == "__main__":
     else:
         logger.info("Running in polling mode...")
         bot.infinity_polling()
+
