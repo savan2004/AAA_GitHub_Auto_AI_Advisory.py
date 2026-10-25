@@ -105,6 +105,21 @@ class FundamentalButtonAccuracyTests(unittest.TestCase):
         self.assertNotIn("nan", result.lower())
         self.assertNotIn("inf", result.lower())
 
+    def test_revenue_larger_than_market_cap_is_not_discarded(self):
+        # A distributor can have sales several times its market value.
+        result = self._render(
+            {"mcap": 100000000, "rev": 900000000, "pe": 10}, {}
+        )
+        self.assertIn("Revenue       : ₹90.00 Cr", result)
+        self.assertNotIn("data err", result)
+
+    def test_html_company_name_is_escaped(self):
+        # The Telegram bot uses HTML parse mode; provider names are untrusted.
+        result = self._render(
+            {"name": "<bad&name>", "pe": 10}, {}
+        )
+        self.assertNotIn("<bad&name>", result)
+
     def test_missing_unreconciled_data_is_not_fabricated(self):
         result = self._render({}, {})
         self.assertIn("Fundamentals unavailable", result)
