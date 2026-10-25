@@ -72,6 +72,8 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256_000
 bot = telebot.TeleBot(TOKEN, threaded=False)
 executor = ThreadPoolExecutor(max_workers=20)
+# This measures only the current Python process lifespan, NOT 24-hour service uptime.
+_PROCESS_START_MONOTONIC = time.monotonic()
 
 # ── Smart Symbol Resolver (yfinance version-safe) ────────────────────────────
 _SYMBOL_MAP = {}
@@ -1297,6 +1299,32 @@ def index():
 @app.route("/api/status", methods=["GET"])
 def api_status():
     return jsonify({"bot": "running", "ai": "available" if ai_available() else "no keys"})
+
+
+# External uptime monitors should probe these independently of Telegram.
+# Liveness verifies HTTP process execution, NOT downstream provider availability.
+@app.route("/health/live", methods=["GET"])
+def health_live():
+    return jsonify({
+        "status": "alive",
+        "process_uptime_seconds": max(0, int(time.monotonic() - _PROCESS_START_MONOTONIC)),
+        "scope": "this_process_only",
+    }), 200
+
+
+@app.route("/health/ready", methods=["GET"])
+def health_ready():
+    # A dead submission executor cannot accept webhook updates even while
+    # the Flask process is responding. Do not claim Telegram delivery is OK.
+    can_accept = not getattr(executor, "_shutdown", True)
+    configured = not WEBHOOK_URL or bool(WEBHOOK_SECRET)
+    ready = bool(can_accept and configured)
+    return jsonify({
+        "status": "ready" if ready else "degraded",
+        "scope": "local_webhook_intake_only",
+        "telegram_delivery": "not_verified",
+    }), 200 if ready else 503
+
 
 
 def _process_webhook(data_str):
