@@ -319,18 +319,23 @@ def build_adv(sym):
         pass
 
     name = fund.get("name") or info.get("name") or sym
-    pe = fund.get("pe") or safe_val(info, "pe")
+    pe = fund.get("pe") if fund.get("pe") is not None else safe_val(info, "pe")
     fwd_pe = fund.get("fwd_pe")
-    pb = fund.get("pb") or safe_val(info, "pb")
+    pb = fund.get("pb") if fund.get("pb") is not None else safe_val(info, "pb")
     roe = fund.get("roe")
-    eps = fund.get("eps") or safe_val(info, "eps")
-    mcap = fund.get("mcap") or info.get("market_cap")
-    rev = fund.get("rev") or info.get("totalRevenue")
-    de = fund.get("de") or safe_val(info, "debtToEquity")
+    eps = fund.get("eps") if fund.get("eps") is not None else safe_val(info, "eps")
+    mcap = fund.get("mcap") if fund.get("mcap") is not None else info.get("market_cap")
+    rev = fund.get("rev") if fund.get("rev") is not None else info.get("totalRevenue")
+    # Preserve legitimate 0.00 debt/equity, and never present Yahoo's 75% as 75x.
+    de = fund.get("de")
+    if de is None:
+        de = safe_val(info, "debt_equity_ratio")
+        if de is None:
+            de = safe_val(info, "debtToEquity", mul=0.01)
     div_y = fund.get("div_y")
-    w52h = fund.get("w52h") or safe_val(info, "high52")
-    w52l = fund.get("w52l") or safe_val(info, "low52")
-    beta = fund.get("beta") or safe_val(info, "beta")
+    w52h = fund.get("w52h") if fund.get("w52h") is not None else safe_val(info, "high52")
+    w52l = fund.get("w52l") if fund.get("w52l") is not None else safe_val(info, "low52")
+    beta = fund.get("beta") if fund.get("beta") is not None else safe_val(info, "beta")
 
     n = min(252, len(close))
     if w52h is None:
@@ -383,8 +388,8 @@ def build_adv(sym):
         frow("Revenue", _fmt_revenue(rev, mcap)),
         frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
         frow("Price/Book", pb),
-        frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
-        frow("Debt/Equity", de) + (f"  |  Beta: {beta}" if beta else ""),
+        frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps is not None else ""),
+        frow("Debt/Equity", de) + (f"  |  Beta: {beta}" if beta is not None else ""),
         frow("Div Yield", div_y, "%"),
         "━━━━━━━━━━━━━━━━━━━━",
         _get_tgt_line(trend, ltp, atr),
@@ -467,16 +472,21 @@ def build_fundamental_text(sym, cname=None):
         pass
 
     name = cname or fund.get("name") or info.get("name") or sym
-    pe = fund.get("pe") or safe_val(info, "pe")
+    pe = fund.get("pe") if fund.get("pe") is not None else safe_val(info, "pe")
     fwd_pe = fund.get("fwd_pe")
-    pb = fund.get("pb") or safe_val(info, "pb")
+    pb = fund.get("pb") if fund.get("pb") is not None else safe_val(info, "pb")
     roe = fund.get("roe")
-    eps = fund.get("eps") or safe_val(info, "eps")
-    mcap = fund.get("mcap") or info.get("market_cap")
-    rev = fund.get("rev") or info.get("totalRevenue")
-    de = fund.get("de") or safe_val(info, "debtToEquity")
+    eps = fund.get("eps") if fund.get("eps") is not None else safe_val(info, "eps")
+    mcap = fund.get("mcap") if fund.get("mcap") is not None else info.get("market_cap")
+    rev = fund.get("rev") if fund.get("rev") is not None else info.get("totalRevenue")
+    # Preserve legitimate 0.00 debt/equity, and never present Yahoo's 75% as 75x.
+    de = fund.get("de")
+    if de is None:
+        de = safe_val(info, "debt_equity_ratio")
+        if de is None:
+            de = safe_val(info, "debtToEquity", mul=0.01)
     div_y = fund.get("div_y")
-    beta = fund.get("beta") or safe_val(info, "beta")
+    beta = fund.get("beta") if fund.get("beta") is not None else safe_val(info, "beta")
 
     if all(v is None for v in (pe, pb, roe, mcap, rev, de, div_y, beta)):
         return f"❌ Fundamentals unavailable for <b>{name}</b> ({sym}) right now. Try again shortly."
