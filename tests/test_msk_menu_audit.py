@@ -1,6 +1,10 @@
 """Static audit of Telegram reply buttons, callback actions and public branding."""
 import ast
 from pathlib import Path
+
+# CI discovery runs this suite; include independent provider/numeric regression classes.
+from test_fundamental_numeric_validation import FundamentalNumericValidationTests
+from test_fundamental_edgecases import FinancialNumericEdgeCases
 import re
 import unittest
 
