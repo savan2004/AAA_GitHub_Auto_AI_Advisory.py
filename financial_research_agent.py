@@ -178,7 +178,7 @@ def answer_financial_question(question, provider=None, evidence=None):
     # The legacy aggregator has no field-level provenance or filing dates, so
     # this route labels all figures UNVERIFIED rather than inventing citations.
     stock_request = re.fullmatch(
-        r"(?i)(?:audit|analyze|analyse)\\s+([a-z0-9][a-z0-9&.-]{0,17})",
+        r"(?i)(?:audit|analyze|analyse)\s+([a-z0-9][a-z0-9&.-]{0,17})",
         question,
     )
     if stock_request:
