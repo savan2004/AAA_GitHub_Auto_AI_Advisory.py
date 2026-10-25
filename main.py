@@ -43,6 +43,7 @@ from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
+from financial_research_agent import answer_financial_question
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -627,7 +628,7 @@ def main_keyboard():
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
-    kb.add("🏭 Sector Report")
+    kb.add("🏭 Sector Report", "🧠 Ask AI Advisor")
     return kb
 
 
@@ -1246,6 +1247,33 @@ def retired_buttons(m):
               reply_markup=main_keyboard())
 
 
+# ── Opt-in financial research advisor (separate from ticker/report workflows) ──
+@bot.message_handler(commands=["ask"])
+def cmd_ask_financial(m):
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        safe_send(m.chat.id, "🧠 Ask: /ask What is ROE?\\nOr tap 🧠 Ask AI Advisor.")
+        return
+    if not API_RATE_LIMITER.is_allowed(m.chat.id):
+        safe_send(m.chat.id, "⚠️ Rate limited. Please try later.")
+        return
+    executor.submit(_run_financial_answer, m.chat.id, parts[1])
+
+
+@bot.message_handler(func=lambda m: m.text == "🧠 Ask AI Advisor")
+def advisor_button(m):
+    state.clear(m.chat.id)
+    state.set(m.chat.id, "financial_advisor")
+    safe_send(m.chat.id, "🧠 Send one financial research question.\\n"
+              "For example: What is ROE? or How to evaluate SBIN?\\n"
+              "Type 🔙 Menu to exit. No live prices are claimed.")
+
+
+def _run_financial_answer(chat_id, question):
+    reply = answer_financial_question(question)
+    safe_send(chat_id, reply, parse_mode=None)
+
+
 # ── Catch-all Text Handler ───────────────────────────────────────────────────
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_text(m):
@@ -1254,6 +1282,11 @@ def handle_text(m):
 
     if not API_RATE_LIMITER.is_allowed(uid):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
+        return
+
+    if state.get(uid) == "financial_advisor":
+        state.clear(uid)
+        executor.submit(_run_financial_answer, uid, text)
         return
 
     if state.get(uid) == "analysis":
