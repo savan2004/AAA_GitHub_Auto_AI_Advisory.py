@@ -1,7 +1,12 @@
 """Offline adversarial tests of deterministic Indian stock fundamental audit."""
 import math
+import sys
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
+
+# Also works when invoked as python tests/test_msk_menu_audit.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fundamental_audit import _symbol, audit_metrics, format_audit, audit_stock
 
 
