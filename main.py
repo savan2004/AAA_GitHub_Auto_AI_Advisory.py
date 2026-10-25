@@ -9,6 +9,7 @@ import re
 import json
 import time
 import logging
+import math
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, date
 from collections import deque
@@ -215,13 +216,17 @@ portfolio = PortfolioManager()
 
 # ── Safe Formatting Helpers ──────────────────────────────────────────────────
 def safe_val(d, *keys, mul=1.0):
+    """Preserve legitimate zero values but reject NaN, infinity and booleans."""
     for k in keys:
         v = d.get(k)
-        if v is not None:
-            try:
-                return round(float(v) * mul, 2)
-            except (TypeError, ValueError):
-                pass
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            number = float(v) * mul
+            if math.isfinite(number):
+                return round(number, 2)
+        except (TypeError, ValueError, OverflowError):
+            continue
     return None
 
 
