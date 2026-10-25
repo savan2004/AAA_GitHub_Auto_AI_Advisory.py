@@ -1,7 +1,10 @@
 """Offline financial agent tests: no network, no credentials, no paid calls."""
 import ast
+import sys
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "financial_research_agent.py"
@@ -127,6 +130,47 @@ class FinancialAgentTests(unittest.TestCase):
                 self.assertNotIn("unavailable", result)
                 self.assertIn("Educational research", result)
 
+
+
+    def test_sbin_audit_routes_to_deterministic_engine_without_llm(self):
+        """A stock-audit request must never incur an LLM call."""
+        observed = []
+        mock_module = types.ModuleType("fundamental_audit")
+        def fake_audit(symbol):
+            observed.append(symbol)
+            return "SBIN | source-checked offline audit | not a live quote"
+        mock_module.audit_stock = fake_audit
+        def no_llm(*args, **kwargs):
+            raise AssertionError("No LLM should run for /audit SBIN")
+        with patch.dict(sys.modules, {"fundamental_audit": mock_module}):
+            result = self.agent["answer_financial_question"](
+                "audit sbin", provider=no_llm)
+        self.assertEqual(observed, ["sbin"])
+        self.assertIn("SBIN | source-checked", result)
+
+    def test_sbin_filing_fixture_metric_rendering(self):
+        """Q1 FY27 known filing values, not evidence of live-feed accuracy."""
+        from datetime import datetime, timezone
+        from fundamental_audit import format_audit
+        filing = {
+            "name": "State Bank of India",
+            "roe": 17.87,
+            # No P/E, P/B, or current price: these are NOT in this snapshot.
+            "field_sources": {"roe": "Screener.in"},
+        }
+        report = format_audit("SBIN", filing,
+                              retrieved_at=datetime(2026, 10, 25,
+                                                    tzinfo=timezone.utc))
+        self.assertIn("ROE: 17.87%", report)
+        self.assertIn("Missing: P/E, P/B", report)
+        self.assertIn("UNVERIFIED", report)
+        self.assertNotIn("Price:", report)
+
+    def test_audit_telegram_handler_registered_before_catchall(self):
+        self.assertIn('commands=["audit"]', MAIN)
+        self.assertLess(MAIN.index('commands=["audit"]'),
+                        MAIN.index("def handle_text(m):"))
+        self.assertIn('MSK_AI_ADVISOR_ENABLED', MAIN)
 
 
 if __name__ == "__main__":
