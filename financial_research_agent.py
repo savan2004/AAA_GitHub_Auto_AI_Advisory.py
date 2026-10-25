@@ -174,15 +174,34 @@ def answer_financial_question(question, provider=None, evidence=None):
     normalized = re.sub(r"[?!.]+$", "", question.lower().strip())
     if normalized in glossary:
         return glossary[normalized] + DISCLAIMER
+    # Explicit, on-demand stock research is deterministic and has no LLM cost.
+    # The legacy aggregator has no field-level provenance or filing dates, so
+    # this route labels all figures UNVERIFIED rather than inventing citations.
+    stock_request = re.fullmatch(
+        r"(?i)(?:audit|analyze|analyse)\\s+([a-z0-9][a-z0-9&.-]{0,17})",
+        question,
+    )
+    if stock_request:
+        from fundamental_audit import audit_stock
+        return audit_stock(stock_request.group(1))
     # Default Telegram integration supplies no evidence; it must not pretend
     # to have access to fresh market data.
     validated = _validated_evidence(evidence)
     if provider is None:
+        # Explicit opt-in: an API key might belong to a billable account.
+        # Never fall through to the existing OpenAI/AskFuzz paid providers.
+        if os.getenv("MSK_AI_FREE_LLM_ENABLED", "").lower() != "true":
+            return UNAVAILABLE
         if not any(os.getenv(k) for k in ("GROQ_API_KEY", "GEMINI_API_KEY",
-                                        "GOOGLE_API_KEY", "OPENAI_API_KEY", "OPENAI_KEY")):
+                                        "GOOGLE_API_KEY")):
             return UNAVAILABLE
         from ai_engine import _call_ai
-        provider = _call_ai
+
+        def free_provider(messages, max_tokens, system):
+            return _call_ai(messages, max_tokens=max_tokens, system=system,
+                            allowed_providers=("groq", "gemini"))
+
+        provider = free_provider
     try:
         response, error = provider(
             [{"role": "user", "content": question}], max_tokens=450,
