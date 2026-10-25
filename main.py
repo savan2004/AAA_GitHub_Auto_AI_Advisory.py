@@ -1260,6 +1260,18 @@ def cmd_ask_financial(m):
     executor.submit(_run_financial_answer, m.chat.id, parts[1])
 
 
+@bot.message_handler(commands=["audit"])
+def cmd_audit_financial(m):
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        safe_send(m.chat.id, "🔍 Usage: /audit INFY (indicative fundamentals, not verified live data)")
+        return
+    if not API_RATE_LIMITER.is_allowed(m.chat.id):
+        safe_send(m.chat.id, "⚠️ Rate limited. Please try later.")
+        return
+    executor.submit(_run_financial_answer, m.chat.id, "audit " + parts[1].strip())
+
+
 @bot.message_handler(func=lambda m: m.text == "🧠 Ask AI Advisor")
 def advisor_button(m):
     state.clear(m.chat.id)
