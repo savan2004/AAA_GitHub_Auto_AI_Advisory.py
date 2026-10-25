@@ -3,6 +3,7 @@ import ast
 from pathlib import Path
 
 from test_health_endpoints import HealthEndpointTests
+from test_uptime_probe import UptimeProbeTests
 import re
 import unittest
 
