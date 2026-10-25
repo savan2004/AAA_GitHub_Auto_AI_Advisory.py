@@ -38,6 +38,7 @@ import os
 import re
 import time
 import logging
+import math
 import random
 from typing import Dict, Any, Optional
 
@@ -63,16 +64,43 @@ def _set_cached(key: str, val: Any, ttl: int = None):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def safe_val(d: dict, *keys, mul: float = 1.0):
+    """Return the first finite numeric value, including legitimate zeroes.
+
+    A zero debt/equity ratio or dividend yield is meaningful. NaN and
+    infinity must never reach investor-facing analysis or score calculations.
+    """
     for k in keys:
         v = d.get(k)
-        if v is not None:
-            try:
-                f = float(v) * mul
-                if f != 0:        # don't accept 0 as a valid fundamental
-                    return round(f, 2)
-            except Exception:
-                pass
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            f = float(v) * mul
+            if math.isfinite(f):
+                return round(f, 2)
+        except (TypeError, ValueError, OverflowError):
+            continue
     return None
+
+
+def _positive_rupees(data: dict, *keys):
+    """Reject invalid and non-positive rupee amounts before caching or fallback."""
+    number = safe_val(data, *keys)
+    return number if number is not None and number > 0 else None
+
+
+def _yahoo_de_ratio(data: dict):
+    """Yahoo debtToEquity uses percentage points, not an already-scaled ratio.
+
+    The normalized data-engine field is preferable when present. Negative
+    numbers imply a non-interpretable ratio and are omitted, not advertised.
+    """
+    normalized = safe_val(data, "debt_equity_ratio")
+    if normalized is not None and normalized >= 0:
+        return normalized
+    raw_percent = safe_val(data, "debtToEquity")
+    if raw_percent is None or raw_percent < 0:
+        return None
+    return round(raw_percent / 100, 4)
 
 
 def fmt_cr(val) -> str:
@@ -362,11 +390,11 @@ def get_fundamentals(sym: str) -> dict:
             roe_raw = safe_val(info, "roe")
             result["roe"]    = round(roe_raw * 100, 1) if roe_raw is not None and abs(roe_raw) <= 1 else roe_raw
             result["eps"]    = safe_val(info, "eps")
-            result["mcap"]   = info.get("market_cap")
+            result["mcap"]   = _positive_rupees(info, "market_cap")
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
             # fmt_mcap() correctly converts to Crores by dividing by 1e7
-            result["rev"]    = info.get("totalRevenue")
-            result["de"]     = safe_val(info, "debtToEquity")
+            result["rev"]    = _positive_rupees(info, "totalRevenue")
+            result["de"]     = _yahoo_de_ratio(info)
             result["beta"]   = safe_val(info, "beta")
             result["w52h"]   = safe_val(info, "high52")
             result["w52l"]   = safe_val(info, "low52")
@@ -435,9 +463,9 @@ def get_fundamentals(sym: str) -> dict:
                 roe_raw = safe_val(yf_info, "returnOnEquity")
                 result["roe"] = round(roe_raw * 100, 1) if roe_raw and abs(roe_raw) <= 1 else roe_raw
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
-            if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
-            if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
-            if result["de"]    is None: result["de"]   = safe_val(yf_info, "debtToEquity")
+            if result["mcap"]  is None: result["mcap"] = _positive_rupees(yf_info, "marketCap")
+            if result["rev"]   is None: result["rev"]  = _positive_rupees(yf_info, "totalRevenue")
+            if result["de"]    is None: result["de"]   = _yahoo_de_ratio(yf_info)
             if result["w52h"]  is None: result["w52h"] = safe_val(yf_info, "fiftyTwoWeekHigh")
             if result["w52l"]  is None: result["w52l"] = safe_val(yf_info, "fiftyTwoWeekLow")
             if result["beta"]  is None: result["beta"] = safe_val(yf_info, "beta")
