@@ -379,7 +379,9 @@ def build_adv(sym):
         "━━━━━━━━━━━━━━━━━━━━",
         "📋 <b>FUNDAMENTALS</b>",
         frow("Market Cap", fmt_mcap(mcap)),
-        frow("Revenue", _fmt_revenue(rev, mcap)),
+        # Revenue can legitimately exceed market capitalisation (e.g. distributors).
+        # Do not suppress it using an arbitrary revenue-to-market-cap ratio.
+        frow("Revenue", fmt_mcap(rev)),
         frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
         frow("Price/Book", pb),
         frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
@@ -494,7 +496,9 @@ def build_fundamental_text(sym, cname=None):
     except Exception:
         pass
 
-    name = cname or fund.get("name") or info.get("name") or sym
+    from html import escape
+    name = escape(str(cname or fund.get("name") or info.get("name") or sym))
+    display_sym = escape(sym)
     pe = _fundamental_field(fund, info, "pe", "pe", minimum=0, allow_zero=False)
     fwd_pe = _fundamental_field(fund, info, "fwd_pe", "forwardPE", minimum=0, allow_zero=False)
     pb = _fundamental_field(fund, info, "pb", "pb", minimum=0, allow_zero=False)
@@ -512,10 +516,10 @@ def build_fundamental_text(sym, cname=None):
     beta = _fundamental_field(fund, info, "beta", "beta")
 
     if all(v is None for v in (pe, pb, roe, mcap, rev, de, div_y, beta, eps)):
-        return f"❌ Fundamentals unavailable for <b>{name}</b> ({sym}) right now. Try again shortly."
+        return f"❌ Fundamentals unavailable for <b>{name}</b> ({display_sym}) right now. Try again shortly."
 
     rows = [
-        f"💰 <b>{name}</b>  ({sym}) — Fundamental Analysis",
+        f"💰 <b>{name}</b>  ({display_sym}) — Fundamental Analysis",
         "━━━━━━━━━━━━━━━━━━━━",
         frow("Market Cap", fmt_mcap(mcap)),
         frow("Revenue", _fmt_revenue(rev, mcap)),
