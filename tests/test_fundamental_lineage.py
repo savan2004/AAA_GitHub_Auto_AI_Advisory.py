@@ -55,6 +55,7 @@ class SourceAccuracyTests(unittest.TestCase):
             self.calls.append(sym)
             return self.yahoo.copy()
         module.get_info = get_info
+        module.get_live_price = lambda sym: 220
         with patch.dict(sys.modules, {"data_engine": module}):
             return self.funcs["get_fundamentals"]("INFY")
 
@@ -109,6 +110,20 @@ class SourceAccuracyTests(unittest.TestCase):
         self.assertIn("data_engine", result["field_sources"]["pe"])
         self.assertEqual(result["field_sources"]["roe"], "Screener.in")
         self.assertEqual(result["field_sources"]["eps"], "Finnhub")
+
+    def test_derived_pb_names_both_contributing_sources(self):
+        self.screener = {"book_value": 100}
+        result = self.query()
+        self.assertEqual(result["pb"], 2.2)
+        self.assertEqual(
+            result["field_sources"]["pb"],
+            "Screener book + mixed quote (derived)"
+        )
+        sys.path.insert(0, str(ROOT))
+        from fundamental_audit import format_audit
+        report = format_audit("INFY", result)
+        self.assertIn("Derived: Screener book + mixed quote", report)
+        self.assertIn("UNVERIFIED", report)
 
     def test_cached_result_does_not_refetch(self):
         self.yahoo = {"debtToEquity": 80}
