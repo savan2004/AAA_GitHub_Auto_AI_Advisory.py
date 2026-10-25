@@ -1,6 +1,8 @@
 """Static audit of Telegram reply buttons, callback actions and public branding."""
 import ast
 from pathlib import Path
+
+from test_health_endpoints import HealthEndpointTests
 import re
 import unittest
 
