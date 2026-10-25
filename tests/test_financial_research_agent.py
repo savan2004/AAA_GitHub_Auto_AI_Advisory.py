@@ -116,6 +116,18 @@ class FinancialAgentTests(unittest.TestCase):
         self.agent["answer_financial_question"](
             "Explain debt to equity", provider=fake)
 
+    def test_glossary_needs_no_paid_provider(self):
+        def forbidden(*args, **kwargs):
+            raise AssertionError("glossary must not call LLM")
+        for question in ("What is ROE?", "What is PE?", "What is EPS?",
+                         "What is debt to equity?", "What is PB?"):
+            with self.subTest(question=question):
+                result = self.agent["answer_financial_question"](
+                    question, provider=forbidden)
+                self.assertNotIn("unavailable", result)
+                self.assertIn("Educational research", result)
+
+
 
 if __name__ == "__main__":
     unittest.main()
