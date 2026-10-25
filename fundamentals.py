@@ -38,6 +38,7 @@ import os
 import re
 import time
 import logging
+import math
 import random
 from typing import Dict, Any, Optional
 
@@ -63,16 +64,31 @@ def _set_cached(key: str, val: Any, ttl: int = None):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def safe_val(d: dict, *keys, mul: float = 1.0):
+    """First finite numeric value, including legitimate zero and negative EPS."""
     for k in keys:
         v = d.get(k)
-        if v is not None:
-            try:
-                f = float(v) * mul
-                if f != 0:        # don't accept 0 as a valid fundamental
-                    return round(f, 2)
-            except Exception:
-                pass
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            f = float(v) * mul
+            if math.isfinite(f):
+                return round(f, 2)
+        except (TypeError, ValueError, OverflowError):
+            continue
     return None
+
+
+def yahoo_debt_equity(info: dict) -> Optional[float]:
+    """Normalize Yahoo's percent-style debtToEquity to a dimensionless ratio.
+
+    Yahoo financialData.debtToEquity=75 means 0.75x, not 75x.
+    data_engine already provides normalized debt_equity_ratio when available.
+    Screener/Finnhub ratios are NOT routed through this function.
+    """
+    ratio = safe_val(info, "debt_equity_ratio")
+    if ratio is not None:
+        return ratio
+    return safe_val(info, "debtToEquity", mul=0.01)
 
 
 def fmt_cr(val) -> str:
@@ -350,6 +366,14 @@ def get_fundamentals(sym: str) -> dict:
         "div_y": None, "w52h": None, "w52l": None, "beta": None,
     }
 
+    # Record where each field was first populated. This is provider-layer
+    # lineage, NOT exchange-filing verification, and may refer to cached data.
+    field_sources = {}
+    def record_sources(label):
+        for key, value in result.items():
+            if key != "name" and value is not None and key not in field_sources:
+                field_sources[key] = label
+
     # ── Source 1: data_engine (Yahoo v8/v10 + NSE, rate-limited) ─────────────
     try:
         from data_engine import get_info
@@ -366,7 +390,7 @@ def get_fundamentals(sym: str) -> dict:
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
             # fmt_mcap() correctly converts to Crores by dividing by 1e7
             result["rev"]    = info.get("totalRevenue")
-            result["de"]     = safe_val(info, "debtToEquity")
+            result["de"]     = yahoo_debt_equity(info)
             result["beta"]   = safe_val(info, "beta")
             result["w52h"]   = safe_val(info, "high52")
             result["w52l"]   = safe_val(info, "low52")
@@ -375,6 +399,8 @@ def get_fundamentals(sym: str) -> dict:
             logger.info(f"get_fundamentals {sym}: data_engine OK (rev={result['rev'] is not None})")
     except Exception as e:
         logger.warning(f"get_fundamentals data_engine {sym}: {e}")
+
+    record_sources("data_engine (mixed third-party providers)")
 
     # ── Source 2: Screener.in (NO key required — fills most gaps) ────────────
     missing = [k for k in ["pe", "roe", "de", "mcap", "rev", "w52h", "w52l", "eps", "div_y", "pb"]
@@ -403,6 +429,8 @@ def get_fundamentals(sym: str) -> dict:
                     pass
             logger.info(f"get_fundamentals {sym}: Screener.in filled {[k for k in missing if result[k] is not None]}")
 
+    record_sources("Screener.in")
+
     # ── Source 3: Finnhub (fills PE/ROE/EPS/beta/D-E if still missing) ───────
     still_missing = [k for k in ["pe", "fwd_pe", "roe", "eps", "w52h", "w52l", "beta", "pb", "de", "div_y"]
                       if result[k] is None]
@@ -421,6 +449,8 @@ def get_fundamentals(sym: str) -> dict:
             if result["div_y"] is None:
                 result["div_y"] = safe_val(fh, "dividend_yield")
 
+    record_sources("Finnhub")
+
     # ── Source 4: yfinance (last resort — attempt EVERY still-missing field) ──
     still_missing2 = [k for k in result if k != "name" and result[k] is None]
     if still_missing2:
@@ -437,13 +467,16 @@ def get_fundamentals(sym: str) -> dict:
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
             if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
             if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
-            if result["de"]    is None: result["de"]   = safe_val(yf_info, "debtToEquity")
+            if result["de"]    is None: result["de"]   = yahoo_debt_equity(yf_info)
             if result["w52h"]  is None: result["w52h"] = safe_val(yf_info, "fiftyTwoWeekHigh")
             if result["w52l"]  is None: result["w52l"] = safe_val(yf_info, "fiftyTwoWeekLow")
             if result["beta"]  is None: result["beta"] = safe_val(yf_info, "beta")
             if result["div_y"] is None:
                 div_raw = safe_val(yf_info, "dividendYield")
                 result["div_y"] = round(div_raw * 100, 2) if div_raw and div_raw <= 1 else div_raw
+
+    record_sources("yfinance (Yahoo)")
+    result["field_sources"] = field_sources
 
     filled = [k for k, v in result.items() if v is not None]
     logger.info(f"get_fundamentals {sym}: filled={filled}")
