@@ -379,9 +379,7 @@ def build_adv(sym):
         "━━━━━━━━━━━━━━━━━━━━",
         "📋 <b>FUNDAMENTALS</b>",
         frow("Market Cap", fmt_mcap(mcap)),
-        # Revenue can legitimately exceed market capitalisation (e.g. distributors).
-        # Do not suppress it using an arbitrary revenue-to-market-cap ratio.
-        frow("Revenue", fmt_mcap(rev)),
+        frow("Revenue", _fmt_revenue(rev, mcap)),
         frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
         frow("Price/Book", pb),
         frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
@@ -522,7 +520,8 @@ def build_fundamental_text(sym, cname=None):
         f"💰 <b>{name}</b>  ({display_sym}) — Fundamental Analysis",
         "━━━━━━━━━━━━━━━━━━━━",
         frow("Market Cap", fmt_mcap(mcap)),
-        frow("Revenue", _fmt_revenue(rev, mcap)),
+        # Revenue can exceed market cap; that alone is not a source-data error.
+        frow("Revenue", fmt_mcap(rev)),
         frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe:g}" if fwd_pe is not None else ""),
         frow("Price/Book", pb),
         frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps:g}" if eps is not None else ""),
