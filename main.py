@@ -1270,6 +1270,9 @@ def advisor_button(m):
 
 
 def _run_financial_answer(chat_id, question):
+    if os.getenv("MSK_AI_ADVISOR_ENABLED", "").lower() != "true":
+        safe_send(chat_id, "🧠 AI Advisor is in testing and is not enabled yet.")
+        return
     reply = answer_financial_question(question)
     safe_send(chat_id, reply, parse_mode=None)
 
