@@ -56,7 +56,7 @@ class WebhookSecurityTests(unittest.TestCase):
 class FundamentalButtonAccuracyTests(unittest.TestCase):
     """Exercise the real Fundamental button formatter with immutable provider fixtures."""
 
-    def _render(self, fund, info):
+    def _render(self, fund, info, cname="Mock SBIN"):
         import sys
         import types
         from unittest.mock import patch
@@ -76,7 +76,7 @@ class FundamentalButtonAccuracyTests(unittest.TestCase):
         stub = types.ModuleType("fundamentals")
         stub.get_fundamentals = lambda _sym: fund
         with patch.dict(sys.modules, {"fundamentals": stub}):
-            return scope["build_fundamental_text"]("SBIN", "Mock SBIN")
+            return scope["build_fundamental_text"]("SBIN", cname)
 
     def test_fixture_zero_roa_and_debt_equity_preserved(self):
         result = self._render(
@@ -116,8 +116,9 @@ class FundamentalButtonAccuracyTests(unittest.TestCase):
     def test_html_company_name_is_escaped(self):
         # The Telegram bot uses HTML parse mode; provider names are untrusted.
         result = self._render(
-            {"name": "<bad&name>", "pe": 10}, {}
+            {"name": "<bad&name>", "pe": 10}, {}, cname=None
         )
+        self.assertIn("&lt;bad&amp;name&gt;", result)
         self.assertNotIn("<bad&name>", result)
 
     def test_missing_unreconciled_data_is_not_fabricated(self):
