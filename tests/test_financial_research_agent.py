@@ -26,7 +26,7 @@ class FinancialAgentTests(unittest.TestCase):
 
     def test_no_provider_fails_closed(self):
         self.assertEqual(self.agent["answer_financial_question"](
-            "What is ROE?", provider=lambda *a, **kw: ("", "timeout")),
+            "Explain operating leverage", provider=lambda *a, **kw: ("", "timeout")),
             self.agent["UNAVAILABLE"])
 
     def test_provider_exception_fails_closed(self):
@@ -40,9 +40,9 @@ class FinancialAgentTests(unittest.TestCase):
         def fake(messages, max_tokens, system):
             captured.update(messages=messages, system=system, max_tokens=max_tokens)
             return "ROE measures profitability relative to equity.", ""
-        result = self.agent["answer_financial_question"]("What is ROE?", provider=fake)
+        result = self.agent["answer_financial_question"]("Explain ROE with examples", provider=fake)
         self.assertIn("ROE measures", result)
-        self.assertEqual(captured["messages"], [{"role": "user", "content": "What is ROE?"}])
+        self.assertEqual(captured["messages"], [{"role": "user", "content": "Explain ROE with examples"}])
         self.assertIn("VERIFIED DATA: none", captured["system"])
         self.assertIn("not personalized investment advice", result)
 
