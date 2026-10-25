@@ -161,6 +161,19 @@ def answer_financial_question(question, provider=None, evidence=None):
         return "Please send one financial question (1–1200 characters)."
     if _sensitive(question):
         return "🔒 Do not share account credentials, OTPs or personal IDs in chat."
+    # No LLM needed for simple, stable educational definitions.
+    # These deterministic answers cost nothing and cannot invent live quotes.
+    glossary = {
+        "what is roe": "ROE = Net profit / average shareholders' equity × 100. Compare with sector peers and examine leverage; a high ROE alone does not prove quality.",
+        "what is pe": "P/E = Share price / earnings per share. Compare with growth, profitability, sector peers and accounting quality; a low P/E alone is not a bargain.",
+        "what is p/e": "P/E = Share price / earnings per share. Compare with growth, profitability, sector peers and accounting quality; a low P/E alone is not a bargain.",
+        "what is eps": "EPS = Profit attributable to ordinary shareholders / weighted-average ordinary shares. Check dilution and one-off earnings.",
+        "what is debt to equity": "Debt-to-equity = Total debt / shareholders' equity. Definitions vary; compare with sector norms and cash-flow coverage.",
+        "what is pb": "P/B = Market capitalization / book equity (or share price / book value per share). Useful for some financial firms, but asset quality matters.",
+    }
+    normalized = re.sub(r"[?!.]+$", "", question.lower().strip())
+    if normalized in glossary:
+        return glossary[normalized] + DISCLAIMER
     # Default Telegram integration supplies no evidence; it must not pretend
     # to have access to fresh market data.
     validated = _validated_evidence(evidence)
