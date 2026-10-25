@@ -120,6 +120,7 @@ def format_audit(symbol, snapshot, *, retrieved_at=None):
     provider_labels = {
         "data_engine (mixed third-party providers)": "Mixed free providers",
         "Screener.in": "Screener.in",
+        "Screener book + mixed quote (derived)": "Derived: Screener book + mixed quote",
         "Finnhub": "Finnhub",
         "yfinance (Yahoo)": "Yahoo Finance",
     }
