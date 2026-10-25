@@ -92,9 +92,10 @@ def _make_groq_client(api_key: str):
 
 
 def _call_ai(
-    messages: List[Dict[str, str]], 
-    max_tokens: int = 500, 
-    system: str = ""
+    messages: List[Dict[str, str]],
+    max_tokens: int = 500,
+    system: str = "",
+    allowed_providers=None,
 ) -> Tuple[str, str]:
     """
     Call AI providers in fallback order: GROQ → Gemini → OpenAI → AskFuzz.
@@ -112,11 +113,15 @@ def _call_ai(
     """
     errors = []
     global _groq, _gemini, _openai
+    # Opt-in provider allowlist for zero-additional-cost advisor workflows.
+    # Default remains unchanged for existing reports and bot functionality.
+    enabled = (set(allowed_providers) if allowed_providers is not None
+               else {"groq", "gemini", "openai", "askfuzz"})
     
     # ─────────────────────────────────────────────────────────────────────────
     # Try GROQ (Primary)
     # ─────────────────────────────────────────────────────────────────────────
-    groq_key = _key("GROQ_API_KEY")
+    groq_key = _key("GROQ_API_KEY") if "groq" in enabled else ""
     if groq_key:
         try:
             if _groq is None:
@@ -142,7 +147,7 @@ def _call_ai(
     # ─────────────────────────────────────────────────────────────────────────
     # Try Gemini (Secondary)
     # ─────────────────────────────────────────────────────────────────────────
-    gemini_key = _key("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    gemini_key = _key("GEMINI_API_KEY", "GOOGLE_API_KEY") if "gemini" in enabled else ""
     if gemini_key:
         try:
             if _gemini is None:
@@ -161,7 +166,7 @@ def _call_ai(
     # ─────────────────────────────────────────────────────────────────────────
     # Try OpenAI (Tertiary) — correctly indented as sibling, not child
     # ─────────────────────────────────────────────────────────────────────────
-    openai_key = _key("OPENAI_API_KEY", "OPENAI_KEY")
+    openai_key = _key("OPENAI_API_KEY", "OPENAI_KEY") if "openai" in enabled else ""
     if openai_key:
         try:
             if _openai is None:
@@ -184,7 +189,7 @@ def _call_ai(
     # ─────────────────────────────────────────────────────────────────────────
     # Try AskFuzz (India-focused finance AI)
     # ─────────────────────────────────────────────────────────────────────────
-    askfuzz_key = _key("ASKFUZZ_API_KEY")
+    askfuzz_key = _key("ASKFUZZ_API_KEY") if "askfuzz" in enabled else ""
     if askfuzz_key:
         try:
             text, error = _call_askfuzz_ai(askfuzz_key, messages, max_tokens, system)
