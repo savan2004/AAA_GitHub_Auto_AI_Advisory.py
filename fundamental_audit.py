@@ -1,0 +1,186 @@
+"""Zero-cost, deterministic audit of *indicative* company fundamentals.
+
+Existing get_fundamentals merges free providers with no per-field lineage or
+filing dates. This module must NEVER call the result verified or live. It
+makes no buy/sell decisions. Tests inject a fetcher and never access network.
+"""
+import math
+import re
+from datetime import datetime, timezone
+
+# Numerical bounds are safety sanity checks, NOT valuation thresholds.
+_BOUNDS = {
+    "pe": (0, 10000), "pb": (0, 10000), "roe": (-10000, 10000),
+    "eps": (-1000000, 1000000), "de": (0, 100000),
+    "mcap": (0, 1e18), "rev": (0, 1e18), "div_y": (0, 100),
+}
+_CORE = ("pe", "pb", "roe", "eps", "de", "mcap", "rev")
+_TITLES = {
+    "pe": "P/E", "pb": "P/B", "roe": "ROE", "eps": "EPS",
+    "de": "Debt/Equity", "mcap": "Market Cap", "rev": "Revenue",
+    "div_y": "Dividend Yield",
+}
+_DISCLAIMER = ("Educational research, not a buy/sell call or personalized advice. "
+               "Verify each figure and fiscal period against official exchange filings.")
+
+
+def _num(value):
+    """Accept numeric values only. Reject booleans, strings and nonfinite."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        num = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _symbol(raw):
+    if not isinstance(raw, str):
+        return None
+    symbol = raw.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9&.-]{0,17}", symbol):
+        return None
+    return symbol
+
+
+def audit_metrics(snapshot):
+    """Return a structured, testable audit. No invented ratios or figures.
+
+    Inputs: get_fundamentals shape (pe, pb, roe percent, eps INR, de ratio,
+    mcap/rev INR). Data provider provenance and reporting dates are unavailable.
+    """
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    metrics, warnings = {}, []
+    for key, (low, high) in _BOUNDS.items():
+        raw = snapshot.get(key)
+        if raw is None:
+            continue
+        val = _num(raw)
+        if val is None or not low <= val <= high or (key in ("pe", "pb", "mcap") and val == 0):
+            warnings.append(f"{_TITLES[key]} rejected: invalid or ambiguous value")
+            continue
+        metrics[key] = val
+
+    # A positive P/E and nonpositive trailing EPS can come from different
+    # reporting periods. Flag for reconciliation, never infer a current price.
+    if metrics.get("pe", 0) > 0 and "eps" in metrics and metrics["eps"] <= 0:
+        warnings.append("P/E conflicts with nonpositive EPS; reporting periods may differ")
+    if "pb" in metrics and metrics["pb"] > 100:
+        warnings.append("Unusually large P/B; verify price/book units and negative-equity treatment")
+    if "de" in metrics and metrics["de"] > 10:
+        warnings.append("Debt/Equity unit ambiguous (some providers return percent vs ratio); do not compare")
+    if "roe" in metrics and abs(metrics["roe"]) > 100:
+        warnings.append("Extreme ROE; inspect small/negative equity and reporting period")
+    if "rev" in metrics and "mcap" in metrics and metrics["rev"] > metrics["mcap"] * 100:
+        warnings.append("Revenue far exceeds market cap; inspect units and period")
+
+    covered = len(set(metrics).intersection(_CORE))
+    missing = [_TITLES[k] for k in _CORE if k not in metrics]
+    notes = []
+    if "eps" in metrics and metrics["eps"] < 0:
+        notes.append("Negative EPS: examine losses, exceptional items and cash generation")
+    elif "eps" in metrics and metrics["eps"] == 0:
+        notes.append("Zero EPS: trailing P/E is not informative")
+    if "roe" in metrics and metrics["roe"] < 0:
+        notes.append("Negative ROE: examine profitability and equity denominator")
+    if "pe" in metrics:
+        notes.append("P/E must be compared with sector peers, earnings quality and growth")
+    if "de" in metrics:
+        notes.append("Debt/Equity depends on industry and accounting; review debt servicing")
+    if "mcap" in metrics and "rev" in metrics:
+        notes.append("Market cap and revenue alone do not establish fair valuation")
+    notes.append("Peer multiples, cash flow, debt maturities and filing dates are not verified")
+    return {
+        "metrics": metrics,
+        "coverage_count": covered,
+        "coverage_total": len(_CORE),
+        "missing": missing,
+        "warnings": warnings,
+        "notes": notes,
+        "verified": False,
+    }
+
+
+def format_audit(symbol, snapshot, *, retrieved_at=None):
+    """Telegram plain-text output; do not imply current quotes or filing dates."""
+    symbol = _symbol(symbol)
+    if symbol is None:
+        return "Invalid NSE symbol. Example: /audit INFY"
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    result = audit_metrics(snapshot)
+    metrics = result["metrics"]
+    name = snapshot.get("name")
+    if not isinstance(name, str):
+        name = symbol
+    # Only allow source labels generated by our collector; metadata remains
+    # indicative, not evidence of a dated exchange filing.
+    provider_labels = {
+        "data_engine (mixed third-party providers)": "Mixed free providers",
+        "Screener.in": "Screener.in",
+        "Screener book + mixed quote (derived)": "Derived: Screener book + mixed quote",
+        "Finnhub": "Finnhub",
+        "yfinance (Yahoo)": "Yahoo Finance",
+    }
+    raw_sources = snapshot.get("field_sources")
+    raw_sources = raw_sources if isinstance(raw_sources, dict) else {}
+    sources = {key: provider_labels.get(raw_sources.get(key), "source unknown")
+               for key in metrics}
+
+    # Prevent multiline/source-content spoofing in a Telegram message.
+    name = re.sub(r"[^\w &().-]", "", name)[:70].strip() or symbol
+    if retrieved_at is None:
+        retrieved_at = datetime.now(timezone.utc)
+    stamp = retrieved_at.astimezone(timezone.utc).strftime("%d %b %Y %H:%M UTC")
+    parts = [
+        f"🔍 MSK FUNDAMENTAL DATA AUDIT — {name} ({symbol})",
+        f"Data completeness: {result['coverage_count']}/{result['coverage_total']} (not an investment score)",
+        "Source: mixed free-provider aggregate (exact field source unavailable)",
+        f"Audit generated: {stamp} (NOT the quote/filing timestamp)",
+        "Data status: UNVERIFIED — cross-check NSE/BSE filings",
+    ]
+    if not metrics:
+        parts.append("No usable fundamental figures available; no conclusion possible.")
+    else:
+        for key in _CORE + ("div_y",):
+            if key in metrics:
+                value = metrics[key]
+                unit = "%" if key in ("roe", "div_y") else ("INR" if key in ("eps", "mcap", "rev") else "")
+                if key in ("mcap", "rev"):
+                    rendered = f"₹{value / 1e7:,.2f} Cr"
+                elif key == "eps":
+                    rendered = f"₹{value:,.2f}"
+                else:
+                    rendered = f"{value:,.2f}{unit}"
+                parts.append(f"{_TITLES[key]}: {rendered} [provider: {sources[key]}]")
+    if result["missing"]:
+        parts.append("Missing: " + ", ".join(result["missing"]))
+    if result["warnings"]:
+        parts.append("⚠️ CHECK: " + " | ".join(result["warnings"]))
+    if result["notes"]:
+        parts.append("Research checks: " + " | ".join(result["notes"]))
+    parts.append(_DISCLAIMER)
+    return "\n".join(parts)[:3800]
+
+
+def audit_stock(symbol, *, fetcher=None, now=None):
+    """Fetch only on explicit user request, using existing provider stack.
+
+    The fetcher can be replaced in tests. Do not silently upgrade the
+    resulting aggregator output to exchange-verified evidence.
+    """
+    symbol = _symbol(symbol)
+    if symbol is None:
+        return "Invalid NSE symbol. Example: /audit INFY"
+    if fetcher is None:
+        from fundamentals import get_fundamentals
+        fetcher = get_fundamentals
+    try:
+        snapshot = fetcher(symbol)
+    except Exception:
+        return f"⚠️ Data providers unavailable for {symbol}; no research conclusion generated."
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    return format_audit(symbol, snapshot, retrieved_at=now)
