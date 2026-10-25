@@ -6,6 +6,7 @@ import unittest
 
 from test_financial_research_agent import FinancialAgentTests
 from test_fundamental_audit import FundamentalAuditTests
+from test_fundamental_lineage import SourceAccuracyTests
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = (ROOT / "main.py").read_text(encoding="utf-8")
