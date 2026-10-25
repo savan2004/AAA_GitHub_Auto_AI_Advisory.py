@@ -56,6 +56,66 @@ class FinancialAgentTests(unittest.TestCase):
         self.assertNotIn("get_live_price(", src)
         self.assertNotIn("portfolio.get(", src)
 
+    def test_private_credentials_never_forwarded(self):
+        def forbidden(*args, **kwargs):
+            raise AssertionError("provider must not be called")
+        result = self.agent["answer_financial_question"](
+            "OTP: 123456", provider=forbidden)
+        self.assertIn("Do not share", result)
+
+    def test_rejects_unattributed_evidence(self):
+        captured = {}
+        def fake(messages, max_tokens, system):
+            captured["system"] = system
+            return "A P/E ratio compares price to earnings.", ""
+        self.agent["answer_financial_question"](
+            "Evaluate INFY", provider=fake,
+            evidence={"symbol": "INFY", "source": "NSE",
+                      "source_url": "https://nseindia.com.evil.example/filing",
+                      "as_of": "2026-10-24T10:00:00+05:30",
+                      "metrics": {"pe": 21}})
+        self.assertIn("VERIFIED DATA: none", captured["system"])
+
+    def test_rejects_nonfinite_and_invalid_metrics(self):
+        from datetime import datetime, timezone
+        evidence = {"symbol": "INFY", "source": "NSE",
+                    "source_url": "https://www.nseindia.com/companies",
+                    "as_of": "2026-10-24T10:00:00+05:30",
+                    "metrics": {"pe": float("nan"), "roe_pct": True,
+                                "debt_to_equity": 0}}
+        result = self.agent["_validated_evidence"](
+            evidence, now=datetime(2026, 10, 25, tzinfo=timezone.utc))
+        self.assertEqual(result["metrics"], {"debt_to_equity": 0.0})
+
+    def test_blocks_fake_live_market_claim(self):
+        result = self.agent["answer_financial_question"](
+            "What is today's price?", provider=lambda *a, **kw:
+            ("Current price is ₹999.99", ""))
+        self.assertIn("cannot verify", result)
+
+    def test_blocks_direct_buy_recommendation(self):
+        result = self.agent["answer_financial_question"](
+            "Should I invest?", provider=lambda *a, **kw:
+            ("Strong buy this stock immediately", ""))
+        self.assertIn("cannot verify", result)
+
+    def test_rejects_stale_evidence(self):
+        from datetime import datetime, timezone
+        evidence = {"symbol": "INFY", "source": "NSE",
+                    "source_url": "https://www.nseindia.com/companies",
+                    "as_of": "2025-01-01T10:00:00+05:30",
+                    "metrics": {"pe": 22}}
+        self.assertIsNone(self.agent["_validated_evidence"](
+            evidence, now=datetime(2026, 10, 25, tzinfo=timezone.utc)))
+
+    def test_provider_receives_no_chat_history(self):
+        def fake(messages, max_tokens, system):
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(messages[0]["role"], "user")
+            return "Debt to equity compares borrowings with shareholder equity.", ""
+        self.agent["answer_financial_question"](
+            "Explain debt to equity", provider=fake)
+
 
 if __name__ == "__main__":
     unittest.main()
