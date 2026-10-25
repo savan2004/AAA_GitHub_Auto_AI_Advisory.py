@@ -4,7 +4,7 @@ AI provider adapter and report-safe fallbacks.
 Supports multiple AI providers with intelligent fallback:
   1. GROQ (primary, free, fast)
   2. Gemini (secondary, reliable)
-  3. OpenAI (tertiary, premium quality)
+  3. OpenAI (legacy tertiary: billable; excluded from the opt-in advisor)
   4. AskFuzz (optional, India-focused finance AI)
   5. Deterministic fallback (never crashes)
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # AI PROVIDER CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-_GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+_GROQ_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
 _groq = _gemini = _openai = None
 
 # Chat history storage: {user_id: list of messages, max 10 turns for context safety}
@@ -153,7 +153,7 @@ def _call_ai(
             if _gemini is None:
                 import google.generativeai as genai
                 genai.configure(api_key=gemini_key)
-                _gemini = genai.GenerativeModel("gemini-1.5-flash")
+                _gemini = genai.GenerativeModel("gemini-3.6-flash")
             prompt = (system + "\n\n" if system else "") + messages[-1]["content"]
             r = _gemini.generate_content(prompt)
             text = (getattr(r, "text", "") or "").strip()
