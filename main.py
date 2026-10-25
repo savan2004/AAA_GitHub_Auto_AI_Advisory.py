@@ -451,7 +451,36 @@ def build_technical_text(sym, cname=None):
     return "\n".join(rows)
 
 
+def _verified_fundamental_number(value, *, minimum=None, allow_zero=True):
+    """Reject non-finite, Boolean and invalid financial figures, preserving valid zero."""
+    import math
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    if not math.isfinite(number):
+        return None
+    if minimum is not None and (number < minimum or (number == minimum and not allow_zero)):
+        return None
+    return number
+
+
+def _fundamental_field(fund, info, fund_key, info_key=None, *, minimum=None, allow_zero=True):
+    """Prefer a valid fundamental value; never replace legitimate 0 with fallback."""
+    for obj, key in ((fund, fund_key), (info, info_key)):
+        if isinstance(obj, dict) and key:
+            value = _verified_fundamental_number(
+                obj.get(key), minimum=minimum, allow_zero=allow_zero
+            )
+            if value is not None:
+                return value
+    return None
+
+
 def build_fundamental_text(sym, cname=None):
+    """Show only finite, unit-checked ratios; mark unverified snapshot freshness."""
     sym = str(sym).upper().replace(".NS", "").replace(".BO", "")
     fund = {}
     try:
@@ -466,18 +495,23 @@ def build_fundamental_text(sym, cname=None):
         pass
 
     name = cname or fund.get("name") or info.get("name") or sym
-    pe = fund.get("pe") or safe_val(info, "pe")
-    fwd_pe = fund.get("fwd_pe")
-    pb = fund.get("pb") or safe_val(info, "pb")
-    roe = fund.get("roe")
-    eps = fund.get("eps") or safe_val(info, "eps")
-    mcap = fund.get("mcap") or info.get("market_cap")
-    rev = fund.get("rev") or info.get("totalRevenue")
-    de = fund.get("de") or safe_val(info, "debtToEquity")
-    div_y = fund.get("div_y")
-    beta = fund.get("beta") or safe_val(info, "beta")
+    pe = _fundamental_field(fund, info, "pe", "pe", minimum=0, allow_zero=False)
+    fwd_pe = _fundamental_field(fund, info, "fwd_pe", "forwardPE", minimum=0, allow_zero=False)
+    pb = _fundamental_field(fund, info, "pb", "pb", minimum=0, allow_zero=False)
+    roe = _fundamental_field(fund, {}, "roe")
+    eps = _fundamental_field(fund, info, "eps", "eps")
+    mcap = _fundamental_field(fund, info, "mcap", "market_cap", minimum=0, allow_zero=False)
+    rev = _fundamental_field(fund, info, "rev", "totalRevenue", minimum=0, allow_zero=False)
+    de = _fundamental_field(fund, info, "de", "debt_equity_ratio", minimum=0)
+    # Yahoo finance's debtToEquity is reported as a percentage (e.g. 45 -> 0.45x);
+    # avoid silently displaying percentage points as a dimensionless ratio.
+    if de is None:
+        raw_de_pct = _verified_fundamental_number(info.get("debtToEquity"), minimum=0)
+        de = raw_de_pct / 100 if raw_de_pct is not None else None
+    div_y = _fundamental_field(fund, {}, "div_y", minimum=0)
+    beta = _fundamental_field(fund, info, "beta", "beta")
 
-    if all(v is None for v in (pe, pb, roe, mcap, rev, de, div_y, beta)):
+    if all(v is None for v in (pe, pb, roe, mcap, rev, de, div_y, beta, eps)):
         return f"❌ Fundamentals unavailable for <b>{name}</b> ({sym}) right now. Try again shortly."
 
     rows = [
@@ -485,12 +519,13 @@ def build_fundamental_text(sym, cname=None):
         "━━━━━━━━━━━━━━━━━━━━",
         frow("Market Cap", fmt_mcap(mcap)),
         frow("Revenue", _fmt_revenue(rev, mcap)),
-        frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
+        frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe:g}" if fwd_pe is not None else ""),
         frow("Price/Book", pb),
-        frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
-        frow("Debt/Equity", de) + (f"  |  Beta: {beta}" if beta else ""),
+        frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps:g}" if eps is not None else ""),
+        frow("Debt/Equity", de) + (f"  |  Beta: {beta:g}" if beta is not None else ""),
         frow("Div Yield", div_y, "%"),
         "━━━━━━━━━━━━━━━━━━━━",
+        "⚠️ <i>Data timestamp and provider reconciliation not verified; figures may be stale or differ by reporting period.</i>",
         "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
     ]
     return "\n".join(rows)
