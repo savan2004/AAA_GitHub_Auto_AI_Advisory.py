@@ -425,6 +425,9 @@ def get_fundamentals(sym: str) -> dict:
                     price = get_live_price(sym)
                     if price and sc["book_value"] > 0:
                         result["pb"] = round(price / sc["book_value"], 2)
+                        # Book value is Screener, but price may be a cached
+                        # Yahoo/NSE quote. Both sources must be disclosed.
+                        field_sources["pb"] = "Screener book + mixed quote (derived)"
                 except Exception:
                     pass
             logger.info(f"get_fundamentals {sym}: Screener.in filled {[k for k in missing if result[k] is not None]}")
