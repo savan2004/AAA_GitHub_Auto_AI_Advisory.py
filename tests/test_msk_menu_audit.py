@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import unittest
 
+from test_financial_research_agent import FinancialAgentTests
+
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = (ROOT / "main.py").read_text(encoding="utf-8")
 CONFIG = (ROOT / "config.py").read_text(encoding="utf-8")
