@@ -38,6 +38,7 @@ import os
 import re
 import time
 import logging
+import math
 import random
 from typing import Dict, Any, Optional
 
@@ -63,15 +64,21 @@ def _set_cached(key: str, val: Any, ttl: int = None):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def safe_val(d: dict, *keys, mul: float = 1.0):
+    """Return the first finite numeric value, including legitimate zeroes.
+
+    A zero debt/equity ratio or dividend yield is meaningful. NaN and
+    infinity must never reach investor-facing analysis or score calculations.
+    """
     for k in keys:
         v = d.get(k)
-        if v is not None:
-            try:
-                f = float(v) * mul
-                if f != 0:        # don't accept 0 as a valid fundamental
-                    return round(f, 2)
-            except Exception:
-                pass
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            f = float(v) * mul
+            if math.isfinite(f):
+                return round(f, 2)
+        except (TypeError, ValueError, OverflowError):
+            continue
     return None
 
 
