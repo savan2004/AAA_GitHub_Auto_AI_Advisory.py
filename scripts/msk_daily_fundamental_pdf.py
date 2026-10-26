@@ -14,6 +14,10 @@ from pathlib import Path
 import re
 import sys
 
+ROOT = str(Path(__file__).resolve().parents[1])
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 # The list is deliberately liquid NSE-listed equities, NOT a recommendation.
 WATCHLIST = (
     "RELIANCE", "TCS", "INFY", "ITC", "HINDUNILVR", "BHARTIARTL",
