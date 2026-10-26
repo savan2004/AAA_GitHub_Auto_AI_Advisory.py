@@ -8,6 +8,7 @@ class GroupStockRequestTests(unittest.TestCase):
         self.assertEqual(extract_stock_request("MSK what about Tata Motors?"), "TATAMOTORS")
         self.assertEqual(extract_stock_request("MSK technical analysis of HDFC Bank"), "HDFCBANK")
         self.assertEqual(extract_stock_request("MSK chart NSE:SBIN"), "SBIN")
+        self.assertEqual(extract_stock_request("@IndianstockAIbot review Reliance"), "RELIANCE")
 
     def test_does_not_reply_to_chatter(self):
         for message in ("Reliance is rising", "MSK hello", "Review Reliance",
