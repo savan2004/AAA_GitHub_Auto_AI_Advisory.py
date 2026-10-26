@@ -44,6 +44,7 @@ from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
 from group_stock_requests import extract_stock_request
+from group_member_filter import is_member_message
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -1276,12 +1277,12 @@ def _group_stock_review(chat_id, message_id, query):
 
 
 @bot.message_handler(
-    func=lambda m: getattr(m.chat, "type", None) in ("group", "supergroup")
+    func=lambda m: is_member_message(m)
     and bool(extract_stock_request(getattr(m, "text", None))),
     content_types=["text"],
 )
 def group_stock_review(m):
-    if getattr(getattr(m, "from_user", None), "is_bot", False):
+    if not is_member_message(m):
         return
     sender_id = getattr(getattr(m, "from_user", None), "id", None)
     if sender_id is None or not API_RATE_LIMITER.is_allowed(sender_id):
