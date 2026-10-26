@@ -1289,6 +1289,7 @@ def group_stock_review(m):
         return
     query = extract_stock_request(m.text)
     if query:
+        logger.info("[Discussion] accepted member stock-review request for %s", query)
         try:
             executor.submit(_group_stock_review, m.chat.id, m.message_id, query)
         except RuntimeError:
@@ -1373,6 +1374,11 @@ def webhook():
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict) or not isinstance(payload.get("update_id"), int):
         return "invalid Telegram update", 400
+    # Log only message type and visibility; never user text, IDs or secrets.
+    msg = payload.get("message")
+    if isinstance(msg, dict) and isinstance(msg.get("chat"), dict) and msg["chat"].get("type") in ("group", "supergroup"):
+        logger.info("[Discussion webhook] inbound group message (has_text=%s, automatic_forward=%s)",
+                    bool(msg.get("text")), bool(msg.get("is_automatic_forward")))
     uid = payload["update_id"]
     if not _webhook_slots.acquire(blocking=False):
         return "server busy", 503  # Telegram retries non-2xx.
