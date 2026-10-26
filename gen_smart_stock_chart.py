@@ -950,7 +950,11 @@ try:
     ratio   = fw / (fw + panel_w)
     for ax_i in fig.get_axes():
         p = ax_i.get_position()
-        ax_i.set_position([p.x0 * ratio, p.y0, p.width * ratio, p.height])
+        # Use the empty space within the ORIGINAL left chart region.
+        # This does not move the sidebar or alter the four stacked panels.
+        chart_x = p.x0 * ratio
+        chart_width = max(0.01, ratio - 0.042 - chart_x)
+        ax_i.set_position([chart_x, p.y0, chart_width, p.height])
 
     # ── HEADER ────────────────────────────────────────────────────────────────
     header_h = 0.055
@@ -962,7 +966,7 @@ try:
     price_bg  = TV_GREEN_L if change_pct >= 0 else TV_RED_L
     header.add_patch(FancyBboxPatch((0.205,0.15), 0.175, 0.70,
         boxstyle="round,pad=0.02", fc=price_bg, ec=price_col, lw=1.0, zorder=5))
-    header.text(0.225, 0.72, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center", zorder=7)
+    header.text(0.225, 0.60, f"₹{last_close:,.2f}", fontsize=10.5, fontweight="bold", color=price_col, va="center", zorder=7)
     header.text(0.225, 0.22, f"{chg_icon} {change_pct:+.2f}%  Session", fontsize=7.5, color=price_col, va="center", zorder=7)
     pills = []
     if _mcap_str: pills.append(("MCap", _mcap_str))
@@ -1001,7 +1005,7 @@ try:
         fontweight="bold", color=sig_fg, ha="center", va="top", zorder=5)
 
     # Score + bar
-    sa.text(0.5, 0.900, f"Legacy checks: {score_str} (not a trade trigger)", fontsize=8.5, color=sig_fg,
+    sa.text(0.5, 0.917, f"Legacy checks: {score_str} (not a trade trigger)", fontsize=8.5, color=sig_fg,
         ha="center", va="top", zorder=5)
     bar_y = 0.867; bar_h = 0.016
     bar_fill = max(0.0, min(1.0, (score + max_score) / (2 * max_score)))
@@ -1010,8 +1014,7 @@ try:
     if bar_fill > 0:
         sa.add_patch(FancyBboxPatch((0.06,bar_y), 0.88*bar_fill, bar_h,
             boxstyle="round,pad=0.003", fc=sig_fg, ec="none", zorder=5))
-    sa.text(0.5, bar_y + bar_h/2, "LEGACY INDICATOR AGREEMENT",
-        fontsize=5.5, color=TEXT_SEC, ha="center", va="center", zorder=6)
+    # Color bar deliberately has no label printed over it; avoids illegibility.
     sa.plot([0.05,0.95],[0.848,0.848], color=BORDER_COL, lw=0.8, zorder=5)
 
     # Reason
