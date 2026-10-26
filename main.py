@@ -766,9 +766,15 @@ def run_report(chat_id, query):
             # PDF content is NOT read by this handler, so never imply it is.
             try:
                 quick = build_fundamental_text(sym, name)
-                send_research(chat_id, "pdf",
-                              f"Research PDF delivered for {name or sym}. Full PDF contents "
-                              f"are NOT available to AI. Independent fundamentals recap:\n{quick}")
+                remembered = remember_ai_context(
+                    chat_id, "pdf",
+                    f"Research PDF delivered for {name or sym}. Full PDF contents "
+                    f"are NOT available to AI. Independent fundamentals recap:\n{quick}"
+                )
+                if remembered and chat_id > 0:
+                    safe_send(chat_id, "🤖 You can ask AI about the separate public-metrics recap. "
+                              "The full PDF has NOT been read by AI.",
+                              reply_markup=ai_research_keyboard("pdf"))
             except Exception:
                 logger.warning("AI PDF recap data unavailable")
         else:
@@ -1140,9 +1146,12 @@ def swing_btn(m):
                     safe_send(chat_id, chunk)
                 # Give the user AI controls once, after the long scanner output.
                 topic = "swing_safe" if md == "conservative" else "swing_agr"
-                send_research(chat_id, topic,
+                remembered = remember_ai_context(chat_id, topic,
                               "⏱ Summary input: first part of this swing scan (data not independently exchange verified).\n"
                               + res[:2950])
+                if remembered and chat_id > 0:
+                    safe_send(chat_id, "🤖 Ask about the swing scan or draft its key takeaways.",
+                              reply_markup=ai_research_keyboard(topic))
         except Exception as e:
             logger.error(f"Swing err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
@@ -1197,8 +1206,12 @@ def _deliver_buzz(chat_id, result):
     if kb:
         safe_send(chat_id, "👆 Tap a stock for Technical / Fundamental / Chart / full PDF report.")
     if msgs:
-        send_research(chat_id, "buzz", "🔥 Stocks Buzz findings (feed dates may vary):\n" +
-                      "\n".join(msgs[:2])[:3000])
+        remembered = remember_ai_context(
+            chat_id, "buzz", "🔥 Stocks Buzz findings (feed dates may vary):\n" +
+            "\n".join(msgs[:2])[:3000])
+        if remembered and chat_id > 0:
+            safe_send(chat_id, "🤖 Ask about Stocks Buzz or draft an evidence-based summary.",
+                      reply_markup=ai_research_keyboard("buzz"))
 
 
 def run_buzz(chat_id):
