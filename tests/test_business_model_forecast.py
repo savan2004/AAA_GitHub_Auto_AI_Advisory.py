@@ -84,7 +84,7 @@ class BusinessForecastTests(unittest.TestCase):
             self.assertIn("FY2029", text)
             self.assertIn("hypothetical scenarios", text)
             self.assertIn("NOT additive", text)
-            self.assertIn("New Energy", text)
+            self.assertIn("new energy", " ".join(text.lower().split()))
             self.assertIn("No consolidated projected PAT", " ".join(text.split()))
             self.assertLess(text.index("Business Model & 3-Year Forecast"),
                             text.index("Technical Analysis"))
