@@ -41,7 +41,7 @@ jobs:
       - name: Compile research and bot routing
         run: python -m py_compile model_financial_data.py model_portfolios.py research_upgrade.py main.py
       - name: Install financial parser dependencies
-        run: python -m pip install beautifulsoup4==4.13.4
+        run: python -m pip install beautifulsoup4==4.13.4 requests==2.32.3
       - name: Test strict statement period parser
         run: python -m unittest discover -s tests -p 'test_model_financial_data.py' -v
       - name: Test three model profiles without network/AI keys
