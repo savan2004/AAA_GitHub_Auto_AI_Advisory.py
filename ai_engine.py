@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 from ai_provider_gateway import GROQ_MODELS as _ACTIVE_GROQ_MODELS
 _GROQ_MODELS = list(_ACTIVE_GROQ_MODELS)
-_groq = _gemini = _openai = None
 
 # Chat history storage: {user_id: list of messages, max 10 turns for context safety}
 _chat_history: Dict[int, List[Dict]] = defaultdict(list)
@@ -72,24 +71,6 @@ def ai_available() -> bool:
         _key("OPENAI_API_KEY", "OPENAI_KEY") or
         _key("ASKFUZZ_API_KEY")  # ✅ FIXED: Now includes AskFuzz
     )
-
-
-def _make_groq_client(api_key: str):
-    """Initialize Groq safely without global monkey-patches to httpx.
-
-    The surrounding provider fallback catches a compatibility failure and
-    tries the next configured provider rather than affecting other threads.
-    """
-    from groq import Groq
-    try:
-        return Groq(api_key=api_key, timeout=15.0, max_retries=1)
-    except TypeError as exc:
-        if "proxies" in str(exc).lower():
-            raise RuntimeError(
-                "Installed Groq/httpx dependency versions are incompatible. "
-                "Update pinned dependencies in a tested release; no global patch applied."
-            ) from exc
-        raise
 
 
 def _call_ai(
