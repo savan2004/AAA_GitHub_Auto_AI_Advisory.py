@@ -12,7 +12,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        yfinance: ['0.2.61', '1.7.0']
+        include:
+          - yfinance: '0.2.61'
+            curl: '0.7.4'
+          - yfinance: '0.2.61'
+            curl: '0.17.0'
+          - yfinance: '1.7.0'
+            curl: '0.17.0'
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     steps:
@@ -21,6 +27,6 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install selected yfinance version
-        run: python -m pip install "yfinance==${{ matrix.yfinance }}" "requests==2.32.3"
+        run: python -m pip install "yfinance==${{ matrix.yfinance }}" "curl_cffi==${{ matrix.curl }}" "requests==2.32.3"
       - name: Run limited anonymous Yahoo diagnostic
         run: python -u tests/diagnose_yahoo_finance.py
