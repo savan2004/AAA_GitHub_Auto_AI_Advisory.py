@@ -600,6 +600,8 @@ def build_portfolio_card(uid):
     t_pnl = round(t_cur - priced_inv, 2)
     t_pct = round(t_pnl / priced_inv * 100, 2) if priced_inv > 0 else 0.0
     icon = "🟢" if t_pnl >= 0 else "🔴"
+    concentration = max((r["inv"] / t_inv * 100 for r in rows), default=0) if t_inv > 0 else 0
+    largest = max(rows, key=lambda r: r["inv"]) if rows else None
 
     lines = [f"<b>━━━ 💼 PORTFOLIO ━━━</b>", f"📅 {date.today().strftime('%d-%b-%Y')}  |  {len(rows)} holdings", "", "<b>── HOLDINGS ──</b>"]
 
@@ -616,6 +618,10 @@ def build_portfolio_card(uid):
         ]
 
     lines += ["", f"{icon} <b>{'Partial' if missing_quotes else 'Total'} P&L: ₹{t_pnl:+,.2f} ({t_pct:+.2f}%)</b>", "─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM", "⚠️ <i>Educational only.</i>"]
+    if largest and concentration >= 40:
+        lines += [f"⚠️ Concentration risk: {largest['sym']} is {concentration:.1f}% of invested capital (cost basis)."]
+    elif largest:
+        lines += [f"📊 Largest holding: {largest['sym']} ({concentration:.1f}% of invested capital, cost basis)."]
     if missing_quotes:
         lines += ["⚠️ Prices unavailable: " + ", ".join(missing_quotes) + ". P&L excludes these holdings.", f"📌 Invested capital: ₹{t_inv:,.2f}; priced capital: ₹{priced_inv:,.2f}."]
     return "\n".join(lines)
