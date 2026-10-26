@@ -43,6 +43,33 @@ class MemberFilterTests(unittest.TestCase):
     def test_missing_sender(self):
         self.assertFalse(is_member_message(msg(from_user=None)))
 
+    def test_executor_shutdown_returns_friendly_error(self):
+        import ast
+        from pathlib import Path
+        from unittest.mock import Mock
+
+        source = ast.parse(Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8"))
+        handler = next(node for node in source.body if isinstance(node, ast.FunctionDef)
+                       and node.name == "group_stock_review")
+        handler.decorator_list = []
+        module = ast.fix_missing_locations(ast.Module(body=[handler], type_ignores=[]))
+        executor = Mock()
+        executor.submit.side_effect = RuntimeError("cannot schedule new futures after shutdown")
+        limiter = Mock()
+        limiter.is_allowed.return_value = True
+        send = Mock()
+        context = {"is_member_message": is_member_message,
+                   "API_RATE_LIMITER": limiter, "extract_stock_request": lambda _: "RELIANCE",
+                   "executor": executor, "_group_stock_review": Mock(),
+                   "logger": Mock(), "safe_send": send}
+        exec(compile(module, "<group-handler-test>", "exec"), context)
+        message = msg(text="MSK review Reliance", message_id=456)
+        message.chat.id = -100100
+        context["group_stock_review"](message)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.kwargs["reply_to_message_id"], 456)
+
+
 
 if __name__ == "__main__":
     unittest.main()
