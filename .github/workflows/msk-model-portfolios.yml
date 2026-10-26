@@ -1,0 +1,34 @@
+name: MSK Model Portfolios Regression
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'model_portfolios.py'
+      - 'research_upgrade.py'
+      - 'main.py'
+      - 'tests/test_model_portfolios.py'
+      - '.github/workflows/msk-model-portfolios.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'model_portfolios.py'
+      - 'research_upgrade.py'
+      - 'main.py'
+      - 'tests/test_model_portfolios.py'
+      - '.github/workflows/msk-model-portfolios.yml'
+  workflow_dispatch:
+
+jobs:
+  model-portfolio-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Compile research and bot routing
+        run: python -m py_compile model_portfolios.py research_upgrade.py main.py
+      - name: Test three model profiles without network/AI keys
+        run: python -m unittest discover -s tests -p 'test_model_portfolios.py' -v
+      - name: Check existing Telegram menu routing
+        run: python -m unittest discover -s tests -p 'test_msk_menu_audit.py' -v
