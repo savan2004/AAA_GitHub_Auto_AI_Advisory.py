@@ -509,6 +509,31 @@ def _cover(R, story):
 def _investment_view(R, story):
     fv = R["fv"]
     story += section("Investment View", "Analyst commentary, bull vs bear case and valuation cross-check")
+    # Keep business/fundamental evidence and timing in the SAME readable panel.
+    # Technical breakout evidence does not override missing company financials.
+    pillars = (R.get("sc") or {}).get("pillars") or {}
+    setup = (R.get("ch") or {}).get("tech_setup") or {}
+    def _pillar(label):
+        x = pillars.get(label)
+        return f"{x}/100 (model score)" if isinstance(x, (float, int)) else "Not verified"
+    evidence_warning = bool((R.get("sc") or {}).get("insufficient_evidence"))
+    timing = setup.get("status") or "Advanced chart not verified (using basic technical view)"
+    last_date = setup.get("date") or "last available closing candle"
+    combined = ("RESEARCH ONLY - insufficient verified financial evidence"
+                if evidence_warning else
+                "WATCHLIST / independent due diligence before any transaction")
+    story += [P("FUNDAMENTAL + TECHNICAL | ONE-PAGE DECISION SNAPSHOT", "h2"),
+              table([[P("Dimension", "th"), P("Evidence", "th")],
+                     [P("Business quality", "cellb"), P(_pillar("Quality"), "cell")],
+                     [P("Growth / valuation", "cellb"),
+                      P(esc(_pillar("Growth") + " / " + _pillar("Valuation")), "cell")],
+                     [P("Technical timing", "cellb"),
+                      P(esc(timing + " (EOD " + str(last_date) + ")"), "cell")],
+                     [P("Combined research", "cellb"), P(esc(combined), "cellb")]],
+                    [43 * mm, 135 * mm]),
+              P("Model scores are descriptive screening metrics, not calibrated win "
+                "probabilities or price targets. Technical timing cannot prove company quality.", "tiny"),
+              Spacer(1, 7)]
     reasoning = R.get("reasoning") or {}
     story.append(P(colored("RESEARCH METHOD: TOP-DOWN + BOTTOM-UP", NAVY_H), "h2"))
     story.append(P("<b>Top-down:</b> " + esc(reasoning.get("market_regime", "NOT VERIFIED")), "small"))
