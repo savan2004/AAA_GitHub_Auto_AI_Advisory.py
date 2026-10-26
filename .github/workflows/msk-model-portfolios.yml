@@ -7,6 +7,7 @@ on:
       - 'research_upgrade.py'
       - 'main.py'
       - 'tests/test_model_portfolios.py'
+      - 'tests/demo_model_portfolios.py'
       - '.github/workflows/msk-model-portfolios.yml'
   push:
     branches: [main]
@@ -15,6 +16,7 @@ on:
       - 'research_upgrade.py'
       - 'main.py'
       - 'tests/test_model_portfolios.py'
+      - 'tests/demo_model_portfolios.py'
       - '.github/workflows/msk-model-portfolios.yml'
   workflow_dispatch:
 
@@ -30,5 +32,7 @@ jobs:
         run: python -m py_compile model_portfolios.py research_upgrade.py main.py
       - name: Test three model profiles without network/AI keys
         run: python -m unittest discover -s tests -p 'test_model_portfolios.py' -v
+      - name: Simulate exact Telegram output using synthetic evidence
+        run: python tests/demo_model_portfolios.py
       - name: Check existing Telegram menu routing
         run: python -m unittest discover -s tests -p 'test_msk_menu_audit.py' -v
