@@ -91,6 +91,14 @@ def _make_groq_client(api_key: str):
         raise
 
 
+def _provider_error_code(exc):
+    """Return non-sensitive diagnostics; never log provider response bodies or tokens."""
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int) and 100 <= status <= 599:
+        return f"HTTP {status}"
+    return type(exc).__name__
+
+
 def _call_ai(
     messages: List[Dict[str, str]], 
     max_tokens: int = 500, 
@@ -134,10 +142,10 @@ def _call_ai(
                     if text:
                         return text, ""
                 except Exception as exc:
-                    errors.append(f"GROQ ({model}): {str(exc)[:80]}")
+                    errors.append(f"GROQ ({model}): {_provider_error_code(exc)}")
         except Exception as exc:
-            errors.append(f"GROQ init: {str(exc)[:80]}")
-            logger.warning("Groq initialization failed: %s", exc)
+            errors.append(f"GROQ init: {_provider_error_code(exc)}")
+            logger.warning("Groq initialization failed: %s", _provider_error_code(exc))
     
     # ─────────────────────────────────────────────────────────────────────────
     # Try Gemini (Secondary)
@@ -171,8 +179,8 @@ def _call_ai(
             if text:
                 return text, ""
         except Exception as exc:
-            errors.append(f"OpenAI: {str(exc)[:80]}")
-            logger.warning("OpenAI call failed: %s", exc)
+            errors.append(f"OpenAI: {_provider_error_code(exc)}")
+            logger.warning("OpenAI call failed: %s", _provider_error_code(exc))
     
     # ─────────────────────────────────────────────────────────────────────────
     # Try AskFuzz (India-focused finance AI)
