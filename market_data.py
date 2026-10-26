@@ -28,6 +28,7 @@ _OHLCV = ["Open", "High", "Low", "Close", "Volume"]
 
 _cache: Dict[str, dict] = {}
 _cache_lock = threading.Lock()
+_download_lock = threading.Lock()
 
 
 def to_yahoo(sym: str) -> str:
@@ -111,27 +112,34 @@ def _split_multi(raw: pd.DataFrame, tickers: List[str]) -> Dict[str, pd.DataFram
     return out
 
 
-def _download_chunk(tickers: List[str], period: str, retries: int = 2) -> Dict[str, pd.DataFrame]:
+def _download_chunk(tickers: List[str], period: str, retries: int = 2, adjusted: bool = False) -> Dict[str, pd.DataFrame]:
     import yfinance as yf
+    result = {}
+    pending = list(dict.fromkeys(tickers))
     last_err = None
     for attempt in range(retries + 1):
         try:
-            raw = yf.download(
-                tickers=tickers if len(tickers) > 1 else tickers[0],
-                period=period, interval="1d",
-                group_by="ticker", auto_adjust=False,
-                progress=False, threads=True, timeout=30,
-            )
-            got = _split_multi(raw, tickers)
-            if got or attempt == retries:
-                return got
-        except Exception as e:                       # network / throttling
+            # yfinance shares download/cache state. Serialize separate callers,
+            # but retain its internal parallelism on the initial bulk request.
+            with _download_lock:
+                raw = yf.download(
+                    tickers=pending if len(pending) > 1 else pending[0],
+                    period=period, interval="1d",
+                    group_by="ticker", auto_adjust=adjusted,
+                    progress=False, threads=(attempt == 0 and len(pending) > 1), timeout=30,
+                )
+            result.update(_split_multi(raw, pending))
+            pending = [t for t in pending if t not in result]
+            if not pending:
+                return result
+        except Exception as e:
             last_err = e
             logger.warning(f"[market_data] chunk attempt {attempt + 1} failed: {str(e)[:120]}")
-        time.sleep(2.0 * (attempt + 1))
+        if attempt < retries:
+            time.sleep(2.0 * (attempt + 1))
     if last_err:
-        logger.warning(f"[market_data] chunk gave up: {str(last_err)[:120]}")
-    return {}
+        logger.warning(f"[market_data] chunk incomplete: {str(last_err)[:120]}")
+    return result
 
 
 def bulk_history(
@@ -140,6 +148,7 @@ def bulk_history(
     chunk_size: int = 100,
     progress_cb: Optional[Callable[[int, int], None]] = None,
     cache_ttl: int = 0,
+    adjusted: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """
     Download daily OHLCV for many NSE symbols.
@@ -161,7 +170,7 @@ def bulk_history(
     for s in syms:
         if cache_ttl:
             with _cache_lock:
-                e = _cache.get(f"{s}|{period}")
+                e = _cache.get(f"{s}|{period}|{adjusted}")
             if e and now - e["ts"] < cache_ttl:
                 result[s] = e["df"]
                 continue
@@ -172,13 +181,13 @@ def bulk_history(
     for i in range(0, len(todo), chunk_size):
         part = todo[i:i + chunk_size]
         y_map = {to_yahoo(s): s for s in part}
-        got = _download_chunk(list(y_map.keys()), period)
+        got = _download_chunk(list(y_map.keys()), period, adjusted=adjusted)
         for yt, df in got.items():
             plain = y_map.get(yt) or from_yahoo(yt)
             result[plain] = df
             if cache_ttl:
                 with _cache_lock:
-                    _cache[f"{plain}|{period}"] = {"df": df, "ts": time.time()}
+                    _cache[f"{plain}|{period}|{adjusted}"] = {"df": df, "ts": time.time()}
         done += len(part)
         if progress_cb:
             try:
@@ -196,3 +205,4 @@ def index_history(ticker: str = "^NSEI", period: str = "1y") -> Optional[pd.Data
     except Exception as e:
         logger.warning(f"[market_data] index {ticker} failed: {e}")
         return None
+
