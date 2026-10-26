@@ -5,25 +5,9 @@ from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-
-# ── Lazy Gemini init (no module-level crash) ──────────────────────────────
-_gemini_configured = False
-
-def _ensure_gemini():
-    global _gemini_configured
-    if _gemini_configured or not GEMINI_API_KEY:
-        return _gemini_configured
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        _gemini_configured = True
-        logger.info("llm_wrapper: Gemini configured")
-    except Exception as e:
-        logger.error(f"llm_wrapper: Gemini config error: {e}")
-    return _gemini_configured
-
+# All provider configuration, model selection and HTTP transport now live in
+# ai_provider_gateway.py. No cached keys, obsolete Gemini SDK init or global
+# httpx monkeypatch are used here.
 
 def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
     """Use the shared verified provider chain; no global httpx monkeypatches.
