@@ -18,7 +18,7 @@ class YahooSessionNormalizerTests(unittest.TestCase):
             "marketCap": 4_000_000_000_000, "regularMarketPrice": 1500,
         }
         normalized = normalize_yfinance_info(data, "INFY.NS", fetched_at=100)
-        self.assertEqual(normalized["roe_pct"], 31.9)
+        self.assertAlmostEqual(normalized["roe_pct"], 31.9)
         self.assertAlmostEqual(normalized["debt_equity_ratio"], 0.093, places=8)
         self.assertEqual(normalized["revenue_growth_pct"], 12)
         self.assertEqual(normalized["market_cap"], 4_000_000_000_000)
@@ -61,7 +61,9 @@ class YahooEngineFallbackTests(unittest.TestCase):
         tree = ast.parse(source)
         node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
                     and n.name == "_yahoo_v10_fundamentals")
+        from typing import Optional
         ctx = {
+            "Optional": Optional,
             "_wait_for_rate_slot": lambda: None,
             "_HEADERS": {},
             "logger": MagicMock(),
