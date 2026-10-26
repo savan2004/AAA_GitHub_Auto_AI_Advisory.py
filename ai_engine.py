@@ -495,9 +495,13 @@ def fetch_news(symbol: str, limit: int = 3) -> str:
     Returns:
         str: Formatted news headlines or empty string if unavailable
     """
-    # This function integrates with market_news.py
-    # Placeholder returns empty string (will be called from main.py data fetch)
-    return ""
+    # Only return non-canned headlines; a missing headline is not evidence.
+    try:
+        from data_validation import get_stock_news_robust
+        return get_stock_news_robust(symbol) or ""
+    except Exception:
+        logger.warning("Stock headline feed unavailable")
+        return ""
 
 
 def fetch_market_news(limit: int = 5) -> str:
@@ -510,9 +514,16 @@ def fetch_market_news(limit: int = 5) -> str:
     Returns:
         str: Formatted market news or empty string if unavailable
     """
-    # This function integrates with market_news.py
-    # Placeholder returns empty string (will be called from main.py data fetch)
-    return ""
+    try:
+        from market_news import get_market_news
+        news = get_market_news(n=max(1, min(int(limit), 10)))
+        # The legacy feed substitutes static headlines when live feeds fail.
+        if not isinstance(news, str) or "(Auto-generated)" in news:
+            return ""
+        return news + "\nHeadline dates and original links not independently verified."
+    except Exception:
+        logger.warning("Market headline feed unavailable")
+        return ""
 
 
 def get_live_market_context(force: bool = False) -> str:
