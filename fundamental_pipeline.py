@@ -331,6 +331,12 @@ def validate_report(expected: dict, inp: dict, R: dict, pdf_path: Optional[str] 
         err(f"ISIN mismatch ({expected['isin']} vs {isin_info})")
 
     # required data + freshness
+    # Scheduled/automated publication is forbidden until provenance, source
+    # freshness and regulatory review have explicitly been approved. The
+    # research PDF may still be generated privately for inspection.
+    publication = R.get("reasoning") or {}
+    if publication.get("publication_eligible") is not True:
+        err("automated publication blocked: research provenance/freshness/regulatory review not approved")
     cm = R.get("completeness") or {}
     if cm.get("missing_mandatory"):
         err("mandatory data missing: " + ", ".join(cm["missing_mandatory"]))
