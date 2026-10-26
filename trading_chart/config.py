@@ -53,6 +53,22 @@ class ChartConfig:
     triangle_flat_atr: float = .42
     channel_touch_atr: float = .50
     max_pattern_age_bars: int = 5
+    # Pattern/volume geometry and anti-chop parameters (one source of truth)
+    trend_swing_lookback: int = 75
+    channel_min_width_atr: float = 1.
+    channel_touch_width_fraction: float = .1
+    triangle_min_swing_height_atr: float = .3
+    double_neckline_min_atr: float = 1.1
+    double_geometry_scale_atr: float = 4.
+    consolidation_history_bars: int = 30
+    consolidation_max_range_atr: float = 2.5
+    consolidation_score_base: float = 63.
+    pullback_touch_atr: float = .25
+    pullback_gap_fit_atr: float = 2.
+    pullback_score_base: float = 61.
+    turning_lookback: int = 3
+    turning_ema_tolerance: float = .003
+    channel_atr_floor: float = .5
     chart_title: str = "MSK Trading Chart | Research Signal"
     plots_template: str = "plotly_dark"
 
