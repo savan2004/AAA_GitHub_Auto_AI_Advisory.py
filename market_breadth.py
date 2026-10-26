@@ -16,6 +16,24 @@ _cache = None
 _cache_at = 0.0
 
 
+def expected_completed_session(now=None):
+    """Strict NSE weekday freshness gate; holidays conservatively fail closed.
+
+    Daily OHLCV bars are usable only after 16:00 IST. Before the close, use
+    the preceding weekday. Never treat a multi-day-old quote as today's quote.
+    """
+    stamp = now or datetime.now(IST)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=IST)
+    stamp = stamp.astimezone(IST)
+    day = stamp.date()
+    if stamp.time() < daytime(16):
+        day -= timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
+
+
 def completed_prices(frame, now=None):
     """Remove intraday bars; 16:00 IST provides a post-close publication buffer."""
     now = now or datetime.now(IST)
@@ -96,21 +114,41 @@ def calculate_breadth(hist, symbols, benchmark, sectors=None, now=None):
         if cohort:
             vals = [x['advances']/x['valid']*100 for x in series]
             latest.update(trend_delta=round(vals[-1]-vals[0], 1), trend_count=len(cohort))
-    stamp = now or datetime.now(IST)
-    stale = (stamp.date() - sessions[-1].date()).days > 7
+    expected_day = expected_completed_session(now)
+    # Previous code allowed up to seven calendar days and could present a
+    # Friday close as Monday's current market. Exchange holidays fail closed.
+    stale = sessions[-1].date() != expected_day
     latest['stale'] = stale
+    latest['expected_session'] = str(expected_day)
+    latest['trend_context'] = None
     latest['interpretation'] = 'Stale session: no current market-wide conclusion' if stale else 'Insufficient coverage for a market-wide conclusion'
     if not stale and latest['coverage'] >= 80 and latest['valid']:
         ap = latest['advances']/latest['valid']*100
         idx = latest['benchmark_change']
+        ma20 = latest['ma20']['pct']
+        ma50 = latest['ma50']['pct']
+        weak_sma = ma20 is not None and ma50 is not None and ma20 < 40 and ma50 < 40
+        weak_highs = latest['high_low_count'] >= max(20, latest['valid'] * 0.8) and latest['lows'] > latest['highs'] * 2
         if idx is not None and idx > 0 and ap < 40:
             latest['interpretation'] = 'Index rising, but most covered stocks are not participating'
         elif ap >= 60:
-            latest['interpretation'] = 'Broad positive participation in the covered universe'
+            latest['interpretation'] = 'Broad positive DAILY participation in the covered universe'
         elif ap <= 40:
-            latest['interpretation'] = 'Broad negative participation in the covered universe'
+            latest['interpretation'] = 'Broad negative DAILY participation in the covered universe'
         else:
-            latest['interpretation'] = 'Mixed participation; no broad directional agreement'
+            latest['interpretation'] = 'Mixed daily participation; no broad directional agreement'
+        if ap >= 60 and (weak_sma or weak_highs):
+            evidence = []
+            if weak_sma:
+                evidence.append(f"only {ma20:.1f}% above 20D and {ma50:.1f}% above 50D SMA")
+            if weak_highs:
+                evidence.append(f"{latest['highs']} closing highs vs {latest['lows']} closing lows")
+            latest['trend_context'] = ('Daily rebound in participation, but weak underlying trend: ' +
+                                       '; '.join(evidence) +
+                                       '. This is NOT a confirmed medium-term reversal.')
+        elif ap <= 40 and not weak_sma and not weak_highs:
+            latest['trend_context'] = ('Weak daily participation alone does not establish a persistent downtrend.')
+    return latest
     return latest
 
 
@@ -135,12 +173,21 @@ def get_breadth():
     global _cache, _cache_at
     # One scanner at a time; callers share a completed result for 15 minutes.
     with _lock:
-        if _cache is not None and time.time()-_cache_at < 900:
+        expected = str(expected_completed_session())
+        if (_cache is not None and time.time()-_cache_at < 900
+                and _cache.get('session') == expected and not _cache.get('stale')
+                and _cache.get('coverage', 0) >= 80):
             return _cache
         from market_data import bulk_history, index_history
         syms, sectors, source, degraded = load_universe()
         hist = bulk_history(syms, '2y', chunk_size=100, cache_ttl=900, adjusted=True)
         result = calculate_breadth(hist, syms, index_history('^NSEI', '2y'), sectors)
+        if result['stale']:
+            raise ValueError(f"Latest verified NSE session {result['session']} is not expected "
+                             f"session {result['expected_session']}; no stale breadth report.")
+        if result['coverage'] < 80:
+            raise ValueError(f"Insufficient Nifty basket quote coverage "
+                             f"({result['coverage']}%); report withheld.")
         result.update(source=source, degraded=degraded, fetched=datetime.now(IST).strftime('%d-%b %H:%M IST'))
         if degraded:
             result['interpretation'] = 'Sample only: ' + result['interpretation']
@@ -161,7 +208,10 @@ def format_breadth(r):
         lines.append(f"Advance share, first→last of 5 sessions: {r['trend_delta']:+.1f} pp (same {r['trend_count']} stocks)")
     if r['benchmark_change'] is not None:
         lines.append(f"Nifty 50: {r['benchmark_change']:+.2f}%")
-    lines += ['', '<b>' + html.escape(r['interpretation']) + '</b>', '', '<b>Industry participation (≥5 covered stocks)</b>']
+    lines += ['', '<b>' + html.escape(r['interpretation']) + '</b>']
+    if r.get('trend_context'):
+        lines.append('⚠️ ' + html.escape(r['trend_context']))
+    lines += ['', '<b>Industry participation (≥5 covered stocks)</b>']
     sectors = [(s,v) for s,v in r['sectors'].items() if v['count'] >= 5]
     ranked = sorted(sectors, key=lambda x: x[1]['adv_pct'], reverse=True)
     chosen = ranked[:3] + [x for x in ranked[-3:] if x not in ranked[:3]]

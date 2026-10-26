@@ -48,6 +48,72 @@ class BreadthTests(unittest.TestCase):
         old=calculate_breadth({'A':f},['A'],f,now=NOW+timedelta(days=15))
         self.assertTrue(old['stale']);self.assertIn('Stale',old['interpretation'])
 
+    def test_monday_must_not_republish_previous_friday_as_current(self):
+        from market_breadth import expected_completed_session
+        monday = datetime(2026, 10, 26, 20, 12, tzinfo=IST)
+        friday_prices = frame()
+        stale = calculate_breadth({'UP': friday_prices}, ['UP'], friday_prices, now=monday)
+        self.assertTrue(stale['stale'])
+        self.assertEqual(stale['session'], '2026-10-23')
+        self.assertEqual(stale['expected_session'], '2026-10-26')
+        self.assertEqual(expected_completed_session(monday), date(2026, 10, 26))
+        fresh_prices = frame()
+        fresh_prices.index = pd.bdate_range(end='2026-10-26', periods=len(fresh_prices))
+        current = calculate_breadth({'UP': fresh_prices}, ['UP'], fresh_prices, now=monday)
+        self.assertFalse(current['stale'])
+        self.assertEqual(current['session'], '2026-10-26')
+
+    def test_strong_daily_breadth_but_weak_trend_is_not_a_reversal(self):
+        benchmark = frame(up=False)
+        series = {}
+        for i in range(4):
+            df = frame(up=False).copy()
+            if i < 3:
+                df.iloc[-1, df.columns.get_loc('Close')] = df['Close'].iloc[-2] * 1.008
+            series[f'STOCK{i}'] = df
+        r = calculate_breadth(series, list(series), benchmark, now=NOW)
+        self.assertEqual((r['advances'], r['declines']), (3, 1))
+        self.assertLess(r['ma20']['pct'], 40)
+        self.assertLess(r['ma50']['pct'], 40)
+        self.assertIn('positive DAILY', r['interpretation'])
+        self.assertIn('NOT a confirmed medium-term reversal', r['trend_context'])
+        r.update(source='Fixture', fetched='testing offline')
+        html_text = format_breadth(r)
+        self.assertIn('weak underlying trend', html_text)
+        self.assertIn('NOT a confirmed', html_text)
+
+    def test_no_false_trend_warning_when_daily_and_ma_agree(self):
+        benchmark = frame(up=True)
+        series = {}
+        for i in range(4):
+            df = frame(up=True).copy()
+            if i == 3:
+                df.iloc[-1, df.columns.get_loc('Close')] = df['Close'].iloc[-2] * .995
+            series[f'STOCK{i}'] = df
+        r = calculate_breadth(series, list(series), benchmark, now=NOW)
+        self.assertEqual((r['advances'], r['declines']), (3, 1))
+        self.assertGreater(r['ma20']['pct'], 40)
+        self.assertGreater(r['ma50']['pct'], 40)
+        self.assertIsNone(r['trend_context'])
+
+    def test_publication_blocks_stale_data_even_when_coverage_is_high(self):
+        import market_breadth as breadth
+        import market_data
+        past = frame()
+        breadth._cache = None
+        with patch.object(breadth, 'load_universe', return_value=(['UP'], {}, 'fixture', False)), \
+             patch.object(market_data, 'bulk_history', return_value={'UP': past}), \
+             patch.object(market_data, 'index_history', return_value=past), \
+             patch.object(breadth, 'expected_completed_session', return_value=date(2026, 10, 26)):
+            # Live wall-clock in get_breadth need not match test: force its
+            # calculate_breadth result to a verified stale sample.
+            stale_result = calculate_breadth({'UP': past}, ['UP'], past,
+                                              now=datetime(2026, 10, 26, 20, tzinfo=IST))
+            with patch.object(breadth, 'calculate_breadth', return_value=stale_result):
+                with self.assertRaisesRegex(ValueError, 'no stale breadth report'):
+                    breadth.get_breadth()
+        breadth._cache = None
+
     def test_five_session_fixed_cohort_and_html(self):
         f=frame();hole=f.copy();hole.iloc[-4,hole.columns.get_loc('Close')]=np.nan
         r=calculate_breadth({'A':f,'B':hole},['A','B'],f,{'A':'A&B'},now=NOW)
