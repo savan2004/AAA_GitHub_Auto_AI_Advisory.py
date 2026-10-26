@@ -65,10 +65,16 @@ def market_data(symbol="RELIANCE.NS"):
     h=h[(h.Open>0)&(h.High>0)&(h.Low>0)&(h.Close>0)&(h.Volume>=0)]
     if len(h) < 110:
         raise RuntimeError("Insufficient valid Yahoo Finance price+volume candles")
-    if h.index[-1].date() < (datetime.now(timezone.utc).date()-pd.Timedelta(days=8)):
+    # Yahoo dates for .NS denote LOCAL market sessions. Converting a
+    # midnight IST index to UTC changes the date to the preceding day.
+    # Preserve the NSE session calendar DATE, not the UTC instant.
+    h_idx = pd.DatetimeIndex(h.index)
+    session_dates = (h_idx.tz_convert("Asia/Kolkata").date
+                     if h_idx.tz is not None else h_idx.date)
+    if session_dates[-1] < (datetime.now(timezone.utc).date()-pd.Timedelta(days=8)):
         raise RuntimeError("Yahoo data unexpectedly stale; refusing realistic current chart")
     d=pd.DataFrame({
-        "timestamp":pd.to_datetime(h.index,utc=True),
+        "timestamp":pd.to_datetime(session_dates,utc=True),
         "open":h.Open.astype(float).values,
         "high":h.High.astype(float).values,
         "low":h.Low.astype(float).values,
