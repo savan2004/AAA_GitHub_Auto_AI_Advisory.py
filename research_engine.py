@@ -264,16 +264,23 @@ def compute_risk(df: pd.DataFrame, nifty: Optional[pd.DataFrame]) -> dict:
 # FUNDAMENTALS
 # ══════════════════════════════════════════════════════════════════════════
 def _de_ratio(fund: dict, last_year: Optional[dict]) -> Optional[float]:
-    """Debt/Equity as a plain ratio. Statements are authoritative; the
-    aggregated fund['de'] mixes sources (Yahoo reports it in percent), so only
-    used as a last resort with a unit heuristic."""
+    """Debt/Equity as a plain ratio.
+
+    The upstream fundamentals adapter is responsible for provider-specific
+    units; never infer units from whether a ratio exceeds eight. An actual
+    heavily leveraged company can legitimately exceed 8x.
+    """
     if last_year and last_year.get("borrowings") is not None and last_year.get("networth"):
         if last_year["networth"] > 0:
             return round(last_year["borrowings"] / last_year["networth"], 2)
     de = fund.get("de")
     if de is None:
         return None
-    return round(de / 100.0, 2) if de > 8 else round(float(de), 2)
+    try:
+        value = float(de)
+        return round(value, 2) if math.isfinite(value) and value >= 0 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: List[dict],
