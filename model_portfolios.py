@@ -147,10 +147,20 @@ def format_model(result, snap):
             "Fundamentals must be dated; prices are latest verified historical closes, NOT live LTP.\n")
     if result["status"] != "complete":
         reasons = "; ".join(f"{escape(k)}: {v}" for k, v in sorted(result["rejected"].items()))
+        source_rejections = "; ".join(
+            f"{escape(str(k))}: {v}" for k, v in sorted((snap.get("rejected") or {}).items())
+        )
+        cache_count = snap.get("cached")
+        source_note = (
+            f"Cached fundamental records: {cache_count}/{universe}.\n"
+            if isinstance(cache_count, int) else ""
+        )
         return [head + f"\nOnly {result['qualified']}/{MODEL_SIZE} passed the selection and diversification gates.\n"
                 "No ten-stock model or allocation published. Insufficient verified coverage.\n"
-                f"Reasons: {reasons[:800] or 'Too few qualified candidates / cache warming'}\n"
-                "Retry when verified market and statement data are available."], []
+                + source_note
+                + f"Research data failures: {source_rejections[:500] or 'provider evidence incomplete or unavailable'}.\n"
+                + f"Model exclusion reasons: {reasons[:500] or 'Too few eligible candidates / cache warming'}.\n"
+                + "No output here is evidence of correct live selection until prices and fundamental ratios are independently verified."], []
     holdings = result["holdings"]
     messages = [head + f"Cash reserve: ₹{result['cash_rupees']/1e7:,.2f} Cr ({cfg['cash_pct']}%).\n"
                 f"Ten holdings, at most {MAX_STOCKS_PER_SECTOR} from one sector.\n"
