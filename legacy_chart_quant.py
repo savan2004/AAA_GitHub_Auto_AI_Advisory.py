@@ -7,6 +7,7 @@ import math
 
 import numpy as np
 import pandas as pd
+from matplotlib.patches import FancyBboxPatch
 
 from trading_chart.engine import analyze
 from trading_chart.config import DEFAULT_CONFIG
@@ -89,7 +90,7 @@ def draw_signal_rows(sidebar, payload, border_color=_BORDER):
         y = top - i * gap
         if i % 2 == 0:
             sidebar.add_patch(
-                __import__("matplotlib").patches.FancyBboxPatch(
+                FancyBboxPatch(
                     (0.043, y-gap*0.94), 0.91, gap*0.9,
                     boxstyle="round,pad=0.002", fc=_CARD,
                     ec="none", alpha=0.58, zorder=3))
