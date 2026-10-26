@@ -50,6 +50,7 @@ class CriticalResearchReportSafety(unittest.TestCase):
         self.assertFalse(any("Conservative balance sheet" in x or "PEG of" in x
                              or "operating leverage" in x for x in report["flags"]["strengths"]))
         self.assertFalse(any(x["title"] == "Weak cash conversion" for x in report["flags"]["risks"]))
+        self.assertIn("not a confirmed BUY", report["nar"]["outlook"])
 
     def test_pdf_does_not_call_pillar_availability_full_data_coverage(self):
         from pypdf import PdfReader
@@ -59,7 +60,7 @@ class CriticalResearchReportSafety(unittest.TestCase):
             rg.build_pdf(report, pdf)
             text = " ".join(p.extract_text() or "" for p in PdfReader(pdf).pages)
         self.assertIn("Pillar coverage 6/6", text)
-        self.assertIn("NOT full field or source verification", text)
+        self.assertIn("NOT full field or source verification", " ".join(text.split()))
         self.assertNotIn("Data coverage 100%", text)
         self.assertIn("INTERNAL RESEARCH DRAFT", text)
 
