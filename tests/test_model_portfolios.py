@@ -150,5 +150,52 @@ class AggressiveModelTests(unittest.TestCase):
         self.assertEqual(aggressive["holdings"], [])
 
 
+class TelegramModelIntegrationTests(unittest.TestCase):
+    def test_three_profile_requests_use_evidence_engine_not_static_lists(self):
+        import ast
+        from pathlib import Path
+        import model_portfolios
+        from unittest.mock import patch
+
+        source = (Path(__file__).resolve().parents[1] / "main.py").read_text("utf-8")
+        tree = ast.parse(source)
+        func = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "build_scan")
+        code = ast.get_source_segment(source, func)
+        self.assertIn("model_portfolios import run_model", code)
+        self.assertNotIn("SCREENER_STOCKS", source)
+        self.assertIn("messages, symbols = build_scan(prof)", source)
+
+        snap = {"rows": [candidate(i) for i in range(10)],
+                "checked": 10, "universe": 10}
+        with patch.object(model_portfolios, "get_research_snapshot", return_value=snap):
+            with patch.object(model_portfolios.time, "time", return_value=NOW):
+                for profile, capital_cash in [
+                    ("conservative", "2.00"),
+                    ("moderate", "1.00"),
+                    ("aggressive", "0.50"),
+                ]:
+                    messages, symbols = model_portfolios.run_model(profile)
+                    self.assertEqual(len(symbols), 10)
+                    self.assertEqual(len(messages), 4)
+                    self.assertIn("₹10.00 Cr", messages[0])
+                    self.assertIn("₹" + capital_cash + " Cr", messages[0])
+
+    def test_malformed_symbol_not_offered_in_callback(self):
+        rows = [candidate(i) for i in range(10)]
+        rows[0]["symbol"] = "BAD|SHARE"
+        self.assertEqual(select_model(rows, "conservative", now=NOW)["holdings"], [])
+
+    def test_empty_snapshot_returns_no_symbols_or_investment_claims(self):
+        import model_portfolios
+        from unittest.mock import patch
+        snap = {"rows": [], "checked": 0, "universe": 200}
+        with patch.object(model_portfolios, "get_research_snapshot", return_value=snap):
+            messages, symbols = model_portfolios.run_model("moderate")
+        self.assertEqual(symbols, [])
+        self.assertIn("No ten-stock model", messages[0])
+        self.assertNotIn("Cash reserve:", messages[0])
+
+
 if __name__ == "__main__":
     unittest.main()
