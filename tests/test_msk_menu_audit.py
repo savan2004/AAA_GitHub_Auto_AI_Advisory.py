@@ -22,9 +22,14 @@ class MenuAudit(unittest.TestCase):
 
     def test_inline_action_handlers(self):
         actions = re.findall(r'callback_data=f"([a-z]+)\|', MAIN)
-        self.assertEqual(set(actions), {"tech", "fund", "chart", "pdf", "menu"})
+        self.assertEqual(set(actions), {"tech", "fund", "chart", "pdf", "menu",
+                                        "aiquestion", "aisummary"})
         for action in actions:
-            self.assertIn(f'action == "{action}"', MAIN, f"Unrouted callback {action}")
+            if action in ("aiquestion", "aisummary"):
+                self.assertIn('action in ("aiquestion", "aisummary")', MAIN)
+                self.assertIn('if action == "aiquestion":', MAIN)
+            else:
+                self.assertIn(f'action == "{action}"', MAIN, f"Unrouted callback {action}")
 
     def test_public_branding(self):
         self.assertIn("MSK Bot", MAIN)
