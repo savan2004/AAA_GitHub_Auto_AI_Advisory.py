@@ -1,0 +1,21 @@
+name: MSK Group Natural-Language Tests
+on:
+  pull_request:
+    paths:
+      - 'group_stock_requests.py'
+      - 'tests/test_group_stock_requests.py'
+      - 'main.py'
+      - '.github/workflows/msk-group-tests.yml'
+  workflow_dispatch:
+jobs:
+  parser-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile group integration
+        run: python -m py_compile main.py group_stock_requests.py
+      - name: Test group request parser
+        run: python -m unittest discover -s tests -p 'test_group_stock_requests.py' -v
