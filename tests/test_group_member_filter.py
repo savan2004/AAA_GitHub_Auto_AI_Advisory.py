@@ -31,6 +31,12 @@ class MemberFilterTests(unittest.TestCase):
     def test_forwarded_channel(self):
         self.assertFalse(is_member_message(msg(forward_origin=SimpleNamespace(type="channel"))))
 
+    def test_legacy_channel_forward(self):
+        self.assertFalse(is_member_message(msg(forward_from_chat=SimpleNamespace(type="channel"))))
+
+    def test_forward_origin_chat(self):
+        self.assertFalse(is_member_message(msg(forward_origin=SimpleNamespace(type="chat"))))
+
     def test_private_chat(self):
         self.assertFalse(is_member_message(msg(chat=SimpleNamespace(type="private"))))
 
