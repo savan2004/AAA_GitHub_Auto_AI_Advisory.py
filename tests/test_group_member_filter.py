@@ -71,5 +71,41 @@ class MemberFilterTests(unittest.TestCase):
 
 
 
+    def test_unmentioned_member_review_dispatches(self):
+        """Exercise the real group handler with a natural-language group message."""
+        import ast
+        from pathlib import Path
+        from unittest.mock import Mock
+        from group_stock_requests import extract_stock_request
+
+        source = ast.parse(Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8"))
+        handler = next(node for node in source.body if isinstance(node, ast.FunctionDef)
+                       and node.name == "group_stock_review")
+        handler.decorator_list = []
+        isolated = ast.fix_missing_locations(ast.Module(body=[handler], type_ignores=[]))
+        executor, limiter = Mock(), Mock()
+        limiter.is_allowed.return_value = True
+        ctx = {
+            "is_member_message": is_member_message,
+            "API_RATE_LIMITER": limiter,
+            "extract_stock_request": extract_stock_request,
+            "executor": executor,
+            "_group_stock_review": Mock(),
+            "logger": Mock(),
+            "safe_send": Mock(),
+        }
+        exec(compile(isolated, "<group-handler-test>", "exec"), ctx)
+        message = msg(text="Share review on Reliance", message_id=987)
+        message.chat.id = -100123
+        ctx["group_stock_review"](message)
+        executor.submit.assert_called_once_with(ctx["_group_stock_review"], -100123, 987, "RELIANCE")
+
+        # Channel forwards and bot-originated copies must not trigger research.
+        forwarded = msg(text="Share review on Reliance", message_id=988, is_automatic_forward=True)
+        forwarded.chat.id = -100123
+        ctx["group_stock_review"](forwarded)
+        executor.submit.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
