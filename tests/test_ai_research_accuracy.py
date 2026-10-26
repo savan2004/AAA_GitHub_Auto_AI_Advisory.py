@@ -3,9 +3,12 @@
 No external APIs/keys/Telegram calls. Full provider HTTP responses are mocked.
 """
 import ast
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
+
+os.environ.setdefault('TELEGRAM_TOKEN','offline-test-token-no-live-bot')
 
 import ai_provider_gateway as gw
 import ai_engine
