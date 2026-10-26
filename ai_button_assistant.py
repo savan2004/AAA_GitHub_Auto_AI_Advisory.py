@@ -152,7 +152,12 @@ def draft(chat_id, topic, question, *, now=None, caller=None):
     if facts is None and topic not in ("general", "portfolio"):
         return ("The previous research data has expired or is unavailable. "
                 "Please run this button again, then ask your question."), False
-    if not facts and _is_market_claim(question):
+    educational = any(question.lower().startswith(prefix) for prefix in (
+        "what is ", "what does ", "explain ", "define ", "how does ",
+        "how can ", "difference between ", "meaning of ", "tell me about ",
+        "क्या है", "समझाओ", "कैसे ", "મતલબ", "સમજાવો",
+    ))
+    if not facts and _is_market_claim(question) and not educational:
         return ("Current market data are not supplied. Please select a stock "
                 "and run Technical/Fundamental/Report first."), False
     system, prompt = _draft_prompt(topic, question, facts)
