@@ -49,6 +49,7 @@ from reportlab.platypus import (
 )
 
 import research_engine as eng
+from business_model_forecast import business_model_for, forecast_segments, explain_gap
 from research_reasoning import build_reasoning
 import report_charts as charts
 
@@ -410,7 +411,10 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         "fin": charts.chart_financials(years, sym) if years else None,
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
-    return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
+    # Only a verified company filing can populate business-unit descriptions.
+    business_profile = business_model_for(sym)
+    business_forecast = forecast_segments(business_profile) if business_profile else None
+    return dict(sym=sym, name=name, business_forecast=business_forecast, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
                 news=inp.get("news") or [], fund=fund,
@@ -497,6 +501,77 @@ def _cover(R, story):
             story.append(im)
     story.append(Spacer(1, 4))
     story.append(P(R["nar"]["summary"], "just"))
+
+
+
+def _business_model_and_forecast(R, story):
+    """Lead research with verified segment unit economics, not price oscillators."""
+    data = R.get("business_forecast")
+    story += section("Business Model & 3-Year Forecast", "How the company earns, what drives earnings, and what is assumed")
+    if not data:
+        story += [
+            P(esc(explain_gap(R["sym"])), "small"),
+            P("Research coverage gap: locate the latest official segment filing and "
+              "verify revenue, segment EBITDA, capital intensity, business drivers and "
+              "ownership economics before publishing forecasts.", "tiny"),
+        ]
+        return
+
+    from business_model_forecast import PROFILES
+    profile = PROFILES[R["sym"]]
+    story += [
+        P("<b>WHAT THE COMPANY SELLS AND HOW IT MAKES MONEY</b>", "h2"),
+        P(esc(profile["business_summary"]), "just"),
+        Spacer(1, 6),
+        P("<b>Capital allocation question:</b> " + esc(profile["capital_allocation"]), "small"),
+        Spacer(1, 6),
+        P("<b>FY2026 filing baseline:</b> Segment financials in INR crore; "
+          "not company-level consolidated revenue and not additive.", "small"),
+        P("<b>Original official report:</b> " + esc(data["source"]) + " · "
+          "As of " + esc(data["asof"]), "tiny"),
+    ]
+
+    for unit in data["segments"]:
+        story += [Spacer(1, 9), P(esc(unit["name"]), "h2")]
+        story.append(kv([[
+            "Actual revenue (" + esc(unit["reported_fy"]) + ")",
+            f"Rs {unit['actual_revenue_cr']:,.0f} Cr",
+            "Actual EBITDA / margin",
+            f"Rs {unit['actual_ebitda_cr']:,.0f} Cr / {unit['reported_ebitda_margin_pct']:.1f}%",
+        ]]))
+        story += [
+            Spacer(1, 4),
+            P("<b>Business economics:</b> " + esc(unit["how_money_is_made"]), "small"),
+            P("<b>Growth drivers:</b> " + esc(unit["drivers"]), "small"),
+            P("<b>Key threats:</b> " + esc(unit["risks"]), "small"),
+            Spacer(1, 3),
+        ]
+        rows = [[P("Scenario", "th"), P("FY2027 Rev / EBITDA", "th"),
+                 P("FY2028 Rev / EBITDA", "th"), P("FY2029 Rev / EBITDA", "th")]]
+        for scenario in ("Bear", "Base", "Bull"):
+            periods = unit["scenarios"][scenario]
+            rows.append([P(scenario, "cellb")] + [
+                P(f"{p['revenue_cr']:,.0f} / {p['ebitda_cr']:,.0f}", "cellr")
+                for p in periods
+            ])
+        story.append(table(rows, [26 * mm, 51 * mm, 51 * mm, 50 * mm]))
+        assumptions = " · ".join(
+            f"{name}: {unit['scenarios'][name][0]['assumed_growth_pct']:+.1f}% growth, "
+            f"{unit['scenarios'][name][0]['assumed_ebitda_margin_pct']:.1f}% EBITDA margin"
+            for name in ("Bear", "Base", "Bull")
+        )
+        story.append(P("<b>Model assumptions:</b> " + esc(assumptions), "tiny"))
+    story += [
+        Spacer(1, 7),
+        callout("<b>Forecasts are hypothetical scenarios, not measured facts.</b> "
+                + esc(data["assumptions_note"]), AMBER_H, "#FFF9EC"),
+        Spacer(1, 5),
+        P("<b>What cannot be valued here:</b> No consolidated projected PAT, EPS, "
+          "free cash flow, net debt, SOTP value or price target is computed. "
+          "Segment eliminations, depreciation, taxation and capital spending "
+          "must be verified first.", "small"),
+        P("<b>Coverage notes:</b> " + esc(data["special_note"]), "tiny"),
+    ]
 
 
 def _investment_view(R, story):
@@ -889,6 +964,7 @@ def build_pdf(R: dict, output_path: str) -> str:
     story: list = []
     _cover(R, story)
     story.append(PageBreak())
+    _business_model_and_forecast(R, story)
     _investment_view(R, story)
     _technical(R, story)
     _risk(R, story)
