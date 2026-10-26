@@ -617,7 +617,11 @@ def build_portfolio_card(uid):
             "   ···"
         ]
 
-    lines += ["", f"{icon} <b>{'Partial' if missing_quotes else 'Total'} P&L: ₹{t_pnl:+,.2f} ({t_pct:+.2f}%)</b>", "─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM", "⚠️ <i>Educational only.</i>"]
+    if priced_inv > 0:
+        lines += ["", f"{icon} <b>{'Partial' if missing_quotes else 'Total'} P&L: ₹{t_pnl:+,.2f} ({t_pct:+.2f}%)</b>"]
+    else:
+        lines += ["", "⚪ <b>P&L unavailable — no valid market quotes</b>"]
+    lines += ["─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM", "⚠️ <i>Educational only.</i>"]
     if largest and concentration >= 40:
         lines += [f"⚠️ Concentration risk: {largest['sym']} is {concentration:.1f}% of invested capital (cost basis)."]
     elif largest:
