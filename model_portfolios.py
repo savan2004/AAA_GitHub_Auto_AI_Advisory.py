@@ -150,6 +150,10 @@ def format_model(result, snap):
         source_rejections = "; ".join(
             f"{escape(str(k))}: {v}" for k, v in sorted((snap.get("rejected") or {}).items())
         )
+        provider_failures = "; ".join(
+            f"{escape(str(k))}: {escape(str(v))}" for k, v in
+            sorted((snap.get("provider_failures") or {}).items())
+        )
         cache_count = snap.get("cached")
         source_note = (
             f"Cached fundamental records: {cache_count}/{universe}.\n"
@@ -158,7 +162,7 @@ def format_model(result, snap):
         return [head + f"\nOnly {result['qualified']}/{MODEL_SIZE} passed the selection and diversification gates.\n"
                 "No ten-stock model or allocation published. Insufficient verified coverage.\n"
                 + source_note
-                + f"Research data failures: {source_rejections[:500] or 'provider evidence incomplete or unavailable'}.\n"
+                + f"Research data failures: {(provider_failures or source_rejections)[:500] or 'provider evidence incomplete or unavailable'}.\n"
                 + f"Model exclusion reasons: {reasons[:500] or 'Too few eligible candidates / cache warming'}.\n"
                 + "No output here is evidence of correct live selection until prices and fundamental ratios are independently verified."], []
     holdings = result["holdings"]
@@ -189,8 +193,9 @@ def get_research_snapshot():
     Initial presses may return insufficient coverage. We do NOT fake ten picks.
     Up to eight missing quotes and two history series may be refreshed on a click.
     """
-    from data_engine import cached_get, get_hist, get_info
-    from nifty500_collector import SECTOR_STOCKS
+    from data_engine import cached_get, cached_set, get_hist
+    from model_financial_data import fetch_model_fundamentals
+    from nifty500_collector import SECTOR_STOCKS, get_stock_sector
 
     sectors = [
         sorted(set(stocks))
@@ -225,7 +230,35 @@ def get_research_snapshot():
                 pass
         return result
 
-    return snapshot(universe, cached_get, get_info, limited_history, priority=priority)
+    # Model-specific cache prevents partial Yahoo quote records from passing
+    # as fundamentals. Every accepted value comes with statement-period evidence.
+    failures = {}
+
+    def model_cached_get(key, ttl):
+        prefix, suffix = "info_v2_", ".NS"
+        if key.startswith(prefix) and key.endswith(suffix):
+            symbol = key[len(prefix):-len(suffix)]
+            return cached_get(f"model_fund_v1_{symbol}", min(int(ttl), 21600))
+        return cached_get(key, ttl)
+
+    def model_get_info(symbol):
+        bad = cached_get(f"model_failure_v1_{symbol}", 1800)
+        if bad:
+            failures[symbol] = bad
+            return None
+        # This is deliberately a bounded fetch; if provider refuses or data
+        # lacks an annual period, do not fill values from unverifiable guesses.
+        info, reason = fetch_model_fundamentals(symbol, get_stock_sector(symbol))
+        if not info:
+            failures[symbol] = reason or "fundamentals missing"
+            cached_set(f"model_failure_v1_{symbol}", failures[symbol], 1800)
+            return None
+        cached_set(f"model_fund_v1_{symbol}", info, 21600)
+        return info
+
+    data = snapshot(universe, model_cached_get, model_get_info,
+                    limited_history, priority=priority)
+    return dict(data, provider_failures=failures)
 
 
 def run_model(profile):
