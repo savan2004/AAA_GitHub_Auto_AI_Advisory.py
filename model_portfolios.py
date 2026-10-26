@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from html import escape
 import math
 import os
+import re
 import time
 
 from research_upgrade import rank, snapshot
@@ -52,6 +53,8 @@ def _validate_evidence(row, rupees_each, now):
     for field in ("symbol", "sector", "asof"):
         if not isinstance(row.get(field), str) or not row[field].strip():
             return f"missing {field}"
+    if not re.fullmatch(r"[A-Z0-9&-]{1,25}", row["symbol"]):
+        return "invalid NSE-style ticker"
     if any(word in row["sector"].lower() for word in ("financial", "bank", "insurance")):
         return "financial-sector validation unavailable"
     for field in ("roe", "growth", "debt", "cap", "pe", "vol", "price", "turnover", "fetched_at"):
@@ -151,7 +154,7 @@ def format_model(result, snap):
     holdings = result["holdings"]
     messages = [head + f"Cash reserve: ₹{result['cash_rupees']/1e7:,.2f} Cr ({cfg['cash_pct']}%).\n"
                 f"Ten holdings, at most {MAX_STOCKS_PER_SECTOR} from one sector.\n"
-                "Amounts are illustrative risk budgets, not share orders or recommendations."]
+                "Scores are unbacktested heuristics. Amounts are illustrative risk budgets, not share orders."]
     for start in (0, 5):
         blocks = []
         for number, h in enumerate(holdings[start:start + 5], start + 1):
