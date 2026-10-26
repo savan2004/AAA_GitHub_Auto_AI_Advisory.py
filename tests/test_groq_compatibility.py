@@ -101,5 +101,36 @@ class GroqCompatibilityTests(unittest.TestCase):
         self.assertIn("All providers failed", result)
         self.assertNotIn(secret, str(warning.call_args_list))
 
+    def test_legacy_wrapper_openai_fallback_after_groq_unavailable(self):
+        client = Mock()
+        client.chat.completions.create.return_value = reply("OpenAI backup success")
+        client.__enter__ = Mock(return_value=client)
+        client.__exit__ = Mock(return_value=False)
+        groq = Mock()
+        groq.chat.completions.create.side_effect = RuntimeError("offline")
+        with patch.object(llm_wrapper, "GROQ_API_KEY", "dummy"), patch.object(
+            llm_wrapper, "GEMINI_API_KEY", ""
+        ), patch.object(ai_engine, "_make_groq_client", return_value=groq), patch.dict(
+            "os.environ", {"OPENAI_API_KEY": "placeholder-openai"}
+        ), patch("openai.OpenAI", return_value=client):
+            result = llm_wrapper.actual_llm_call("test")
+        self.assertEqual(result, "OpenAI backup success")
+
+    def test_legacy_wrapper_openai_error_never_logs_secret(self):
+        secret = "private-test-secret"
+        client = Mock()
+        client.__enter__ = Mock(return_value=client)
+        client.__exit__ = Mock(return_value=False)
+        client.chat.completions.create.side_effect = RuntimeError(secret)
+        with patch.object(llm_wrapper, "GROQ_API_KEY", ""), patch.object(
+            llm_wrapper, "GEMINI_API_KEY", ""
+        ), patch.dict("os.environ", {"OPENAI_API_KEY": "placeholder-openai"}), patch(
+            "openai.OpenAI", return_value=client
+        ), patch.object(llm_wrapper.logger, "warning") as warnings:
+            response = llm_wrapper.actual_llm_call("test")
+        self.assertIn("All providers failed", response)
+        self.assertNotIn(secret, str(warnings.call_args_list))
+
+
 if __name__ == "__main__":
     unittest.main()
