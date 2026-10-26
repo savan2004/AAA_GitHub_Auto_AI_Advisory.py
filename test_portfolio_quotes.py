@@ -19,6 +19,12 @@ class PortfolioQuoteTests(unittest.TestCase):
         self.assertIn("Partial", body)
         self.assertIn("Prices unavailable", body)
 
+    def test_concentration_alert_is_cost_basis_based(self):
+        body = ast.get_source_segment(SOURCE, FUNCTION)
+        self.assertIn("concentration >= 40", body)
+        self.assertIn("Concentration risk:", body)
+        self.assertIn("cost basis", body)
+
     def test_invalid_prices_are_excluded(self):
         body = ast.get_source_segment(SOURCE, FUNCTION)
         self.assertIn("math.isfinite", body)
