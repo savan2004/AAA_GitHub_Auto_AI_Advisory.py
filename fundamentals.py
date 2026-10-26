@@ -62,14 +62,14 @@ def _set_cached(key: str, val: Any, ttl: int = None):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def safe_val(d: dict, *keys, mul: float = 1.0):
+def safe_val(d: dict, *keys, mul: float = 1.0, allow_zero: bool = False):
     for k in keys:
         v = d.get(k)
         if v is not None:
             try:
                 f = float(v) * mul
-                if f != 0:        # don't accept 0 as a valid fundamental
-                    return round(f, 2)
+                if f == f and abs(f) != float("inf") and (f != 0 or allow_zero):
+                    return round(f, 4)
             except Exception:
                 pass
     return None
@@ -359,14 +359,23 @@ def get_fundamentals(sym: str) -> dict:
             result["pe"]     = safe_val(info, "pe")
             result["fwd_pe"] = safe_val(info, "forwardPE")
             result["pb"]     = safe_val(info, "pb")
-            roe_raw = safe_val(info, "roe")
-            result["roe"]    = round(roe_raw * 100, 1) if roe_raw is not None and abs(roe_raw) <= 1 else roe_raw
+            # Yahoo normalized `roe_pct` is already a percent. Its raw
+            # `roe` (returnOnEquity) is a FRACTION, including >1 in
+            # unusual cases. Never guess the unit from numerical size.
+            if info.get("roe_pct") is not None:
+                result["roe"] = safe_val(info, "roe_pct", allow_zero=True)
+            else:
+                result["roe"] = safe_val(info, "roe", mul=100, allow_zero=True)
             result["eps"]    = safe_val(info, "eps")
             result["mcap"]   = info.get("market_cap")
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
             # fmt_mcap() correctly converts to Crores by dividing by 1e7
             result["rev"]    = info.get("totalRevenue")
-            result["de"]     = safe_val(info, "debtToEquity")
+            # Yahoo debtToEquity=percent points (e.g. 5 -> 0.05x).
+            # Prefer data_engine's explicit normalized ratio whenever present.
+            result["de"] = (safe_val(info, "debt_equity_ratio", allow_zero=True)
+                            if info.get("debt_equity_ratio") is not None
+                            else safe_val(info, "debtToEquity", mul=0.01, allow_zero=True))
             result["beta"]   = safe_val(info, "beta")
             result["w52h"]   = safe_val(info, "high52")
             result["w52l"]   = safe_val(info, "low52")
@@ -432,12 +441,11 @@ def get_fundamentals(sym: str) -> dict:
             if result["fwd_pe"] is None: result["fwd_pe"] = safe_val(yf_info, "forwardPE")
             if result["pb"]    is None: result["pb"]    = safe_val(yf_info, "priceToBook")
             if result["roe"]   is None:
-                roe_raw = safe_val(yf_info, "returnOnEquity")
-                result["roe"] = round(roe_raw * 100, 1) if roe_raw and abs(roe_raw) <= 1 else roe_raw
+                result["roe"] = safe_val(yf_info, "returnOnEquity", mul=100, allow_zero=True)
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
             if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
             if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
-            if result["de"]    is None: result["de"]   = safe_val(yf_info, "debtToEquity")
+            if result["de"]    is None: result["de"]   = safe_val(yf_info, "debtToEquity", mul=0.01, allow_zero=True)
             if result["w52h"]  is None: result["w52h"] = safe_val(yf_info, "fiftyTwoWeekHigh")
             if result["w52l"]  is None: result["w52l"] = safe_val(yf_info, "fiftyTwoWeekLow")
             if result["beta"]  is None: result["beta"] = safe_val(yf_info, "beta")
