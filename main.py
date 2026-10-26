@@ -1289,7 +1289,12 @@ def group_stock_review(m):
         return
     query = extract_stock_request(m.text)
     if query:
-        executor.submit(_group_stock_review, m.chat.id, m.message_id, query)
+        try:
+            executor.submit(_group_stock_review, m.chat.id, m.message_id, query)
+        except RuntimeError:
+            logger.exception("Group analysis task rejected by executor")
+            safe_send(m.chat.id, "⚠️ Analysis temporarily unavailable. Please retry later.",
+                      reply_to_message_id=m.message_id)
 
 
 # ── Catch-all Text Handler ───────────────────────────────────────────────────
