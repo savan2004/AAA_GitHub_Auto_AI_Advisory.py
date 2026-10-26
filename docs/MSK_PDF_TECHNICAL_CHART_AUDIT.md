@@ -25,3 +25,9 @@
 - Uses synthetic OHLCV fixtures in GitHub CI, **never** real-money or Telegram publishing tests.
 - **PR only**: no merge/deploy since MSK Render `autoDeploy` is enabled on main.
 - Current chart is *technical research* not a backtested prediction. A "WAIT" observation is deliberately expected frequently. Real EOD datasets need independent verification before production deployment.
+
+## Independent regression evidence (26 Oct 2026)
+
+- New source-consistent image + full-PDF regression suite: **7/7 passed** in Actions run 40337313192 (new test step).
+- Extra full `tests/test_fundamental_pipeline.py` suite: **8 failures + 17 errors** on this branch. Specific failures identify missing `R['asof']` and `R['completeness']` from main's `report_generator.assemble()`, and further score expectations incompatible with main. These are NOT resolved in this chart-only PR; PR #39 handles the `asof` gap and further work is needed for overall Fundamental Pipeline readiness. Since the unrelated legacy suite already relies on absent main fields, it is no longer treated as the chart-specific release gate. It remains a separate production blocker for the daily-research workflow.
+- Before combining with PR #39 or PR #40, rebase/re-run **both** research and chart suites. No merging based on chart tests alone.
