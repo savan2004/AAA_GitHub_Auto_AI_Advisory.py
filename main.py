@@ -655,13 +655,19 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
     try:
         bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
     except Exception as e:
+        # Never log the bot token or message content. This used to fail silently,
+        # making missing discussion replies impossible to diagnose on Render.
+        logger.warning("[Telegram delivery] send failed: HTTP %s (%s)",
+                       getattr(e, "error_code", "unknown"), type(e).__name__)
         err_str = str(e).lower()
         if "can't parse" in err_str or "bad request" in err_str:
             try:
                 plain = re.sub(r"<[^>]+>", "", str(text))
                 bot.send_message(chat_id, plain, **kwargs)
-            except Exception:
-                pass
+            except Exception as fallback_error:
+                logger.warning("[Telegram delivery] plain-text fallback failed: HTTP %s (%s)",
+                               getattr(fallback_error, "error_code", "unknown"),
+                               type(fallback_error).__name__)
 
 
 # ── Command Handlers ─────────────────────────────────────────────────────────
