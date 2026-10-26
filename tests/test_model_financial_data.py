@@ -1,8 +1,13 @@
 """Contract tests for named NSE financial evidence; no live network needed."""
 from datetime import datetime, timezone
+from unittest.mock import patch
+import json
+import os
+import tempfile
+from pathlib import Path
 import unittest
 
-from model_financial_data import parse_screener_model
+from model_financial_data import parse_screener_model, fetch_model_fundamentals
 
 NOW = datetime(2026, 10, 26, 12, tzinfo=timezone.utc).timestamp()
 
@@ -82,6 +87,58 @@ class ScreenerModelEvidenceTests(unittest.TestCase):
     def test_missing_roe_rejected(self):
         data = demo_html().replace("31.9 %", "-")
         self.assertIn("ROE", self.parse(data)[1])
+
+
+class ApprovedSnapshotTests(unittest.TestCase):
+    def test_without_rights_never_scrapes_public_site(self):
+        with patch.dict(os.environ, {
+            "MODEL_APPROVED_DATA_PATH": "",
+            "MODEL_SCREENER_USE_AUTHORIZED": "",
+        }):
+            with patch("model_financial_data.requests.get") as online:
+                record, reason = fetch_model_fundamentals("INFY", "Technology")
+                online.assert_not_called()
+                self.assertIsNone(record)
+                self.assertIn("not configured", reason)
+
+    def test_authorized_snapshot_is_used_as_is_without_refetch(self):
+        record, reason = parse_screener_model(demo_html(), "INFY",
+                                               fetched_at=NOW, sector="Technology")
+        self.assertIsNone(reason)
+        record.update(symbol="INFY", provider="Approved Test Dataset",
+                      provider_url="https://www.nseindia.com/reports/fixture",
+                      coverage="synthetic fixture using identical annual periods")
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "approved.json"
+            path.write_text(json.dumps({
+                "schema_version": 1, "approved_by": "Test Research Reviewer",
+                "records": {"INFY": record},
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"MODEL_APPROVED_DATA_PATH": str(path)}):
+                with patch("model_financial_data.requests.get") as remote:
+                    with patch("model_financial_data.time.time", return_value=NOW):
+                        found, error = fetch_model_fundamentals("INFY", "Technology")
+                    remote.assert_not_called()
+            self.assertIsNone(error)
+            self.assertEqual(found["name"], "Example Software Ltd")
+            self.assertEqual(found["roe_pct"], 31.9)
+
+    def test_approval_invalid_or_wrong_symbol_never_passes(self):
+        record, _ = parse_screener_model(demo_html(), "INFY", fetched_at=NOW,
+                                          sector="Technology")
+        record.update(symbol="INFY", provider="Approved Test Dataset",
+                      provider_url="https://www.nseindia.com/reports/fixture")
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "approved.json"
+            path.write_text(json.dumps({
+                "schema_version": 1, "approved_by": "",
+                "records": {"INFY": record},
+            }))
+            with patch.dict(os.environ, {"MODEL_APPROVED_DATA_PATH": str(path)}):
+                with patch("model_financial_data.time.time", return_value=NOW):
+                    found, error = fetch_model_fundamentals("INFY", "Technology")
+            self.assertIsNone(found)
+            self.assertIn("approval", error)
 
 
 if __name__ == "__main__":
