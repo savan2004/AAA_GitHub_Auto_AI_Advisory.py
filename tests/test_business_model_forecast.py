@@ -85,8 +85,7 @@ class BusinessForecastTests(unittest.TestCase):
             self.assertIn("hypothetical scenarios", text)
             self.assertIn("NOT additive", text)
             self.assertIn("New Energy", text)
-            self.assertIn("not computed", text.lower().replace("is computed", "not computed")
-                          if "not computed" in text.lower() else "not computed")
+            self.assertIn("No consolidated projected PAT", " ".join(text.split()))
             self.assertLess(text.index("Business Model & 3-Year Forecast"),
                             text.index("Technical Analysis"))
 
