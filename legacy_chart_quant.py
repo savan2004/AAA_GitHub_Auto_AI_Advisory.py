@@ -83,9 +83,6 @@ def draw_signal_rows(sidebar, payload, border_color=_BORDER):
     rows = formatted_rows(payload)
     top, bottom = 0.793, 0.218
     gap = (top - bottom) / len(rows)
-    sidebar.text(0.065, 0.812, "CONFIRMED QUANT READOUT",
-                 fontsize=7.0, color=_SECONDARY, fontweight="bold",
-                 va="center", zorder=8)
     for i, (label, value) in enumerate(rows):
         y = top - i * gap
         if i % 2 == 0:
