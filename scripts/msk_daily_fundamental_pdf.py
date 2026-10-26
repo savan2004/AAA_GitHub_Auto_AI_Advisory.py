@@ -116,6 +116,16 @@ def validate_inputs(inp: dict, today: date) -> list[str]:
         errors.append("Fewer than 4 annual financial periods")
     if len(quarters) < 4:
         errors.append("Fewer than 4 quarterly financial periods")
+    # Financial statement periods need an explicit, defensible reporting date.
+    from research_data import freshness, period_end
+    annual_dates = [period_end(r.get("label", "")) for r in years]
+    if annual_dates:
+        if any(d is None for d in annual_dates) or any(b <= a for a, b in zip(annual_dates, annual_dates[1:])):
+            errors.append("Annual financial reporting dates are invalid or out of order")
+        elif (today - annual_dates[-1]).days > 800 or (today - annual_dates[-1]).days < 0:
+            errors.append("Latest annual financials are stale or from the future")
+    if quarters and freshness(quarters, today).get("status") != "FRESH":
+        errors.append("Latest quarterly financials are not confirmed fresh")
     if years:
         row = years[-1]
         for key in ("revenue", "net_profit"):
@@ -208,7 +218,7 @@ def send(meta: dict) -> int:
     caption = (f"📄 MSK Daily Fundamental Research | {meta['symbol']}\n"
                f"{meta['company']}\n"
                f"Financial and price data reviewed as of {meta['asof']}.\n"
-               "Full fundamental, peer, technical and risk details inside.\n"
+               "Financial, technical, ownership and risk sections; peers where available.\n"
                "Educational research, not SEBI-registered investment advice.")
     bot = telebot.TeleBot(token, threaded=False)
     with p.open("rb") as file:
