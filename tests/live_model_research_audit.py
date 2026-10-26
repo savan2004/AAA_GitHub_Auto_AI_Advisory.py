@@ -19,6 +19,7 @@ import pandas as pd
 import requests
 
 from research_upgrade import evaluate, rank
+from model_financial_data import fetch_model_fundamentals
 from model_portfolios import select_model
 
 SAMPLE = (
@@ -138,13 +139,24 @@ def audit():
         fetched_at = time.time()
         info = make_fundamentals(funda_obj, meta, sector, fetched_at) if funda_obj else {
             "sector": sector, "fetched_at": fetched_at}
-        row, reason = evaluate(symbol, info, frame, now=fetched_at)
+        # The unavailable Yahoo quoteSummary feed must not be our only route.
+        # Run the exact new Screener parser, with explicit fiscal-period labels.
+        screener_info, screener_reason = fetch_model_fundamentals(symbol, sector)
+        if screener_info is not None:
+            info = screener_info
+        row, reason = evaluate(symbol, info, frame, now=time.time())
         if row:
             rows.append(row)
         print("\nSTOCK:", description, "(", symbol, ")")
         print("CHART_SOURCE:", histurl, "STATUS:", histstatus)
         print("FUND_SOURCE:", fundurl, "STATUS:", fundstatus)
-        print("SECTOR:", info.get("sector"), "SOURCE:", info.get("sources", {}).get("sector", "repository map"))
+        print("FALLBACK_SOURCE:", f"https://www.screener.in/company/{symbol}/consolidated/")
+        print("FALLBACK_STATUS:", "PARSED" if screener_info else (screener_reason or "unavailable"))
+        print("COMPANY_ON_PAGE:", info.get("name") or "Unknown")
+        print("ANNUAL_SALES_PERIOD:", info.get("fiscal_sales_period") or "Unavailable")
+        print("ANNUAL_SALES_PREVIOUS:", info.get("fiscal_sales_previous") or "Unavailable")
+        print("BALANCE_PERIOD:", info.get("balance_sheet_period") or "Unavailable")
+        print("SECTOR:", info.get("sector"), "SOURCE:", info.get("provider", "repository map"))
         print("HISTORY_ASOF:", row["asof"] if row else (
             str(frame.index[-1].date()) if frame is not None and not frame.empty else "Unavailable"))
         print("CLOSE_INR:", fmt(row["price"] if row else (
@@ -162,6 +174,7 @@ def audit():
                 print("PROFILE", profile.upper(), "PASS" if eligible else "FAIL",
                       "score=" + str(rank([row], profile)[0]["score"]) if eligible else "threshold mismatch")
 
+    print("\nREAL_STOCKS_WITH_COMPLETE_FINANCIALS:", len(rows), "of", len(SAMPLE))
     for profile in ("conservative", "moderate", "aggressive"):
         model = select_model(rows, profile, now=time.time())
         print("\nFINAL_MODEL", profile.upper(),
