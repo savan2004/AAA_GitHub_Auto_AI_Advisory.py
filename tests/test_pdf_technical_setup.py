@@ -84,6 +84,19 @@ class TechnicalChartRegression(unittest.TestCase):
         for key in ("tech_price", "tech_momentum"):
             Path(r["ch"][key]).unlink(missing_ok=True)
 
+    def test_quarterly_actual_chart_and_missing_period_guard(self):
+        from report_quarterly_charts import render_quarterly_chart
+        data = strong()
+        quarters = data["stm"]["quarters"]
+        plot = render_quarterly_chart(quarters, "STRONGCO")
+        self.assertIsNotNone(plot)
+        file = Path(plot)
+        self.assertGreater(file.stat().st_size, 10_000)
+        self.assertEqual(file.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+        file.unlink(missing_ok=True)
+        incomplete = [{**q, "revenue": None} for q in quarters]
+        self.assertIsNone(render_quarterly_chart(incomplete, "STRONGCO"))
+
     def test_pivots_require_right_side_confirmation(self):
         df = strong()["df"]
         # Last candle alone cannot become a confirmed swing pivot.
