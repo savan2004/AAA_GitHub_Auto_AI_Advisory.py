@@ -162,6 +162,14 @@ def draft(chat_id, topic, question, *, now=None, caller=None):
         "today", "current", "latest", "right now", "live price",
         "this minute", "अभी", "आज", "હાલ", "આજે",
     ))
+    if topic == "portfolio" and any(term in question.lower() for term in (
+        "my holding", "my portfolio", "my profit", "my loss", "my p&l",
+        "my average", "my quantity", "my investment", "my returns",
+        "मेरे शेयर", "मेरा पोर्टफोलियो", "મારો પોર્ટફોલિયો",
+    )):
+        return ("Private portfolio holdings and performance are not supplied "
+                "to AI. Check the Portfolio button for your actual figures; "
+                "you may ask general diversification or risk questions."), False
     if not facts and _is_market_claim(question) and (not educational or live_intent):
         return ("Current market data are not supplied. Please select a stock "
                 "and run Technical/Fundamental/Report first."), False
@@ -186,6 +194,10 @@ def draft(chat_id, topic, question, *, now=None, caller=None):
         logger.warning("AI button draft rejected: number not grounded in source")
         return ("AI draft rejected because it introduced a number not present "
                 "in the selected research data. Please rely on the original report."), False
+    if topic in ("general", "portfolio") and re.search(
+        r"\b(?:BUY|SELL|BUY NOW|SELL NOW)\b", body, flags=re.I
+    ) and "BUY" not in (facts or "").upper() and "SELL" not in (facts or "").upper():
+        return "AI draft rejected because it made an unsupported trading call.", False
     if any(phrase in body.lower() for phrase in (
         "guaranteed return", "sure-shot profit", "latest news confirms",
         "insider sources", "company announced today",
