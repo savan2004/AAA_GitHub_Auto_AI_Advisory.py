@@ -51,6 +51,8 @@ from reportlab.platypus import (
 import research_engine as eng
 from research_reasoning import build_reasoning
 import report_charts as charts
+from pdf_technical_setup import build_setup_charts
+from report_quarterly_charts import render_quarterly_chart
 
 logger = logging.getLogger(__name__)
 
@@ -403,11 +405,16 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         logger.debug(f"buzz status skipped: {e}")
 
     years = (inp.get("stm") or {}).get("years") or []
+    chart_pack = build_setup_charts(df, sym, t)
     ch = {
-        "tech": charts.chart_technical(df, sym, t),
+        "tech": charts.chart_technical(df, sym, t) if not chart_pack else None,
+        "tech_price": chart_pack["price"] if chart_pack else None,
+        "tech_momentum": chart_pack["momentum"] if chart_pack else None,
+        "tech_setup": chart_pack["summary"] if chart_pack else None,
         "rel": charts.chart_relative_and_drawdown(df["Close"], nifty["Close"] if has_nifty else None, sym),
         "score": charts.chart_scorecard(sc["pillars"], sc["composite"], sym),
         "fin": charts.chart_financials(years, sym) if years else None,
+        "quarters": render_quarterly_chart((inp.get("stm") or {}).get("quarters"), sym),
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
     return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
@@ -502,6 +509,31 @@ def _cover(R, story):
 def _investment_view(R, story):
     fv = R["fv"]
     story += section("Investment View", "Analyst commentary, bull vs bear case and valuation cross-check")
+    # Keep business/fundamental evidence and timing in the SAME readable panel.
+    # Technical breakout evidence does not override missing company financials.
+    pillars = (R.get("sc") or {}).get("pillars") or {}
+    setup = (R.get("ch") or {}).get("tech_setup") or {}
+    def _pillar(label):
+        x = pillars.get(label)
+        return f"{x}/100 (model score)" if isinstance(x, (float, int)) else "Not verified"
+    evidence_warning = bool((R.get("sc") or {}).get("insufficient_evidence"))
+    timing = setup.get("status") or "Advanced chart not verified (using basic technical view)"
+    last_date = setup.get("date") or "last available closing candle"
+    combined = ("RESEARCH ONLY - insufficient verified financial evidence"
+                if evidence_warning else
+                "WATCHLIST / independent due diligence before any transaction")
+    story += [P("FUNDAMENTAL + TECHNICAL | ONE-PAGE DECISION SNAPSHOT", "h2"),
+              table([[P("Dimension", "th"), P("Evidence", "th")],
+                     [P("Business quality", "cellb"), P(_pillar("Quality"), "cell")],
+                     [P("Growth / valuation", "cellb"),
+                      P(esc(_pillar("Growth") + " / " + _pillar("Valuation")), "cell")],
+                     [P("Technical timing", "cellb"),
+                      P(esc(timing + " (EOD " + str(last_date) + ")"), "cell")],
+                     [P("Combined research", "cellb"), P(esc(combined), "cellb")]],
+                    [43 * mm, 135 * mm]),
+              P("Model scores are descriptive screening metrics, not calibrated win "
+                "probabilities or price targets. Technical timing cannot prove company quality.", "tiny"),
+              Spacer(1, 7)]
     reasoning = R.get("reasoning") or {}
     story.append(P(colored("RESEARCH METHOD: TOP-DOWN + BOTTOM-UP", NAVY_H), "h2"))
     story.append(P("<b>Top-down:</b> " + esc(reasoning.get("market_regime", "NOT VERIFIED")), "small"))
@@ -564,7 +596,20 @@ def _investment_view(R, story):
 def _technical(R, story):
     t = R["t"]
     story += section("Technical Analysis", "Multi-timeframe trend, momentum, volume and key price levels")
-    if R["ch"].get("tech"):
+    # The standalone Telegram chart does its own download and is not safe to
+    # embed: both views MUST be calculated from the report's same OHLCV.
+    if R["ch"].get("tech_price") and R["ch"].get("tech_momentum"):
+        for key in ("tech_price", "tech_momentum"):
+            im = img(R["ch"][key], W)
+            if im:
+                story.append(im)
+                story.append(Spacer(1, 3))
+        obs = R["ch"].get("tech_setup") or {}
+        story.append(P("<b>Technical setup observation:</b> " + esc(obs.get("status", "WAIT")) +
+                       ". Strict conditions: previous 20-session high/low break, EMA 20/50 alignment, "
+                       "at least 2x prior 20-session volume, ADX 20+ and directional index agreement. "
+                       "No confirmed setup means WAIT, not a BUY/SELL call.", "small"))
+    elif R["ch"].get("tech"):
         im = img(R["ch"]["tech"], W)
         if im:
             story.append(im)
@@ -683,6 +728,12 @@ def _fundamentals(R, story):
         im = img(R["ch"]["fin"], W)
         if im:
             story += [Spacer(1, 6), im]
+    if R["ch"].get("quarters"):
+        im = img(R["ch"]["quarters"], W)
+        if im:
+            story += [Spacer(1, 6), P("Verified quarterly visual trends", "h2"),
+                      im, P("Charts show reported periods only. Quarterly figures are "
+                            "not management guidance or forward projections.", "tiny")]
 
     years = (stm or {}).get("years") or []
     if len(years) >= 3:

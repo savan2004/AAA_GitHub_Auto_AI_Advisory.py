@@ -1,0 +1,38 @@
+name: MSK PDF Technical Setup Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'pdf_technical_setup.py'
+      - 'report_generator.py'
+      - 'technical_indicators.py'
+      - 'tests/test_pdf_technical_setup.py'
+      - '.github/workflows/msk-pdf-technical-setup-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chart-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      TELEGRAM_TOKEN: '123:offline-test'
+      MPLBACKEND: 'Agg'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install locked research dependencies for offline image/PDF fixture
+        run: python -m pip install --disable-pip-version-check -r requirements.txt pypdf
+      - name: Generate two chart pages and full PDF with synthetic fixtures
+        run: python -m unittest discover -s tests -p test_pdf_technical_setup.py -v
+      # Full legacy fundamental suite currently fails against main because
+      # report_generator.assemble() lacks 'asof'/'completeness'; tracked separately
+      # in the daily fundamental research workstream (PR #39).
+      - name: Check Python syntax
+        run: python -m py_compile pdf_technical_setup.py report_generator.py technical_indicators.py report_quarterly_charts.py
