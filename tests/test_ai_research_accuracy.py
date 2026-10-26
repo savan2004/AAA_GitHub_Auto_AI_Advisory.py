@@ -151,6 +151,32 @@ class GroundedResearchTests(unittest.TestCase):
             api.assert_not_called()
 
 
+class MarketNewsEvidenceTests(unittest.TestCase):
+    def test_ai_never_returns_static_market_headlines_as_current(self):
+        with patch("market_news.get_market_news",
+                   return_value="📰 MARKET NEWS (Auto-generated)\n• Static claim"):
+            self.assertEqual(ai_engine.fetch_market_news(), "")
+
+    def test_real_headline_date_limit_is_explicit(self):
+        with patch("market_news.get_market_news",
+                   return_value="📰 MARKET NEWS\n• New verified source item"):
+            output=ai_engine.fetch_market_news()
+        self.assertIn("Headline dates and original links not independently verified",output)
+
+    def test_canned_per_stock_headline_is_not_evidence(self):
+        import market_news
+        import data_validation
+        canned=next(iter(market_news._STOCK_NEWS_FALLBACK.values()))
+        with patch("market_news.get_stock_news",return_value="📰 "+canned):
+            self.assertEqual(data_validation.get_stock_news_robust("RELIANCE"),"")
+
+    def test_live_per_stock_headline_can_be_returned(self):
+        with patch("data_validation.get_stock_news_robust",
+                   return_value="📰 Company results published, source pending"):
+            self.assertEqual(ai_engine.fetch_news("INFY"),
+                             "📰 Company results published, source pending")
+
+
 class FinanceUnitContracts(unittest.TestCase):
     """Provider-native units are never inferred from values or blended."""
 
