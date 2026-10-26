@@ -15,6 +15,8 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import hmac
+import random
+import tempfile
 
 import requests
 import pandas as pd
@@ -60,13 +62,14 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN environment variable is required")
 
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
+WEBHOOK_URL = (os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
 TAVILY_KEY = os.getenv("TAVILY_API_KEY")
 # An independent secret is mandatory whenever webhook mode is used.
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 if WEBHOOK_URL and (len(WEBHOOK_SECRET) < 16 or not WEBHOOK_SECRET.replace("_", "").replace("-", "").isalnum()):
     raise RuntimeError("Set TELEGRAM_WEBHOOK_SECRET (16+ letters/digits/_/-) before webhook deployment")
 WEBHOOK_PATH = "/webhook/telegram"
+_webhook_registered = threading.Event()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256_000
@@ -157,6 +160,7 @@ state = StateManager()
 _processed_updates = deque(maxlen=1000)
 _processed_updates_set = set()
 _webhook_lock = threading.Lock()
+_processing_updates = set()
 _webhook_slots = threading.BoundedSemaphore(value=40)
 
 
@@ -165,7 +169,8 @@ class PortfolioManager:
     def __init__(self, file_path="portfolio_data.json"):
         self._data = {}
         self._file = file_path
-        self._lock = threading.Lock()
+        # Re-entrant because mutations serialize their atomic persistence.
+        self._lock = threading.RLock()
         self._load()
 
     def _load(self):
@@ -177,12 +182,30 @@ class PortfolioManager:
             logger.warning(f"Portfolio load error: {e}")
 
     def _save(self):
-        try:
-            with self._lock:
-                with open(self._file, "w") as f:
+        """Atomically replace the local snapshot while holding the portfolio lock.
+
+        Render's default filesystem is ephemeral. A persistent DB is required
+        for cross-deployment durability; this snapshot alone cannot provide it.
+        """
+        with self._lock:
+            tmp_path = None
+            try:
+                directory = os.path.dirname(os.path.abspath(self._file))
+                fd, tmp_path = tempfile.mkstemp(prefix=".portfolio-", suffix=".tmp", dir=directory)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(self._data, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Portfolio save error: {e}")
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self._file)
+                tmp_path = None
+            except OSError:
+                logger.exception("Portfolio snapshot could not be saved")
+            finally:
+                if tmp_path is not None:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
     def get(self, uid):
         with self._lock:
@@ -197,7 +220,7 @@ class PortfolioManager:
                 p[sym] = {"qty": nq, "avg": round((oq * oa + qty * price) / nq, 2)}
             else:
                 p[sym] = {"qty": qty, "avg": round(price, 2)}
-        self._save()
+            self._save()
 
     def remove(self, uid, sym):
         with self._lock:
@@ -1291,64 +1314,116 @@ def index():
     return jsonify({"status": "ok", "version": "6.2"})
 
 
+@app.route("/health", methods=["GET"])
+def health():
+    """Liveness: HTTP process responding; independent of Telegram availability."""
+    return jsonify({"ok": True, "service": "running"}), 200
+
+
+@app.route("/ready", methods=["GET"])
+def ready():
+    """Readiness: webhook registered; does not guarantee every report succeeds."""
+    if not WEBHOOK_URL:
+        return jsonify({"ok": False, "telegram_webhook": "not_configured"}), 503
+    active = _webhook_registered.is_set()
+    return jsonify({"ok": active, "telegram_webhook": "registered" if active else "pending"}), (200 if active else 503)
+
+
 @app.route("/api/status", methods=["GET"])
 def api_status():
-    return jsonify({"bot": "running", "ai": "available" if ai_available() else "no keys"})
-
-
-def _process_webhook(data_str):
-    try:
-        update = telebot.types.Update.de_json(data_str)
-        if update:
-            bot.process_new_updates([update])
-    except Exception as e:
-        logger.error(f"Webhook process err: {e}")
+    return jsonify({
+        "http": "running",
+        "telegram_webhook": "registered" if _webhook_registered.is_set() else "not_ready",
+        "ai": "available" if ai_available() else "no keys",
+    })
 
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    # Telegram sends this header when webhook is registered with secret_token.
+    """Acknowledge Telegram only after the update is accepted by bot handlers.
+
+    Long-running research jobs submitted by handlers remain best-effort. A
+    durable work queue (with external storage) is required to guarantee their
+    completion after a worker crash or deployment restart.
+    """
     supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     if not WEBHOOK_SECRET or not hmac.compare_digest(supplied, WEBHOOK_SECRET):
         return "unauthorized", 403
     if request.content_length is not None and request.content_length > 256_000:
         return "payload too large", 413
     payload = request.get_json(silent=True)
-    if not isinstance(payload, dict) or not isinstance(payload.get("update_id"), int):
+    if not isinstance(payload, dict) or type(payload.get("update_id")) is not int:
         return "invalid Telegram update", 400
     uid = payload["update_id"]
     if not _webhook_slots.acquire(blocking=False):
-        return "server busy", 503  # Telegram retries non-2xx.
+        return "server busy", 503
     try:
         with _webhook_lock:
             if uid in _processed_updates_set:
                 return "ok", 200
-            if len(_processed_updates) == _processed_updates.maxlen:
-                _processed_updates_set.discard(_processed_updates[0])
-            _processed_updates.append(uid)
-            _processed_updates_set.add(uid)
-        future = executor.submit(_process_webhook, json.dumps(payload))
-        future.add_done_callback(lambda _: _webhook_slots.release())
-    except Exception:
-        with _webhook_lock:
-            _processed_updates_set.discard(uid)
-            try:
-                _processed_updates.remove(uid)
-            except ValueError:
-                pass
+            if uid in _processing_updates:
+                return "in progress", 503
+            _processing_updates.add(uid)
+
+        try:
+            update = telebot.types.Update.de_json(json.dumps(payload))
+            if update is None:
+                raise ValueError("Empty Telegram update")
+            # Synchronous handling prevents silent loss when handler processing
+            # fails before the update is accepted by the bot.
+            bot.process_new_updates([update])
+        except Exception:
+            logger.exception("Webhook handler failed; requesting Telegram retry")
+            return "processing failed", 503
+        else:
+            with _webhook_lock:
+                if len(_processed_updates) == _processed_updates.maxlen:
+                    _processed_updates_set.discard(_processed_updates[0])
+                _processed_updates.append(uid)
+                _processed_updates_set.add(uid)
+            return "ok", 200
+        finally:
+            with _webhook_lock:
+                _processing_updates.discard(uid)
+    finally:
         _webhook_slots.release()
-        logger.exception("Unable to schedule webhook update")
-        return "busy", 503
-    return "ok", 200
+
+
+def _register_webhook_with_retry():
+    """Keep HTTP health available while retrying Telegram configuration."""
+    delay = 2.0
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            result = bot.set_webhook(
+                url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
+                secret_token=WEBHOOK_SECRET,
+            )
+            if result is False:
+                raise RuntimeError("Telegram declined webhook registration")
+            _webhook_registered.set()
+            logger.info("Telegram webhook registered successfully")
+            return
+        except Exception as exc:
+            _webhook_registered.clear()
+            # Avoid printing the token, even if a library exception contains it.
+            logger.warning("Webhook setup attempt %s failed (%s); retrying", attempt, type(exc).__name__)
+            time.sleep(delay + random.uniform(0, min(delay / 4, 3.0)))
+            delay = min(delay * 2, 60.0)
 
 
 # ── Runner ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    logger.info("🚀 Starting AutoAI Bot v6.2...")
+    logger.info("Starting AutoAI Bot v6.2...")
     if WEBHOOK_URL:
-        bot.set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}", secret_token=WEBHOOK_SECRET)
-        logger.info(f"Webhook active: {WEBHOOK_URL}{WEBHOOK_PATH}")
+        # Register in a background daemon thread so Telegram outages do not
+        # block Render from binding the required HTTP port.
+        threading.Thread(target=_register_webhook_with_retry,
+                         name="telegram-webhook-registration", daemon=True).start()
         app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
     else:
-        logger.info("Running in polling mode...")
+        if os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
+            raise RuntimeError("Render Web Service requires WEBHOOK_URL (or RENDER_EXTERNAL_URL) and TELEGRAM_WEBHOOK_SECRET")
+        logger.info("Running in local polling mode...")
         bot.infinity_polling()
