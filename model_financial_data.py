@@ -6,6 +6,9 @@ Absence/format drift is a hard rejection. The data source must permit such use;
 operators should review its current terms before production rollout.
 """
 from datetime import datetime, timezone
+from pathlib import Path
+import json
+import os
 from urllib.parse import quote
 import math
 import re
@@ -182,9 +185,81 @@ def parse_screener_model(html_text, symbol, fetched_at=None, sector=None):
     }, None
 
 
+def _approved_snapshot(symbol, sector):
+    """Read a separately authorized, curated/licensed, dated financial record.
+
+    Refuse blank or self-contradictory provenance, unapproved imports and stale
+    snapshots; fetching a local file does NOT reset the actual data timestamp.
+    """
+    path = os.getenv("MODEL_APPROVED_DATA_PATH", "").strip()
+    if not path:
+        return None, "approved financial snapshot path not configured"
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None, "approved snapshot unavailable/invalid JSON"
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        return None, "unsupported approved financial snapshot schema"
+    if not isinstance(payload.get("approved_by"), str) or not payload["approved_by"].strip():
+        return None, "financial snapshot lacks explicit operator approval"
+    records = payload.get("records")
+    record = records.get(symbol) if isinstance(records, dict) else None
+    if not isinstance(record, dict) or record.get("symbol") != symbol:
+        return None, "approved snapshot has no exact NSE symbol"
+    if record.get("sector") != sector:
+        return None, "approved sector classification mismatch"
+    if not isinstance(record.get("provider"), str) or not record["provider"].strip():
+        return None, "approved financial statement provider missing"
+    source = record.get("provider_url")
+    if not isinstance(source, str) or not re.fullmatch(r"https://[a-zA-Z0-9./_?&=%#-]{8,400}", source):
+        return None, "approved financial source URL invalid"
+    if not isinstance(record.get("coverage"), str) or not record["coverage"]:
+        return None, "statement accounting basis not documented"
+    for key in ("fiscal_sales_period", "fiscal_sales_previous", "balance_sheet_period"):
+        try:
+            datetime.strptime(record[key], "%Y-%m")
+        except (ValueError, KeyError, TypeError):
+            return None, f"financial statement date missing/invalid: {key}"
+    try:
+        newer = datetime.strptime(record["fiscal_sales_period"], "%Y-%m")
+        older = datetime.strptime(record["fiscal_sales_previous"], "%Y-%m")
+        balance = datetime.strptime(record["balance_sheet_period"], "%Y-%m")
+    except (ValueError, TypeError, KeyError):
+        return None, "invalid annual/balance statement dates"
+    if newer.year - older.year != 1 or newer.month != older.month:
+        return None, "sales comparison must use consecutive fiscal years"
+    now = time.time()
+    if newer.replace(tzinfo=timezone.utc).timestamp() > now or balance.replace(tzinfo=timezone.utc).timestamp() > now:
+        return None, "financial statement periods are future-dated"
+    if now - newer.replace(tzinfo=timezone.utc).timestamp() > 460 * 86400:
+        return None, "approved financial statement outdated"
+    try:
+        fetched = datetime.fromisoformat(record["fetched_utc"].replace("Z", "+00:00")).timestamp()
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None, "approved snapshot retrieval timestamp missing"
+    if not 0 <= now - fetched <= 86400:
+        return None, "approved data snapshot must be less than 24 hours old"
+    values = {key: record.get(key) for key in REQUIRED}
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+           for v in values.values()):
+        return None, "approved financial values missing or nonfinite"
+    if not (0 < values["pe"] < 500 and values["market_cap"] > 0 and
+            -200 <= values["roe_pct"] <= 300 and -100 <= values["revenue_growth_pct"] <= 3000 and
+            0 <= values["debt_equity_ratio"] <= 100):
+        return None, "approved financial values out of range"
+    return dict(record, fetched_at=fetched), None
+
+
 def fetch_model_fundamentals(symbol, sector, timeout=9):
     if not re.fullmatch(r"[A-Z0-9&-]{1,25}", symbol):
         return None, "invalid ticker"
+    if os.getenv("MODEL_APPROVED_DATA_PATH"):
+        return _approved_snapshot(symbol, sector)
+    # Screener.in grants personal non-commercial viewing in its public terms.
+    # Do NOT automatically scrape for a public/commercial Telegram service.
+    # Operators must explicitly obtain the necessary data-use rights first.
+    if os.getenv("MODEL_SCREENER_USE_AUTHORIZED", "").lower() != "true":
+        return None, "licensed/approved financial source not configured; public Screener use disabled"
     url = f"https://www.screener.in/company/{quote(symbol)}/consolidated/"
     try:
         response = requests.get(url, headers=HEADERS, timeout=(4, timeout), allow_redirects=False)
