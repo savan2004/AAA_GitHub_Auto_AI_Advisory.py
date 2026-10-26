@@ -120,10 +120,12 @@ def check_ai_providers() -> Dict[str, Tuple[str, str]]:
         
         for provider in ["groq", "gemini", "openai", "askfuzz"]:
             if status[provider]["configured"]:
-                # Provider is configured, assume OK (actual test would be expensive)
+                # An API key existing does NOT mean the model is available,
+                # the account has quota, or any research answer is accurate.
+                # A live probe requires an explicit bounded diagnostic action.
                 result[provider] = (
-                    HealthStatus.OK,
-                    f"{provider.upper()} configured and ready"
+                    HealthStatus.UNKNOWN,
+                    f"{provider.upper()} key configured; live request not tested"
                 )
             else:
                 result[provider] = (
