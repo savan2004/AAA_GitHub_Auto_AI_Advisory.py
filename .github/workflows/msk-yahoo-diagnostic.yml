@@ -4,6 +4,9 @@ on:
     branches: [main]
     paths:
       - 'tests/diagnose_yahoo_finance.py'
+      - 'tests/test_yahoo_session_fundamentals.py'
+      - 'yahoo_session_fundamentals.py'
+      - 'data_engine.py'
       - '.github/workflows/msk-yahoo-diagnostic.yml'
   workflow_dispatch:
 
@@ -28,5 +31,9 @@ jobs:
           python-version: '3.11'
       - name: Install selected yfinance version
         run: python -m pip install "yfinance==${{ matrix.yfinance }}" "curl_cffi==${{ matrix.curl }}" "requests==2.32.3"
+      - name: Verify Yahoo session normalization and 401 fallback
+        run: |
+          python -m py_compile yahoo_session_fundamentals.py data_engine.py
+          python -m unittest discover -s tests -p 'test_yahoo_session_fundamentals.py' -v
       - name: Run limited anonymous Yahoo diagnostic
         run: python -u tests/diagnose_yahoo_finance.py
