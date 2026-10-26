@@ -349,8 +349,11 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
     fv["peer_pe"], fv["peer_roe"] = _f(peer_pe, 1), _f(peer_roe, 1)
     fv["pe_prem"] = (round((fv["pe"] / peer_pe - 1) * 100, 0)
                      if fv["pe"] and fv["pe"] > 0 and peer_pe else None)
+    # Historical PEG becomes misleading after demergers or tiny starting bases:
+    # do not score/present a 'cheap' PEG for triple-digit historical CAGR.
     fv["peg"] = (round(fv["pe"] / fv["pat_cagr3"], 2)
-                 if fv["pe"] and fv["pe"] > 0 and fv["pat_cagr3"] and fv["pat_cagr3"] > 0 else None)
+                 if fv["pe"] and fv["pe"] > 0 and fv["pat_cagr3"]
+                 and 0 < fv["pat_cagr3"] <= 100 else None)
     fv["earn_yield"] = round(100.0 / fv["pe"], 2) if fv["pe"] and fv["pe"] > 0 else None
     # EPS, P/E and price come from different feeds; only trust the cross-check when they agree
     # (EPS × P/E should land near the market price). Otherwise a unit/period mismatch would
@@ -647,12 +650,16 @@ def build_flags(t: dict, rk: dict, fv: dict, sh: List[dict], consensus: Optional
     if fv.get("rev_cagr3") is not None and fv["rev_cagr3"] >= 15:
         pos.append(f"Strong top-line compounding: sales CAGR of {fv['rev_cagr3']:.0f}% (3-yr)"
                    + (f" and {fv['rev_cagr5']:.0f}% (5-yr)." if fv.get("rev_cagr5") is not None else "."))
-    if fv.get("pat_cagr3") is not None and fv["pat_cagr3"] >= 20:
-        pos.append(f"Profit CAGR of {fv['pat_cagr3']:.0f}% over 3 years shows operating leverage.")
+    if fv.get("pat_cagr3") is not None and 20 <= fv["pat_cagr3"] <= 100:
+        pos.append(f"Profit CAGR of {fv['pat_cagr3']:.0f}% over 3 years; verify sustainability and the comparison base.")
+    # Triple-digit historical growth can be driven by a very small or restructured
+    # starting base; it must never be presented as proof of operating leverage.
     if fv.get("pat_cagr3") is not None and fv["pat_cagr3"] < 0:
         R("High", "Shrinking profits", f"3-year profit CAGR is {fv['pat_cagr3']:.0f}%.")
     if fv.get("q_pat_yoy") is not None and fv["q_pat_yoy"] <= -15:
-        R("High", "Latest-quarter profit decline", f"Net profit fell {abs(fv['q_pat_yoy']):.0f}% YoY in the latest quarter.")
+        R("High", "Latest-quarter profit decline",
+          f"Net profit fell {abs(fv['q_pat_yoy']):.0f}% YoY; inspect one-off income, dividend receipts "
+          "and the comparable quarter before attributing this to core operations.")
     elif fv.get("q_pat_yoy") is not None and fv["q_pat_yoy"] >= 20:
         pos.append(f"Latest-quarter net profit grew {fv['q_pat_yoy']:.0f}% YoY.")
     if fv.get("opm_delta") is not None:
@@ -676,8 +683,9 @@ def build_flags(t: dict, rk: dict, fv: dict, sh: List[dict], consensus: Optional
             and ((fv.get("roe") is not None and fv["roe"] < 8) or (fv.get("pat_cagr3") is not None and fv["pat_cagr3"] < 0))):
         R("Medium", "Possible value trap",
           f"P/E is {abs(fv['pe_prem']):.0f}% below peers, but profitability/earnings trend is weak — cheap for a reason until proven otherwise.")
-    if fv.get("peg") is not None and fv["peg"] <= 1.0:
-        pos.append(f"PEG of {fv['peg']} — price is modest relative to 3-year profit growth.")
+    if (fv.get("peg") is not None and fv["peg"] <= 1.0 and
+            fv.get("pat_cagr3") is not None and 0 < fv["pat_cagr3"] <= 100):
+        pos.append(f"PEG of {fv['peg']} on historical profit CAGR (not a forward valuation).")
     # ownership
     if len(sh) >= 5:
         first, lastq = sh[-5], sh[-1]
