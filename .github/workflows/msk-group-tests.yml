@@ -1,5 +1,7 @@
 name: MSK Group Natural-Language Tests
 on:
+  push:
+    branches: [main]
   pull_request:
     paths:
       - 'group_stock_requests.py'
