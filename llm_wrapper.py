@@ -15,7 +15,7 @@ def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
     if GROQ_API_KEY:
         used_any = True
         try:
-            from ai_engine import _GROQ_MODELS, _make_groq_client
+            from ai_engine import _GROQ_MODELS, _make_groq_client, _provider_error_code
             # Share validated Groq model IDs and safe client creation.
             # Do not monkey-patch httpx.Client globally (thread unsafe).
             client = _make_groq_client(GROQ_API_KEY)
@@ -34,9 +34,9 @@ def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
                     if text:
                         return text
                 except Exception as model_error:
-                    logger.warning(f"Groq model {model} failed: {model_error}")
+                    logger.warning("Groq model %s failed: %s", model, _provider_error_code(model_error))
         except Exception as e:
-            logger.error(f"Groq client error: {e}")
+            logger.error("Groq client error: %s", _provider_error_code(e))
 
     # ── Gemini: share the supported, credential-safe REST adapter ─────────
     if GEMINI_API_KEY:
