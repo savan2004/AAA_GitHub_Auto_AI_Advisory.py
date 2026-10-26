@@ -13,7 +13,12 @@ def get_stock_news_robust(sym):
         if isinstance(news, str) and news.strip():
             fallback_markers = ("Market conditions favorable", "Latest market conditions",
                                 "Recommend checking company announcements")
-            if not any(marker in news for marker in fallback_markers):
+            try:
+                from market_news import _STOCK_NEWS_FALLBACK
+                fallback_markers += tuple(str(v) for v in _STOCK_NEWS_FALLBACK.values())
+            except (ImportError, AttributeError):
+                pass
+            if not any(marker.lower() in news.lower() for marker in fallback_markers):
                 return news
     except Exception as exc:
         logger.warning("Stock news error for %s: %s", sym, exc)
