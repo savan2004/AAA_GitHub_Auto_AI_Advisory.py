@@ -1,0 +1,26 @@
+name: MSK Full Research Bridge Validation
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal_report_bridge.py'
+      - 'main.py'
+      - 'tests/test_internal_report_bridge.py'
+      - '.github/workflows/msk-full-report-bridge.yml'
+permissions:
+  contents: read
+jobs:
+  test-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Flask for offline bridge tests
+        run: python -m pip install 'Flask==3.0.3'
+      - name: Auth, evidence and full-document-only tests
+        run: python -m unittest discover -s tests -p test_internal_report_bridge.py -v
+      - name: Python syntax
+        run: python -m py_compile internal_report_bridge.py main.py
