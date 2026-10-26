@@ -1,5 +1,14 @@
 name: MSK Gemini Provider Compatibility
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'ai_engine.py'
+      - 'llm_wrapper.py'
+      - 'gemini_provider.py'
+      - 'requirements.txt'
+      - 'tests/test_gemini_provider.py'
+      - '.github/workflows/msk-gemini-tests.yml'
   pull_request:
     branches: [main]
     paths:
