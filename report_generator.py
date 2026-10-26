@@ -52,6 +52,7 @@ import research_engine as eng
 from research_reasoning import build_reasoning
 import report_charts as charts
 from pdf_technical_setup import build_setup_charts
+from report_quarterly_charts import render_quarterly_chart
 
 logger = logging.getLogger(__name__)
 
@@ -413,6 +414,7 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         "rel": charts.chart_relative_and_drawdown(df["Close"], nifty["Close"] if has_nifty else None, sym),
         "score": charts.chart_scorecard(sc["pillars"], sc["composite"], sym),
         "fin": charts.chart_financials(years, sym) if years else None,
+        "quarters": render_quarterly_chart((inp.get("stm") or {}).get("quarters"), sym),
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
     return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
@@ -701,6 +703,12 @@ def _fundamentals(R, story):
         im = img(R["ch"]["fin"], W)
         if im:
             story += [Spacer(1, 6), im]
+    if R["ch"].get("quarters"):
+        im = img(R["ch"]["quarters"], W)
+        if im:
+            story += [Spacer(1, 6), P("Verified quarterly visual trends", "h2"),
+                      im, P("Charts show reported periods only. Quarterly figures are "
+                            "not management guidance or forward projections.", "tiny")]
 
     years = (stm or {}).get("years") or []
     if len(years) >= 3:
