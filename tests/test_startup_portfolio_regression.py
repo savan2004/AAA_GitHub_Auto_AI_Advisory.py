@@ -53,5 +53,85 @@ class WebhookSecurityTests(unittest.TestCase):
         self.assertIn('WEBHOOK_PATH = "/webhook/telegram"', source)
 
 
+class FundamentalButtonAccuracyTests(unittest.TestCase):
+    """Exercise the real Fundamental button formatter with immutable provider fixtures."""
+
+    def _render(self, fund, info, cname="Mock SBIN"):
+        import sys
+        import types
+        from unittest.mock import patch
+
+        source = MAIN_FILE.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        selected = [
+            n for n in tree.body if isinstance(n, ast.FunctionDef) and
+            n.name in ("build_fundamental_text", "_fundamental_field",
+                       "_verified_fundamental_number", "frow", "fmt_mcap", "_fmt_revenue")
+        ]
+        self.assertEqual(len(selected), 6)
+        scope = {}
+        exec(compile(ast.Module(body=selected, type_ignores=[]),
+                     str(MAIN_FILE), "exec"), scope)
+        scope["get_info"] = lambda _sym: info
+        stub = types.ModuleType("fundamentals")
+        stub.get_fundamentals = lambda _sym: fund
+        with patch.dict(sys.modules, {"fundamentals": stub}):
+            return scope["build_fundamental_text"]("SBIN", cname)
+
+    def test_fixture_zero_roa_and_debt_equity_preserved(self):
+        result = self._render(
+            {"roe": 0, "de": 0, "div_y": 0, "eps": 0, "mcap": 100000000},
+            {"debtToEquity": 300, "eps": 22},
+        )
+        self.assertIn("ROE           : 0.0%", result)
+        self.assertIn("Debt/Equity   : 0.0", result)
+        self.assertIn("EPS: ₹0", result)
+        self.assertIn("Div Yield     : 0.0%", result)
+        self.assertNotIn("EPS: ₹22", result)
+
+    def test_yahoo_debt_equity_percent_is_converted_to_ratio(self):
+        result = self._render({"pe": 12, "roe": 14}, {"debtToEquity": 45})
+        self.assertIn("Debt/Equity   : 0.45", result)
+        self.assertNotIn("Debt/Equity   : 45", result)
+
+    def test_invalid_primary_value_uses_only_valid_fallback(self):
+        result = self._render(
+            {"pe": float("nan"), "pb": float("inf"), "mcap": True, "roe": float("nan")},
+            {"pe": 18, "pb": 2.5, "market_cap": 200000000, "debtToEquity": -50},
+        )
+        self.assertIn("PE (TTM)      : 18.0", result)
+        self.assertIn("Price/Book    : 2.5", result)
+        self.assertIn("Debt/Equity   : N/A", result)
+        self.assertNotIn("nan", result.lower())
+        self.assertNotIn("inf", result.lower())
+
+    def test_revenue_larger_than_market_cap_is_not_discarded(self):
+        # A distributor can have sales several times its market value.
+        result = self._render(
+            {"mcap": 100000000, "rev": 900000000, "pe": 10}, {}
+        )
+        self.assertIn("Revenue       : ₹90.00 Cr", result)
+        self.assertNotIn("data err", result)
+
+    def test_html_company_name_is_escaped(self):
+        # The Telegram bot uses HTML parse mode; provider names are untrusted.
+        result = self._render(
+            {"name": "<bad&name>", "pe": 10}, {}, cname=None
+        )
+        self.assertIn("&lt;bad&amp;name&gt;", result)
+        self.assertNotIn("<bad&name>", result)
+
+    def test_missing_unreconciled_data_is_not_fabricated(self):
+        result = self._render({}, {})
+        self.assertIn("Fundamentals unavailable", result)
+        self.assertNotIn("BUY", result)
+
+    def test_partial_data_has_freshness_warning_not_claim_of_live_accuracy(self):
+        result = self._render({"pe": 11}, {})
+        self.assertIn("Data timestamp and provider reconciliation not verified", result)
+        self.assertIn("Revenue       : N/A", result)
+        self.assertNotIn("BUY", result)
+
+
 if __name__ == "__main__":
     unittest.main()
