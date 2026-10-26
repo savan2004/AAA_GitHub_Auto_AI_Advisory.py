@@ -52,8 +52,31 @@ def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
             return text
         logger.warning("Gemini provider failed: %s", error)
 
+    # ── OpenAI: tertiary provider when Groq and Gemini cannot answer ───
+    from ai_engine import _key, _provider_error_code
+    openai_key = _key("OPENAI_API_KEY", "OPENAI_KEY")
+    if openai_key:
+        used_any = True
+        try:
+            from openai import OpenAI
+            with OpenAI(api_key=openai_key, timeout=15.0, max_retries=1) as client:
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are a concise Indian stock market analysis assistant."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                )
+                answer = (response.choices[0].message.content or "").strip()
+                if answer:
+                    return answer
+        except Exception as exc:
+            logger.warning("OpenAI fallback failed: %s", _provider_error_code(exc))
+
     if not used_any:
-        return "⚠️ AI engine not configured. Set GROQ_API_KEY or GEMINI_API_KEY."
+        return "⚠️ AI engine not configured. Set GROQ_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY."
     return "⚠️ AI engine error. All providers failed."
 
 
