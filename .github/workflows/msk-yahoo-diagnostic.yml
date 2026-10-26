@@ -1,0 +1,26 @@
+name: MSK Yahoo Finance Diagnostic
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/diagnose_yahoo_finance.py'
+      - '.github/workflows/msk-yahoo-diagnostic.yml'
+  workflow_dispatch:
+
+jobs:
+  yahoo-readonly-probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        yfinance: ['0.2.61', '1.7.0']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install selected yfinance version
+        run: python -m pip install "yfinance==${{ matrix.yfinance }}" "requests==2.32.3"
+      - name: Run limited anonymous Yahoo diagnostic
+        run: python -u tests/diagnose_yahoo_finance.py
