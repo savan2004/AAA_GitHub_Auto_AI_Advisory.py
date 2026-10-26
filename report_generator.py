@@ -388,7 +388,8 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     # The AI analyst narrative may use a price only when its session date is
     # explicit. This is last HISTORY CLOSE, not a live intraday quote.
     try:
-        last_index = pd.Timestamp(df.index[-1])
+        from pandas import Timestamp
+        last_index = Timestamp(df.index[-1])
         if last_index.tzinfo is not None:
             last_index = last_index.tz_convert("Asia/Kolkata")
         t["asof"] = last_index.strftime("%Y-%m-%d")
