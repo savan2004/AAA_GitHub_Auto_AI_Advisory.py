@@ -47,6 +47,14 @@ class TechnicalChartRegression(unittest.TestCase):
         self.assertAlmostEqual(float(minus.iloc[-1]), 0.0, delta=1e-9)
         self.assertGreater(float(adx.iloc[-1]), 75)
 
+    def test_published_adx_matches_chart_and_uses_correct_minus_dm(self):
+        from technical_indicators import calc_adx
+        df = strong()["df"]
+        canonical = calc_adx(df)
+        derived = ch.adx_series(df)
+        for scalar, full in zip(canonical, derived):
+            self.assertAlmostEqual(scalar, round(float(full.iloc[-1]), 1), delta=0.15)
+
     def test_breakout_signal_needs_prior_high_volume_and_adx_not_just_price(self):
         df = strong()["df"].copy()
         z = ch._series(df)
