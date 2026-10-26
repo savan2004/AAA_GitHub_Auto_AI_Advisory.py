@@ -1,6 +1,7 @@
 """Strict, command-free MSK group stock-request detection.
 
-No external calls here: only explicitly addressed messages trigger expensive work.
+No external calls here: only explicit stock-analysis requests trigger expensive work.
+A bot mention is optional inside the linked discussion group.
 """
 import re
 
@@ -25,7 +26,9 @@ def extract_stock_request(text):
     """Return a ticker/known company name or None. Never guess from group chatter."""
     if not isinstance(text, str) or len(text) > 280:
         return None
-    if not ADDRESS.search(text) or not REQUEST_WORDS.search(text):
+    # Users in a linked discussion group should not need to mention the bot.
+    # The analysis verb AND a uniquely recognised company/ticker are still required.
+    if not REQUEST_WORDS.search(text):
         return None
     clean = ADDRESS.sub(" ", text)
     clean = re.sub(r"[^A-Za-z0-9&.\- ]+", " ", clean).strip()
