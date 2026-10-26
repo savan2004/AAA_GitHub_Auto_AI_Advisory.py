@@ -957,13 +957,13 @@ try:
     header   = fig.add_axes([0.0, 1.0 - header_h, ratio, header_h])
     header.set_facecolor(BG_PANEL); header.set_xlim(0,1); header.set_ylim(0,1); header.axis("off")
     header.text(0.015, 0.72, ticker, fontsize=14, fontweight="bold", color=TEXT_ACC, va="center")
-    header.text(0.015, 0.25, company_name, fontsize=8, color=TEXT_SEC, va="center")
+    header.text(0.015, 0.25, company_name[:24], fontsize=8, color=TEXT_SEC, va="center")
     price_col = TV_GREEN if change_pct >= 0 else TV_RED
     price_bg  = TV_GREEN_L if change_pct >= 0 else TV_RED_L
-    header.add_patch(FancyBboxPatch((0.15,0.15), 0.22, 0.70,
+    header.add_patch(FancyBboxPatch((0.205,0.15), 0.175, 0.70,
         boxstyle="round,pad=0.02", fc=price_bg, ec=price_col, lw=1.0, zorder=5))
-    header.text(0.17, 0.72, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center")
-    header.text(0.17, 0.22, f"{chg_icon} {change_pct:+.2f}%  Session", fontsize=7.5, color=price_col, va="center")
+    header.text(0.225, 0.72, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center", zorder=7)
+    header.text(0.225, 0.22, f"{chg_icon} {change_pct:+.2f}%  Session", fontsize=7.5, color=price_col, va="center", zorder=7)
     pills = []
     if _mcap_str: pills.append(("MCap", _mcap_str))
     if _pe_str:   pills.append(("",     _pe_str))
