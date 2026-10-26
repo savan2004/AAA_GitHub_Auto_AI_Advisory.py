@@ -5,6 +5,7 @@ v6.2: removed News + AI chat buttons · added 🔥 Stocks Buzz (top-1000 breakou
 """
 
 import os
+import math
 import re
 import json
 import time
@@ -571,32 +572,42 @@ def build_portfolio_card(uid):
     rows = []
     winners = []
     losers = []
+    missing_quotes = []
 
     for sym, pos in p.items():
         qty, avg = pos["qty"], pos["avg"]
         try:
             ltp_raw = get_live_price(sym)
-            ltp = round(float(ltp_raw), 2) if ltp_raw is not None else avg
+            ltp = round(float(ltp_raw), 2) if ltp_raw is not None else None
+            if ltp is not None and (not math.isfinite(ltp) or ltp <= 0):
+                ltp = None
         except Exception:
-            ltp = avg
+            ltp = None
+        if ltp is None:
+            missing_quotes.append(sym)
 
         inv = qty * avg
-        cur = qty * ltp
-        pnl = round(cur - inv, 2)
-        pct = round((ltp - avg) / avg * 100, 2) if avg > 0 else 0.0
+        cur = qty * ltp if ltp is not None else None
+        pnl = round(cur - inv, 2) if cur is not None else None
+        pct = round((ltp - avg) / avg * 100, 2) if ltp is not None and avg > 0 else None
         rows.append({"sym": sym, "qty": qty, "avg": avg, "ltp": ltp, "inv": inv, "cur": cur, "pnl": pnl, "pct": pct})
         t_inv += inv
-        t_cur += cur
-        (winners if pnl >= 0 else losers).append((sym, pnl, pct))
+        if cur is not None:
+            t_cur += cur
+            (winners if pnl >= 0 else losers).append((sym, pnl, pct))
 
-    t_pnl = round(t_cur - t_inv, 2)
-    t_pct = round((t_cur - t_inv) / t_inv * 100, 2) if t_inv > 0 else 0.0
+    priced_inv = sum(r['inv'] for r in rows if r['ltp'] is not None)
+    t_pnl = round(t_cur - priced_inv, 2)
+    t_pct = round(t_pnl / priced_inv * 100, 2) if priced_inv > 0 else 0.0
     icon = "🟢" if t_pnl >= 0 else "🔴"
 
     lines = [f"<b>━━━ 💼 PORTFOLIO ━━━</b>", f"📅 {date.today().strftime('%d-%b-%Y')}  |  {len(rows)} holdings", "", "<b>── HOLDINGS ──</b>"]
 
-    for r in sorted(rows, key=lambda x: x["pnl"], reverse=True):
+    for r in sorted(rows, key=lambda x: (x["pnl"] is not None, x["pnl"] or 0), reverse=True):
         wt = round(r["inv"] / t_inv * 100, 1) if t_inv > 0 else 0
+        if r["ltp"] is None:
+            lines += [f"⚪ <b>{r['sym']}</b>", f"   Qty:{r['qty']} ({wt}%)  Avg:₹{r['avg']:,.2f} → LTP:Unavailable", "   P&L: Unavailable (excluded from totals)", "   ···"]
+            continue
         lines += [
             f"{'🟢' if r['pnl'] >= 0 else '🔴'} <b>{r['sym']}</b>",
             f"   Qty:{r['qty']} ({wt}%)  Avg:₹{r['avg']:,.2f} → LTP:₹{r['ltp']:,.2f}",
@@ -604,7 +615,9 @@ def build_portfolio_card(uid):
             "   ···"
         ]
 
-    lines += ["", f"{icon} <b>Total P&L: ₹{t_pnl:+,.2f} ({t_pct:+.2f}%)</b>", "─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM", "⚠️ <i>Educational only.</i>"]
+    lines += ["", f"{icon} <b>{'Partial' if missing_quotes else 'Total'} P&L: ₹{t_pnl:+,.2f} ({t_pct:+.2f}%)</b>", "─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM", "⚠️ <i>Educational only.</i>"]
+    if missing_quotes:
+        lines += ["⚠️ Prices unavailable: " + ", ".join(missing_quotes) + ". P&L excludes these holdings.", f"📌 Invested capital: ₹{t_inv:,.2f}; priced capital: ₹{priced_inv:,.2f}."]
     return "\n".join(lines)
 
 
