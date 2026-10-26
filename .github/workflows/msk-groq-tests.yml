@@ -1,5 +1,13 @@
 name: MSK Groq Provider Compatibility
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'ai_engine.py'
+      - 'llm_wrapper.py'
+      - 'requirements.txt'
+      - 'tests/test_groq_compatibility.py'
+      - '.github/workflows/msk-groq-tests.yml'
   pull_request:
     branches: [main]
     paths:
