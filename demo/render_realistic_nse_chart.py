@@ -135,7 +135,13 @@ def make_chart(data,payload,out,company="Reliance Industries",symbol="RELIANCE.N
         lambda x,pos:f"{x/1e6:.1f}M" if x>=1e6 else f"{x/1e3:.0f}K"))
     plt.setp(ax.get_xticklabels(),visible=False)
     positions=list(range(0,count,10))
-    if count-1 not in positions:positions.append(count-1)
+    # Never draw consecutive x-axis tick labels at the right edge;
+    # replace the previous tick when fewer than six sessions apart.
+    if count-1 not in positions:
+        if positions and count-1-positions[-1] < 6:
+            positions[-1] = count-1
+        else:
+            positions.append(count-1)
     vax.set_xticks(positions)
     vax.set_xticklabels([pd.Timestamp(d.timestamp.iloc[i]).strftime("%d %b")
                         for i in positions],fontsize=10,color=MUTED)
