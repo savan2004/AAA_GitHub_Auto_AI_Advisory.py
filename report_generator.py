@@ -51,6 +51,7 @@ from reportlab.platypus import (
 import research_engine as eng
 from research_reasoning import build_reasoning
 import report_charts as charts
+from pdf_technical_setup import build_setup_charts
 
 logger = logging.getLogger(__name__)
 
@@ -403,8 +404,12 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         logger.debug(f"buzz status skipped: {e}")
 
     years = (inp.get("stm") or {}).get("years") or []
+    chart_pack = build_setup_charts(df, sym, t)
     ch = {
-        "tech": charts.chart_technical(df, sym, t),
+        "tech": charts.chart_technical(df, sym, t) if not chart_pack else None,
+        "tech_price": chart_pack["price"] if chart_pack else None,
+        "tech_momentum": chart_pack["momentum"] if chart_pack else None,
+        "tech_setup": chart_pack["summary"] if chart_pack else None,
         "rel": charts.chart_relative_and_drawdown(df["Close"], nifty["Close"] if has_nifty else None, sym),
         "score": charts.chart_scorecard(sc["pillars"], sc["composite"], sym),
         "fin": charts.chart_financials(years, sym) if years else None,
@@ -564,7 +569,20 @@ def _investment_view(R, story):
 def _technical(R, story):
     t = R["t"]
     story += section("Technical Analysis", "Multi-timeframe trend, momentum, volume and key price levels")
-    if R["ch"].get("tech"):
+    # The standalone Telegram chart does its own download and is not safe to
+    # embed: both views MUST be calculated from the report's same OHLCV.
+    if R["ch"].get("tech_price") and R["ch"].get("tech_momentum"):
+        for key in ("tech_price", "tech_momentum"):
+            im = img(R["ch"][key], W)
+            if im:
+                story.append(im)
+                story.append(Spacer(1, 3))
+        obs = R["ch"].get("tech_setup") or {}
+        story.append(P("<b>Technical setup observation:</b> " + esc(obs.get("status", "WAIT")) +
+                       ". Strict conditions: previous 20-session high/low break, EMA 20/50 alignment, "
+                       "at least 2x prior 20-session volume, ADX 20+ and directional index agreement. "
+                       "No confirmed setup means WAIT, not a BUY/SELL call.", "small"))
+    elif R["ch"].get("tech"):
         im = img(R["ch"]["tech"], W)
         if im:
             story.append(im)
