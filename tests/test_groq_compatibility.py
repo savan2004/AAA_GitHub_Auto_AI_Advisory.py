@@ -1,7 +1,7 @@
 """Offline Groq compatibility tests: no provider credentials or network calls."""
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 import ai_engine
 import llm_wrapper
@@ -102,7 +102,7 @@ class GroqCompatibilityTests(unittest.TestCase):
         self.assertNotIn(secret, str(warning.call_args_list))
 
     def test_legacy_wrapper_openai_fallback_after_groq_unavailable(self):
-        client = Mock()
+        client = MagicMock()
         client.chat.completions.create.return_value = reply("OpenAI backup success")
         client.__enter__ = Mock(return_value=client)
         client.__exit__ = Mock(return_value=False)
@@ -118,7 +118,7 @@ class GroqCompatibilityTests(unittest.TestCase):
 
     def test_legacy_wrapper_openai_error_never_logs_secret(self):
         secret = "private-test-secret"
-        client = Mock()
+        client = MagicMock()
         client.__enter__ = Mock(return_value=client)
         client.__exit__ = Mock(return_value=False)
         client.chat.completions.create.side_effect = RuntimeError(secret)
