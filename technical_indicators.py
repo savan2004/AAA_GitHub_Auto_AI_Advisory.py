@@ -106,10 +106,12 @@ def calc_adx(df: pd.DataFrame, period: int = ADX_PERIOD) -> tuple:
     ADX > 25 = trending market. +DI > -DI = bullish.
     """
     high, low, close = df["High"], df["Low"], df["Close"]
-    plus_dm  = high.diff()
-    minus_dm = low.diff().abs()
-    plus_dm  = plus_dm.where((plus_dm > minus_dm)  & (plus_dm > 0),  0.0)
-    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+    # Wilder directional movement: a rising Low is NOT negative movement.
+    # Compare the *raw* competing moves before zeroing either series.
+    up_move = high.diff()
+    down_move = low.shift(1) - low
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
     tr1 = high - low
     tr2 = (high - close.shift()).abs()
     tr3 = (low  - close.shift()).abs()
