@@ -699,6 +699,7 @@ close_s  = data["Close"]; vol_s = data["Volume"]
 close    = close_s.values; n = len(close)
 ema9     = close_s.ewm(span=9,  adjust=False).mean()
 ema21    = close_s.ewm(span=21, adjust=False).mean()
+ema20    = close_s.ewm(span=20, adjust=False).mean()
 ema50    = close_s.ewm(span=50, adjust=False).mean()
 sma20    = close_s.rolling(20).mean()
 sma50    = close_s.rolling(50).mean()
@@ -707,7 +708,7 @@ ema26    = close_s.ewm(span=26, adjust=False).mean()
 macd     = ema12 - ema26
 macd_sig = macd.ewm(span=9, adjust=False).mean()
 hist     = macd - macd_sig
-vol_ma20 = vol_s.rolling(20).mean()
+vol_ma20 = vol_s.shift(1).rolling(20, min_periods=20).mean()
 
 bb_mid   = sma20
 bb_std   = close_s.rolling(20).std()
@@ -753,8 +754,23 @@ checks, score, max_score, signal_text, sig_col = compute_full_score(
     last_close, vol_s, vol_ma20
 )
 score_str = f"{score:+d}/{max_score}"
-is_bull   = score >= 0
+# Legacy checklist remains visible as context; final trade action is quant-gated.
+from legacy_chart_quant import compute_chart_evidence
+try:
+    quant_df, quant_payload = compute_chart_evidence(data)
+except (ValueError, TypeError, KeyError, IndexError) as quant_error:
+    print(f"[CHART_QUANT] insufficient evidence: {type(quant_error).__name__}", file=sys.stderr)
+    quant_df = None
+    quant_payload = dict(
+        trend="Insufficient data", pattern="No clean pattern",
+        adx=None, adx_label="Unavailable", vol_multiple=None,
+        vol_label="Unavailable", signal="WAIT", quality="Weak",
+        markers=[], pattern_anchors=[], status="Insufficient data")
+signal_text = quant_payload["signal"]
+is_bull   = signal_text == "BUY"
 is_wait   = signal_text == "WAIT"
+if quant_payload.get("vol_multiple") is not None:
+    vr = float(quant_payload["vol_multiple"])
 
 # ── TARGETS (only shown when NOT in WAIT zone) ────────────────────────────────
 if not is_wait:
@@ -805,20 +821,17 @@ tv_style = mpf.make_mpf_style(
 hc = [TV_GREEN if v >= 0 else TV_RED for v in hist.fillna(0)]
 
 from datetime import datetime
-today    = datetime.now().strftime("%d %b %Y")
+today    = data.index[-1].strftime("%d %b %Y")
 ticker   = symbol.replace(".NS","").replace(".BO","")
 chg_icon = "▲" if change_pct >= 0 else "▼"
 title    = f"{ticker}  |  {company_name}  |  ₹{last_close:,.2f}  {chg_icon} {change_pct:+.2f}%  |  {today}"
 
 apds = [
-    mpf.make_addplot(ema9,    color=TV_ORANGE, width=1.5),
-    mpf.make_addplot(ema21,   color=TV_BLUE,   width=1.5),
-    mpf.make_addplot(ema50,   color=TV_GOLD,   width=1.2, linestyle="--"),
-    mpf.make_addplot(sma20,   color=TV_VIOLET, width=1.0, linestyle="--"),
-    mpf.make_addplot(bb_upper,color=TV_TEAL,   width=0.8, linestyle="--", alpha=0.65),
-    mpf.make_addplot(bb_lower,color=TV_TEAL,   width=0.8, linestyle="--", alpha=0.65),
-    mpf.make_addplot([support]*n,    color=TV_GREEN, linestyle=":", width=0.8, alpha=0.7),
-    mpf.make_addplot([resistance]*n, color=TV_RED,   linestyle=":", width=0.8, alpha=0.7),
+    # Preserve candles, volume, MACD and RSI panels; less clutter on price.
+    mpf.make_addplot(ema20, color=TV_ORANGE, width=1.55),
+    mpf.make_addplot(ema50, color=TV_BLUE, width=1.55),
+    mpf.make_addplot([support]*n, color=TV_GREEN, linestyle=":", width=0.75, alpha=0.45),
+    mpf.make_addplot([resistance]*n, color=TV_RED, linestyle=":", width=0.75, alpha=0.45),
     mpf.make_addplot(macd,     panel=2, color=TV_BLUE,   width=1.1, ylabel="MACD"),
     mpf.make_addplot(macd_sig, panel=2, color=TV_AMBER,  width=1.1),
     mpf.make_addplot([0]*n,    panel=2, color=BORDER_COL, linestyle="--", width=0.7),
@@ -863,9 +876,10 @@ try:
         for spine in ax.spines.values(): spine.set_edgecolor(BORDER_COL)
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
 
-    # BB fill
-    _xs = np.arange(n)
-    ax0.fill_between(_xs, bb_upper.values, bb_lower.values, alpha=0.06, color=TV_TEAL, zorder=1)
+    # New subtle channel, one verified pattern label and recent signal marker.
+    from legacy_chart_quant import draw_price_evidence
+    if quant_df is not None:
+        draw_price_evidence(ax0, quant_df, quant_payload)
 
     # RSI shading + label
     if ax3:
@@ -895,17 +909,19 @@ try:
 
     if ax2: ax2.set_facecolor(BG_DARK)
 
-    # Elliott + patterns
-    ew       = elliott_wave(data, pivots)
-    patterns = detect_patterns(data, pivots, lookback=80)
-    top_pat  = patterns[0] if patterns else None
-    al = sorted(pivots, key=lambda p: p.price)
-    ah = sorted(pivots, key=lambda p: -p.price)
-    fib_lo = al[0].price if al else float(data["Low"].min())
-    fib_hi = ah[0].price if ah else float(data["High"].max())
-    draw_fib_levels(ax0, fib_lo, fib_hi, n)
-    if ew:      draw_ew_labels(ax0, ew, data)
-    if top_pat: draw_pattern(ax0, top_pat, data)
+    # Old decorative Fibonacci/Elliott overlays are opt-in, to avoid
+    # confusing them with algorithmically confirmed trading patterns.
+    if os.getenv("MSK_CHART_SHOW_LEGACY_DECORATIONS") == "1":
+        ew = elliott_wave(data, pivots)
+        old_patterns = detect_patterns(data, pivots, lookback=80)
+        al = sorted(pivots, key=lambda p: p.price)
+        ah = sorted(pivots, key=lambda p: -p.price)
+        if al and ah:
+            draw_fib_levels(ax0, al[0].price, ah[0].price, n)
+        if ew:
+            draw_ew_labels(ax0, ew, data)
+        if old_patterns:
+            draw_pattern(ax0, old_patterns[0], data)
 
     ax0.annotate(f"S: ₹{support:,.0f}", xy=(1.002, support),
         xycoords=("axes fraction","data"), color=TV_GREEN, fontsize=7, va="center", fontweight="bold",
@@ -916,11 +932,9 @@ try:
 
     # Legend
     leg = [
-        mlines.Line2D([],[],color=TV_ORANGE,lw=1.8,label=f"EMA 9 ({e9l:,.0f})"),
-        mlines.Line2D([],[],color=TV_BLUE,  lw=1.8,label=f"EMA 21 ({e21l:,.0f})"),
-        mlines.Line2D([],[],color=TV_GOLD,  lw=1.2,ls="--",label=f"EMA 50 ({e50l:,.0f})"),
-        mlines.Line2D([],[],color=TV_VIOLET,lw=1.0,ls="--",label=f"SMA 20 ({s20l:,.0f})"),
-        mlines.Line2D([],[],color=TV_TEAL,  lw=1.0,ls="--",label=f"BB({_bb_l:,.0f}–{_bb_u:,.0f})"),
+        mlines.Line2D([], [], color=TV_ORANGE, lw=1.65, label=f"EMA 20 ({float(ema20.iloc[-1]):,.0f})"),
+        mlines.Line2D([], [], color=TV_BLUE, lw=1.65, label=f"EMA 50 ({e50l:,.0f})"),
+        mlines.Line2D([], [], color=TV_TEAL, lw=0.85, ls="--", label="Regression channel"),
         mlines.Line2D([],[],color=TV_GREEN, lw=0.8,ls=":",label=f"Sup {support:,.0f}"),
         mlines.Line2D([],[],color=TV_RED,   lw=0.8,ls=":",label=f"Res {resistance:,.0f}"),
     ]
@@ -949,13 +963,13 @@ try:
     header.add_patch(FancyBboxPatch((0.15,0.15), 0.22, 0.70,
         boxstyle="round,pad=0.02", fc=price_bg, ec=price_col, lw=1.0, zorder=5))
     header.text(0.17, 0.72, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center")
-    header.text(0.17, 0.22, f"{chg_icon} {change_pct:+.2f}%  Today", fontsize=7.5, color=price_col, va="center")
+    header.text(0.17, 0.22, f"{chg_icon} {change_pct:+.2f}%  Session", fontsize=7.5, color=price_col, va="center")
     pills = []
     if _mcap_str: pills.append(("MCap", _mcap_str))
     if _pe_str:   pills.append(("",     _pe_str))
-    pills += [("ATR", f"₹{atr_val:,.1f}"), ("Vol", f"{vr:.1f}x avg"),
-              ("52W%", f"{_52w_pct:.0f}%"), ("Period", CHART_PERIOD.upper()),
-              ("Score", score_str)]
+    pills += [("ADX", f"{quant_payload.get('adx'):.0f}" if quant_payload.get('adx') is not None else "N/A"),
+              ("Vol", f"{vr:.1f}x"), ("Period", CHART_PERIOD.upper()),
+              ("Legacy", score_str)]
     px = 0.40
     for lbl, val in pills:
         txt = f"{lbl}: {val}" if lbl else val
@@ -987,7 +1001,7 @@ try:
         fontweight="bold", color=sig_fg, ha="center", va="top", zorder=5)
 
     # Score + bar
-    sa.text(0.5, 0.900, f"Score  {score_str}  (max ±20)", fontsize=8.5, color=sig_fg,
+    sa.text(0.5, 0.900, f"Legacy checks: {score_str} (not a trade trigger)", fontsize=8.5, color=sig_fg,
         ha="center", va="top", zorder=5)
     bar_y = 0.867; bar_h = 0.016
     bar_fill = max(0.0, min(1.0, (score + max_score) / (2 * max_score)))
@@ -996,42 +1010,19 @@ try:
     if bar_fill > 0:
         sa.add_patch(FancyBboxPatch((0.06,bar_y), 0.88*bar_fill, bar_h,
             boxstyle="round,pad=0.003", fc=sig_fg, ec="none", zorder=5))
-    sa.text(0.5, bar_y + bar_h/2, "BEARISH ◄──────────────► BULLISH",
+    sa.text(0.5, bar_y + bar_h/2, "LEGACY INDICATOR AGREEMENT",
         fontsize=5.5, color=TEXT_SEC, ha="center", va="center", zorder=6)
     sa.plot([0.05,0.95],[0.848,0.848], color=BORDER_COL, lw=0.8, zorder=5)
 
     # Reason
-    reason_txt = winner.get("reason","Best crossover")
+    reason_txt = f"{quant_payload.get('pattern', 'No clean pattern')} | {quant_payload.get('quality', 'Weak')}"
     sa.text(0.5, 0.838, reason_txt[:40], fontsize=7.5, color=sig_fg,
         ha="center", va="top", fontweight="bold", zorder=5)
     sa.plot([0.05,0.95],[0.814,0.814], color=BORDER_COL, lw=0.6, zorder=5)
 
-    # ── 11 Signal rows ────────────────────────────────────────────────────────
-    # Dynamic row height based on check count
-    n_checks = len(checks)  # always 11
-    row_top  = 0.798
-    row_gap  = (row_top - 0.20) / n_checks   # auto-fit all 11
-
-    for i, (label, pts, col, detail) in enumerate(checks):
-        y    = row_top - i * row_gap
-        ic   = "●" if pts > 0 else ("○" if pts == 0 else "●")
-        ic_c = col
-        # Row background
-        bg_c = "#26A69A12" if pts > 0 else ("#EF535012" if pts < 0 else BG_DARK+"00")
-        sa.add_patch(FancyBboxPatch((0.04, y - row_gap*0.85), 0.92, row_gap*0.82,
-            boxstyle="round,pad=0.003", fc=bg_c, ec="none", zorder=3))
-        sa.text(0.10, y - row_gap*0.38, ic, fontsize=8, color=ic_c, va="center", ha="center", zorder=5)
-        # Weight badge
-        w_col = TV_GREEN if pts > 0 else (TV_RED if pts < 0 else TEXT_SEC)
-        sa.add_patch(FancyBboxPatch((0.16, y - row_gap*0.70), 0.11, row_gap*0.65,
-            boxstyle="round,pad=0.002", fc=BG_CARD, ec=w_col, lw=0.6, zorder=4))
-        sa.text(0.215, y - row_gap*0.38, f"{pts:+d}", fontsize=6.5, color=w_col,
-            va="center", ha="center", fontweight="bold", zorder=5)
-        # Label
-        sa.text(0.30, y - row_gap*0.38, label[:34], fontsize=6.8,
-            color=TEXT_PRI if pts != 0 else TEXT_SEC, va="center", zorder=5)
-
-    sa.plot([0.05,0.95],[0.20,0.20], color=BORDER_COL, lw=0.8, zorder=5)
+    # Six readable quant fields inside the existing right-hand PNG panel.
+    from legacy_chart_quant import draw_signal_rows
+    draw_signal_rows(sa, quant_payload)
 
     # ── TRADE LEVELS or No-Trade Zone ────────────────────────────────────────
     tl_top = 0.188; tl_gap = 0.048
@@ -1041,16 +1032,11 @@ try:
             boxstyle="round,pad=0.01", fc="#2A2410", ec=TV_YELLOW, lw=1.2, zorder=4))
         sa.text(0.5, 0.172, "⏸  NO TRADE ZONE", fontsize=9, fontweight="bold",
             color=TV_YELLOW, ha="center", va="top", zorder=5)
-        sa.text(0.5, 0.145, f"Score {score:+d} — need ≥+12 for BUY", fontsize=7.5,
+        sa.text(0.5, 0.145, "No confirmed quality-graded trigger", fontsize=7.5,
             color=TEXT_SEC, ha="center", va="top", zorder=5)
         sa.text(0.5, 0.120, "Wait for stronger confirmation:", fontsize=7,
             color=TEXT_SEC, ha="center", va="top", zorder=5)
-        needs = []
-        if score < 12:
-            gap = 12 - score
-            needs.append(f"Need +{gap} more pts for BUY signal")
-        if weekly_data is not None:
-            needs.append("Check weekly trend first")
+        needs = ["Confirm ADX + relative volume", "Wait for clean pattern & EMA trigger"]
         sa.text(0.5, 0.098, "\n".join(needs[:2]), fontsize=6.5, color=TV_YELLOW,
             ha="center", va="top", zorder=5)
         sa.text(0.5, 0.052, "ATR(14): ₹" + f"{atr_val:,.2f}", fontsize=7.5,
