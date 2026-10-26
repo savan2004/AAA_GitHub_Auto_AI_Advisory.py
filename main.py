@@ -44,6 +44,7 @@ from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
 from group_stock_requests import extract_stock_request
+from group_member_filter import is_member_message
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -641,13 +642,19 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
     try:
         bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
     except Exception as e:
+        # Never log the bot token or message content. This used to fail silently,
+        # making missing discussion replies impossible to diagnose on Render.
+        logger.warning("[Telegram delivery] send failed: HTTP %s (%s)",
+                       getattr(e, "error_code", "unknown"), type(e).__name__)
         err_str = str(e).lower()
         if "can't parse" in err_str or "bad request" in err_str:
             try:
                 plain = re.sub(r"<[^>]+>", "", str(text))
                 bot.send_message(chat_id, plain, **kwargs)
-            except Exception:
-                pass
+            except Exception as fallback_error:
+                logger.warning("[Telegram delivery] plain-text fallback failed: HTTP %s (%s)",
+                               getattr(fallback_error, "error_code", "unknown"),
+                               type(fallback_error).__name__)
 
 
 # ── Command Handlers ─────────────────────────────────────────────────────────
@@ -1263,19 +1270,25 @@ def _group_stock_review(chat_id, message_id, query):
 
 
 @bot.message_handler(
-    func=lambda m: getattr(m.chat, "type", None) in ("group", "supergroup")
+    func=lambda m: is_member_message(m)
     and bool(extract_stock_request(getattr(m, "text", None))),
     content_types=["text"],
 )
 def group_stock_review(m):
-    if getattr(getattr(m, "from_user", None), "is_bot", False):
+    if not is_member_message(m):
         return
     sender_id = getattr(getattr(m, "from_user", None), "id", None)
     if sender_id is None or not API_RATE_LIMITER.is_allowed(sender_id):
         return
     query = extract_stock_request(m.text)
     if query:
-        executor.submit(_group_stock_review, m.chat.id, m.message_id, query)
+        logger.info("[Discussion] accepted member stock-review request for %s", query)
+        try:
+            executor.submit(_group_stock_review, m.chat.id, m.message_id, query)
+        except RuntimeError:
+            logger.exception("Group analysis task rejected by executor")
+            safe_send(m.chat.id, "⚠️ Analysis temporarily unavailable. Please retry later.",
+                      reply_to_message_id=m.message_id)
 
 
 # ── Catch-all Text Handler ───────────────────────────────────────────────────
@@ -1354,6 +1367,11 @@ def webhook():
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict) or not isinstance(payload.get("update_id"), int):
         return "invalid Telegram update", 400
+    # Log only message type and visibility; never user text, IDs or secrets.
+    msg = payload.get("message")
+    if isinstance(msg, dict) and isinstance(msg.get("chat"), dict) and msg["chat"].get("type") in ("group", "supergroup"):
+        logger.info("[Discussion webhook] inbound group message (has_text=%s, automatic_forward=%s)",
+                    bool(msg.get("text")), bool(msg.get("is_automatic_forward")))
     uid = payload["update_id"]
     if not _webhook_slots.acquire(blocking=False):
         return "server busy", 503  # Telegram retries non-2xx.
