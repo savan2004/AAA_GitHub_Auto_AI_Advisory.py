@@ -130,5 +130,25 @@ class ModerateModelTests(unittest.TestCase):
         self.assertEqual(model["holdings"], [])
 
 
+class AggressiveModelTests(unittest.TestCase):
+    def test_high_growth_candidates_distinguish_aggressive(self):
+        rows = [candidate(i) for i in range(10)]
+        rows[0].update(roe=11, growth=15, debt=1.4, cap=2000, pe=75, vol=60)
+        self.assertEqual(select_model(rows, "moderate", now=NOW)["status"],
+                         "insufficient_verified_candidates")
+        aggressive = select_model(rows, "aggressive", now=NOW)
+        self.assertEqual(aggressive["status"], "complete")
+        self.assertEqual(sum(h["allocation_rupees"] for h in aggressive["holdings"]), 95_000_000)
+        self.assertEqual(aggressive["cash_rupees"], 5_000_000)
+
+    def test_aggressive_still_rejects_loss_of_growth_or_liquidity(self):
+        rows = [candidate(i) for i in range(10)]
+        rows[0]["growth"] = 1
+        rows[1]["turnover"] = 8.0
+        aggressive = select_model(rows, "aggressive", now=NOW)
+        self.assertEqual(aggressive["status"], "insufficient_verified_candidates")
+        self.assertEqual(aggressive["holdings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
