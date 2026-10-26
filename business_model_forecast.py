@@ -155,7 +155,7 @@ def forecast_segments(profile: dict, years: int = 3) -> dict:
     validate_profile(profile)
     if not isinstance(years, int) or isinstance(years, bool) or not 1 <= years <= 3:
         raise ValueError("Only a 1–3-year illustration is supported")
-    start_year = int(profile["fiscal_year"][-4:])
+    start_year = int(profile["asof"][:4])  # verified FY-end date, not formatted FY label
     output = []
     for segment in profile["segments"]:
         base_margin = segment["ebitda"] / segment["revenue"] * 100
