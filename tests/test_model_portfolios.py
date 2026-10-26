@@ -111,5 +111,24 @@ class ConservativeModelTests(unittest.TestCase):
             select_model([], "conservative", capital_rupees=0)
 
 
+class ModerateModelTests(unittest.TestCase):
+    def test_moderate_ninety_percent_invested_with_ten_percent_cash(self):
+        rows = [candidate(i) for i in range(10)]
+        rows[0].update(roe=11, growth=3, debt=1.0, cap=8000, pe=55, vol=40)
+        conservative = select_model(rows, "conservative", now=NOW)
+        self.assertEqual(conservative["status"], "insufficient_verified_candidates")
+        moderate = select_model(rows, "moderate", now=NOW)
+        self.assertEqual(moderate["status"], "complete")
+        self.assertEqual(sum(h["allocation_rupees"] for h in moderate["holdings"]), 90_000_000)
+        self.assertEqual(moderate["cash_rupees"], 10_000_000)
+
+    def test_moderate_never_relaxes_roe_or_sector_gates(self):
+        rows = [candidate(i) for i in range(10)]
+        rows[0]["roe"] = 8
+        model = select_model(rows, "moderate", now=NOW)
+        self.assertEqual(model["status"], "insufficient_verified_candidates")
+        self.assertEqual(model["holdings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
