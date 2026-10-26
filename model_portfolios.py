@@ -57,6 +57,25 @@ def _validate_evidence(row, rupees_each, now):
         return "invalid NSE-style ticker"
     if any(word in row["sector"].lower() for word in ("financial", "bank", "insurance")):
         return "financial-sector validation unavailable"
+    # Financial evidence is mandatory; a recent retrieval is NOT equivalent
+    # to a recent company filing. Carry both provider and accounting dates.
+    if not isinstance(row.get("provider"), str) or not row["provider"].strip():
+        return "financial data provider missing"
+    url = row.get("provider_url")
+    if not isinstance(url, str) or not re.fullmatch(r"https://[A-Za-z0-9./_?&=%#-]{8,400}", url):
+        return "financial evidence URL missing/invalid"
+    try:
+        fiscal = datetime.strptime(row["fiscal_sales_period"], "%Y-%m").replace(tzinfo=timezone.utc)
+        prior = datetime.strptime(row["fiscal_sales_previous"], "%Y-%m").replace(tzinfo=timezone.utc)
+        balance = datetime.strptime(row["balance_sheet_period"], "%Y-%m").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError, KeyError):
+        return "financial statement dates absent/invalid"
+    if fiscal.year - prior.year != 1 or fiscal.month != prior.month:
+        return "year-on-year revenue periods not comparable"
+    if any(now - d.timestamp() < 0 for d in (fiscal, balance)) or (
+        now - fiscal.timestamp() > 460 * 86400 or now - balance.timestamp() > 460 * 86400
+    ):
+        return "financial statement periods stale/future"
     for field in ("roe", "growth", "debt", "cap", "pe", "vol", "price", "turnover", "fetched_at"):
         if _finite(row.get(field)) is None:
             return f"missing or invalid {field}"
@@ -173,12 +192,15 @@ def format_model(result, snap):
         blocks = []
         for number, h in enumerate(holdings[start:start + 5], start + 1):
             blocks.append(
-                f"<b>{number}. {escape(h['symbol'])}</b>  | {escape(h['sector'])}\n"
-                f"Illustrative allocation ₹{h['allocation_rupees']/1e7:.2f} Cr\n"
-                f"Score {h['score']:.1f}/100 | Trend {escape(str(h['timing']))}\n"
-                f"ROE {h['roe']:.1f}% | Growth {h['growth']:.1f}% | D/E {h['debt']:.2f}\n"
-                f"P/E {h['pe']:.1f} | Annualized volatility {h['vol']:.1f}%\n"
-                f"Close ₹{h['price']:,.2f} ({escape(h['asof'])}); 20d turnover ₹{h['turnover']:.1f} Cr/day"
+                f"<b>{number}. {escape(h['name'])} ({escape(h['symbol'])})</b> | {escape(h['sector'])}\n"
+                f"Virtual allocation ₹{h['allocation_rupees']/1e7:.2f} Cr\n"
+                f"Score {h['score']:.1f}/100 (unbacktested) | Trend {escape(str(h['timing']))}\n"
+                f"ROE {h['roe']:.1f}% | Annual sales YoY {h['growth']:.1f}%\n"
+                f"P/E {h['pe']:.1f} | Borrowings/Equity {h['debt']:.2f} | Volatility {h['vol']:.1f}%\n"
+                f"Sales FY {escape(h['fiscal_sales_previous'])}→{escape(h['fiscal_sales_period'])}; "
+                f"Balance sheet {escape(h['balance_sheet_period'])}\n"
+                f"Close ₹{h['price']:,.2f} ({escape(h['asof'])}); turnover ₹{h['turnover']:.1f} Cr/day\n"
+                f"Financial source: {escape(h['provider'])} | {escape(h['provider_url'])}"
             )
         messages.append("\n\n".join(blocks))
     messages.append("⚠️ Screened research only. No real holdings, executed trades, NAV, "
