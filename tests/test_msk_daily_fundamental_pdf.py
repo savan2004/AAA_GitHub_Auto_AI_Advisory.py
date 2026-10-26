@@ -83,6 +83,21 @@ class DailyPdfRules(unittest.TestCase):
         issues = daily.validate_inputs(x, date(2026, 10, 26))
         self.assertTrue(any("not dated today" in e for e in issues))
 
+    def test_old_financial_statements_are_rejected_even_with_fresh_price(self):
+        from fixtures import strong
+        x = strong()
+        x["stm"]["years"][-1]["label"] = "Mar 2022"
+        errors = daily.validate_inputs(x, date(2026, 10, 16))
+        self.assertTrue(any("out of order" in e or "stale" in e for e in errors))
+
+    def test_old_quarterly_report_is_rejected(self):
+        from fixtures import strong
+        x = strong()
+        for i, row in enumerate(x["stm"]["quarters"]):
+            row["label"] = f"Mar {2015 + i}"
+        errors = daily.validate_inputs(x, date(2026, 10, 16))
+        self.assertTrue(any("quarterly" in e for e in errors))
+
     def test_report_engine_supplies_real_asof_date(self):
         from fixtures import strong
         import report_generator as rg
