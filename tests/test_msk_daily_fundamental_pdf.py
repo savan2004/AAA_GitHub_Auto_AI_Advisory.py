@@ -2,6 +2,9 @@
 import copy
 from datetime import date, timedelta
 import importlib.util
+import os
+# The production config requires a Telegram token at import time; tests never send.
+os.environ.setdefault('TELEGRAM_TOKEN', '123:offline-test-only')
 from pathlib import Path
 import sys
 import tempfile
