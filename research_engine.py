@@ -819,8 +819,14 @@ def numbers_grounded(text: str, facts: str, max_unmatched: int = 0) -> bool:
     missing = 0
     for number in _numbers(text):
         x = abs(number)
-        if not any(abs(x - known) <= max(0.005 * known, 0.011)
-                   for known in fact_nums):
+        # A plausible reporting YEAR must match exactly, not merely be
+        # "within 0.5%" of another year (2024 vs 2026 is misinformation).
+        if 1900 <= x <= 2100 and x.is_integer():
+            matched = any(known == x for known in fact_nums)
+        else:
+            matched = any(abs(x - known) <= max(0.005 * known, 0.011)
+                          for known in fact_nums)
+        if not matched:
             missing += 1
             if missing > max_unmatched:
                 return False
