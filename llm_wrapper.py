@@ -6,24 +6,7 @@ from typing import Tuple
 logger = logging.getLogger(__name__)
 
 GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-
-# ── Lazy Gemini init (no module-level crash) ──────────────────────────────
-_gemini_configured = False
-
-def _ensure_gemini():
-    global _gemini_configured
-    if _gemini_configured or not GEMINI_API_KEY:
-        return _gemini_configured
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        _gemini_configured = True
-        logger.info("llm_wrapper: Gemini configured")
-    except Exception as e:
-        logger.error(f"llm_wrapper: Gemini config error: {e}")
-    return _gemini_configured
-
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
 
 def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
     used_any = False
@@ -66,25 +49,19 @@ def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
         except Exception as e:
             logger.error(f"Groq client error: {e}")
 
-    # ── Gemini ────────────────────────────────────────────────────────────
-    if GEMINI_API_KEY and _ensure_gemini():
+    # ── Gemini: share the supported, credential-safe REST adapter ─────────
+    if GEMINI_API_KEY:
         used_any = True
-        try:
-            import google.generativeai as genai
-            for model_name in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
-                try:
-                    model = genai.GenerativeModel(model_name=model_name)
-                    resp = model.generate_content(
-                        prompt,
-                        generation_config={"max_output_tokens": max_tokens, "temperature": 0.3}
-                    )
-                    text = (getattr(resp, "text", "") or "").strip()
-                    if text:
-                        return text
-                except Exception as model_error:
-                    logger.warning(f"Gemini model {model_name} failed: {model_error}")
-        except Exception as e:
-            logger.error(f"Gemini client error: {e}")
+        from gemini_provider import call_gemini
+        text, error = call_gemini(
+            GEMINI_API_KEY,
+            [{"role": "user", "content": prompt}],
+            max_tokens,
+            "You are a concise Indian stock market analysis assistant.",
+        )
+        if text:
+            return text
+        logger.warning("Gemini provider failed: %s", error)
 
     if not used_any:
         return "⚠️ AI engine not configured. Set GROQ_API_KEY or GEMINI_API_KEY."
