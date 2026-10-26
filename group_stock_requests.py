@@ -17,7 +17,7 @@ REQUEST_WORDS = re.compile(
     r"\b(review|analyse|analyze|analysis|technical|technicals|chart|trend|outlook|"
     r"bullish|bearish|what about|how is|check|share|view|opinion)\b", re.I
 )
-ADDRESS = re.compile(r"(?<![\w])(?:msk|@mskbot)(?![\w])", re.I)
+ADDRESS = re.compile(r"(?<![\w])(?:msk|@indianstockaibot)(?![\w])", re.I)
 TICKER = re.compile(r"^[A-Z][A-Z0-9&-]{1,14}$")
 
 
@@ -34,6 +34,12 @@ def extract_stock_request(text):
              if re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", lowered)]
     unique = {sym for _, sym in found}
     if len(unique) == 1:
+        # Unknown extra tickers can be ambiguous; reject rather than guess.
+        remaining = lowered
+        for alias, _ in found:
+            remaining = re.sub(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", " ", remaining)
+        if re.search(r"\b(?:and|or|vs|versus)\b", remaining):
+            return None
         return next(iter(unique))
     if len(unique) > 1:
         return None
