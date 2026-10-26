@@ -151,5 +151,50 @@ class GroundedResearchTests(unittest.TestCase):
             api.assert_not_called()
 
 
+class FinanceUnitContracts(unittest.TestCase):
+    """Provider-native units are never inferred from values or blended."""
+
+    @staticmethod
+    def _get(info, other=None, yh=None):
+        import fundamentals
+        with patch("data_engine.get_info", return_value=info),\
+             patch("fundamentals._get_cached", return_value=None),\
+             patch("fundamentals._set_cached"),\
+             patch("fundamentals._fetch_screener", return_value=None),\
+             patch("fundamentals._fetch_finnhub", return_value=other),\
+             patch("fundamentals._fetch_yfinance", return_value=yh):
+            return fundamentals.get_fundamentals("INFY")
+
+    def test_yahoo_roe_is_fraction_and_debt_field_is_percent(self):
+        obj=self._get({
+            "name":"Infosys Ltd","pe":16.2,"roe":.29951,
+            "debtToEquity":5.0,"market_cap":4_000_000_000_000,
+            "totalRevenue":1_800_000_000_000,
+        })
+        self.assertAlmostEqual(obj["roe"],29.951,places=3)
+        self.assertAlmostEqual(obj["de"],.05,places=3)
+
+    def test_roe_over_one_is_still_yahoo_fraction(self):
+        obj=self._get({"roe":1.20,"debtToEquity":0.0})
+        self.assertEqual(obj["roe"],120.)
+        self.assertEqual(obj["de"],0.0)
+
+    def test_finnhub_already_normalized_ratio_not_divided_again(self):
+        obj=self._get({},other={"roe":18.5,"de":.76})
+        self.assertEqual(obj["roe"],18.5)
+        self.assertEqual(obj["de"],.76)
+
+    def test_yfinance_native_units(self):
+        obj=self._get({},yh={"returnOnEquity":.20,"debtToEquity":6.0})
+        self.assertEqual(obj["roe"],20.)
+        self.assertEqual(obj["de"],.06)
+
+    def test_high_real_debt_multiple_is_not_diluted(self):
+        from research_engine import _de_ratio
+        self.assertEqual(_de_ratio({"de":12},None),12.0)
+        self.assertEqual(_de_ratio({"de":.08},None),.08)
+        self.assertIsNone(_de_ratio({"de":float("nan")},None))
+
+
 if __name__ == "__main__":
     unittest.main()
