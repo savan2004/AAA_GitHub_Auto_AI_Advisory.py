@@ -30,5 +30,43 @@ class PortfolioQuoteTests(unittest.TestCase):
         self.assertIn("math.isfinite", body)
         self.assertIn("ltp <= 0", body)
 
+
+    def test_rendered_portfolio_with_missing_quote(self):
+        from datetime import date
+        import math
+        namespace = {
+            "portfolio": type("Portfolio", (), {"get": lambda self, uid: {
+                "RELIANCE": {"qty": 10, "avg": 100.0},
+                "TCS": {"qty": 5, "avg": 200.0},
+            }})(),
+            "get_live_price": lambda sym: 110.0 if sym == "RELIANCE" else None,
+            "date": date,
+            "math": math,
+        }
+        exec(compile(ast.Module(body=[FUNCTION], type_ignores=[]), "<portfolio>", "exec"), namespace)
+        result = namespace["build_portfolio_card"](123)
+        self.assertIn("Partial P&L: ₹+100.00", result)
+        self.assertIn("TCS", result)
+        self.assertIn("LTP:Unavailable", result)
+        self.assertIn("priced capital: ₹1,000.00", result)
+        self.assertNotIn("Total P&L:", result)
+
+    def test_all_missing_quotes_are_not_flat_returns(self):
+        from datetime import date
+        import math
+        namespace = {
+            "portfolio": type("Portfolio", (), {"get": lambda self, uid: {
+                "TCS": {"qty": 5, "avg": 200.0},
+            }})(),
+            "get_live_price": lambda sym: None,
+            "date": date,
+            "math": math,
+        }
+        exec(compile(ast.Module(body=[FUNCTION], type_ignores=[]), "<portfolio>", "exec"), namespace)
+        result = namespace["build_portfolio_card"](123)
+        self.assertIn("Prices unavailable:", result)
+        self.assertIn("LTP:Unavailable", result)
+        self.assertNotIn("Total P&L:", result)
+
 if __name__ == "__main__":
     unittest.main()
