@@ -1,5 +1,7 @@
 name: Startup and Portfolio Regression
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
