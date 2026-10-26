@@ -705,6 +705,7 @@ def cmd_start(m):
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
+              "🤖 After research, choose <b>Ask AI</b> or <b>Draft View</b> to get a source-aware explanation.\n"
               "Use menu buttons below.",
               reply_markup=main_keyboard())
 
@@ -712,7 +713,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nAI: tap Ask AI or Draft View after any research report.\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
 
 
 def run_report(chat_id, query):
@@ -939,12 +940,12 @@ def cmd_status(m):
                 f"🤖 <b>MSK Bot — STATUS</b>",
                 "─── ── ── ── ── ──",
                 f"Bot : ✅ Running",
-                f"AI  : {res.get('_status', '?')}",
+                "AI  : API keys configuration only (live models not tested)",
                 f"Time: {datetime.now().strftime('%d-%b-%Y %H:%M')}"
             ]
             for p_name in ["GROQ", "Gemini", "OpenAI", "AskFuzz"]:
                 v = res.get(p_name, "SKIP")
-                ic = "✅" if str(v).startswith("OK") else ("⚪" if str(v) == "SKIP" else "❌")
+                ic = "⚪" if str(v) == "CONFIGURED" else ("🔸" if str(v) == "NOT CONFIGURED" else "⚠️")
                 lines.append(f"  {ic} {p_name}: {str(v)[:35]}")
             safe_send(chat_id, "\n".join(lines), reply_markup=main_keyboard())
         except Exception as e:
