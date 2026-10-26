@@ -35,4 +35,4 @@ jobs:
       # report_generator.assemble() lacks 'asof'/'completeness'; tracked separately
       # in the daily fundamental research workstream (PR #39).
       - name: Check Python syntax
-        run: python -m py_compile pdf_technical_setup.py report_generator.py technical_indicators.py
+        run: python -m py_compile pdf_technical_setup.py report_generator.py technical_indicators.py report_quarterly_charts.py
