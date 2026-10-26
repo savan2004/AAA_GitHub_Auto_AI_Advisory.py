@@ -25,9 +25,12 @@ def publish_once(env=None, opener=None, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    # No fabricated market data: a heartbeat only, clearly labeled.
-    text = ("MSK Bot service update — " + now.strftime("%Y-%m-%d %H:%M UTC")
-            + "\nAutomated publisher operational. This is not market analysis.")
+    # Require an externally verified report; never publish a diagnostic heartbeat.
+    text = env.get("CHANNEL_REPORT_TEXT", "").strip()
+    if not text:
+        raise ValueError("No verified channel report supplied; refusing to publish")
+    if len(text) > 4096:
+        raise ValueError("Channel report exceeds Telegram message length limit")
     payload = urllib.parse.urlencode({"chat_id": channel, "text": text}).encode()
     request = urllib.request.Request(
         "https://api.telegram.org/bot" + token + "/sendMessage",
