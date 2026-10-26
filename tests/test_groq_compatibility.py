@@ -68,5 +68,38 @@ class GroqCompatibilityTests(unittest.TestCase):
             openai_client.close()
 
 
+    def test_sensitive_provider_error_is_redacted(self):
+        secret = "example-sensitive-token"
+        client = Mock()
+        client.chat.completions.create.side_effect = RuntimeError(
+            "provider rejected key " + secret + " and private request body"
+        )
+        key = lambda name, *others: "dummy" if name == "GROQ_API_KEY" else ""
+        with patch.object(ai_engine, "_groq", client), patch.object(
+            ai_engine, "_key", side_effect=key
+        ):
+            response, error = ai_engine._call_ai(
+                [{"role": "user", "content": "test"}]
+            )
+        self.assertEqual(response, "")
+        self.assertIn("RuntimeError", error)
+        self.assertNotIn(secret, error)
+        self.assertNotIn("private request body", error)
+
+    def test_legacy_wrapper_does_not_log_sensitive_groq_errors(self):
+        secret = "example-sensitive-token"
+        client = Mock()
+        client.chat.completions.create.side_effect = RuntimeError(
+            "provider rejected key " + secret
+        )
+        with patch.object(llm_wrapper, "GROQ_API_KEY", "dummy"), patch.object(
+            llm_wrapper, "GEMINI_API_KEY", ""
+        ), patch.object(ai_engine, "_make_groq_client", return_value=client), patch.object(
+            llm_wrapper.logger, "warning"
+        ) as warning:
+            result = llm_wrapper.actual_llm_call("test")
+        self.assertIn("All providers failed", result)
+        self.assertNotIn(secret, str(warning.call_args_list))
+
 if __name__ == "__main__":
     unittest.main()
