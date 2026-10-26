@@ -488,6 +488,20 @@ def build_fundamental_text(sym, cname=None):
     measured = {"Market cap": mcap, "Revenue": rev, "P/E": pe, "P/B": pb, "ROE": roe, "EPS": eps, "D/E": de, "Dividend yield": div_y}
     available = sum(value is not None for value in measured.values())
     missing = [label for label, value in measured.items() if value is None]
+    # Conservative observations only; do not manufacture a target or BUY/SELL call.
+    signals = []
+    if roe is not None:
+        signals.append("ROE suggests stronger profitability" if roe >= 15 else "ROE indicates profitability needs review")
+    if de is not None:
+        signals.append("Debt/equity indicates elevated leverage" if de > 1 else "Debt/equity indicates relatively limited leverage")
+    if pe is not None:
+        signals.append("P/E is high in absolute terms; compare with peers and growth" if pe > 40 else "P/E requires sector and earnings-growth comparison")
+    if len(signals) < 2:
+        signals = ["Insufficient verified metrics for a balanced fundamental assessment"]
+    assessment = ["", "<b>📌 Fundamental observations (not a recommendation)</b>"] + [
+        "• " + html.escape(signal) for signal in signals
+    ]
+
     rows = [
         f"💰 <b>{name}</b>  ({sym}) — Fundamental Analysis",
         "━━━━━━━━━━━━━━━━━━━━",
@@ -504,7 +518,7 @@ def build_fundamental_text(sym, cname=None):
         "⚠️ <i>Data may be delayed or mixed across sources/periods. Verify against filings before investing.</i>",
         "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
     ]
-    return "\n".join(rows)
+    return "\n".join(rows + assessment)
 
 
 # ── Screener Card ─────────────────────────────────────────────────────────
