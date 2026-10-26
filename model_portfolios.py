@@ -22,6 +22,11 @@ PROFILES = {
         "cash_pct": 20,
         "focus": "Quality, leverage control and lower volatility",
     },
+    "moderate": {
+        "label": "⚖️ MODERATE",
+        "cash_pct": 10,
+        "focus": "Quality-growth balance and controlled valuation risk",
+    },
 }
 
 
