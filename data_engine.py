@@ -279,8 +279,11 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=12)
             if resp.status_code in (401, 403):
-                logger.debug(f"[Yahoo v10] {host} blocked for {symbol} ({resp.status_code})")
-                continue
+                # Raw quoteSummary needs a Yahoo cookie + matching crumb.
+                # Trying another host anonymously will repeat the same error.
+                logger.info("[Yahoo v10] anonymous access rejected for %s (HTTP %d); using session-aware client",
+                            symbol, resp.status_code)
+                break
             if resp.status_code == 429:
                 time.sleep(_jitter(30))
                 return None
@@ -339,9 +342,14 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
             if out.get("pe") is not None or out.get("market_cap") is not None:
                 return out
         except Exception as e:
-            logger.debug(f"[Yahoo v10] {host} {symbol}: {e}")
+            logger.debug("[Yahoo v10] %s %s: %s", host, symbol, type(e).__name__)
 
-    return None
+    # Tested with existing installed yfinance==0.2.61 + curl_cffi==0.7.4:
+    # its cookie/crumb manager retrieves data where raw quoteSummary is 401.
+    # The fallback still respects get_info's hourly cache and does not provide
+    # audited financial statement period attribution to investment models.
+    from yahoo_session_fundamentals import get_yahoo_session_fundamentals
+    return get_yahoo_session_fundamentals(symbol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
