@@ -19,10 +19,15 @@ class PublisherTests(unittest.TestCase):
         response.__exit__ = lambda *args: None
         opener = Mock(return_value=response)
         result = publish_once({"CHANNEL_PUBLISH_ENABLED": "true", "TELEGRAM_TOKEN": "test",
-            "TELEGRAM_CHANNEL_ID": "@test"}, opener=opener,
+            "TELEGRAM_CHANNEL_ID": "@test", "CHANNEL_REPORT_TEXT": "Verified report"}, opener=opener,
             now=dt.datetime(2026, 10, 26, tzinfo=dt.timezone.utc))
         self.assertEqual(result["message_id"], 7)
         self.assertEqual(opener.call_count, 1)
+
+    def test_refuses_empty_report(self):
+        with self.assertRaises(ValueError):
+            publish_once({"CHANNEL_PUBLISH_ENABLED": "true", "TELEGRAM_TOKEN": "test",
+                "TELEGRAM_CHANNEL_ID": "@test"})
 
     def test_rejected_delivery(self):
         response = io.BytesIO(b'{"ok": false}')
