@@ -647,9 +647,12 @@ def build_flags(t: dict, rk: dict, fv: dict, sh: List[dict], consensus: Optional
             R("High", "Weak cash conversion", f"3-year operating cash flow is only {fv['ocf_pat']:.2f}× reported profit — earnings quality needs checking.")
         elif fv["ocf_pat"] >= 0.9:
             pos.append(f"Profits are backed by cash — 3-year operating cash flow is {fv['ocf_pat']:.2f}× net profit.")
-    if fv.get("rev_cagr3") is not None and fv["rev_cagr3"] >= 15:
-        pos.append(f"Strong top-line compounding: sales CAGR of {fv['rev_cagr3']:.0f}% (3-yr)"
-                   + (f" and {fv['rev_cagr5']:.0f}% (5-yr)." if fv.get("rev_cagr5") is not None else "."))
+    if fv.get("rev_cagr3") is not None and 15 <= fv["rev_cagr3"] <= 100:
+        pos.append(f"Sales grew at {fv['rev_cagr3']:.0f}% CAGR over 3 years; inspect comparability and organic growth.")
+    elif fv.get("rev_cagr3") is not None and fv["rev_cagr3"] > 100:
+        R("Medium", "Historical growth base caution",
+          f"3-year revenue CAGR of {fv['rev_cagr3']:.0f}% may reflect a small/restructured base; "
+          "verify comparable operations before extrapolating.")
     if fv.get("pat_cagr3") is not None and 20 <= fv["pat_cagr3"] <= 100:
         pos.append(f"Profit CAGR of {fv['pat_cagr3']:.0f}% over 3 years; verify sustainability and the comparison base.")
     # Triple-digit historical growth can be driven by a very small or restructured
@@ -793,8 +796,9 @@ def deterministic_narrative(name: str, sym: str, t: dict, rk: dict, fv: dict, sc
     out["outlook"] = (f"Short-term bias is <b>{hz['Short term (1–4 wks)'][0].lower()}</b>, medium-term "
                       f"<b>{hz['Medium term (3–6 mths)'][0].lower()}</b> and the long-term fundamental picture is "
                       f"<b>{hz['Long term (1–3 yrs)'][0].lower()}</b>. "
-                      + (f"A close above ₹{plan['bull_trigger']:,.2f} on strong volume would confirm upside continuation; "
-                         f"a close below ₹{plan['bear_trigger']:,.2f} would invalidate the constructive case."
+                      + (f"A close above ₹{plan['bull_trigger']:,.2f} is only an early resistance watch, "
+                         "not a confirmed BUY without the full breakout and volume conditions; "
+                         f"a close below ₹{plan['bear_trigger']:,.2f} raises downside risk."
                          if plan.get("bull_trigger") and plan.get("bear_trigger") else ""))
     return out
 
