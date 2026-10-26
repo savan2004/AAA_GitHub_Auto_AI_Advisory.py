@@ -72,6 +72,11 @@ WEBHOOK_PATH = "/webhook/telegram"
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256_000
+
+# Authenticated internal REPORT ONLY bridge to the separate Channel product.
+# Never modifies either Telegram webhook or user-facing MSK handlers.
+from internal_report_bridge import bp as full_research_bp
+app.register_blueprint(full_research_bp)
 bot = telebot.TeleBot(TOKEN, threaded=False)
 executor = ThreadPoolExecutor(max_workers=20)
 
