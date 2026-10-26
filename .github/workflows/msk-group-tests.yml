@@ -3,7 +3,9 @@ on:
   pull_request:
     paths:
       - 'group_stock_requests.py'
+      - 'group_member_filter.py'
       - 'tests/test_group_stock_requests.py'
+      - 'tests/test_group_member_filter.py'
       - 'main.py'
       - '.github/workflows/msk-group-tests.yml'
   workflow_dispatch:
@@ -16,6 +18,8 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile group integration
-        run: python -m py_compile main.py group_stock_requests.py
-      - name: Test group request parser
-        run: python -m unittest discover -s tests -p 'test_group_stock_requests.py' -v
+        run: python -m py_compile main.py group_stock_requests.py group_member_filter.py
+      - name: Test group requests and member-only filtering
+        run: |
+          python -m unittest discover -s tests -p 'test_group_stock_requests.py' -v
+          python -m unittest discover -s tests -p 'test_group_member_filter.py' -v
