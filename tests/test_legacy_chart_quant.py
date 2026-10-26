@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import runpy
+import shutil
 import sys
 import tempfile
 import unittest
@@ -109,6 +110,11 @@ class OldTemplateQuantTests(unittest.TestCase):
                     self.assertGreater(img.width,1500)
                     self.assertGreater(img.height,850)
                     print(f"OLD_TEMPLATE_PNG_OK size={img.width}x{img.height} bytes={generated[0].stat().st_size}")
+                # Retain one CI artifact to visually compare new data with
+                # original v7 formatting; never label it market-data evidence.
+                demos = ROOT/"msk_chart_examples"
+                demos.mkdir(exist_ok=True)
+                shutil.copyfile(generated[0], demos/"legacy_v7_quant_demo.png")
             finally:
                 os.chdir(oldcwd)
 
