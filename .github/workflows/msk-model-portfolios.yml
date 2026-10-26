@@ -50,7 +50,10 @@ jobs:
         run: python tests/demo_model_portfolios.py
       - name: Install public-data audit dependencies
         run: python -m pip install pandas==2.2.3 requests==2.32.3
-      - name: Audit five real NSE companies using exact research rules
+      - name: Audit five real NSE companies (manual and licensed use ONLY)
+        if: ${{ github.event_name == 'workflow_dispatch' && vars.MSK_SCREENER_USE_LICENSED == 'true' }}
+        env:
+          MODEL_SCREENER_USE_AUTHORIZED: 'true'
         run: python tests/live_model_research_audit.py
       - name: Check existing Telegram menu routing
         run: python -m unittest discover -s tests -p 'test_msk_menu_audit.py' -v
