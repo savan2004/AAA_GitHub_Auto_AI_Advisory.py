@@ -43,6 +43,7 @@ from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
+from group_stock_requests import extract_stock_request
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -1246,9 +1247,56 @@ def retired_buttons(m):
               reply_markup=main_keyboard())
 
 
+# ── Group-only natural-language stock review ─────────────────────────────────
+def _group_stock_review(chat_id, message_id, query):
+    """Reply to the requesting member; reuse the bot's technicals and chart engine."""
+    try:
+        ticker, cname = resolve_symbol(query)
+        if not ticker:
+            safe_send(chat_id, "⚠️ Stock not verified. Please send MSK review NSE:SYMBOL.",
+                      reply_to_message_id=message_id)
+            return
+        sym = ticker.replace(".NS", "").replace(".BO", "")
+        technical = build_technical_text(sym, cname)
+        safe_send(chat_id, technical, reply_to_message_id=message_id)
+        try:
+            success, meta, path = get_chart_generator().generate(ticker, cname)
+            if success and path:
+                with open(path, "rb") as chart:
+                    bot.send_photo(chat_id, chart, caption=f"📈 {cname or sym} — Technical chart",
+                                   reply_to_message_id=message_id)
+            else:
+                logger.warning("Group chart unavailable for %s: %s", sym, str(meta)[:120])
+        except Exception:
+            logger.exception("Group chart generation failed for %s", sym)
+    except Exception:
+        logger.exception("Group review failed")
+        safe_send(chat_id, "⚠️ Analysis temporarily unavailable. Please retry later.",
+                  reply_to_message_id=message_id)
+
+
+@bot.message_handler(
+    func=lambda m: getattr(m.chat, "type", None) in ("group", "supergroup")
+    and bool(extract_stock_request(getattr(m, "text", None))),
+    content_types=["text"],
+)
+def group_stock_review(m):
+    if getattr(getattr(m, "from_user", None), "is_bot", False):
+        return
+    sender_id = getattr(getattr(m, "from_user", None), "id", None)
+    if sender_id is None or not API_RATE_LIMITER.is_allowed(sender_id):
+        return
+    query = extract_stock_request(m.text)
+    if query:
+        executor.submit(_group_stock_review, m.chat.id, m.message_id, query)
+
+
 # ── Catch-all Text Handler ───────────────────────────────────────────────────
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_text(m):
+    # Group conversations are not private bot input. Ignore unrelated chatter.
+    if getattr(m.chat, 'type', None) in ('group', 'supergroup'):
+        return
     uid = m.chat.id
     text = m.text.strip()
 
