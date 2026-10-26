@@ -410,7 +410,10 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         "fin": charts.chart_financials(years, sym) if years else None,
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
-    return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
+    # Last completed candle is the report valuation date; never call it a live price.
+    candle_day = df.index[-1]
+    asof = candle_day.strftime("%d-%b-%Y") if hasattr(candle_day, "strftime") else str(candle_day)[:10]
+    return dict(sym=sym, name=name, asof=asof, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
                 news=inp.get("news") or [], fund=fund,
