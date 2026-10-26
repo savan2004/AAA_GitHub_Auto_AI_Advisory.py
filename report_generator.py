@@ -750,7 +750,7 @@ def _fundamentals(R, story):
     if R["ch"].get("quarters"):
         im = img(R["ch"]["quarters"], W)
         if im:
-            story += [Spacer(1, 6), P("Verified quarterly visual trends", "h2"),
+            story += [Spacer(1, 6), P("Reported quarterly trends (provider data, not independently verified)", "h2"),
                       im, P("Charts show reported periods only. Quarterly figures are "
                             "not management guidance or forward projections.", "tiny")]
 
@@ -918,7 +918,7 @@ def _plan(R, story):
     bull_obj = _scenario_objective(t, plan["bull_trigger"], "bull")
     bear_obj = _scenario_objective(t, plan["bear_trigger"], "bear")
     rows = [
-        [P(colored("Bull", GREEN_H), "cellb"), P(f"Daily close above {inr(plan['bull_trigger'])} on ≥1.5× average volume"), P(bull_obj)],
+        [P(colored("Bull (watch)", GREEN_H), "cellb"), P(f"Early watch: close above {inr(plan['bull_trigger'])} on ≥1.5× volume; NOT a confirmed BUY"), P(bull_obj)],
         [P(colored("Base", AMBER_H), "cellb"), P(f"Consolidation between {inr(plan['bear_trigger'])} and {inr(plan['bull_trigger'])}"), P("Range-bound; wait for resolution")],
         [P(colored("Bear", RED_H), "cellb"), P(f"Daily close below {inr(plan['bear_trigger'])}"), P(bear_obj)],
     ]
