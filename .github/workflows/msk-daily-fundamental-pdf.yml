@@ -1,0 +1,109 @@
+name: MSK Daily Fundamental Research PDF
+
+on:
+  # 19:40 IST weekdays, after Indian cash market close.
+  schedule:
+    - cron: '10 14 * * 1-5'
+  workflow_dispatch:
+
+# All posting is opt-in. Only a private/test target chat ID is recommended.
+concurrency:
+  group: msk-daily-pdf-one-send
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 28
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      MSK_DAILY_RESEARCH_CHAT_ID: ${{ secrets.MSK_DAILY_RESEARCH_CHAT_ID }}
+      MSK_DAILY_RESEARCH_ENABLED: ${{ vars.MSK_DAILY_RESEARCH_ENABLED }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Retrieve durable claim state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin refs/heads/msk-daily-pdf-state:refs/remotes/origin/msk-daily-pdf-state
+          git worktree add -B msk-daily-pdf-state "$RUNNER_TEMP/msk-pdf-state" origin/msk-daily-pdf-state
+          DAY="$(TZ=Asia/Kolkata date '+%Y-%m-%d')"
+          echo "day=$DAY" >> "$GITHUB_OUTPUT"
+          echo "state_file=$RUNNER_TEMP/msk-pdf-state/msk_daily_research_state.json" >> "$GITHUB_OUTPUT"
+      - name: Eligibility and no-duplicate check
+        id: check
+        shell: bash
+        env:
+          DAY: ${{ steps.state.outputs.day }}
+          STATE_FILE: ${{ steps.state.outputs.state_file }}
+        run: |
+          set -euo pipefail
+          if python3 scripts/msk_daily_fundamental_pdf.py check --day "$DAY" --state "$STATE_FILE"; then
+            echo 'eligible=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'eligible=false' >> "$GITHUB_OUTPUT"
+            echo 'Not eligible; no PDF or Telegram request attempted.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Install existing research dependencies
+        if: steps.check.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt pypdf
+      - name: Generate and validate one full evidence-backed PDF
+        if: steps.check.outputs.eligible == 'true'
+        env:
+          DAY: ${{ steps.state.outputs.day }}
+          STATE_FILE: ${{ steps.state.outputs.state_file }}
+        run: |
+          python scripts/msk_daily_fundamental_pdf.py prepare --day "$DAY" --state "$STATE_FILE"
+      - name: Persist claim BEFORE Telegram transport
+        if: steps.check.outputs.eligible == 'true'
+        env:
+          DAY: ${{ steps.state.outputs.day }}
+          STATE_FILE: ${{ steps.state.outputs.state_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/msk_daily_fundamental_pdf.py claim --day "$DAY" --state "$STATE_FILE"
+          git -C "$RUNNER_TEMP/msk-pdf-state" config user.name 'msk-pdf-scheduler'
+          git -C "$RUNNER_TEMP/msk-pdf-state" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C "$RUNNER_TEMP/msk-pdf-state" add msk_daily_research_state.json
+          git -C "$RUNNER_TEMP/msk-pdf-state" commit -m "Daily research $DAY CLAIMED: no automatic resend"
+          git -C "$RUNNER_TEMP/msk-pdf-state" push origin HEAD:refs/heads/msk-daily-pdf-state
+      - name: Send validated PDF once (never automatically retry)
+        if: steps.check.outputs.eligible == 'true'
+        id: deliver
+        env:
+          DAY: ${{ steps.state.outputs.day }}
+          STATE_FILE: ${{ steps.state.outputs.state_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          MESSAGE_ID="$(python scripts/msk_daily_fundamental_pdf.py send --day "$DAY" --state "$STATE_FILE")"
+          if ! [[ "$MESSAGE_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'No valid Telegram document ACK; claim remains locked.' >&2
+            exit 1
+          fi
+          echo "message_id=$MESSAGE_ID" >> "$GITHUB_OUTPUT"
+      - name: Save acknowledged receipt (state branch only)
+        if: steps.check.outputs.eligible == 'true'
+        env:
+          DAY: ${{ steps.state.outputs.day }}
+          STATE_FILE: ${{ steps.state.outputs.state_file }}
+          MESSAGE_ID: ${{ steps.deliver.outputs.message_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/msk_daily_fundamental_pdf.py confirm --day "$DAY" --state "$STATE_FILE" --message-id "$MESSAGE_ID"
+          git -C "$RUNNER_TEMP/msk-pdf-state" add msk_daily_research_state.json
+          git -C "$RUNNER_TEMP/msk-pdf-state" commit -m "Daily research $DAY Telegram ACK confirmed"
+          git -C "$RUNNER_TEMP/msk-pdf-state" push origin HEAD:refs/heads/msk-daily-pdf-state
+          echo "Daily fundamental PDF delivered; Telegram ACK $MESSAGE_ID." >> "$GITHUB_STEP_SUMMARY"
