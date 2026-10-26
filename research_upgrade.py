@@ -74,6 +74,11 @@ def evaluate(symbol, info, frame, now=None):
     return dict(symbol=symbol, name=str(info.get("name") or symbol)[:80], sector=sector,
                 price=float(c.iloc[-1]), asof=asof.strftime("%d-%b-%Y"),
                 fetched_at=stamp, vol=vol, turnover=turnover, timing=timing,
+                provider=info.get("provider"), provider_url=info.get("provider_url"),
+                fiscal_sales_period=info.get("fiscal_sales_period"),
+                fiscal_sales_previous=info.get("fiscal_sales_previous"),
+                balance_sheet_period=info.get("balance_sheet_period"),
+                coverage=info.get("coverage"),
                 **{**values, "cap":values["cap"]/1e7}), None
 
 def rank(rows, profile, size=10):
