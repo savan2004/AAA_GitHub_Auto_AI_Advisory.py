@@ -556,21 +556,8 @@ def build_scan(profile):
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
 def build_breadth():
-    lines = ["📊 <b>MARKET BREADTH</b>", "━━━━━━━━━━━━━━━━━━━━"]
-    indices = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "NIFTY IT": "^CNXIT", "NIFTY MIDCAP": "^NSEMDCP50"}
-    for name, tick in indices.items():
-        try:
-            d = yf.Ticker(tick).history(period="1mo")
-            if d is None or len(d) < 5:
-                continue
-            l = round(float(d["Close"].iloc[-1]), 2)
-            p = round(float(d["Close"].iloc[-2]), 2)
-            c = round((l - p) / p * 100, 2) if p > 0 else 0.0
-            icon = "🟢" if c >= 0 else "🔴"
-            lines.append(f"{icon} <b>{name}</b>: {l:,.2f} ({c:+.2f}%)")
-        except Exception:
-            pass
-    return "\n".join(lines) if len(lines) > 2 else "❌ Index data unavailable."
+    from market_breadth import get_breadth, format_breadth
+    return format_breadth(get_breadth())
 
 
 # ── Build Portfolio Card ─────────────────────────────────────────────────────
