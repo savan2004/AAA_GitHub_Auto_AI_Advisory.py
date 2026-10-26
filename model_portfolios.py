@@ -27,6 +27,11 @@ PROFILES = {
         "cash_pct": 10,
         "focus": "Quality-growth balance and controlled valuation risk",
     },
+    "aggressive": {
+        "label": "🚀 AGGRESSIVE",
+        "cash_pct": 5,
+        "focus": "High growth with strict data, sector and liquidity gates",
+    },
 }
 
 
