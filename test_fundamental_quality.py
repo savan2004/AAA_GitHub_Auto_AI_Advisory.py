@@ -19,6 +19,12 @@ class FundamentalQualityTests(unittest.TestCase):
         for key in ("pe", "pb", "eps", "mcap", "rev", "de", "beta"):
             self.assertIn('fund.get("'+key+'") is not None', text)
 
+    def test_assessment_is_cautious_and_does_not_invent_targets(self):
+        text = ast.get_source_segment(SOURCE, FUNCTION)
+        self.assertIn("Fundamental observations (not a recommendation)", text)
+        self.assertIn("Insufficient verified metrics", text)
+        self.assertIn("compare with peers and growth", text)
+
     def test_untrusted_company_name_is_escaped(self):
         text = ast.get_source_segment(SOURCE, FUNCTION)
         self.assertIn("html.escape(str(name))", text)
