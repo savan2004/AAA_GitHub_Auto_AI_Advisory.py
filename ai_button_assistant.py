@@ -148,7 +148,8 @@ def draft(chat_id, topic, question, *, now=None, caller=None):
     if topic == "portfolio":
         # Always safe-by-default. User explicitly asking is NOT permission
         # to transmit previously stored portfolio balances or transactions.
-        facts = None
+        facts = ("PRIVATE portfolio data withheld; no positions, investment "
+                 "amounts or P&L are supplied.")
     if facts is None and topic not in ("general", "portfolio"):
         return ("The previous research data has expired or is unavailable. "
                 "Please run this button again, then ask your question."), False
@@ -157,7 +158,11 @@ def draft(chat_id, topic, question, *, now=None, caller=None):
         "how can ", "difference between ", "meaning of ", "tell me about ",
         "क्या है", "समझाओ", "कैसे ", "મતલબ", "સમજાવો",
     ))
-    if not facts and _is_market_claim(question) and not educational:
+    live_intent = any(word in question.lower() for word in (
+        "today", "current", "latest", "right now", "live price",
+        "this minute", "अभी", "आज", "હાલ", "આજે",
+    ))
+    if not facts and _is_market_claim(question) and (not educational or live_intent):
         return ("Current market data are not supplied. Please select a stock "
                 "and run Technical/Fundamental/Report first."), False
     system, prompt = _draft_prompt(topic, question, facts)
