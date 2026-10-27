@@ -159,7 +159,7 @@
  }
  function screenerTab(panel){
    const list=results();if(!list.length){p(panel,"Upload one or more symbols in price CSV, or run the synthetic test universe.","warning");return;}
-   p(panel,"This screener analyses the "+list.length+" UPLOADED "+(universeKind==="synthetic"?"SYNTHETIC TEST":"USER-SUPPLIED")+" series, not live NSE constituents.");
+   p(panel,"This screener analyses "+list.length+" loaded "+(universeKind==="synthetic"?"SYNTHETIC TEST":list.every(x=>x.entry.source==="tej_eod")?"TejHQ NSE EOD historical":"USER-SUPPLIED")+" series; coverage is only loaded symbols, not a complete NSE index.");
    const select=document.createElement("select");select.id="trendFilter";select.setAttribute("aria-label","Filter trend");
    for(const v of ["Any trend","Uptrend","Downtrend","Sideways"]){let o=document.createElement("option");o.value=v;o.textContent=v;select.append(o);}
    select.style.cssText="background:#0b1525;color:white;border:1px solid #30455d;border-radius:8px;padding:10px;margin-right:10px";
@@ -213,7 +213,7 @@
      if(/volume|vol/.test(q))return "Relative volume compares a candle's volume with the preceding 20 sessions. 1.5x is above normal, 2x high, 3x explosive."+suffix;
    }
    if(!e)return "No company evidence loaded. Choose SYNTHETIC TEST to explore, or upload OHLCV CSV for your stock. Stock search alone is not a live feed."+suffix;
-   const caution=e.kind==="synthetic"?"SYNTHETIC DATA — NOT NSE QUOTES":"User-uploaded price data; original source not independently verified.";
+   const caution=e.kind==="synthetic"?"SYNTHETIC DATA — NOT NSE QUOTES":e.kind==="tej_eod"?"TejHQ NSE bhavcopy EOD only; raw unadjusted historical data, NOT live":"User-uploaded price data; original source not independently verified.";
    const evidence="Stock "+e.symbol+" ("+e.session+"): "+caution+"\nLast close ₹"+fmt(e.close)+
      "; trend "+e.trend+"; EMA20 ₹"+fmt(e.ema20)+"; EMA50 ₹"+fmt(e.ema50)+
      "; ADX "+fmt(e.adx,1)+" ("+e.adxLabel+"); Volume "+fmt(e.multiple)+"x ("+e.volumeLabel+").\n"+
