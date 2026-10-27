@@ -100,7 +100,7 @@ const assert=require("node:assert/strict");
    console.log("MSK_EIGHT_REAL_ACTION_CARDS_PASS");
    await page.getByRole("button",{name:/technical analysis/i}).click();
    assert((await page.locator("#detailBody").innerText()).includes("EMA20"));
-   await page.getByRole("button",{name:/trading chart/i}).click();
+   await page.locator('.nav[data-tab="chart"]').click();
    await page.setViewportSize({width:390,height:844});
    const mobile=await page.evaluate(()=>{
      const c=document.querySelector("#chartCanvas");
@@ -118,7 +118,7 @@ const assert=require("node:assert/strict");
    assert(await page.locator("#mobileScrim").count()===1,"Mobile scrim missing");
    await page.locator("#mobileScrim").click({position:{x:350,y:100}});
    assert(await page.locator("body.menu-open").count()===0,"Mobile sidebar did not close");
-   await page.getByRole("button",{name:/fundamentals/i}).click();
+   await page.locator('.nav[data-tab="fundamental"]').click();
    assert(/No financial statements imported|Unavailable|financial-statement CSV/i.test(await page.locator("#detailBody").innerText()),"No financial ratios may be invented from a price chart");
    console.log("MSK_BEL_EOD_REAL_CHROME_PASS",state.asof,state.close);
  }finally{await browser.close();}
