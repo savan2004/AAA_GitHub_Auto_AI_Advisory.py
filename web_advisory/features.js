@@ -133,6 +133,7 @@
  }
  function results(){
    const out=[];for(const [symbol,entry] of library){
+     if(["NIFTY","NIFTY50","BANKNIFTY","NIFTYBANK"].includes(symbol.replace(/[^A-Z0-9]/g,"")))continue; // Index levels are not stock constituents.
      const q=core.compute(entry.bars);const last=entry.bars.at(-1),prev=entry.bars.at(-2);
      out.push({symbol,entry,q,change:prev.close?(last.close/prev.close-1)*100:0,
        sma20:entry.bars.length>=20?entry.bars.slice(-20).reduce((s,x)=>s+x.close,0)/20:null});
