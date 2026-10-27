@@ -169,7 +169,7 @@
    function update(){
      const q=list.filter(x=>(select.value==="Any trend"||x.q.trend===select.value)&&((x.q.adx||0)>=Number(min.value||0)));
      view.replaceChildren();barList(view,q.length+" matching stocks",["Stock","Close (₹)","Trend","ADX","Vol x","Signal","Date"],
-       q.map(x=>[x.symbol,fmt(x.q.last),x.q.trend,fmt(x.q.adx,1),fmt(x.q.ratio),x.q.signal,x.q.date]));
+       q.map(x=>[x.symbol,fmt(x.q.last),x.q.trend,fmt(x.q.adx,1),fmt(x.q.ratio),x.entry.source==="tej_eod"?"RESEARCH ONLY":x.entry.source==="synthetic"?"DEMO ONLY":"UNVERIFIED / "+x.q.signal,x.q.date]));
    }select.onchange=update;min.oninput=update;update();
    panel.append(btn("Export Screener CSV",()=>csvDownload([
       ["symbol","asof","close","trend","adx14","volume_multiple","signal","data_source"],
