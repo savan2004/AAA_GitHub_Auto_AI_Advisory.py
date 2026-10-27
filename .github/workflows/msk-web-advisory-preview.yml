@@ -35,7 +35,7 @@ jobs:
           a=Path('web_advisory/app.js').read_text()
           s=Path('web_advisory/config.js').read_text()
           assert all(x in h for x in ['csvFile','chartCanvas','chatForm','dataLabel','market_widget.js','dashboard.css','dashboard.js'])
-          assert h.count('class="action-card" data-go=') == 8
+          assert h.count('class="action-card" data-go=') == 9
           assert h.count('class="nav') >= 8
           f=Path('web_advisory/features.js').read_text()
           assert all(x in a for x in ['No clean pattern','SYNTHETIC','timestamp','volume'])
@@ -87,7 +87,8 @@ jobs:
             ['/market_widget.js', 'DATA ACCESS RESTRICTED'],
             ['/config.js', 'br-cool-poetry-a1bhjhc3-mskwebapi'],
             ['/dashboard.css', 'web-pro'],
-            ['/dashboard.js', 'MSKDashboard']
+            ['/dashboard.js', 'MSKDashboard'],
+            ['/import_center.js', 'MSKImport']
           ]) {
             const response = await fetch(host + route, {signal:AbortSignal.timeout(15000)});
             if (!response.ok) throw new Error(route + ' live HTTP ' + response.status);
