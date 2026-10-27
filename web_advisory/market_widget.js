@@ -168,6 +168,7 @@
  features.renderPanel=panel;
  features.offlineAnswer=offlineAnswer;
  features.getExternalSymbol=()=>selected;
+ app.marketWidget={clearExternal:()=>{selected=null;reset();},showExternal:external};
  const input=$("ticker"),action=$("analyzeSymbol");
  // Capture before the older demo-only listeners to prevent the stale
  // "no loaded observations" error from overwriting the new result.
