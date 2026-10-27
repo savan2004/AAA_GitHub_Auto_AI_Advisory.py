@@ -203,7 +203,7 @@
  }
  function offlineAnswer(question){
    const raw=String(question||"").slice(0,550),q=raw.toLowerCase(),e=currentEvidence();
-   const suffix="\n\nLOCAL RULE-BASED RESEARCH • NOT GENERATIVE AI. No provider connection is configured.";
+   const suffix="\nData mode: "+(e?(e.kind==="synthetic"?"SYNTHETIC DEMO — NOT REAL NSE DATA":"USER CSV — SOURCE UNVERIFIED"):"NO MARKET DATA LOADED")+"\nLOCAL RULE-BASED RESEARCH • NOT GENERATIVE AI. No provider connection is configured.";
    if(/what is|meaning|define|explain|क्या है|શું છે/.test(q)){
      if(/\badx\b/.test(q))return "ADX measures TREND STRENGTH, not direction. Below 20 is weak; 20–25 building; 25–35 strong; above 35 very strong."+suffix;
      if(/\broe\b/.test(q))return "ROE = net income / average shareholder equity. Use the company's financial filings and period; OHLC candles cannot supply this."+suffix;
