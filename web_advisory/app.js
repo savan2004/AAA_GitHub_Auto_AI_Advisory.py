@@ -195,10 +195,7 @@
      "\nPattern: "+c.pattern+" | Signal: "+c.signal+"\nRisk: no source audit, no historical signal backtest and no issuer filings imported.\nNext checks: exchange session/adjustments, financial statements, risk budget.");
  }
  el("loadSample").addEventListener("click",()=>dataLoaded(demo(),"synthetic","Generated test series"));
- el("csvFile").addEventListener("change",async e=>{let f=e.target.files&&e.target.files[0];if(!f)return;
-   if(f.size>2e6){alert("CSV file limit 2MB.");return;}
-   try{dataLoaded(csvParse(await f.text()),"uploaded",f.name);}catch(err){alert("CSV rejected: "+err.message);}
- });
+
  document.querySelectorAll(".nav").forEach(btn=>btn.addEventListener("click",()=>{
    document.querySelectorAll(".nav").forEach(b=>b.classList.toggle("active",b===btn));
    st.tab=btn.dataset.tab;renderTab();if(st.data.length)requestAnimationFrame(draw);
