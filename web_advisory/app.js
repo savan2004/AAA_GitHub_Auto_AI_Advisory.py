@@ -91,7 +91,13 @@
  function dataLoaded(rows,kind,file){
    st.data=rows;st.kind=kind;st.file=file;st.calc=compute(rows);
    const c=st.calc;
-   text("lastPrice","₹"+fm(c.last));text("priceMeta",c.date+" • "+(kind==="synthetic"?"SIMULATED":"user CSV (unverified)"));
+   if(kind==="tej_eod"){
+     document.body.classList.add("market-eod");
+     // A strategy cannot be called trade-ready without measured out-of-sample
+     // accuracy; compute indicators but never publish actionable BUY/SELL.
+     c.signal="RESEARCH ONLY";c.quality="Not backtested";
+   }else document.body.classList.remove("market-eod");
+   text("lastPrice","₹"+fm(c.last));text("priceMeta",c.date+" • "+(kind==="synthetic"?"SIMULATED":kind==="tej_eod"?"NSE EOD (TejHQ) • not live":"user CSV (unverified)"));
    text("trend",c.trend);text("adx",c.adx===null?"—":fm(c.adx,1));
    text("adxLabel",c.adxLabel);text("vol",c.ratio===null?"—":fm(c.ratio,2)+"x");text("volLabel",c.volLabel);
    text("chartTitle",sym()+" • Historical daily candlesticks");
@@ -102,9 +108,13 @@
      let r=document.createElement("div"),l=document.createElement("span"),v=document.createElement("b");
      l.textContent=pair[0];v.textContent=pair[1];r.append(l,v);panel.append(r);
    }
-   text("dataLabel",(kind==="synthetic"?"SYNTHETIC DEMO — NOT REAL NSE":"USER CSV — NOT INDEPENDENTLY VERIFIED")+" • "+file+" • "+rows.length+" daily bars • "+c.date);
+   text("dataLabel",(kind==="synthetic"?"SYNTHETIC DEMO — NOT REAL NSE":
+        kind==="tej_eod"?"NSE END-OF-DAY • NOT INTRADAY/LIVE • TejHQ-derived bhavcopy (raw, unadjusted)":
+        "USER CSV — NOT INDEPENDENTLY VERIFIED")+" • "+file+" • "+rows.length+" daily bars • Last trading session "+c.date);
    el("dataLabel").classList.add("hasData");el("chartEmpty").style.display="none";
-   text("analysisNote",kind==="synthetic"?"Simulated test data. NOT a real market recommendation.":"User-supplied source has not been exchange-verified; no guaranteed signal.");
+   text("analysisNote",kind==="synthetic"?"Simulated test data. NOT a real market recommendation.":
+     kind==="tej_eod"?"Daily exchange-bhavcopy-derived data from TejHQ; unadjusted for corporate actions. Experimental indicators, NOT verified trade signals.":
+     "User-supplied source has not been exchange-verified; no guaranteed signal.");
    draw();renderTab();
  }
  function draw(){
@@ -146,10 +156,11 @@
    if(tab==="ai"){paragraph(panel,"AI chat is below. It requires a secure server-side provider connection; this preview never exposes or guesses API keys.");return;}
    if(!c){paragraph(panel,"No stock data loaded. Import your own OHLCV CSV or choose the SYNTHETIC demo to test the chart.","warning");return;}
    if(st.kind==="synthetic")paragraph(panel,"SIMULATED EXAMPLE. These numbers are not actual Indian stocks.","warning");
+   else if(st.kind==="tej_eod")paragraph(panel,"NSE end-of-day bhavcopy-derived OHLCV served by TejHQ. Last dated session: "+c.date+". Raw/unadjusted history, NOT live quote. Source and rights for public or commercial redistribution require confirmation.","warning");
    else paragraph(panel,"Uploaded CSV: "+st.file+". Claimed session date: "+c.date+". Original source not independently verified.","warning");
    if(["overview","technical","chart"].includes(tab)){
      paragraph(panel,"Trend "+c.trend+". EMA20 ₹"+fm(c.e20.at(-1))+"; EMA50 ₹"+fm(c.e50.at(-1))+". ADX "+fm(c.adx,1)+" ("+c.adxLabel+"). Volume "+(c.ratio===null?"Unavailable":fm(c.ratio,2)+"x "+c.volLabel)+".");
-     paragraph(panel,"Detected pattern: "+c.pattern+". Strict action: "+c.signal+"; setup quality: "+c.quality+". Results have not been backtested.");
+     paragraph(panel,"Pattern observation: "+c.pattern+". Model status: "+c.signal+"; validation: "+c.quality+". Not backtested; no executable BUY/SELL signal.");
      paragraph(panel,"Volume ratio compares current volume against the PREVIOUS twenty candles only. Candles/wicks are from supplied OHLC data.");
    }else if(tab==="fundamental"){
      paragraph(panel,"Unavailable: audited P/E, ROE, revenue growth, balance sheet, earnings date and peers. OHLCV history does not contain company accounts. Do not invent.","warning");
@@ -196,7 +207,7 @@
  }
  function draft(){
    const c=st.calc;if(!c){bubble("assistant","No data loaded. Import a verified-source CSV to create a transparent evidence summary.");return;}
-   bubble("assistant","DETERMINISTIC SUMMARY — NOT GENERATIVE AI\n"+sym()+" | "+(st.kind==="synthetic"?"SYNTHETIC DEMO":"USER CSV / UNVERIFIED")+
+   bubble("assistant","DETERMINISTIC SUMMARY — NOT GENERATIVE AI\n"+sym()+" | "+(st.kind==="synthetic"?"SYNTHETIC DEMO":st.kind==="tej_eod"?"NSE EOD / TejHQ / NOT LIVE":"USER CSV / UNVERIFIED")+
      "\nSession: "+c.date+"\nTrend: "+c.trend+"\nEMA20: ₹"+fm(c.e20.at(-1))+" | EMA50: ₹"+fm(c.e50.at(-1))+
      "\nADX: "+fm(c.adx,1)+" "+c.adxLabel+"\nVolume: "+(c.ratio===null?"unavailable":fm(c.ratio,2)+"x "+c.volLabel)+
      "\nPattern: "+c.pattern+" | Signal: "+c.signal+"\nRisk: no source audit, no historical signal backtest and no issuer filings imported.\nNext checks: exchange session/adjustments, financial statements, risk budget.");
