@@ -142,6 +142,7 @@
      screener:"Stock Screener",breadth:"Market Breadth",pdf:"Research Report",ai:"Direct AI Analyst"};
    text("detailTitle",titles[tab]||"Overview");text("detailLabel",tab.toUpperCase()+" • SOURCE AWARE");panel.replaceChildren();
    el("analysisRegion").hidden=tab==="ai";
+   if(window.MSKWeb&&window.MSKWeb.features&&window.MSKWeb.features.renderPanel(tab,panel))return;
    if(tab==="ai"){paragraph(panel,"AI chat is below. It requires a secure server-side provider connection; this preview never exposes or guesses API keys.");return;}
    if(!c){paragraph(panel,"No stock data loaded. Import your own OHLCV CSV or choose the SYNTHETIC demo to test the chart.","warning");return;}
    if(st.kind==="synthetic")paragraph(panel,"SIMULATED EXAMPLE. These numbers are not actual Indian stocks.","warning");
@@ -163,7 +164,11 @@
  }
  function bubble(role,msg){let x=document.createElement("div");x.className="bubble "+role;x.textContent=msg;el("chatHistory").append(x);el("chatHistory").scrollTop=el("chatHistory").scrollHeight;}
  async function ask(question){
-   const base=api();if(!base){bubble("assistant","Real AI is not configured on this FREE static preview. No AI was called and no market data was transmitted. A secure private backend with your own provider key is required.");return;}
+   const base=api();if(!base){
+     if(window.MSKWeb&&window.MSKWeb.features){bubble("assistant",window.MSKWeb.features.offlineAnswer(question));}
+     else bubble("assistant","Generative AI not connected. Add a secure server endpoint; model keys must not be exposed in the browser.");
+     return;
+   }
    if(st.kind==="synthetic"){bubble("assistant","Synthetic demo prices cannot be treated as real-market evidence. Import correctly sourced market data before requesting a market-specific AI analysis.");return;}
    const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),14000);
    try{
@@ -203,6 +208,7 @@
    text("hoverBar",d.date+"  O ₹"+fm(d.open)+"  H ₹"+fm(d.high)+"  L ₹"+fm(d.low)+"  C ₹"+fm(d.close)+"  VOL "+Math.round(d.volume).toLocaleString("en-IN"));
  });
  window.addEventListener("resize",()=>{if(st.data.length)draw();});
- text("backendIndicator",api()?"Optional AI backend configured":"AI backend not configured");
+ window.MSKWeb={state:st,dataLoaded,csvParse,demo,compute,draw,renderTab,paragraph,bubble,symbol:sym,format:fm};
+ text("backendIndicator",api()?"AI endpoint configured":"Local research • AI provider offline");
  renderTab();
 })();
