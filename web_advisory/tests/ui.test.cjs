@@ -21,7 +21,7 @@ function build(){
  w.URL.revokeObjectURL=()=>{};
  // Deterministic offline-provider default; individual live-feed tests override.
  w.fetch=async()=>({ok:false,status:503});
- for(const f of ["config.js","app.js","features.js","market_widget.js"]){
+ for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js"]){
    w.eval(fs.readFileSync(path.join(root,f),"utf8"));
  }
  return w;
@@ -256,5 +256,54 @@ test("Stale NSE EOD provider history must fail closed",async()=>{
  assert.equal(f.getExternalSymbol(),"BEL");
  assert.equal(w.document.getElementById("lastPrice").textContent,"No MSK quote");
  assert.match(w.document.getElementById("dataLabel").textContent,/stale or future dated/);
+ w.close();
+});
+
+test("professional dashboard displays and routes ALL eight real research actions",()=>{
+ const w=build(),d=w.document;
+ assert.match(d.querySelector("h1").textContent,/Research Dashboard/);
+ assert.equal(d.querySelectorAll(".nav[data-tab]").length,8);
+ assert.equal(d.querySelectorAll(".action-card[data-go]").length,8);
+ assert.equal(d.querySelectorAll(".watch-stock[data-stock]").length,4);
+ assert.ok(d.getElementById("researchDetail"));
+ assert.ok(d.getElementById("aiPanel"));
+ assert.ok(d.querySelector('link[href="dashboard.css"]'));
+ assert.ok(w.MSKDashboard);
+ d.getElementById("loadSample").click();
+ for(const tab of ["technical","fundamental","screener","pdf","chart","breadth","ai","overview"]){
+   const action=d.querySelector('.action-card[data-go="'+tab+'"]');
+   action.click();
+   assert.equal(w.MSKDashboard.activeTab(),tab);
+   assert.equal(d.querySelector(".nav.active").dataset.tab,tab);
+   assert.ok(d.getElementById("detailBody").textContent.length>12,"Inert module: "+tab);
+ }
+ d.querySelector('.watch-stock[data-stock="RELIANCE"]').click();
+ assert.equal(d.getElementById("ticker").value,"RELIANCE");
+ assert.match(d.getElementById("dataLabel").textContent,/NSE:RELIANCE/);
+ assert.equal(d.getElementById("lastPrice").textContent,"No MSK quote");
+ d.getElementById("mobileMenuToggle").click();
+ assert.equal(d.body.classList.contains("menu-open"),true);
+ assert.equal(d.getElementById("mobileMenuToggle").getAttribute("aria-expanded"),"true");
+ d.getElementById("mobileScrim").click();
+ assert.equal(d.body.classList.contains("menu-open"),false);
+ w.close();
+});
+test("EOD source badge updates and stock watchlist actually loads issuer-specific provider",async()=>{
+ const w=build(),d=w.document;
+ const stock="TCS";
+ const bars=[];for(let i=119;i>=0;i--){
+   const date=new Date(Date.UTC(2026,9,26-i)).toISOString().slice(0,10),p=3000+i/5;
+   bars.push({date,open:p,high:p+5,low:p-5,close:p+1,volume:10000+i*20});
+ }
+ w.fetch=async()=>({ok:true,json:async()=>({meta:{symbol:stock,exchange:"NSE"},data:bars})});
+ d.querySelector('.watch-stock[data-stock="TCS"]').click();
+ await new Promise(resolve=>setTimeout(resolve,110));
+ assert.equal(d.getElementById("ticker").value,"TCS");
+ assert.equal(w.MSKWeb.state.kind,"tej_eod");
+ assert.equal(w.MSKWeb.features.library.size,1);
+ assert.equal(d.getElementById("lastPrice").textContent.startsWith("₹"),true);
+ assert.equal(d.getElementById("signal").textContent,"RESEARCH ONLY");
+ assert.match(d.getElementById("feedTrustLabel").textContent,/HISTORICAL NSE EOD/);
+ assert.equal(d.querySelector('.watch-stock[data-stock="TCS"]').classList.contains("selected"),true);
  w.close();
 });
