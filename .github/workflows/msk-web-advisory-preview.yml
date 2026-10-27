@@ -102,7 +102,6 @@ jobs:
           command -v google-chrome || command -v chromium
           CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/live-browser.cjs
       - name: Full LIVE website audit (each button, real file upload and fundamentals)
-        if: always()
         run: |
           CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/audit-full-live.cjs
       - name: Save live desktop and mobile screenshots
