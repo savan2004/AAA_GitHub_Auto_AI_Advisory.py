@@ -19,6 +19,8 @@ function build(){
  w.alert=(msg)=>{throw Error("Unexpected browser alert: "+msg)};
  w.URL.createObjectURL=()=> "blob:https://test/abc";
  w.URL.revokeObjectURL=()=>{};
+ // Deterministic offline-provider default; individual live-feed tests override.
+ w.fetch=async()=>({ok:false,status:503});
  for(const f of ["config.js","app.js","features.js","market_widget.js"]){
    w.eval(fs.readFileSync(path.join(root,f),"utf8"));
  }
@@ -67,7 +69,7 @@ test("all menu buttons respond after ten-stock synthetic demo",()=>{
  assert.equal(w.document.getElementById("chartCanvas").hidden,true);
  assert.equal(w.document.querySelector("#externalNseChart tv-advanced-chart"),null);
  assert.equal(w.document.querySelector("#externalNseChart script"),null);
- assert.match(w.document.querySelector("#externalNseChart").textContent,/DATA ACCESS RESTRICTED/);
+ assert.match(w.document.querySelector("#externalNseChart").textContent,/SOURCE NOT AVAILABLE|DATA ACCESS RESTRICTED/);
  assert.match(w.document.querySelector("#externalNseChart").textContent,/NSE:BEL/);
  assert.doesNotMatch(w.document.getElementById("analysisLines").textContent,/DEMO03/);
  w.document.getElementById("loadSample").click();
@@ -130,7 +132,7 @@ test("BEL search button and research tabs refuse restricted embed without demo p
  assert.equal(doc.getElementById("lastPrice").textContent,"No MSK quote");
  assert.equal(doc.getElementById("adx").textContent,"—");
  assert.equal(doc.getElementById("vol").textContent,"—");
- assert.match(doc.getElementById("dataLabel").textContent,/no imported MSK market data/);
+ assert.match(doc.getElementById("dataLabel").textContent,/Historical data fetch failed safely|no imported MSK market data/);
  assert.ok(doc.querySelector("#externalNseChart a[href='https://in.tradingview.com/symbols/NSE-BEL/']"));
  for(const name of ["overview","technical","fundamental","chart","screener","breadth","pdf","ai"]){
    const detail=clickTab(w,name);
