@@ -127,7 +127,7 @@
      $("hoverBar").textContent="NSE:"+symbol+" • TejHQ / NSE bhavcopy • "+bars.length+
        " historical EOD sessions • latest "+last.date+". Hover candles for OHLCV.";
    }catch(err){
-     if(selected!==symbol||requestRevision!==revision)return;
+     if(selected!==symbol||requestRevision!==revision||!window.document?.body)return;
      const message=err?.name==="AbortError"?"Data source timed out":
         String(err?.message||"Data source unavailable").slice(0,180);
      const mount=$("externalNseChart");
