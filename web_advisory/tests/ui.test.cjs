@@ -65,11 +65,10 @@ test("all menu buttons respond after ten-stock synthetic demo",()=>{
  assert.equal(w.document.getElementById("signal").textContent,"NOT ASSESSED");
  assert.equal(w.document.body.classList.contains("market-external"),true);
  assert.equal(w.document.getElementById("chartCanvas").hidden,true);
- const chartEl=w.document.querySelector("#externalNseChart tv-advanced-chart");
- assert.ok(chartEl);
- assert.equal(chartEl.getAttribute("symbol"),"NSE:BEL");
- assert.equal(chartEl.getAttribute("interval"),"1D");
- assert.equal(w.document.querySelector("#externalNseChart script"),null,"No legacy AAPL-default chart scripts");
+ assert.equal(w.document.querySelector("#externalNseChart tv-advanced-chart"),null);
+ assert.equal(w.document.querySelector("#externalNseChart script"),null);
+ assert.match(w.document.querySelector("#externalNseChart").textContent,/DATA ACCESS RESTRICTED/);
+ assert.match(w.document.querySelector("#externalNseChart").textContent,/NSE:BEL/);
  assert.doesNotMatch(w.document.getElementById("analysisLines").textContent,/DEMO03/);
  w.document.getElementById("loadSample").click();
  assert.equal(F.getExternalSymbol(),null);
@@ -120,7 +119,7 @@ test("ask AI never fakes generative replies; answers are local and research-boun
  w.close();
 });
 
-test("BEL search button and all research tabs use TradingView without demo prices",()=>{
+test("BEL search button and research tabs refuse restricted embed without demo prices",()=>{
  const w=build(),doc=w.document;
  const input=doc.getElementById("ticker");
  input.value="BEL";doc.getElementById("analyzeSymbol").click();
@@ -141,7 +140,8 @@ test("BEL search button and all research tabs use TradingView without demo price
  assert.equal(doc.querySelector("#externalFundamentals"),null,
   "No unverified legacy financial widget");
  clickTab(w,"technical");
- assert.equal(doc.querySelector("#externalTechnicalRating tv-technical-analysis").getAttribute("symbol"),"NSE:BEL");
+ assert.equal(doc.querySelector("#externalTechnicalRating"),null);
+ assert.match(doc.getElementById("detailBody").textContent,/cannot display this NSE symbol/);
  clickTab(w,"fundamental");
  assert.match(doc.getElementById("detailBody").textContent,/Check official financial disclosures/);
  assert.equal(doc.querySelector("#externalFundamentals"),null);
@@ -168,24 +168,25 @@ test("Real CSV import replaces external BEL viewer and restores accurate indicat
  w.close();
 });
 
-test("all externally hosted research widgets MUST match selected stock and clear old symbols",()=>{
+test("restricted NSE symbols show honest stock-specific source links, never default Apple widgets",()=>{
  const w=build(),doc=w.document,F=w.MSKWeb.features;
  F.choose("BEL",false);
  let widget=doc.querySelector("tv-advanced-chart");
- assert.equal(widget.getAttribute("symbol"),"NSE:BEL");
- assert.equal(widget.getAttribute("data-expected-symbol"),"NSE:BEL");
+ assert.equal(widget,null);
+ assert.equal(doc.querySelector(".nse-unavailable")?.getAttribute("data-symbol"),"NSE:BEL");
  assert.equal(doc.querySelector("script[src*='embed-widget-advanced-chart.js']"),null);
  assert.equal(doc.querySelector("script[src*='embed-widget-financials.js']"),null);
  assert.ok(doc.body.classList.contains("market-external"));
  assert.ok(doc.getElementById("explain").hidden);
  F.choose("INFY",false);
  widget=doc.querySelector("tv-advanced-chart");
- assert.equal(widget.getAttribute("symbol"),"NSE:INFY");
- assert.equal(doc.querySelectorAll("tv-advanced-chart").length,1);
+ assert.equal(widget,null);
+ assert.equal(doc.querySelector(".nse-unavailable")?.getAttribute("data-symbol"),"NSE:INFY");
+ assert.equal(doc.querySelectorAll("tv-advanced-chart").length,0);
  assert.doesNotMatch(doc.getElementById("dataLabel").textContent,/NSE:BEL/);
  const panel=clickTab(w,"technical");
- assert.equal(panel.querySelector("tv-technical-analysis").getAttribute("symbol"),"NSE:INFY");
- assert.equal(doc.querySelector("tv-advanced-chart").getAttribute("symbol"),"NSE:INFY");
+ assert.equal(panel.querySelector("tv-technical-analysis"),null);
+ assert.equal(doc.querySelector(".nse-unavailable")?.getAttribute("data-symbol"),"NSE:INFY");
  F.choose("DEMO02",false);
  assert.equal(F.getExternalSymbol(),null);
  assert.equal(doc.querySelector("tv-advanced-chart"),null);
