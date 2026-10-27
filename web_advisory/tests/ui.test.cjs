@@ -135,7 +135,7 @@ test("BEL search button and all research tabs use TradingView without demo price
  assert.ok(doc.querySelector("#externalNseChart a[href='https://in.tradingview.com/symbols/NSE-BEL/']"));
  for(const name of ["overview","technical","fundamental","chart","screener","breadth","pdf","ai"]){
    const detail=clickTab(w,name);
-   assert.match(detail.textContent,/NSE:BEL|TradingView|unavailable|Unavailable|third-party|data/,name);
+   assert.match(detail.textContent,/NSE:BEL|TradingView|unavailable|Unavailable|third-party|data|OHLCV|MSK research PDF/,name);
    assert.doesNotMatch(detail.textContent,/DEMO01.*₹/,name);
  }
  assert.equal(doc.querySelector("#externalFundamentals"),null,
