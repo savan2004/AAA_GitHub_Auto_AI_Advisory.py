@@ -283,7 +283,27 @@
    }
    return intro+"\nAsk about the trend, volume, ADX, historical highs/lows, financial filings or uncertainty. For personalised forecasts, an authenticated and evidence-gated AI backend is not yet available."+footer;
  }
+ function portfolioTab(panel){
+   const report=window.MSKPortfolio;
+   p(panel,"Local-only portfolio holdings — no account, no cloud storage and no broker execution. Import holdings through Import Data → Portfolio.","warning");
+   if(!report?.rows?.length){
+     p(panel,"No holdings imported in this browser session. Use Import Data to upload symbol,quantity,buy_price; then return here.");
+     const action=btn("Import Portfolio CSV",()=>window.MSKImport?.open("portfolio"),"btn");
+     panel.append(action);return;
+   }
+   const money=n=>Number(n).toLocaleString("en-IN",{maximumFractionDigits:2,minimumFractionDigits:2});
+   p(panel,"Holdings "+report.rows.length+" • Original invested cost ₹"+money(report.invested)+
+     " • Stock price observations available for "+report.priced+"/"+report.rows.length+
+     " holdings. Historical values only; not live or realized P&L.");
+   table(panel,["Stock","Quantity","Buy ₹","Buy cost ₹","EOD ₹","Session","Indicative value ₹"],
+     report.rows.map(r=>[r.symbol,r.quantity,money(r.buy_price),money(r.quantity*r.buy_price),
+       r.historical_close===null?"Unavailable":money(r.historical_close),
+       r.asof||"Not loaded",r.estimated_value===null?"Not calculated":money(r.estimated_value)]));
+   p(panel,"No aggregate P&L is calculated until every holding has a matching verified historical close on the same reporting date. No annualised returns, beta or personalized rebalancing recommendations are inferred.");
+   panel.append(btn("Replace Portfolio CSV",()=>window.MSKImport?.open("portfolio"),"btn ghost"));
+ }
  function renderPanel(tab,panel){
+   if(tab==="portfolio"){portfolioTab(panel);return true;}
    if(tab==="fundamental"){fundamentalTab(panel);return true;}
    if(tab==="screener"){screenerTab(panel);return true;}
    if(tab==="breadth"){breadthTab(panel);return true;}
