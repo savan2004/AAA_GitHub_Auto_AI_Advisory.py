@@ -62,11 +62,14 @@ test("all menu buttons respond after ten-stock synthetic demo",()=>{
  assert.equal(F.getExternalSymbol(),"BEL");
  assert.match(w.document.getElementById("dataLabel").textContent,/NSE:BEL/);
  assert.equal(w.document.getElementById("lastPrice").textContent,"Unavailable");
- assert.equal(w.document.getElementById("signal").textContent,"WAIT");
+ assert.equal(w.document.getElementById("signal").textContent,"NOT ASSESSED");
+ assert.equal(w.document.body.classList.contains("market-external"),true);
  assert.equal(w.document.getElementById("chartCanvas").hidden,true);
- assert.ok(w.document.querySelector("#externalNseChart script[src$='embed-widget-advanced-chart.js']"));
- const chartConfig=w.document.querySelector("#externalNseChart script").textContent;
- assert.match(chartConfig,/"symbol":"NSE:BEL"/);
+ const chartEl=w.document.querySelector("#externalNseChart tv-advanced-chart");
+ assert.ok(chartEl);
+ assert.equal(chartEl.getAttribute("symbol"),"NSE:BEL");
+ assert.equal(chartEl.getAttribute("interval"),"1D");
+ assert.equal(w.document.querySelector("#externalNseChart script"),null,"No legacy AAPL-default chart scripts");
  assert.doesNotMatch(w.document.getElementById("analysisLines").textContent,/DEMO03/);
  w.document.getElementById("loadSample").click();
  assert.equal(F.getExternalSymbol(),null);
@@ -123,22 +126,25 @@ test("BEL search button and all research tabs use TradingView without demo price
  input.value="BEL";doc.getElementById("analyzeSymbol").click();
  assert.equal(w.MSKWeb.features.getExternalSymbol(),"BEL");
  assert.match(doc.getElementById("chartTitle").textContent,/NSE:BEL/);
+ assert.equal(doc.body.classList.contains("market-external"),true);
+ assert.equal(doc.getElementById("signal").textContent,"NOT ASSESSED");
  assert.equal(doc.getElementById("lastPrice").textContent,"Unavailable");
  assert.equal(doc.getElementById("adx").textContent,"—");
  assert.equal(doc.getElementById("vol").textContent,"—");
- assert.match(doc.getElementById("dataLabel").textContent,/NO licensed MSK OHLCV/);
+ assert.match(doc.getElementById("dataLabel").textContent,/no imported MSK market data/);
  assert.ok(doc.querySelector("#externalNseChart a[href='https://in.tradingview.com/symbols/NSE-BEL/']"));
  for(const name of ["overview","technical","fundamental","chart","screener","breadth","pdf","ai"]){
    const detail=clickTab(w,name);
    assert.match(detail.textContent,/NSE:BEL|TradingView|unavailable|Unavailable|third-party|data/,name);
    assert.doesNotMatch(detail.textContent,/DEMO01.*₹/,name);
  }
- assert.ok(doc.querySelector("#externalFundamentals script[src$='embed-widget-financials.js']")===null,
-  "Fundamentals widget is removed when leaving the tab");
+ assert.equal(doc.querySelector("#externalFundamentals"),null,
+  "No unverified legacy financial widget");
  clickTab(w,"technical");
- assert.match(doc.querySelector("#externalTechnicalRating script").textContent,/"symbol":"NSE:BEL"/);
+ assert.equal(doc.querySelector("#externalTechnicalRating tv-technical-analysis").getAttribute("symbol"),"NSE:BEL");
  clickTab(w,"fundamental");
- assert.match(doc.querySelector("#externalFundamentals script").textContent,/"symbol":"NSE:BEL"/);
+ assert.match(doc.getElementById("detailBody").textContent,/Check official financial disclosures/);
+ assert.equal(doc.querySelector("#externalFundamentals"),null);
  assert.match(w.MSKWeb.features.offlineAnswer("Analyze BEL with buy target"),/does not have validated historical OHLCV/);
  input.value="INVALID$TICKER";doc.getElementById("analyzeSymbol").click();
  assert.equal(w.MSKWeb.features.getExternalSymbol(),"BEL","invalid text must not select arbitrary untrusted symbols");
@@ -155,8 +161,35 @@ test("Real CSV import replaces external BEL viewer and restores accurate indicat
  assert.equal(f.getExternalSymbol(),null);
  assert.equal(w.document.getElementById("chartCanvas").hidden,false);
  assert.equal(w.document.getElementById("externalNseChart"),null);
+ assert.equal(w.document.body.classList.contains("market-external"),false);
  assert.match(w.document.getElementById("chartTitle").textContent,/BEL/);
  assert.match(w.document.getElementById("priceMeta").textContent,/user CSV/);
  assert.notEqual(w.document.getElementById("adx").textContent,"—");
+ w.close();
+});
+
+test("all externally hosted research widgets MUST match selected stock and clear old symbols",()=>{
+ const w=build(),doc=w.document,F=w.MSKWeb.features;
+ F.choose("BEL",false);
+ let widget=doc.querySelector("tv-advanced-chart");
+ assert.equal(widget.getAttribute("symbol"),"NSE:BEL");
+ assert.equal(widget.getAttribute("data-expected-symbol"),"NSE:BEL");
+ assert.equal(doc.querySelector("script[src*='embed-widget-advanced-chart.js']"),null);
+ assert.equal(doc.querySelector("script[src*='embed-widget-financials.js']"),null);
+ assert.ok(doc.body.classList.contains("market-external"));
+ assert.ok(doc.getElementById("explain").hidden);
+ F.choose("INFY",false);
+ widget=doc.querySelector("tv-advanced-chart");
+ assert.equal(widget.getAttribute("symbol"),"NSE:INFY");
+ assert.equal(doc.querySelectorAll("tv-advanced-chart").length,1);
+ assert.doesNotMatch(doc.getElementById("dataLabel").textContent,/NSE:BEL/);
+ const panel=clickTab(w,"technical");
+ assert.equal(panel.querySelector("tv-technical-analysis").getAttribute("symbol"),"NSE:INFY");
+ assert.equal(doc.querySelector("tv-advanced-chart").getAttribute("symbol"),"NSE:INFY");
+ F.choose("DEMO02",false);
+ assert.equal(F.getExternalSymbol(),null);
+ assert.equal(doc.querySelector("tv-advanced-chart"),null);
+ assert.equal(doc.body.classList.contains("market-external"),false);
+ assert.equal(doc.getElementById("explain").hidden,false);
  w.close();
 });
