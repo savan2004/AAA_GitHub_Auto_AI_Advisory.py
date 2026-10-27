@@ -25,9 +25,10 @@ function build(){
  return w;
 }
 function clickTab(w,tab){const el=w.document.querySelector('[data-tab="'+tab+'"]');assert.ok(el,"missing button "+tab);el.click();return w.document.getElementById("detailBody");}
-test("no keys or fabricated prices appear when website first opens",()=>{
- const w=build();assert.match(w.document.getElementById("lastPrice").textContent,/Unavailable/);
- assert.match(w.document.getElementById("backendIndicator").textContent,/offline/);
+test("website opens with prominently labelled fictional demo, not a fake live quote",()=>{
+ const w=build();assert.match(w.document.getElementById("dataLabel").textContent,/SYNTHETIC/);
+ assert.equal(w.document.getElementById("ticker").value,"DEMO01");
+ assert.match(w.document.getElementById("backendIndicator").textContent,/Checking research API|offline|Neon API/);
  assert.ok(w.MSKWeb.features);w.close();
 });
 test("all menu buttons respond after ten-stock synthetic demo",()=>{
@@ -53,10 +54,10 @@ test("all menu buttons respond after ten-stock synthetic demo",()=>{
  assert.ok(pane.querySelectorAll("tbody tr").length<=10);
  pane=clickTab(w,"pdf");
  assert.match(pane.textContent,/Print/);
- assert.equal(w.document.getElementById("ticker").value,"RELIANCE");
- assert.equal(F.choose("INFY",false),true);
- assert.equal(w.document.getElementById("ticker").value,"INFY");
- assert.match(w.document.getElementById("chartTitle").textContent,/INFY/);
+ assert.equal(w.document.getElementById("ticker").value,"DEMO01");
+ assert.equal(F.choose("DEMO03",false),true);
+ assert.equal(w.document.getElementById("ticker").value,"DEMO03");
+ assert.match(w.document.getElementById("chartTitle").textContent,/DEMO03/);
  assert.equal(F.choose("UNKNOWN",false),false);
  assert.match(w.document.getElementById("dataLabel").textContent,/no loaded observations/);
  w.close();
@@ -66,7 +67,7 @@ test("financial statement button consumes source-dated values and does not inven
  w.document.getElementById("loadSample").click();
  clickTab(w,"fundamental");
  assert.match(w.document.getElementById("detailBody").textContent,/No financial statements imported/);
- F.importFundamentals("symbol,asof,source,pe,roe_percent,revenue_growth_percent,market_cap_inr,debt_equity_ratio\nRELIANCE,2026-09-30,User-uploaded filing,21.2,11.3,7.5,3000000000000,0.48");
+ F.importFundamentals("symbol,asof,source,pe,roe_percent,revenue_growth_percent,market_cap_inr,debt_equity_ratio\nDEMO01,2026-09-30,User-uploaded filing,21.2,11.3,7.5,3000000000000,0.48");
  const pane=clickTab(w,"fundamental");
  assert.match(pane.textContent,/21.20/);
  assert.match(pane.textContent,/User-uploaded filing/);
