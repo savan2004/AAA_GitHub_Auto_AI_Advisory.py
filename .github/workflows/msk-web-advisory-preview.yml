@@ -5,6 +5,11 @@ on:
     paths:
       - 'web_advisory/**'
       - '.github/workflows/msk-web-advisory-preview.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-web-advisory-preview.yml'
   workflow_dispatch:
 
 jobs:
