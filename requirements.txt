@@ -1,16 +1,2 @@
-Flask==3.0.3
-requests==2.32.3
-pandas==2.2.2
-numpy==1.26.4
-yfinance==0.2.61
-curl_cffi==0.7.4
-pyTelegramBotAPI==4.21.0
-groq==0.8.0
-google-generativeai==0.7.2
-openai==1.35.0
-finnhub-python==2.4.20
-matplotlib==3.9.0
-mplfinance==0.12.10b0
-reportlab==4.2.5
-chardet==5.2.0  # requests 2.32.3 compatibility when chardet is installed
-waitress==3.0.2
+# WEBSITE PREVIEW BRANCH ONLY. No Python dependencies needed for a static website.
+# The Bot's main branch retains its original requirements.txt unchanged.
