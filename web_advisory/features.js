@@ -159,6 +159,10 @@
  }
  function screenerTab(panel){
    const list=results();if(!list.length){p(panel,"Upload one or more symbols in price CSV, or run the synthetic test universe.","warning");return;}
+   // The source label is derived from ACTUAL entries. TejHQ must never
+   // inherit the default synthetic universe label from an earlier demo.
+   universeKind=list.every(x=>x.entry.source==="tej_eod")?"tej_eod":
+     list.every(x=>x.entry.source==="synthetic")?"synthetic":"uploaded";
    p(panel,"This screener analyses "+list.length+" loaded "+(universeKind==="synthetic"?"SYNTHETIC TEST":list.every(x=>x.entry.source==="tej_eod")?"TejHQ NSE EOD historical":"USER-SUPPLIED")+" series; coverage is only loaded symbols, not a complete NSE index.");
    const select=document.createElement("select");select.id="trendFilter";select.setAttribute("aria-label","Filter trend");
    for(const v of ["Any trend","Uptrend","Downtrend","Sideways"]){let o=document.createElement("option");o.value=v;o.textContent=v;select.append(o);}
