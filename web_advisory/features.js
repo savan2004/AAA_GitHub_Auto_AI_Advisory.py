@@ -148,6 +148,9 @@
  function fundamentalTab(panel){
    const symbol=cleanSymbol(ui.ticker.value)||active;
    p(panel,"Upload optional financial-statement CSV. All figures are supplied by you, with a source and reporting date. Price-only history cannot produce P/E, ROE or revenue growth.","warning");
+   panel.append(btn("Import Financial Statements (CSV)",()=>{
+     window.MSKImport?.open("fundamental");
+   },"btn"));
    const inp=document.createElement("input");inp.type="file";inp.accept=".csv,text/csv";inp.id="fundCSV";inp.setAttribute("aria-label","Import financial statement CSV");panel.append(inp);
    inp.addEventListener("change",async e=>{try{if(e.target.files?.[0])fundamentalsImport(await e.target.files[0].text());}catch(error){status(error.message,true);}});
    const t=statements.get(symbol);
