@@ -1,0 +1,36 @@
+name: MSK Gemini Provider Compatibility
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ai_engine.py'
+      - 'llm_wrapper.py'
+      - 'gemini_provider.py'
+      - 'requirements.txt'
+      - 'tests/test_gemini_provider.py'
+      - '.github/workflows/msk-gemini-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ai_engine.py'
+      - 'llm_wrapper.py'
+      - 'gemini_provider.py'
+      - 'requirements.txt'
+      - 'tests/test_gemini_provider.py'
+      - '.github/workflows/msk-gemini-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  gemini-compatibility:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install isolated offline test requirements
+        run: python -m pip install requests==2.32.3
+      - name: Compile Gemini integration
+        run: python -m py_compile ai_engine.py llm_wrapper.py gemini_provider.py
+      - name: Test Gemini provider, failover and safe credential handling
+        run: python -m unittest discover -s tests -p 'test_gemini_provider.py' -v

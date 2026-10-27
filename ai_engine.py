@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 # AI PROVIDER CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-_GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
-_groq = _gemini = _openai = None
+_GROQ_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+_groq = _openai = None
 
 # Chat history storage: {user_id: list of messages, max 10 turns for context safety}
 _chat_history: Dict[int, List[Dict]] = defaultdict(list)
@@ -91,6 +91,14 @@ def _make_groq_client(api_key: str):
         raise
 
 
+def _provider_error_code(exc):
+    """Return non-sensitive diagnostics; never log provider response bodies or tokens."""
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int) and 100 <= status <= 599:
+        return f"HTTP {status}"
+    return type(exc).__name__
+
+
 def _call_ai(
     messages: List[Dict[str, str]], 
     max_tokens: int = 500, 
@@ -111,7 +119,7 @@ def _call_ai(
             - If all fail: ("", error_details)
     """
     errors = []
-    global _groq, _gemini, _openai
+    global _groq, _openai
     
     # ─────────────────────────────────────────────────────────────────────────
     # Try GROQ (Primary)
@@ -134,29 +142,22 @@ def _call_ai(
                     if text:
                         return text, ""
                 except Exception as exc:
-                    errors.append(f"GROQ ({model}): {str(exc)[:80]}")
+                    errors.append(f"GROQ ({model}): {_provider_error_code(exc)}")
         except Exception as exc:
-            errors.append(f"GROQ init: {str(exc)[:80]}")
-            logger.warning("Groq initialization failed: %s", exc)
+            errors.append(f"GROQ init: {_provider_error_code(exc)}")
+            logger.warning("Groq initialization failed: %s", _provider_error_code(exc))
     
     # ─────────────────────────────────────────────────────────────────────────
     # Try Gemini (Secondary)
     # ─────────────────────────────────────────────────────────────────────────
     gemini_key = _key("GEMINI_API_KEY", "GOOGLE_API_KEY")
     if gemini_key:
-        try:
-            if _gemini is None:
-                import google.generativeai as genai
-                genai.configure(api_key=gemini_key)
-                _gemini = genai.GenerativeModel("gemini-1.5-flash")
-            prompt = (system + "\n\n" if system else "") + messages[-1]["content"]
-            r = _gemini.generate_content(prompt)
-            text = (getattr(r, "text", "") or "").strip()
-            if text:
-                return text, ""
-        except Exception as exc:
-            errors.append(f"Gemini: {str(exc)[:80]}")
-            logger.warning("Gemini call failed: %s", exc)
+        from gemini_provider import call_gemini
+        text, error = call_gemini(gemini_key, messages, max_tokens, system)
+        if text:
+            return text, ""
+        errors.append(f"Gemini: {error}")
+        logger.warning("Gemini call failed: %s", error)
     
     # ─────────────────────────────────────────────────────────────────────────
     # Try OpenAI (Tertiary) — correctly indented as sibling, not child
@@ -178,8 +179,8 @@ def _call_ai(
             if text:
                 return text, ""
         except Exception as exc:
-            errors.append(f"OpenAI: {str(exc)[:80]}")
-            logger.warning("OpenAI call failed: %s", exc)
+            errors.append(f"OpenAI: {_provider_error_code(exc)}")
+            logger.warning("OpenAI call failed: %s", _provider_error_code(exc))
     
     # ─────────────────────────────────────────────────────────────────────────
     # Try AskFuzz (India-focused finance AI)
