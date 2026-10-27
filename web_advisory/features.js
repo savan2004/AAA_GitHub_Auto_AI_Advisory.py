@@ -90,7 +90,8 @@
  }
  function startDemo(){
    library.clear();statements.clear();
-   const syms=["RELIANCE","TCS","INFY","HDFCBANK","ITC","LT","SUNPHARMA","MARUTI","NTPC","HINDUNILVR"];
+   // Fictional demo symbols: never misrepresent generated candles as NSE prices.
+   const syms=["DEMO01","DEMO02","DEMO03","DEMO04","DEMO05","DEMO06","DEMO07","DEMO08","DEMO09","DEMO10"];
    const original=core.demo();
    for(let k=0;k<syms.length;k++){
      const factor=[1,2.13,0.93,0.61,.21,2.94,1.36,10.1,.26,1.8][k];
@@ -103,7 +104,7 @@
      });
      library.set(syms[k],{bars,source:"synthetic",file:"SIMULATED TEST UNIVERSE — NOT NSE QUOTES"});
    }
-   universeKind="synthetic";setupSymbols();choose("RELIANCE",true);
+   universeKind="synthetic";setupSymbols();choose("DEMO01",true);
    status("SYNTHETIC: 10 TEST companies. NOT real stocks, prices, financial results, screeners or market breadth.");
  }
  function fundamentalsImport(raw){
@@ -251,5 +252,14 @@
  core.features={renderPanel,offlineAnswer,getResearch:currentEvidence,startDemo,importBars,importFundamentals:fundamentalsImport,choose,library,statements,results};
  $("chatHistory").firstElementChild.textContent="Ask about indicators or uploaded stock research. Local evidence answers work without paid AI; generative AI is currently not connected.";
  $("chatInput").placeholder="Ask about trend, ADX, volume, fundamentals...";
- core.renderTab();
+ const example=btn("Example Price CSV",()=>{
+   const fake=core.demo().slice(0,55),body=[
+     ["symbol","timestamp","open","high","low","close","volume"],
+     ...fake.map(v=>["DEMO01",v.date,v.open,v.high,v.low,v.close,v.volume])];
+   csvDownload(body,"msk-SYNTHETIC-candle-example.csv");
+ },"btn ghost");
+ example.title="Download synthetically generated OHLCV CSV to check correct file format";
+ ui.csv.closest(".ticker-input").after(example);
+ // First-load sample is visibly SYNTHETIC, so all buttons respond immediately.
+ startDemo();
 })();
