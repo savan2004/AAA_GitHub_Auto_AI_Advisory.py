@@ -49,3 +49,26 @@ html,body{max-width:100%;overflow-x:hidden}
  .provider-disclosure{flex-direction:column;align-items:flex-start;gap:12px}
  .provider-cta{white-space:normal}
 }
+
+/* Source-accurate blocked-NSE state, after real Chrome proved widget unavailable. */
+.market-external .canvas-wrap,.market-external .external-nse-chart{height:475px!important;min-height:475px!important}
+.nse-unavailable{min-height:475px;width:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;
+  padding:30px 25px;text-align:center;
+  background:radial-gradient(ellipse at 50% -10%,rgba(50,222,198,.105),transparent 65%),linear-gradient(180deg,#0d1c2b,#091322)}
+.nse-unavailable-tag{color:#9ce7da;font-size:10px;font-weight:900;letter-spacing:.17em;
+  padding:8px 12px;border:1px solid #23605a;border-radius:30px;background:#10302b}
+.nse-unavailable-symbol{color:#eefaf8;font-size:42px;font-weight:850;letter-spacing:-.035em;margin-top:14px}
+.nse-unavailable h3{font-weight:750;color:#ddeaf7;font-size:19px;margin:10px 0 6px;line-height:1.4}
+.nse-unavailable p{color:#98b2c8;font-size:13px;max-width:600px;line-height:1.75}
+.nse-open-btn{font-size:13px!important;padding:15px 24px!important;background:#27cab7!important;
+  border-color:#27cab7!important;color:#042522!important;font-weight:900!important;
+  box-shadow:0 8px 26px rgba(0,180,152,.15)}
+.nse-open-btn:hover{background:#63e9d5!important}
+.nse-import-note{font-size:11px!important;color:#718ba8!important;margin-top:18px!important}
+@media(max-width:600px){
+ .market-external .canvas-wrap,.market-external .external-nse-chart{height:530px!important;min-height:530px!important}
+ .nse-unavailable{min-height:530px;padding:22px 14px}
+ .nse-unavailable-symbol{font-size:34px}
+ .nse-unavailable h3{font-size:17px}
+ .nse-unavailable p{font-size:12px}
+}
