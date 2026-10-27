@@ -21,7 +21,7 @@ function build(){
  w.URL.revokeObjectURL=()=>{};
  // Deterministic offline-provider default; individual live-feed tests override.
  w.fetch=async()=>({ok:false,status:503});
- for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js"]){
+ for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js"]){
    w.eval(fs.readFileSync(path.join(root,f),"utf8"));
  }
  return w;
@@ -228,7 +228,7 @@ test("BEL TejHQ EOD response creates real historical candles and never mixes dem
  assert.equal(w.document.getElementById("signal").textContent,"RESEARCH ONLY");
  assert.match(w.document.getElementById("adx").textContent,/\d/);
  assert.match(w.document.getElementById("vol").textContent,/x/);
- assert.match(f.offlineAnswer("Analyze BEL trend and volume"),/TejHQ NSE bhavcopy EOD only/);
+ assert.match(f.offlineAnswer("Analyze BEL trend and volume"),/TejHQ.*NSE historical EOD/);
  w.close();
 });
 test("Wrong provider symbol cannot overwrite BEL with AAPL candles",async()=>{
@@ -305,5 +305,50 @@ test("EOD source badge updates and stock watchlist actually loads issuer-specifi
  assert.equal(d.getElementById("signal").textContent,"RESEARCH ONLY");
  assert.match(d.getElementById("feedTrustLabel").textContent,/HISTORICAL NSE EOD/);
  assert.equal(d.querySelector('.watch-stock[data-stock="TCS"]').classList.contains("selected"),true);
+ w.close();
+});
+
+test("Import Center is discoverable, has 3 modes, and preview validates CSV and reports failure",async()=>{
+ const w=build(),d=w.document,F=w.MSKWeb.features;
+ assert.ok(d.getElementById("openImport"));
+ d.getElementById("openImport").click();
+ assert.equal(d.getElementById("importModal").hidden,false);
+ assert.equal(d.querySelectorAll("[data-import-kind]").length,3);
+ assert.equal(d.getElementById("confirmImport").disabled,true);
+ w.MSKImport.readPreview("symbol,timestamp,open,high,low,close,volume\nAUDIT,2026-01-01,10,12,9,11,100");
+ assert.match(d.getElementById("importRows").textContent,/AUDIT/);
+ d.querySelector('[data-import-kind="fundamental"]').click();
+ assert.match(d.getElementById("importKindTitle").textContent,/Financial/);
+ d.querySelector('[data-import-kind="portfolio"]').click();
+ assert.match(d.getElementById("importKindTitle").textContent,/Portfolio|holdings/);
+ assert.throws(()=>w.MSKImport.readPreview("symbol,quantity\nAAA,5"),/Missing columns/);
+ d.getElementById("closeImport").click();
+ assert.equal(d.getElementById("importModal").hidden,true);
+ w.close();
+});
+test("Private portfolio importer rejects wrong rows and does not invent prices",()=>{
+ const w=build(),D=w.MSKImport;
+ assert.throws(()=>D.holdings("symbol,quantity,buy_price\nBEL,-1,150"),/Invalid holdings/);
+ const x=D.holdings("symbol,quantity,buy_price\nBEL,10,100\nTCS,4,3000");
+ assert.deepEqual(x,{count:2,matched:0});
+ assert.equal(w.MSKPortfolio.rows[0].estimated_value,null);
+ assert.equal(w.MSKPortfolio.rows[0].source,"none");
+ w.close();
+});
+test("Ask Research 3-month question discloses non-forecastable target and correct TejHQ source",async()=>{
+ const w=build(),F=w.MSKWeb.features,bars=[];
+ for(let i=119;i>=0;i--){
+  const date=new Date(Date.UTC(2026,9,26-i)).toISOString().slice(0,10);
+  const p=800+i*.4;
+  bars.push({date,open:p,high:p+2,low:p-2,close:p+1,volume:10000+i});
+ }
+ w.fetch=async()=>({ok:true,json:async()=>({meta:{symbol:"SBIN",exchange:"NSE"},data:bars})});
+ F.choose("SBIN",false);
+ await new Promise(r=>setTimeout(r,120));
+ const a=F.offlineAnswer("SBIN Upper Target for 3 month");
+ assert.match(a,/NOT available|not available/i);
+ assert.match(a,/TejHQ.*NSE historical EOD/);
+ assert.match(a,/RESEARCH ONLY/);
+ assert.doesNotMatch(a,/USER-UPLOADED CSV|guaranteed target/);
  w.close();
 });
