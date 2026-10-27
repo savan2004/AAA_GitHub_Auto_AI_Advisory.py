@@ -54,3 +54,20 @@ jobs:
           if (response.headers.get('access-control-allow-origin') !== 'https://msk-web-advisory-preview.onrender.com') throw new Error('CORS origin mismatch');
           console.log('MSK_NEON_API_HEALTH_OK — AI disabled until secured; no market-feed license inferred');
           JS
+      - name: Verify LIVE Render website serves current functional scripts
+        run: |
+          node --input-type=module <<'JS'
+          const host = 'https://msk-web-advisory-preview.onrender.com';
+          for (const [route,marker] of [
+            ['/', 'features.js'],
+            ['/app.js', 'window.MSKWeb='],
+            ['/features.js', 'DEMO01'],
+            ['/config.js', 'br-cool-poetry-a1bhjhc3-mskwebapi']
+          ]) {
+            const response = await fetch(host + route, {signal:AbortSignal.timeout(15000)});
+            if (!response.ok) throw new Error(route + ' live HTTP ' + response.status);
+            const source = await response.text();
+            if (!source.includes(marker)) throw new Error(route + ' is stale or incomplete');
+            console.log('RENDER_LIVE_OK', route, source.length);
+          }
+          JS
