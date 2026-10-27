@@ -473,19 +473,40 @@ def build_fundamental_text(sym, cname=None):
         pass
 
     name = cname or fund.get("name") or info.get("name") or sym
-    pe = fund.get("pe") or safe_val(info, "pe")
+    pe = fund.get("pe") if fund.get("pe") is not None else safe_val(info, "pe")
     fwd_pe = fund.get("fwd_pe")
-    pb = fund.get("pb") or safe_val(info, "pb")
+    pb = fund.get("pb") if fund.get("pb") is not None else safe_val(info, "pb")
     roe = fund.get("roe")
-    eps = fund.get("eps") or safe_val(info, "eps")
-    mcap = fund.get("mcap") or info.get("market_cap")
-    rev = fund.get("rev") or info.get("totalRevenue")
-    de = fund.get("de") or safe_val(info, "debtToEquity")
+    eps = fund.get("eps") if fund.get("eps") is not None else safe_val(info, "eps")
+    mcap = fund.get("mcap") if fund.get("mcap") is not None else info.get("market_cap")
+    rev = fund.get("rev") if fund.get("rev") is not None else info.get("totalRevenue")
+    de = fund.get("de") if fund.get("de") is not None else safe_val(info, "debtToEquity")
     div_y = fund.get("div_y")
-    beta = fund.get("beta") or safe_val(info, "beta")
+    beta = fund.get("beta") if fund.get("beta") is not None else safe_val(info, "beta")
 
-    if all(v is None for v in (pe, pb, roe, mcap, rev, de, div_y, beta)):
+    if all(v is None for v in (pe, pb, roe, mcap, rev, de, div_y, beta, eps)):
+        import html
+        name = html.escape(str(name))
         return f"❌ Fundamentals unavailable for <b>{name}</b> ({sym}) right now. Try again shortly."
+
+    import html
+    name = html.escape(str(name))
+    measured = {"Market cap": mcap, "Revenue": rev, "P/E": pe, "P/B": pb, "ROE": roe, "EPS": eps, "D/E": de, "Dividend yield": div_y}
+    available = sum(value is not None for value in measured.values())
+    missing = [label for label, value in measured.items() if value is None]
+    # Conservative observations only; do not manufacture a target or BUY/SELL call.
+    signals = []
+    if roe is not None:
+        signals.append("ROE suggests stronger profitability" if roe >= 15 else "ROE indicates profitability needs review")
+    if de is not None:
+        signals.append("Debt/equity indicates elevated leverage" if de > 1 else "Debt/equity indicates relatively limited leverage")
+    if pe is not None:
+        signals.append("P/E is high in absolute terms; compare with peers and growth" if pe > 40 else "P/E requires sector and earnings-growth comparison")
+    if len(signals) < 2:
+        signals = ["Insufficient verified metrics for a balanced fundamental assessment"]
+    assessment = ["", "<b>📌 Fundamental observations (not a recommendation)</b>"] + [
+        "• " + html.escape(signal) for signal in signals
+    ]
 
     rows = [
         f"💰 <b>{name}</b>  ({sym}) — Fundamental Analysis",
@@ -498,9 +519,12 @@ def build_fundamental_text(sym, cname=None):
         frow("Debt/Equity", de) + (f"  |  Beta: {beta}" if beta else ""),
         frow("Div Yield", div_y, "%"),
         "━━━━━━━━━━━━━━━━━━━━",
+        f"📋 Data completeness: {available}/{len(measured)} metrics",
+        ("⚠️ Missing: " + html.escape(", ".join(missing))) if missing else "✅ All core metrics available",
+        "⚠️ <i>Data may be delayed or mixed across sources/periods. Verify against filings before investing.</i>",
         "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
     ]
-    return "\n".join(rows)
+    return "\n".join(rows + assessment)
 
 
 # ── Screener Card ─────────────────────────────────────────────────────────
