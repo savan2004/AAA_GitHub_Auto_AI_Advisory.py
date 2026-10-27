@@ -19,7 +19,7 @@ function build(){
  w.alert=(msg)=>{throw Error("Unexpected browser alert: "+msg)};
  w.URL.createObjectURL=()=> "blob:https://test/abc";
  w.URL.revokeObjectURL=()=>{};
- for(const f of ["config.js","app.js","features.js"]){
+ for(const f of ["config.js","app.js","features.js","market_widget.js"]){
    w.eval(fs.readFileSync(path.join(root,f),"utf8"));
  }
  return w;
@@ -58,8 +58,21 @@ test("all menu buttons respond after ten-stock synthetic demo",()=>{
  assert.equal(F.choose("DEMO03",false),true);
  assert.equal(w.document.getElementById("ticker").value,"DEMO03");
  assert.match(w.document.getElementById("chartTitle").textContent,/DEMO03/);
- assert.equal(F.choose("UNKNOWN",false),false);
- assert.match(w.document.getElementById("dataLabel").textContent,/no loaded observations/);
+ assert.equal(F.choose("BEL",false),true);
+ assert.equal(F.getExternalSymbol(),"BEL");
+ assert.match(w.document.getElementById("dataLabel").textContent,/NSE:BEL/);
+ assert.equal(w.document.getElementById("lastPrice").textContent,"Unavailable");
+ assert.equal(w.document.getElementById("signal").textContent,"WAIT");
+ assert.equal(w.document.getElementById("chartCanvas").hidden,true);
+ assert.ok(w.document.querySelector("#externalNseChart script[src$='embed-widget-advanced-chart.js']"));
+ const chartConfig=w.document.querySelector("#externalNseChart script").textContent;
+ assert.match(chartConfig,/"symbol":"NSE:BEL"/);
+ assert.doesNotMatch(w.document.getElementById("analysisLines").textContent,/DEMO03/);
+ w.document.getElementById("loadSample").click();
+ assert.equal(F.getExternalSymbol(),null);
+ assert.equal(w.document.getElementById("chartCanvas").hidden,false);
+ assert.equal(w.document.getElementById("ticker").value,"DEMO01");
+ assert.equal(w.document.getElementById("externalNseChart"),null);
  w.close();
 });
 test("financial statement button consumes source-dated values and does not invent ratios",()=>{
@@ -101,5 +114,49 @@ test("ask AI never fakes generative replies; answers are local and research-boun
  assert.match(txt,/SIMULATED|SYNTHETIC/);
  assert.match(txt,/NOT GENERATIVE AI/);
  assert.doesNotMatch(txt,/Sure shot buy|Guaranteed/);
+ w.close();
+});
+
+test("BEL search button and all research tabs use TradingView without demo prices",()=>{
+ const w=build(),doc=w.document;
+ const input=doc.getElementById("ticker");
+ input.value="BEL";doc.getElementById("analyzeSymbol").click();
+ assert.equal(w.MSKWeb.features.getExternalSymbol(),"BEL");
+ assert.match(doc.getElementById("chartTitle").textContent,/NSE:BEL/);
+ assert.equal(doc.getElementById("lastPrice").textContent,"Unavailable");
+ assert.equal(doc.getElementById("adx").textContent,"—");
+ assert.equal(doc.getElementById("vol").textContent,"—");
+ assert.match(doc.getElementById("dataLabel").textContent,/NO licensed MSK OHLCV/);
+ assert.ok(doc.querySelector("#externalNseChart a[href='https://in.tradingview.com/symbols/NSE-BEL/']"));
+ for(const name of ["overview","technical","fundamental","chart","screener","breadth","pdf","ai"]){
+   const detail=clickTab(w,name);
+   assert.match(detail.textContent,/NSE:BEL|TradingView|unavailable|Unavailable|third-party|data/,name);
+   assert.doesNotMatch(detail.textContent,/DEMO01.*₹/,name);
+ }
+ assert.ok(doc.querySelector("#externalFundamentals script[src$='embed-widget-financials.js']")===null,
+  "Fundamentals widget is removed when leaving the tab");
+ clickTab(w,"technical");
+ assert.match(doc.querySelector("#externalTechnicalRating script").textContent,/"symbol":"NSE:BEL"/);
+ clickTab(w,"fundamental");
+ assert.match(doc.querySelector("#externalFundamentals script").textContent,/"symbol":"NSE:BEL"/);
+ assert.match(w.MSKWeb.features.offlineAnswer("Analyze BEL with buy target"),/does not have validated historical OHLCV/);
+ input.value="INVALID$TICKER";doc.getElementById("analyzeSymbol").click();
+ assert.equal(w.MSKWeb.features.getExternalSymbol(),"BEL","invalid text must not select arbitrary untrusted symbols");
+ w.close();
+});
+test("Real CSV import replaces external BEL viewer and restores accurate indicators",()=>{
+ const w=build(),f=w.MSKWeb.features;
+ f.choose("BEL",false);assert.equal(f.getExternalSymbol(),"BEL");
+ const lines=["symbol,timestamp,open,high,low,close,volume"];
+ for(let i=0;i<66;i++){const d=new Date(Date.UTC(2026,0,i+1)).toISOString().slice(0,10),p=150+i*.25;
+   lines.push(["BEL",d,p,p+2,p-2,p+1,12000+i].join(","));
+ }
+ f.importBars(lines.join("\n"),"BEL-unverified-history.csv");
+ assert.equal(f.getExternalSymbol(),null);
+ assert.equal(w.document.getElementById("chartCanvas").hidden,false);
+ assert.equal(w.document.getElementById("externalNseChart"),null);
+ assert.match(w.document.getElementById("chartTitle").textContent,/BEL/);
+ assert.match(w.document.getElementById("priceMeta").textContent,/user CSV/);
+ assert.notEqual(w.document.getElementById("adx").textContent,"—");
  w.close();
 });
