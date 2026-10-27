@@ -173,7 +173,7 @@
    }select.onchange=update;min.oninput=update;update();
    panel.append(btn("Export Screener CSV",()=>csvDownload([
       ["symbol","asof","close","trend","adx14","volume_multiple","signal","data_source"],
-      ...list.map(x=>[x.symbol,x.q.date,x.q.last,x.q.trend,x.q.adx,x.q.ratio,x.q.signal,x.entry.source])
+      ...list.map(x=>[x.symbol,x.q.date,x.q.last,x.q.trend,x.q.adx,x.q.ratio,x.entry.source==="tej_eod"?"RESEARCH ONLY":x.entry.source==="synthetic"?"DEMO ONLY":"UNVERIFIED / "+x.q.signal,x.entry.source])
    ],"msk-screener-export.csv")));
  }
  function breadthTab(panel){
