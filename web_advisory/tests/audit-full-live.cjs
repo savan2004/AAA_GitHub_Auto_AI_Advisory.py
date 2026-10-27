@@ -64,6 +64,7 @@ async function step(id,section,action){
     });
     await step("card-"+tab,"Action Card",async()=>{
       await page.locator('.nav[data-tab="overview"]').click({timeout:8000});
+      await page.locator('.nav[data-tab="overview"]').click({timeout:8000});
       await page.locator('.action-card[data-go="'+tab+'"]').click({timeout:8000});
       const q=await page.evaluate(()=>({active:window.MSKWeb?.state.tab,heading:document.querySelector(".heading-block h1")?.textContent,detail:document.getElementById("detailBody")?.textContent.slice(0,190),hash:window.location.hash}));
       return ok(q.active===tab&&q.detail.length>14,JSON.stringify(q));
@@ -81,6 +82,64 @@ async function step(id,section,action){
     const r=await page.evaluate(()=>({kind:window.MSKWeb?.state.kind,symbol:window.MSKWeb?.features?.getResearch()?.symbol,keys:[...window.MSKWeb?.features?.library?.keys()||[]],price:document.getElementById("lastPrice")?.textContent,alert:document.getElementById("dataLabel")?.textContent}));
     return ok(r.kind==="uploaded"&&r.keys.length===2&&r.symbol==="AUDITAAA",JSON.stringify(r));
   });
+  await step("import-center-visible","Import Wizard",async()=>{
+    await page.locator("#openImport").click();
+    const z=await page.evaluate(()=>({
+      open:document.getElementById("importModal").hidden===false,
+      tabs:document.querySelectorAll('[data-import-kind]').length,
+      chooseFile:!!document.getElementById("importFile"),
+      confirmDisabled:document.getElementById("confirmImport").disabled
+    }));
+    await page.locator("#importCancel").click();
+    return ok(z.open&&z.tabs===3&&z.chooseFile&&z.confirmDisabled,JSON.stringify(z));
+  });
+  await step("import-center-price-upload","Import Wizard",async()=>{
+    await page.locator("#openImport").click();
+    await page.locator("#importFile").setInputFiles({
+      name:"MSK-AUDIT-FAKE-PRICES.csv",mimeType:"text/csv",buffer:Buffer.from(csvPrices())});
+    await page.waitForFunction(()=>!document.getElementById("confirmImport").disabled,{timeout:9000});
+    const preview=await page.locator("#importRows tbody tr").count();
+    await page.locator("#confirmImport").click();
+    const z=await page.evaluate(()=>({
+      imported:window.MSKWeb?.state.kind,
+      count:window.MSKWeb?.features?.library?.size,
+      closed:document.getElementById("importModal").hidden,
+      page:document.body.dataset.page
+    }));
+    return ok(preview===6&&z.imported==="uploaded"&&z.count===2&&z.closed&&z.page==="chart",
+      JSON.stringify({preview,...z}));
+  });
+  await step("import-center-financial-upload","Import Wizard",async()=>{
+    await page.locator("#openImport").click();
+    await page.locator('[data-import-kind="fundamental"]').click();
+    await page.locator("#importFile").setInputFiles({
+      name:"MSK-AUDIT-FAKE-FINANCIALS.csv",mimeType:"text/csv",buffer:Buffer.from(csvFinance())});
+    await page.waitForFunction(()=>!document.getElementById("confirmImport").disabled,{timeout:9000});
+    await page.locator("#confirmImport").click();
+    const z=await page.evaluate(()=>({
+      company:window.MSKWeb?.features?.statements?.get("AUDITAAA")?.pe,
+      closed:document.getElementById("importModal").hidden,
+      page:document.body.dataset.page
+    }));
+    return ok(z.company===18.75&&z.closed&&z.page==="fundamental",JSON.stringify(z));
+  });
+  await step("import-center-portfolio-upload","Import Wizard",async()=>{
+    await page.locator("#openImport").click();
+    await page.locator('[data-import-kind="portfolio"]').click();
+    await page.locator("#importFile").setInputFiles({
+      name:"MSK-AUDIT-FAKE-HOLDINGS.csv",mimeType:"text/csv",
+      buffer:Buffer.from("symbol,quantity,buy_price\nAUDITAAA,10,100\nAUDITBBB,5,350")});
+    await page.waitForFunction(()=>!document.getElementById("confirmImport").disabled,{timeout:9000});
+    await page.locator("#confirmImport").click();
+    const z=await page.evaluate(()=>({
+      count:window.MSKPortfolio?.quantity,
+      invested:window.MSKPortfolio?.invested,
+      page:document.body.dataset.page,
+      closed:document.getElementById("importModal").hidden,
+      view:document.getElementById("detailBody").textContent.slice(0,260)
+    }));
+    return ok(z.count===2&&z.invested===2750&&z.page==="portfolio"&&z.closed&&z.view.includes("Holdings 2"),JSON.stringify(z));
+  });
   await step("csv-symbol-switch","CSV Upload",async()=>{
     await page.locator("#ticker").fill("AUDITBBB");
     await page.locator("#analyzeSymbol").click();
@@ -89,7 +148,7 @@ async function step(id,section,action){
     return ok(r.kind==="uploaded"&&r.symbol==="AUDITBBB"&&r.title.includes("AUDITBBB"),JSON.stringify(r));
   });
   await step("fundamental-visible","Fundamentals",async()=>{
-    await page.locator('.action-card[data-go="fundamental"]').click();
+    await page.locator('.nav[data-tab="fundamental"]').click();
     const input=page.locator("#fundCSV");
     const result={visible:await input.isVisible(),exists:await input.count(),label:await input.getAttribute("aria-label"),head:(await page.locator("#detailBody").innerText()).slice(0,220)};
     return ok(result.exists===1&&result.visible&&result.label?.includes("financial"),JSON.stringify(result));
@@ -97,30 +156,30 @@ async function step(id,section,action){
   await step("fundamental-import-csv","Fundamentals",async()=>{
     await page.locator("#ticker").fill("AUDITAAA");
     await page.locator("#analyzeSymbol").click();
-    await page.locator('.action-card[data-go="fundamental"]').click();
+    await page.locator('.nav[data-tab="fundamental"]').click();
     await page.locator("#fundCSV").setInputFiles({name:"MSK-AUDIT-FAKE-FUNDAMENTALS.csv",mimeType:"text/csv",buffer:Buffer.from(csvFinance())});
     await sleep(500);
     const d=await page.evaluate(()=>({statement:window.MSKWeb?.features?.statements?.get("AUDITAAA"),body:document.getElementById("detailBody")?.innerText||document.getElementById("detailBody")?.textContent}));
     return ok(d.statement?.pe===18.75 && /18\.75/.test(d.body||""),JSON.stringify({statement:d.statement,body:String(d.body).slice(0,450)}));
   });
   await step("screener-two-stock","Screener",async()=>{
-    await page.locator('.action-card[data-go="screener"]').click();
+    await page.locator('.nav[data-tab="screener"]').click();
     const txt=(await page.locator("#detailBody").innerText()).slice(0,440);
     return ok(txt.includes("AUDITAAA")&&txt.includes("AUDITBBB"),txt);
   });
   await step("breadth-two-stock","Breadth",async()=>{
-    await page.locator('.action-card[data-go="breadth"]').click();
+    await page.locator('.nav[data-tab="breadth"]').click();
     const txt=(await page.locator("#detailBody").innerText()).slice(0,500);
     return ok(/Advances|Declines/.test(txt)&&/AUDIT|2 uploaded/.test(txt),txt);
   });
   await step("pdf-export-mode","Report",async()=>{
-    await page.locator('.action-card[data-go="pdf"]').click();
+    await page.locator('.nav[data-tab="pdf"]').click();
     const controls=await page.locator("#detailBody button").allTextContents();
     return ok(controls.some(x=>x.includes("PDF")),"Report buttons: "+JSON.stringify(controls));
   });
   await step("ai-sbin-outlook","Local Research Q&A",async()=>{
     // Ask with an imported matching symbol and date; no private finance data sent.
-    await page.locator('.action-card[data-go="ai"]').click();
+    await page.locator('.nav[data-tab="ai"]').click();
     await page.locator("#chatInput").fill("AUDITAAA Upper Target for 3 month");
     await page.locator('#chatForm button[type="submit"]').click();
     await sleep(200);
