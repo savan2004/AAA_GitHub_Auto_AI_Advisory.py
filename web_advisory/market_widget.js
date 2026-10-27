@@ -162,6 +162,11 @@
  function external(symbol){
    if(!valid(symbol))return false;
    selected=symbol;
+   // Never leave a previously loaded fictional DEMO universe accessible in
+   // Screener/Breadth while researching a real NSE ticker.
+   for(const [s,entry] of features.library){
+     if(entry?.source==="synthetic")features.library.delete(s);
+   }
    document.body.classList.remove("market-eod");
    document.body.classList.add("market-external");
    $("ticker").value=symbol;
@@ -239,6 +244,11 @@
      parent.append(link(symbol,"View this stock's chart and technicals at source"));
      paragraph(parent,"Import dated OHLCV CSV with ≥50 candles for actual EMA20/EMA50, ADX14 and volume analysis in the MSK Technical button.");
      return true;
+   }
+   if(tab==="portfolio"||tab==="fundamental"||tab==="screener"||tab==="breadth"){
+     // Do not block usable upload/screener/portfolio modules when the
+     // selected ticker has no EOD data. Other workflows must stay accessible.
+     return originalPanel(tab,parent);
    }
    if(tab==="fundamental"){
      paragraph(parent,"No independently audited financial statements are connected to this MSK website. Never infer P/E, ROE, debt or revenue growth from candle data.","warning");
