@@ -1,0 +1,33 @@
+name: MSK Web Advisory Preview
+on:
+  push:
+    branches: [web/msk-web-advisory-mvp-20261027]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-web-advisory-preview.yml'
+  workflow_dispatch:
+
+jobs:
+  static-app:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate offline application JavaScript syntax
+        run: node --check web_advisory/app.js && node --check web_advisory/config.js
+      - name: Verify no Telegram keys, no live-data claims, source-aware MVP
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          h=Path('web_advisory/index.html').read_text()
+          a=Path('web_advisory/app.js').read_text()
+          s=Path('web_advisory/config.js').read_text()
+          assert all(x in h for x in ['csvFile','chartCanvas','chatForm','dataLabel'])
+          assert all(x in a for x in ['No clean pattern','SYNTHETIC','AI backend not configured','timestamp','volume'])
+          assert 'TELEGRAM_TOKEN' not in s
+          assert 'GROQ_API_KEY' not in s
+          print('MSK_WEB_PREVIEW_SECURITY_CHECKS_OK')
+          PY
