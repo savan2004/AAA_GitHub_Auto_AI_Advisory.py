@@ -15,6 +15,7 @@
  <script src="features.js" defer></script>
  <script src="market_widget.js" defer></script>
  <script src="dashboard.js" defer></script>
+ <script src="import_center.js" defer></script>
 </head>
 <body class="web-pro">
  <div class="app-shell layout">
@@ -51,6 +52,7 @@
       <div class="heading-aside"><span class="session-icon">◷</span><span><small>Market data mode</small><strong>Historical • End of day</strong></span></div>
     </div>
     <section class="search-panel research-search" aria-label="Search for a listed stock">
+      <button id="openImport" class="btn import-primary" type="button">⇧ Import Data / CSV</button>
       <div class="ticker-input stock-input"><label for="ticker">COMPANY / NSE SYMBOL</label><div class="search-field"><span class="search-glass">⌕</span><input id="ticker" maxlength="22" spellcheck="false" autocomplete="off" value="BEL" placeholder="Enter BEL, RELIANCE, TCS..."></div></div>
       <div class="ticker-input fileinput"><label for="csvFile">YOUR HISTORICAL OHLCV DATA <span class="optional">OPTIONAL</span></label><input id="csvFile" type="file" accept=".csv,text/csv"></div>
       <button id="loadSample" class="btn ghost" type="button" title="Clearly marked synthetic example, not NSE prices">Synthetic Demo</button>
@@ -101,6 +103,31 @@
     <div class="trust-footer"><div><b>MSK WEB ADVISORY</b><span>Evidence-led equity research, not trade execution</span></div><span>No account required • No Telegram • No paid APIs enabled</span></div>
    </main>
   </div>
+ </div>
+ <div id="importModal" class="import-dialog" hidden role="dialog" aria-modal="true" aria-label="Import financial data">
+   <button id="importBackdrop" class="import-backdrop" type="button" aria-label="Close importer"></button>
+   <section class="import-pane" tabindex="-1">
+    <header><div><div class="eyebrow">DATA MANAGEMENT</div><h2>Import financial data</h2><p>Upload to this browser only. Review every row before import.</p></div>
+     <button id="closeImport" class="import-close" type="button" aria-label="Close import dialog">×</button></header>
+    <nav class="import-tabs" aria-label="Choose CSV import type">
+      <button data-import-kind="price" class="active" aria-selected="true" type="button">Price candles</button>
+      <button data-import-kind="fundamental" aria-selected="false" type="button">Financial Statements</button>
+      <button data-import-kind="portfolio" aria-selected="false" type="button">Portfolio holdings</button>
+    </nav>
+    <div class="import-content"><h3 id="importKindTitle">Historical price candles</h3>
+     <p id="importHelp">Use CSV with daily OHLCV data; at least 50 candles per symbol.</p>
+     <div class="import-actions"><label for="importFile" class="upload-label">Select CSV file</label>
+      <input type="file" id="importFile" accept=".csv,text/csv" aria-label="Select financial CSV to import">
+      <button id="importTemplate" class="btn ghost" type="button">Download correct CSV template</button></div>
+     <p id="importFeedback" role="status" aria-live="polite">Choose a CSV file to preview.</p>
+     <small id="previewCount">No rows previewed</small>
+     <div class="import-table-scroll" id="importRows"></div>
+     <div id="importReport" class="import-report" role="status"></div>
+     <div class="import-footer"><button id="importCancel" type="button" class="btn ghost">Cancel</button>
+     <button id="confirmImport" type="button" class="btn" disabled>Validate &amp; Import</button></div>
+    </div>
+    <p class="import-privacy">CSV files are processed only in your browser session. Uploaded financial figures are user-declared, not verified company filings. XLSX is not supported: export Excel as CSV UTF-8 first.</p>
+   </section>
  </div>
  <footer class="legal-footer">MSK Web Advisory is an educational research preview, not SEBI-registered personalized investment advice. Verify original exchange filings, timestamp, licensing and execution risk. <span>© 2026 MSK Research</span></footer>
 </body>
