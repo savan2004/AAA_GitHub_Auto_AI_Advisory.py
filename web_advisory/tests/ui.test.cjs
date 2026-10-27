@@ -137,7 +137,7 @@ test("BEL search button and research tabs refuse restricted embed without demo p
  assert.ok(doc.querySelector("#externalNseChart a[href='https://in.tradingview.com/symbols/NSE-BEL/']"));
  for(const name of ["overview","technical","fundamental","chart","screener","breadth","pdf","ai"]){
    const detail=clickTab(w,name);
-   assert.match(detail.textContent,/NSE:BEL|TradingView|unavailable|Unavailable|third-party|data|OHLCV|MSK research PDF/,name);
+   assert.match(detail.textContent,/NSE:BEL|TradingView|unavailable|Unavailable|third-party|data|OHLCV|MSK research PDF|financial-statement CSV|Financial Statements/,name);
    assert.doesNotMatch(detail.textContent,/DEMO01.*₹/,name);
  }
  assert.equal(doc.querySelector("#externalFundamentals"),null,
@@ -190,8 +190,9 @@ test("restricted NSE symbols show honest stock-specific source links, never defa
  const panel=clickTab(w,"technical");
  assert.equal(panel.querySelector("tv-technical-analysis"),null);
  assert.equal(doc.querySelector(".nse-unavailable")?.getAttribute("data-symbol"),"NSE:INFY");
- F.choose("DEMO02",false);
+ w.document.getElementById("loadSample").click(); // Demo must be opted in again; external NSE clears synthetic list.
  assert.equal(F.getExternalSymbol(),null);
+ F.choose("DEMO02",false);
  assert.equal(doc.querySelector("tv-advanced-chart"),null);
  assert.equal(doc.body.classList.contains("market-external"),false);
  assert.equal(doc.getElementById("explain").hidden,false);
