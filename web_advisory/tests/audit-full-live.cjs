@@ -63,6 +63,7 @@ async function step(id,section,action){
       return ok(q.active===tab&&q.detail.length>14,"state "+JSON.stringify(q));
     });
     await step("card-"+tab,"Action Card",async()=>{
+      await page.locator('.nav[data-tab="overview"]').click({timeout:8000});
       await page.locator('.action-card[data-go="'+tab+'"]').click({timeout:8000});
       const q=await page.evaluate(()=>({active:window.MSKWeb?.state.tab,heading:document.querySelector(".heading-block h1")?.textContent,detail:document.getElementById("detailBody")?.textContent.slice(0,190),hash:window.location.hash}));
       return ok(q.active===tab&&q.detail.length>14,JSON.stringify(q));
