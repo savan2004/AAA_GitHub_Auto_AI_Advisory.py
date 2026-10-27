@@ -1,0 +1,35 @@
+name: MSK Research Critical Safety Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'report_generator.py'
+      - 'research_engine.py'
+      - 'fundamental_pipeline.py'
+      - 'tests/test_research_critical_safety.py'
+      - '.github/workflows/msk-research-critical-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-critical-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TELEGRAM_TOKEN: '123:offline-test'
+      MPLBACKEND: 'Agg'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install offline report dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt pypdf
+      - name: Syntax checks
+        run: python -m py_compile report_generator.py research_engine.py fundamental_pipeline.py tests/test_research_critical_safety.py
+      - name: Report safety regressions (no network/no Telegram)
+        run: python -m unittest discover -s tests -p test_research_critical_safety.py -v

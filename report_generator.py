@@ -29,6 +29,7 @@ import os
 import re
 import html as _html
 import logging
+import math
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -381,15 +382,24 @@ def collect_inputs(sym: str) -> dict:
 def assemble(inp: dict, use_ai: bool = True) -> dict:
     sym, name, df = inp["sym"], inp["name"], inp["df"]
     nifty, fund, peers = inp.get("nifty"), inp.get("fund") or {}, inp.get("peers") or []
+    # 'Others' is not a meaningful exchange sector. For the JIOFIN issuer,
+    # use a narrowly scoped financial-entity safety override until a verified
+    # exchange sector is available. Never present the inference as sourced.
+    sector = strip_emoji(inp.get("sector") or "").strip()
+    if sector.lower() in ("others", "unknown", "n/a"):
+        sector = ""
+    inferred_financial = (sym == "JIOFIN" and "jio financial services" in name.lower()
+                          and not eng.is_financial_sector(sector))
+    risk_sector = sector or ("Financial Services (inferred)" if inferred_financial else None)
     sh = (inp.get("extras") or {}).get("shareholding") or []
     has_nifty = nifty is not None and not nifty.empty
 
     t = eng.compute_technicals(df, nifty)
     rk = eng.compute_risk(df, nifty)
-    fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
+    fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, risk_sector, t["ltp"])
     sc = eng.compute_scores(t, rk, fv)
     plan = eng.build_trade_plan(t, rk, sc)
-    reasoning = build_reasoning(nifty, t, fv, sc, inp.get("sector"))
+    reasoning = build_reasoning(nifty, t, fv, sc, sector or None)
     fl = eng.build_flags(t, rk, fv, sh, inp.get("consensus"))
     nar = eng.deterministic_narrative(name, sym, t, rk, fv, sc, plan, sh)
     # LLM commentary is opt-in until its qualitative claims can be verified.
@@ -417,7 +427,7 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         "quarters": render_quarterly_chart((inp.get("stm") or {}).get("quarters"), sym),
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
-    return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
+    return dict(sym=sym, name=name, sector=sector, sector_note=("Financial-services treatment inferred from issuer identity; exchange sector unverified." if inferred_financial else ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
                 news=inp.get("news") or [], fund=fund,
@@ -449,12 +459,16 @@ def _cover(R, story):
                                 ("LEFTPADDING", (0, 0), (-1, -1), 13), ("RIGHTPADDING", (0, 0), (-1, -1), 13)]))
     story += [banner, Spacer(1, 3),
               P(f"Prepared by: <b>Senior Market Analyst Desk</b>, AutoAI Advisory (automated research engine)  ·  "
-                f"{R['generated']}  ·  Prices as of last available close", "small"), Spacer(1, 8)]
+                f"{R['generated']}  ·  Prices as of last available close", "small"), Spacer(1, 4)]
+    if (R.get("reasoning") or {}).get("publication_eligible") is not True:
+        story += [P(colored("INTERNAL RESEARCH DRAFT - NOT CLEARED FOR AUTOMATED PUBLICATION", RED_H), "small"), Spacer(1, 5)]
 
     sc_hex = _stance_color(sc["stance"])
     score_display = ("N/R" if sc.get("insufficient_evidence") else f"{sc['composite']}<font size=11 color='{GREY_H}'> / 100</font>")
+    n_pillars = sum(v is not None for v in (sc.get("pillars") or {}).values())
     left = [P("COMPOSITE SCORE", "lab"), P(score_display, "big"),
-            P(f"Data coverage {sc['coverage']}%", "tiny")]
+            P(f"Pillar coverage {n_pillars}/6 ({sc['coverage']}% model weight)", "tiny"),
+            P("NOT full field or source verification", "tiny")]
     mid = [P("ANALYST STANCE", "lab"), P(colored(esc(sc["stance"]), sc_hex), "stance"), Spacer(1, 2), P(esc(sc["action"]))]
     box = Table([[left, mid]], colWidths=[W * 0.24, W * 0.76])
     box.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.8, NAVY), ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F9FC")),
@@ -519,7 +533,10 @@ def _investment_view(R, story):
     evidence_warning = bool((R.get("sc") or {}).get("insufficient_evidence"))
     timing = setup.get("status") or "Advanced chart not verified (using basic technical view)"
     last_date = setup.get("date") or "last available closing candle"
-    combined = ("RESEARCH ONLY - insufficient verified financial evidence"
+    publication_ready = (R.get("reasoning") or {}).get("publication_eligible") is True
+    combined = ("INTERNAL DRAFT - unverified provenance; not approved for publishing"
+                if not publication_ready else
+                "RESEARCH ONLY - insufficient verified financial evidence"
                 if evidence_warning else
                 "WATCHLIST / independent due diligence before any transaction")
     story += [P("FUNDAMENTAL + TECHNICAL | ONE-PAGE DECISION SNAPSHOT", "h2"),
@@ -535,6 +552,8 @@ def _investment_view(R, story):
                 "probabilities or price targets. Technical timing cannot prove company quality.", "tiny"),
               Spacer(1, 7)]
     reasoning = R.get("reasoning") or {}
+    if R.get("sector_note"):
+        story.append(P(colored("Sector classification caution: ", AMBER_H) + esc(R["sector_note"]), "small"))
     story.append(P(colored("RESEARCH METHOD: TOP-DOWN + BOTTOM-UP", NAVY_H), "h2"))
     story.append(P("<b>Top-down:</b> " + esc(reasoning.get("market_regime", "NOT VERIFIED")), "small"))
     for line in reasoning.get("top_down_evidence", [])[:5]:
@@ -731,7 +750,7 @@ def _fundamentals(R, story):
     if R["ch"].get("quarters"):
         im = img(R["ch"]["quarters"], W)
         if im:
-            story += [Spacer(1, 6), P("Verified quarterly visual trends", "h2"),
+            story += [Spacer(1, 6), P("Reported quarterly trends (provider data, not independently verified)", "h2"),
                       im, P("Charts show reported periods only. Quarterly figures are "
                             "not management guidance or forward projections.", "tiny")]
 
@@ -815,6 +834,41 @@ def _ownership_peers(R, story):
             story += [Spacer(1, 4), P(f"{esc(R['name'])} " + " and ".join(notes) + ".", "just")]
 
 
+def _scenario_objective(t: dict, trigger, side: str) -> str:
+    """Only print a target strictly in the direction of a confirmed break.
+
+    Below a bear trigger, use the nearest lower supplied support or S2/S3.
+    Never substitute an EMA/52W high above the trigger as 'next support'.
+    When evidence is absent, publish a transparent 'unconfirmed' message.
+    """
+    if not isinstance(trigger, (int, float)) or not math.isfinite(trigger) or trigger <= 0:
+        return "Objective not established (invalid trigger)"
+    bearish = side == "bear"
+    rows = t.get("supports" if bearish else "resistances") or []
+    keys = ("S2", "S3") if bearish else ("R2", "R3")
+    pivots = t.get("pivots") or {}
+    candidates = []
+    for item in rows:
+        try:
+            p = float(item["price"])
+            if math.isfinite(p) and p > 0:
+                candidates.append(p)
+        except (KeyError, TypeError, ValueError):
+            continue
+    for key in keys:
+        try:
+            p = float(pivots[key])
+            if math.isfinite(p) and p > 0:
+                candidates.append(p)
+        except (KeyError, TypeError, ValueError):
+            continue
+    valid = [p for p in candidates if (p < trigger - 0.001 if bearish else p > trigger + 0.001)]
+    if not valid:
+        return "Lower support not confirmed" if bearish else "Higher resistance not confirmed"
+    target = max(valid) if bearish else min(valid)
+    return f"Next {'support' if bearish else 'resistance'} {inr(target)}"
+
+
 def _plan(R, story):
     t, plan = R["t"], R["plan"]
     if R["sc"].get("insufficient_evidence") or plan.get("mode") == "NO_TRADE":
@@ -861,12 +915,12 @@ def _plan(R, story):
 
     story += [Spacer(1, 7), P("Decision triggers", "h2")]
     res, sup = t["resistances"], t["supports"]
-    bull_obj = inr(res[1]["price"]) if len(res) > 1 else inr(plan["t2"])
-    bear_obj = inr(sup[1]["price"]) if len(sup) > 1 else inr(t["ema200"] or t["w52l"])
+    bull_obj = _scenario_objective(t, plan["bull_trigger"], "bull")
+    bear_obj = _scenario_objective(t, plan["bear_trigger"], "bear")
     rows = [
-        [P(colored("Bull", GREEN_H), "cellb"), P(f"Daily close above {inr(plan['bull_trigger'])} on ≥1.5× average volume"), P(f"Next resistance {bull_obj}")],
+        [P(colored("Bull (watch)", GREEN_H), "cellb"), P(f"Early watch: close above {inr(plan['bull_trigger'])} on ≥1.5× volume; NOT a confirmed BUY"), P(bull_obj)],
         [P(colored("Base", AMBER_H), "cellb"), P(f"Consolidation between {inr(plan['bear_trigger'])} and {inr(plan['bull_trigger'])}"), P("Range-bound; wait for resolution")],
-        [P(colored("Bear", RED_H), "cellb"), P(f"Daily close below {inr(plan['bear_trigger'])}"), P(f"Next support {bear_obj}")],
+        [P(colored("Bear", RED_H), "cellb"), P(f"Daily close below {inr(plan['bear_trigger'])}"), P(bear_obj)],
     ]
     story.append(table([[P("Scenario", "th"), P("Condition", "th"), P("Objective", "th")]] + rows, [24 * mm, 94 * mm, 60 * mm]))
     r1 = plan.get("range_1m")
@@ -905,7 +959,7 @@ def _appendix(R, story):
     }
     rows = [[P(k, "cellb"), P(f"{int(w * 100)}%", "cellr"), P(desc[k])] for k, w in eng.WEIGHTS.items()]
     story.append(table([[P("Pillar", "th"), P("Weight", "thr"), P("What it measures", "th")]] + rows, [28 * mm, 20 * mm, 130 * mm]))
-    story.append(P("Pillars without data are excluded and the remaining weights re-normalised (see 'Data coverage' on page 1). "
+    story.append(P("Pillars without data are excluded and the remaining weights re-normalised (see 'Pillar coverage' on page 1). "
                    "Stance bands: 75+ high-conviction constructive · 62–74 constructive · 48–61 neutral/wait · 35–47 cautious · below 35 negative. "
                    "A technical veto caps the stance at neutral when the trend pillar is below 35. "
                    "The framework is a structured summary of the data, not a forecast and not a back-tested trading system.", "tiny"))
@@ -917,7 +971,7 @@ def _appendix(R, story):
         f"Prices & volume: Yahoo Finance / NSE / Stooq daily candles ({R['t']['bars']} sessions); benchmark Nifty 50.",
         (f"Financial statements: {esc(stm['source'])} — {len(stm.get('years') or [])} annual periods, "
          f"{len(stm.get('quarters') or [])} quarters.") if stm else "Financial statements: not available.",
-        f"Ratios aggregated from Screener.in / Yahoo / Finnhub: {n_core}/6 core fields available.",
+        f"Ratios aggregated from Screener.in / Yahoo / Finnhub: {n_core}/6 core fields available (separate from model-pillar coverage).",
         f"Shareholding: Screener.in, {len(R['sh'])} quarters." if R["sh"] else "Shareholding: not available.",
         f"Peers: {len(R['peers'])} same-sector companies." if R["peers"] else "Peers: not available for this stock.",
         "Analyst commentary: " + ("AI-assisted, with every figure checked against the data above." if R["ai_note"] else "rule-generated (no AI text used)."),
