@@ -49,10 +49,12 @@
    if(sub)sub.textContent=meta.subtitle;
    document.title="MSK Research | "+meta.title;
  }
+ let syncingLocation=false;
  function activateTab(tab,{scroll=true,updateHistory=true}={}){
    const target=nav.find(b=>b.dataset.tab===tab);
    if(!target)return false;
-   target.click(); // Real shared engine handler, no cosmetic-only navigation.
+   if(!updateHistory)syncingLocation=true;
+   try{target.click();}finally{syncingLocation=false;} // Real shared engine handler
    setView(tab);
    for(const a of actions)a.classList.toggle("active",a.dataset.go===tab);
    if(updateHistory&&window.history?.pushState&&window.location.hash!=="#"+tab)
@@ -70,7 +72,7 @@
    item.addEventListener("click",()=>{
      setView(item.dataset.tab);
      for(const action of actions)action.classList.toggle("active",action.dataset.go===item.dataset.tab);
-     if(window.history?.pushState&&window.location.hash!=="#"+item.dataset.tab)
+     if(!syncingLocation&&window.history?.pushState&&window.location.hash!=="#"+item.dataset.tab)
        window.history.pushState({mskPage:item.dataset.tab},"","#"+item.dataset.tab);
      closeMenu();
      if(item.dataset.tab!=="overview"){
