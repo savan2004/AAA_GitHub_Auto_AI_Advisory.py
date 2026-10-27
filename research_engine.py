@@ -264,16 +264,23 @@ def compute_risk(df: pd.DataFrame, nifty: Optional[pd.DataFrame]) -> dict:
 # FUNDAMENTALS
 # ══════════════════════════════════════════════════════════════════════════
 def _de_ratio(fund: dict, last_year: Optional[dict]) -> Optional[float]:
-    """Debt/Equity as a plain ratio. Statements are authoritative; the
-    aggregated fund['de'] mixes sources (Yahoo reports it in percent), so only
-    used as a last resort with a unit heuristic."""
+    """Debt/Equity as a plain ratio.
+
+    The upstream fundamentals adapter is responsible for provider-specific
+    units; never infer units from whether a ratio exceeds eight. An actual
+    heavily leveraged company can legitimately exceed 8x.
+    """
     if last_year and last_year.get("borrowings") is not None and last_year.get("networth"):
         if last_year["networth"] > 0:
             return round(last_year["borrowings"] / last_year["networth"], 2)
     de = fund.get("de")
     if de is None:
         return None
-    return round(de / 100.0, 2) if de > 8 else round(float(de), 2)
+    try:
+        value = float(de)
+        return round(value, 2) if math.isfinite(value) and value >= 0 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: List[dict],
@@ -807,23 +814,36 @@ def _numbers(text: str) -> List[float]:
     return out
 
 
-def numbers_grounded(text: str, facts: str, max_unmatched: int = 1) -> bool:
-    """True if (almost) every number in `text` appears in `facts` (±1.5%)."""
+def numbers_grounded(text: str, facts: str, max_unmatched: int = 0) -> bool:
+    """Reject invented numeric facts, including small % and invented years.
+
+    Historical implementation let arbitrary values <=12 and years 1990-2040
+    through, and tolerated one unmatched large number. Those exceptions
+    allowed hallucinated earnings growth, P/E and reporting years. This is
+    intentionally strict; reject LLM prose rather than edit it into truth.
+    """
     fact_nums = [abs(x) for x in _numbers(facts)]
-    bad = 0
-    for x in _numbers(text):
-        x = abs(x)
-        if x <= 12 or 1990 <= x <= 2040:             # small ints / years are fine
-            continue
-        if not any(abs(x - f) <= max(0.015 * f, 0.051) for f in fact_nums):
-            bad += 1
-            if bad > max_unmatched:
+    missing = 0
+    for number in _numbers(text):
+        x = abs(number)
+        # A plausible reporting YEAR must match exactly, not merely be
+        # "within 0.5%" of another year (2024 vs 2026 is misinformation).
+        if 1900 <= x <= 2100 and x.is_integer():
+            matched = any(known == x for known in fact_nums)
+        else:
+            matched = any(abs(x - known) <= max(0.005 * known, 0.011)
+                          for known in fact_nums)
+        if not matched:
+            missing += 1
+            if missing > max_unmatched:
                 return False
     return True
 
 
 def facts_block(name, sym, sector, t, rk, fv, sc, plan, sh) -> str:
     L = [f"Company: {name} ({sym}); sector: {re.sub(r'[^A-Za-z &]', '', sector or 'n/a').strip()}",
+         f"Price observation date: {t.get('asof') or 'Unavailable'}; quote is HISTORICAL closing price, not live LTP",
+         f"Price feed: {t.get('price_source') or 'Unverified provider'}; financial data basis: {fv.get('source') or 'Unverified provider/period'}",
          f"Price: {t['ltp']}; 52W high {t['w52h']}; 52W low {t['w52l']}; distance from high {t['dist_high']}%",
          f"Trend: {t['trend']}; weekly {t.get('weekly_trend')}; RSI {t['rsi']}; MACD hist {t['macd_hist']}; ADX {t['adx']}",
          f"EMA20 {t['ema20']}; EMA50 {t['ema50']}; EMA200 {t.get('ema200')}",
@@ -848,6 +868,11 @@ def ai_analyst_note(name, sym, sector, t, rk, fv, sc, plan, sh) -> str:
         from ai_engine import ai_available, _call_ai
         if not ai_available():
             return ""
+        # Do not produce a purported institutional analyst note from numbers
+        # that have no documented price-session date. Deterministic sections
+        # remain available when an AI evidence precondition is unavailable.
+        if not t.get("asof"):
+            return ""
         facts = facts_block(name, sym, sector, t, rk, fv, sc, plan, sh)
         system = ("You are a senior equity research analyst at an Indian institutional brokerage. "
                   "Write in a crisp, professional sell-side voice. Use ONLY the facts provided. "
@@ -866,6 +891,17 @@ def ai_analyst_note(name, sym, sector, t, rk, fv, sc, plan, sh) -> str:
         text = re.sub(r"[*_#`]+", "", text).strip()
         if not numbers_grounded(text, facts):
             logger.warning("[research_engine] AI note rejected: contained numbers not in supplied facts")
+            return ""
+        # A number-free statement can still invent a current event or
+        # external research. If these appear without supplied evidence,
+        # retain the deterministic report rather than publish the AI claim.
+        forbidden = (
+            "according to a recent report", "latest news confirms",
+            "company announced today", "management has guided",
+            "analysts expect", "guaranteed return",
+        )
+        if any(term in text.lower() for term in forbidden):
+            logger.warning("[research_engine] AI note rejected: unsupported external event")
             return ""
         return text
     except Exception as e:

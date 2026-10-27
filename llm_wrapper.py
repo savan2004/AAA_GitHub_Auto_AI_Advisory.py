@@ -5,90 +5,28 @@ from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-
-# ── Lazy Gemini init (no module-level crash) ──────────────────────────────
-_gemini_configured = False
-
-def _ensure_gemini():
-    global _gemini_configured
-    if _gemini_configured or not GEMINI_API_KEY:
-        return _gemini_configured
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        _gemini_configured = True
-        logger.info("llm_wrapper: Gemini configured")
-    except Exception as e:
-        logger.error(f"llm_wrapper: Gemini config error: {e}")
-    return _gemini_configured
-
+# All provider configuration, model selection and HTTP transport now live in
+# ai_provider_gateway.py. No cached keys, obsolete Gemini SDK init or global
+# httpx monkeypatch are used here.
 
 def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
-    used_any = False
+    """Use the shared verified provider chain; no global httpx monkeypatches.
 
-    # ── GROQ ──────────────────────────────────────────────────────────────
-    if GROQ_API_KEY:
-        used_any = True
-        try:
-            from groq import Groq
-            import functools
-            # groq>=0.9 uses httpx which rejects proxies= kwarg from some environments
-            def _safe_groq(api_key):
-                try:
-                    return Groq(api_key=api_key)
-                except TypeError as e:
-                    if "proxies" not in str(e): raise
-                    import httpx
-                    orig = httpx.Client.__init__
-                    httpx.Client.__init__ = lambda self,*a,**kw: orig(self,*a,**{k:v for k,v in kw.items() if k!="proxies"})
-                    c = Groq(api_key=api_key)
-                    httpx.Client.__init__ = orig
-                    return c
-            client = _safe_groq(GROQ_API_KEY)
-            for model in ["llama-3.3-70b-versatile", "llama3-70b-8192", "mixtral-8x7b-32768"]:
-                try:
-                    resp = client.chat.completions.create(
-                        model=model,
-                        messages=[
-                            {"role": "system", "content": "You are a concise Indian stock market analysis assistant."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        max_tokens=max_tokens,
-                        temperature=0.3,
-                    )
-                    text = (resp.choices[0].message.content or "").strip()
-                    if text:
-                        return text
-                except Exception as model_error:
-                    logger.warning(f"Groq model {model} failed: {model_error}")
-        except Exception as e:
-            logger.error(f"Groq client error: {e}")
-
-    # ── Gemini ────────────────────────────────────────────────────────────
-    if GEMINI_API_KEY and _ensure_gemini():
-        used_any = True
-        try:
-            import google.generativeai as genai
-            for model_name in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
-                try:
-                    model = genai.GenerativeModel(model_name=model_name)
-                    resp = model.generate_content(
-                        prompt,
-                        generation_config={"max_output_tokens": max_tokens, "temperature": 0.3}
-                    )
-                    text = (getattr(resp, "text", "") or "").strip()
-                    if text:
-                        return text
-                except Exception as model_error:
-                    logger.warning(f"Gemini model {model_name} failed: {model_error}")
-        except Exception as e:
-            logger.error(f"Gemini client error: {e}")
-
-    if not used_any:
-        return "⚠️ AI engine not configured. Set GROQ_API_KEY or GEMINI_API_KEY."
-    return "⚠️ AI engine error. All providers failed."
+    A configured key is NOT proof that the model/endpoint is operational.
+    """
+    from ai_engine import _call_ai
+    response, reason = _call_ai(
+        [{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+        system=("Explain supplied market data only. Never infer a live price, "
+                "as-of date, issuer results or news without a named source.")
+    )
+    if response:
+        return response
+    if reason == "No AI provider configured":
+        return "⚠️ AI engine not configured. Set a supported AI provider key."
+    logger.warning("LLM request failed (safe status): %s", reason)
+    return "⚠️ AI engine error. All available providers failed."
 
 
 def safe_llm_call(prompt: str, max_tokens: int = 500) -> Tuple[bool, str]:

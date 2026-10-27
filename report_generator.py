@@ -385,6 +385,17 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     has_nifty = nifty is not None and not nifty.empty
 
     t = eng.compute_technicals(df, nifty)
+    # The AI analyst narrative may use a price only when its session date is
+    # explicit. This is last HISTORY CLOSE, not a live intraday quote.
+    try:
+        from pandas import Timestamp
+        last_index = Timestamp(df.index[-1])
+        if last_index.tzinfo is not None:
+            last_index = last_index.tz_convert("Asia/Kolkata")
+        t["asof"] = last_index.strftime("%Y-%m-%d")
+    except (ValueError, TypeError, AttributeError):
+        t["asof"] = None
+    t["price_source"] = "historical OHLCV feed (provider not independently audited)"
     rk = eng.compute_risk(df, nifty)
     fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
     sc = eng.compute_scores(t, rk, fv)

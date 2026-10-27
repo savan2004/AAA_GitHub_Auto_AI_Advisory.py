@@ -1,0 +1,37 @@
+name: MSK AI Provider and Research Accuracy
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ai_provider_gateway.py'
+      - 'ai_engine.py'
+      - 'ai_button_assistant.py'
+      - 'main.py'
+      - 'tests/test_ai_button_assistant.py'
+      - 'llm_wrapper.py'
+      - 'health_monitor.py'
+      - 'research_engine.py'
+      - 'fundamentals.py'
+      - 'data_validation.py'
+      - 'report_generator.py'
+      - 'tests/test_ai_research_accuracy.py'
+      - '.github/workflows/msk-ai-research-accuracy.yml'
+  workflow_dispatch:
+
+jobs:
+  ai-research-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install lightweight research test dependencies
+        run: python -m pip install "numpy==1.26.4" "pandas==2.2.3" "requests==2.32.3"
+      - name: Compile all changed AI research modules
+        run: python -m py_compile ai_provider_gateway.py ai_engine.py ai_button_assistant.py main.py llm_wrapper.py health_monitor.py research_engine.py fundamentals.py data_validation.py report_generator.py
+      - name: Run deterministic provider fallback and research accuracy tests
+        run: python -m unittest discover -s tests -p 'test_ai_research_accuracy.py' -v
+      - name: Verify every menu research button AI context, input and safety
+        run: python -m unittest discover -s tests -p 'test_ai_button_assistant.py' -v

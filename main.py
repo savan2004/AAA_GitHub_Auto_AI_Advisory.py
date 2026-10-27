@@ -38,6 +38,11 @@ from ai_engine import (
     ai_available,
     test_ai_providers,
 )
+from ai_button_assistant import (
+    remember as remember_ai_context,
+    draft as compose_ai_draft,
+    escape_telegram as escape_ai_text,
+)
 from swing_trades import get_swing_trades
 from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
@@ -621,7 +626,7 @@ def main_keyboard():
     kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
-    kb.add("🏭 Sector Report")
+    kb.add("🏭 Sector Report", "🤖 Ask AI")
     return kb
 
 
@@ -636,6 +641,10 @@ def analysis_choice_keyboard(sym):
     kb.add(
         types.InlineKeyboardButton("📈 Chart", callback_data=f"chart|{sym}"),
         types.InlineKeyboardButton("📄 Full Report (PDF)", callback_data=f"pdf|{sym}"),
+    )
+    kb.add(
+        types.InlineKeyboardButton("🤖 Ask AI", callback_data="aiquestion|stock"),
+        types.InlineKeyboardButton("✍️ Draft View", callback_data="aisummary|stock"),
     )
     return kb
 
@@ -662,6 +671,36 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
                                type(fallback_error).__name__)
 
 
+def ai_research_keyboard(topic):
+    """Small opt-in AI actions on an existing deterministic report."""
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🤖 Ask AI", callback_data=f"aiquestion|{topic}"),
+        types.InlineKeyboardButton("✍️ Draft View", callback_data=f"aisummary|{topic}"),
+    )
+    return kb
+
+
+def send_research(chat_id, topic, evidence, **kwargs):
+    """Preserve the original report; add opt-in drafting controls only in DM."""
+    if topic not in ("portfolio", "general"):
+        saved = remember_ai_context(chat_id, topic, evidence)
+    else:
+        saved = topic == "portfolio"
+    # Never attach user-specific controls to discussion groups/channels.
+    if chat_id > 0 and saved and "reply_markup" not in kwargs:
+        kwargs["reply_markup"] = ai_research_keyboard(topic)
+    safe_send(chat_id, evidence, **kwargs)
+
+
+def _send_ai_draft(chat_id, topic, question):
+    """Runs from the existing bounded executor, never on webhook thread."""
+    text, used_model = compose_ai_draft(chat_id, topic, question)
+    label = "🤖 <b>AI Research Draft</b>" if used_model else "ℹ️ <b>Research Check</b>"
+    safe_send(chat_id, label + "\n\n" + escape_ai_text(text) +
+              "\n\n<i>Verify prices, filing periods and sources before trading.</i>")
+
+
 # ── Command Handlers ─────────────────────────────────────────────────────────
 @bot.message_handler(commands=["start"])
 def cmd_start(m):
@@ -671,6 +710,7 @@ def cmd_start(m):
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
+              "🤖 After research, choose <b>Ask AI</b> or <b>Draft View</b> to get a source-aware explanation.\n"
               "Use menu buttons below.",
               reply_markup=main_keyboard())
 
@@ -678,7 +718,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nAI: tap Ask AI or Draft View after any research report.\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>\nStatus: <code>/status</code>")
 
 
 def run_report(chat_id, query):
@@ -728,6 +768,21 @@ def run_report(chat_id, query):
                     os.remove(result)
                 except Exception:
                     pass
+            # Only a fresh public-metrics recap is available to the text AI.
+            # PDF content is NOT read by this handler, so never imply it is.
+            try:
+                quick = build_fundamental_text(sym, name)
+                remembered = remember_ai_context(
+                    chat_id, "pdf",
+                    f"Research PDF delivered for {name or sym}. Full PDF contents "
+                    f"are NOT available to AI. Independent fundamentals recap:\n{quick}"
+                )
+                if remembered and chat_id > 0:
+                    safe_send(chat_id, "🤖 You can ask AI about the separate public-metrics recap. "
+                              "The full PDF has NOT been read by AI.",
+                              reply_markup=ai_research_keyboard("pdf"))
+            except Exception:
+                logger.warning("AI PDF recap data unavailable")
         else:
             safe_send(chat_id, f"❌ Could not generate report for <b>{query}</b>: {result}")
     except Exception as e:
@@ -778,6 +833,9 @@ def send_symbol_menu(chat_id, query):
             f"✅ Found <b>{cname or sym}</b> ({sym}){ltp_line}\n\nWhat would you like to see?",
             reply_markup=analysis_choice_keyboard(sym),
         )
+        remember_ai_context(chat_id, "stock",
+                            f"Stock lookup {cname or sym} ({sym}). {ltp_line or 'Price unavailable'}. "
+                            "This is a provider quote without independently verified exchange timestamp.")
     except Exception as e:
         logger.error(f"Symbol menu err: {e}", exc_info=True)
         safe_send(chat_id, f"❌ Error: {e}")
@@ -803,11 +861,32 @@ def handle_analysis_callback(call):
     except Exception:
         pass
 
+    if action in ("aiquestion", "aisummary"):
+        if getattr(call.message.chat, "type", "private") != "private":
+            return
+        topic = sym.lower()
+        if topic not in ("stock", "technical", "fundamental", "chart", "pdf",
+                         "conservative", "moderate", "aggressive", "breadth",
+                         "swing_safe", "swing_agr", "buzz", "sector", "portfolio", "general"):
+            return
+        if action == "aiquestion":
+            state.set(chat_id, "ai:" + topic)
+            safe_send(chat_id,
+                      "✍️ Type your question about the latest " +
+                      escape_ai_text(topic) +
+                      " report.\n⚠️ Figures are source-dependent and may be delayed."
+                      + ("\nPortfolio holdings are NOT shared with AI." if topic == "portfolio" else ""))
+        else:
+            safe_send(chat_id, "✍️ Drafting a fact-checked research view…")
+            executor.submit(_send_ai_draft, chat_id, topic,
+                            "Draft a short structured outlook, evidence, risks and important missing information.")
+        return
+
     if action == "tech":
         def _run(cid=chat_id, s=sym):
             try:
                 ticker, cname = resolve_symbol(s)
-                safe_send(cid, build_technical_text(s, cname))
+                send_research(cid, "technical", build_technical_text(s, cname))
             except Exception as e:
                 logger.error(f"tech cb err: {e}", exc_info=True)
                 safe_send(cid, f"❌ Error: {e}")
@@ -817,7 +896,7 @@ def handle_analysis_callback(call):
         def _run(cid=chat_id, s=sym):
             try:
                 ticker, cname = resolve_symbol(s)
-                safe_send(cid, build_fundamental_text(s, cname))
+                send_research(cid, "fundamental", build_fundamental_text(s, cname))
             except Exception as e:
                 logger.error(f"fund cb err: {e}", exc_info=True)
                 safe_send(cid, f"❌ Error: {e}")
@@ -834,6 +913,7 @@ def handle_analysis_callback(call):
                 if success and path:
                     with open(path, "rb") as f:
                         bot.send_photo(cid, f, caption=f"<b>📈 {cname or s}</b>\n\n{meta}", parse_mode="HTML")
+                    send_research(cid, "chart", f"Chart: {cname or s} ({s}); source/date not independently verified. Chart metadata: {meta}")
                 else:
                     safe_send(cid, "⚠️ Chart failed, sending text instead:")
                     safe_send(cid, build_technical_text(s, cname))
@@ -865,12 +945,12 @@ def cmd_status(m):
                 f"🤖 <b>MSK Bot — STATUS</b>",
                 "─── ── ── ── ── ──",
                 f"Bot : ✅ Running",
-                f"AI  : {res.get('_status', '?')}",
+                "AI  : API keys configuration only (live models not tested)",
                 f"Time: {datetime.now().strftime('%d-%b-%Y %H:%M')}"
             ]
             for p_name in ["GROQ", "Gemini", "OpenAI", "AskFuzz"]:
                 v = res.get(p_name, "SKIP")
-                ic = "✅" if str(v).startswith("OK") else ("⚪" if str(v) == "SKIP" else "❌")
+                ic = "⚪" if str(v) == "CONFIGURED" else ("🔸" if str(v) == "NOT CONFIGURED" else "⚠️")
                 lines.append(f"  {ic} {p_name}: {str(v)[:35]}")
             safe_send(chat_id, "\n".join(lines), reply_markup=main_keyboard())
         except Exception as e:
@@ -909,6 +989,7 @@ def cmd_chart(m):
             if success and path:
                 with open(path, "rb") as f:
                     bot.send_photo(chat_id, f, caption=f"<b>📈 {cname}</b>\n\n{meta}", parse_mode="HTML")
+                send_research(chat_id, "chart", f"Chart: {cname or sym} ({sym}); metadata only, not a full pixel/image inspection: {meta}")
             else:
                 safe_send(chat_id, "⚠️ Chart failed, sending text:")
                 safe_send(chat_id, build_adv(sym))
@@ -933,7 +1014,13 @@ def chart_button(m):
         threading.Thread(target=ping, daemon=True).start()
         try:
             gen = get_chart_generator()
-            gen.send_to_telegram(bot, chat_id)
+            success, meta, path = gen.generate()
+            if success and path:
+                with open(path, "rb") as f:
+                    bot.send_photo(chat_id, f, caption=f"📈 Technical Analysis\n\n{meta}"[:1015], parse_mode="HTML")
+                send_research(chat_id, "chart", "Auto-selected technical chart; only the chart metadata is available to AI: " + str(meta))
+            else:
+                safe_send(chat_id, "⚠️ Chart unavailable. Type a stock symbol for a specific chart.")
         except Exception as e:
             logger.error(f"Auto chart err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
@@ -981,7 +1068,7 @@ def cmd_portfolio(m):
 
     def _run(chat_id=m.chat.id):
         try:
-            safe_send(chat_id, build_portfolio_card(chat_id))
+            send_research(chat_id, "portfolio", build_portfolio_card(chat_id))
         except Exception as e:
             logger.error(f"Portfolio err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
@@ -1013,7 +1100,7 @@ def scan_btn(m):
 
     def _run(chat_id=m.chat.id, prof=p):
         try:
-            safe_send(chat_id, build_scan(prof))
+            send_research(chat_id, prof, build_scan(prof))
         except Exception as e:
             logger.error(f"Screener err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
@@ -1027,7 +1114,7 @@ def breadth_btn(m):
 
     def _run(chat_id=m.chat.id):
         try:
-            safe_send(chat_id, build_breadth())
+            send_research(chat_id, "breadth", build_breadth())
         except Exception as e:
             logger.error(f"Breadth err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
@@ -1053,7 +1140,7 @@ def swing_btn(m):
         try:
             res = get_swing_trades(mode=md)
             if len(res) <= 3800:
-                safe_send(chat_id, res)
+                send_research(chat_id, "swing_safe" if md == "conservative" else "swing_agr", res)
             else:
                 chunk = ""
                 for line in res.split("\n"):
@@ -1063,12 +1150,30 @@ def swing_btn(m):
                     chunk += line + "\n"
                 if chunk.strip():
                     safe_send(chat_id, chunk)
+                # Give the user AI controls once, after the long scanner output.
+                topic = "swing_safe" if md == "conservative" else "swing_agr"
+                remembered = remember_ai_context(chat_id, topic,
+                              "⏱ Summary input: first part of this swing scan (data not independently exchange verified).\n"
+                              + res[:2950])
+                if remembered and chat_id > 0:
+                    safe_send(chat_id, "🤖 Ask about the swing scan or draft its key takeaways.",
+                              reply_markup=ai_research_keyboard(topic))
         except Exception as e:
             logger.error(f"Swing err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
 
     executor.submit(_run)
 
+
+@bot.message_handler(func=lambda m: m.text == "🤖 Ask AI")
+def ai_question_button(m):
+    if getattr(m.chat, "type", "private") != "private":
+        return
+    state.set(m.chat.id, "ai:general")
+    safe_send(m.chat.id,
+              "🤖 Ask a general research question, e.g. What is ROE or how should I interpret ADX?\n"
+              "For stock-specific facts, run Analysis or another research button first "
+              "and tap its Ask AI option.")
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Analysis")
 def analysis_btn(m):
@@ -1106,6 +1211,13 @@ def _deliver_buzz(chat_id, result):
         safe_send(chat_id, m, reply_markup=kb if (last and kb) else None)
     if kb:
         safe_send(chat_id, "👆 Tap a stock for Technical / Fundamental / Chart / full PDF report.")
+    if msgs:
+        remembered = remember_ai_context(
+            chat_id, "buzz", "🔥 Stocks Buzz findings (feed dates may vary):\n" +
+            "\n".join(msgs[:2])[:3000])
+        if remembered and chat_id > 0:
+            safe_send(chat_id, "🤖 Ask about Stocks Buzz or draft an evidence-based summary.",
+                      reply_markup=ai_research_keyboard("buzz"))
 
 
 def run_buzz(chat_id):
@@ -1181,7 +1293,8 @@ def _deliver_sector(chat_id, path, summary):
         )
     if summary:
         import html as _h
-        safe_send(chat_id, "🧭 <b>Key takeaways</b>\n" + "\n".join(f"• {_h.escape(x, quote=False)}" for x in summary[:6]))
+        send_research(chat_id, "sector", "🧭 <b>Key takeaways</b>\n" +
+                      "\n".join(f"• {_h.escape(x, quote=False)}" for x in summary[:6]))
 
 
 def run_sector_report(chat_id):
@@ -1307,6 +1420,14 @@ def handle_text(m):
 
     if not API_RATE_LIMITER.is_allowed(uid):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
+        return
+
+    context = state.get(uid)
+    if isinstance(context, str) and context.startswith("ai:"):
+        state.clear(uid)
+        topic = context.partition(":")[2]
+        safe_send(uid, "🤖 Preparing a source-aware answer…")
+        executor.submit(_send_ai_draft, uid, topic, text)
         return
 
     if state.get(uid) == "analysis":
