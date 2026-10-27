@@ -186,9 +186,25 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
                 (uid, symbol, _amount(qty, positive=True),
                  _amount(avg, positive=False)),
             )
-        inserted = conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
-        if inserted != len(rows):
-            raise PortfolioStorageError("Imported position count mismatch")
+        # A matching row count alone does not prove that quantities or average
+        # costs survived import. Verify every position inside the same transaction
+        # BEFORE recording a cutover marker; any mismatch rolls the import back.
+        stored = conn.execute(
+            "SELECT uid, symbol, qty, avg FROM holdings ORDER BY uid, symbol"
+        ).fetchall()
+        expected = [
+            (uid, symbol, _amount(qty, positive=True),
+             _amount(avg, positive=False))
+            for uid, symbol, qty, avg in rows
+        ]
+        if len(stored) != len(expected) or any(
+            (db_uid != uid or db_symbol != symbol
+             or _amount(db_qty, positive=True) != qty
+             or _amount(db_avg, positive=False) != avg)
+            for (db_uid, db_symbol, db_qty, db_avg), (uid, symbol, qty, avg)
+            in zip(stored, expected)
+        ):
+            raise PortfolioStorageError("Imported portfolio readback mismatch")
         conn.execute(
             "INSERT INTO portfolio_cutover(id, source_sha256, initial_position_count)"
             " VALUES (1, %s, %s)", (digest, len(rows))

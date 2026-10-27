@@ -55,8 +55,8 @@ def load_legacy_holdings(source):
                 or not uid_text.isdecimal() or str(int(uid_text)) != uid_text):
             raise PortfolioMigrationError("Invalid or ambiguous user ID")
         uid = int(uid_text)
-        if uid > 9223372036854775807:
-            raise PortfolioMigrationError("User ID exceeds SQLite integer range")
+        if uid <= 0 or uid > 9223372036854775807:
+            raise PortfolioMigrationError("User ID must be a positive 64-bit integer")
         if not isinstance(portfolio, dict):
             raise PortfolioMigrationError("User holdings must be a JSON object")
         for symbol, position in portfolio.items():
