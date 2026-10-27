@@ -14,7 +14,7 @@
  const tabs=[...modal.querySelectorAll("[data-import-kind]")];
  let mode="price",current=null;
  const templates={
-   price:"symbol,timestamp,open,high,low,close,volume\nBEL,2026-10-26,,,,,\n",
+   price:null, // Built with 55 valid FICTIONAL candles; a blank one-line OHLC sample cannot pass validation.
    fundamental:"symbol,asof,source,pe,roe_percent,revenue_growth_percent,market_cap_inr,debt_equity_ratio\nBEL,2026-09-30,Exchange filing URL,,,,,\n",
    portfolio:"symbol,quantity,buy_price\nBEL,10,100\n"
  };
@@ -153,7 +153,14 @@
  input.addEventListener("change",()=>prepare(input.files?.[0]));
  $("confirmImport").addEventListener("click",confirm);
  $("importTemplate").addEventListener("click",()=>{
-   const blob=new Blob([templates[mode]],{type:"text/csv;charset=utf-8"});
+   let content=templates[mode];
+   if(mode==="price"){
+     const bars=window.MSKWeb.demo().slice(0,55);
+     content="symbol,timestamp,open,high,low,close,volume\n"+
+       bars.map(x=>["DEMO01",x.date,x.open.toFixed(2),x.high.toFixed(2),
+         x.low.toFixed(2),x.close.toFixed(2),x.volume].join(",")).join("\n")+"\n";
+   }
+   const blob=new Blob([content],{type:"text/csv;charset=utf-8"});
    const url=URL.createObjectURL(blob);
    const a=document.createElement("a");a.href=url;a.download="msk-"+mode+"-template.csv";
    document.body.append(a);a.click();a.remove();
