@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="MSK Web Advisory: transparent Indian equity research workspace with candlestick charting and source-aware analysis.">
+  <title>MSK Web Advisory | Independent Financial Research</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230b1424'/%3E%3Cpath d='M14 72L37 47L55 61L86 19' fill='none' stroke='%232dd4bf' stroke-width='9'/%3E%3C/svg%3E">
+  <script src="config.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+ <header class="top"><a class="brand" href="/" aria-label="MSK Home"><span class="logo">M</span><span>MSK <em>WEB ADVISORY</em><small>Independent financial research workspace</small></span></a><div class="header-right"><span id="backendIndicator" class="status">AI connection not configured</span><span class="chip">BETA • EDUCATIONAL</span></div></header>
+ <main class="layout">
+  <aside class="side" aria-label="Research tools"><h3>RESEARCH DESK</h3><button class="nav active" data-tab="overview">▦ &nbsp; Overview</button><button class="nav" data-tab="technical">◴ &nbsp; Technical Analysis</button><button class="nav" data-tab="fundamental">◈ &nbsp; Fundamentals</button><button class="nav" data-tab="chart">▥ &nbsp; Trading Chart</button><button class="nav" data-tab="screener">⌕ &nbsp; Stock Screener</button><button class="nav" data-tab="breadth">↔ &nbsp; Market Breadth</button><button class="nav" data-tab="pdf">▤ &nbsp; Research Report</button><button class="nav" data-tab="ai">✦ &nbsp; Ask MSK AI</button><div class="sidebottom"><span class="mini-dot"></span> No Telegram required<br><small>Production keys stay server-side</small></div></aside>
+  <section class="main">
+   <div class="intro"><div><div class="eyebrow">YOUR DIRECT RESEARCH PLATFORM</div><h1>Markets, explained with evidence.</h1><p>Understand price action, risk and company fundamentals. Always see what data is real, missing or unverified.</p></div><div class="intro-tag">MSK AI <span>RESEARCH</span></div></div>
+   <section class="search-panel" aria-label="Select company and data"><div class="ticker-input"><label for="ticker">NSE SYMBOL</label><input id="ticker" maxlength="22" spellcheck="false" autocomplete="off" placeholder="e.g. RELIANCE" value="RELIANCE"></div><div class="ticker-input fileinput"><label for="csvFile">IMPORT VERIFIED OHLCV CSV</label><input id="csvFile" type="file" accept=".csv,text/csv"></div><button id="loadSample" class="btn ghost">View Synthetic Example</button><div class="source-alert" id="dataLabel" role="status">No market data loaded. Import timestamp,open,high,low,close,volume CSV or view a clearly labeled synthetic demo.</div></section>
+   <section class="metrics" aria-label="Current research metrics">
+    <div class="metric"><small>LAST OBSERVED CLOSE</small><strong id="lastPrice">Unavailable</strong><span id="priceMeta">No dated source</span></div>
+    <div class="metric"><small>MARKET STRUCTURE</small><strong id="trend">Not assessed</strong><span id="trendMeta">EMA20 / EMA50 + swing</span></div>
+    <div class="metric"><small>ADX (14)</small><strong id="adx">—</strong><span id="adxLabel">Needs 50+ bars</span></div>
+    <div class="metric"><small>RELATIVE VOLUME</small><strong id="vol">—</strong><span id="volLabel">20 previous bars</span></div>
+   </section>
+   <section id="analysisRegion">
+    <div class="chart-grid"><article class="panel chart-panel"><div class="panelhead"><div><div class="eyebrow">PRICE ACTION</div><h2 id="chartTitle">Candlestick Research Chart</h2></div><div class="legend"><span><i class="key ema20"></i> EMA 20</span><span><i class="key ema50"></i> EMA 50</span><span><i class="key ch"></i> Regression channel</span></div></div><div class="canvas-wrap"><canvas id="chartCanvas" aria-label="Candlestick price and volume chart" role="img"></canvas><div class="canvas-empty" id="chartEmpty">Import historical data or view the synthetic example.<br><small>Never substitute fabricated data for actual quotes.</small></div></div><div id="hoverBar" class="hover-bar">OHLC values appear here when you hover a candle.</div></article><aside class="panel insights"><div class="eyebrow">ALGORITHM READOUT</div><h2 id="analysisTitle">Data Quality First</h2><div class="signal" id="signal">WAIT</div><div id="analysisLines" class="readout"><div><span>Trend</span><b>Unavailable</b></div><div><span>Pattern</span><b>No clean pattern</b></div><div><span>ADX</span><b>Unavailable</b></div><div><span>Volume</span><b>Unavailable</b></div><div><span>Signal</span><b>WAIT</b></div><div><span>Quality</span><b>Weak</b></div></div><p class="insight-note" id="analysisNote">A bullish or bearish candle alone is never a verified trading signal.</p><button id="explain" class="btn full">Draft Research Summary</button></aside></div>
+   </section>
+   <section class="panel detail"><div class="panelhead"><div><div class="eyebrow" id="detailLabel">WORKSPACE</div><h2 id="detailTitle">Research Overview</h2></div><span id="detailBadge" class="chip">TRANSPARENT DATA</span></div><div id="detailBody" class="detail-body"></div></section>
+   <section class="panel chat-panel"><div class="panelhead"><div><div class="eyebrow">OPTIONAL • DIRECT AI</div><h2>Ask MSK AI Analyst</h2></div><span class="chip">NO TELEGRAM</span></div><p class="muted">When a secure free-tier backend is connected, AI can explain your evidence. It cannot access your Telegram account, portfolio or API keys.</p><div id="chatHistory" class="chat-history" role="log"><div class="bubble assistant">Ask about your chart, indicators, research limitations, or what information is missing. I will never invent live NSE quotes.</div></div><form id="chatForm" class="chat-form"><input id="chatInput" placeholder="e.g. Explain ADX 25 and volume 2x" maxlength="550" aria-label="Ask AI a question"><button type="submit" class="btn">Ask AI</button></form><small class="muted">AI requires a private server connection; without it the site will clearly say unavailable, not imitate an AI response.</small></section>
+  </section>
+ </main>
+ <footer>MSK Web Advisory • Research & financial literacy only • Not SEBI-registered investment advice • Do not trade solely on AI output. <span>© 2026 MSK Research</span></footer>
+</body>
+</html>
