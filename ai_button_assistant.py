@@ -95,9 +95,9 @@ def recall(chat_id, topic, *, now=None):
 
 
 _MARKET_CLAIM_TERMS = re.compile(
-    r"(?<!\\w)(?:price|ltp|target|buy|sell|nifty|stock|today|returns?|"
+    r"(?<!\w)(?:price|ltp|target|buy|sell|nifty|stock|today|returns?|"
     r"ratios?|p/?e|roe|growth|moving average|fundamentals?|technical|"
-    r"dividend|market|current|अब|भाव|आज|खरीद|बेच|निफ्टी|शेयर)(?!\\w)",
+    r"dividend|market|current|अब|भाव|आज|खरीद|बेच|निफ्टी|शेयर)(?!\w)",
     re.I,
 )
 
