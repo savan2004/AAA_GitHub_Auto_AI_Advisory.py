@@ -64,6 +64,7 @@
      const sample=rows.slice(-500).map(({symbol:ignore,...b})=>b);
      accepted.set(symbol,{bars:sample,source:"uploaded",file:file});
    }
+   if(window.MSKWeb?.marketWidget)window.MSKWeb.marketWidget.clearExternal();
    library.clear();for(const [k,v] of accepted)library.set(k,v);
    universeKind="uploaded";
    setupSymbols();
@@ -242,7 +243,7 @@
  ui.csv.closest(".ticker-input").append(help);
  const sampleBtn=ui.search;
  // Capture to replace old single-symbol event handler and offer a useful test universe.
- sampleBtn.addEventListener("click",event=>{event.stopImmediatePropagation();startDemo();},true);
+ sampleBtn.addEventListener("click",event=>{event.stopImmediatePropagation();if(window.MSKWeb?.marketWidget)window.MSKWeb.marketWidget.clearExternal();startDemo();},true);
  ui.csv.addEventListener("change",async event=>{
    event.stopImmediatePropagation();const file=event.target.files?.[0];if(!file)return;
    try{importBars(await file.text(),file.name);}catch(error){status("CSV import failed: "+error.message,true);}
