@@ -127,7 +127,8 @@ const assert=require("node:assert/strict");
    await page.locator("#mobileMenuToggle").click();
    assert(await page.locator("body.menu-open").count()===1,"Mobile sidebar did not open");
    assert(await page.locator("#mobileScrim").count()===1,"Mobile scrim missing");
-   await page.locator("#mobileScrim").click({position:{x:350,y:100}});
+   // Scrim occupies viewport x=266–390, therefore local x=30 is inside.
+   await page.locator("#mobileScrim").click({position:{x:30,y:100}});
    assert(await page.locator("body.menu-open").count()===0,"Mobile sidebar did not close");
    // The dashboard quick-cards are deliberately hidden in the standalone
    // Chart screen. Use the mobile sidebar exactly as the visitor would.
