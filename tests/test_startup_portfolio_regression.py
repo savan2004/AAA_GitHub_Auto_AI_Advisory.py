@@ -299,6 +299,21 @@ class PostgresPortfolioOfflineTests(unittest.TestCase):
                 "SELECT qty FROM holdings WHERE uid = 100"
             ).fetchone()[0], 50)
 
+    def test_empty_legacy_snapshot_requires_explicit_approval(self):
+        from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
+        self.source.write_text("{}", encoding="utf-8")
+        self.assertEqual(
+            import_legacy_to_postgres(self.source, self.dsn, connector=self.connector),
+            {"status": "dry-run", "positions": 0},
+        )
+        with self.assertRaisesRegex(PortfolioStorageError, "Empty legacy portfolio"):
+            import_legacy_to_postgres(self.source, self.dsn, connector=self.connector, apply=True)
+        self.assertFalse(self.database.exists())
+        result = import_legacy_to_postgres(
+            self.source, self.dsn, connector=self.connector, apply=True, allow_empty=True
+        )
+        self.assertEqual(result, {"status": "imported", "positions": 0})
+
     def test_invalid_input_is_rejected_before_any_db_write(self):
         from postgres_portfolio import import_legacy_to_postgres
         from portfolio_migration import PortfolioMigrationError
