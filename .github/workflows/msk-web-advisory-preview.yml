@@ -15,7 +15,7 @@ on:
 jobs:
   static-app:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 9
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -24,7 +24,7 @@ jobs:
       - name: Validate offline application JavaScript syntax
         run: node --check web_advisory/app.js && node --check web_advisory/config.js && node --check web_advisory/features.js && node --check web_advisory/market_widget.js
       - name: Install lightweight browser simulator
-        run: npm install --no-save --no-audit --no-fund jsdom@26
+        run: npm install --no-save --no-audit --no-fund jsdom@26 playwright-core@1.56.1
       - name: Click-through tests for every button and every CSV/AI route
         run: node --test web_advisory/tests/ui.test.cjs
       - name: Verify no Telegram keys, no live-data claims, source-aware MVP
@@ -77,3 +77,15 @@ jobs:
             console.log('RENDER_LIVE_OK', route, source.length);
           }
           JS
+      - name: Real Chrome visual smoke — BEL, TradingView widget, mobile
+        run: |
+          command -v google-chrome || command -v chromium
+          CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/live-browser.cjs
+      - name: Save live desktop and mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-web-bel-actual-browser-evidence
+          path: web_advisory/browser-proof/*.png
+          if-no-files-found: ignore
+          retention-days: 7
