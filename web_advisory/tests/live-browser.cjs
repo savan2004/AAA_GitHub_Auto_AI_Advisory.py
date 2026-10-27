@@ -75,7 +75,7 @@ const assert=require("node:assert/strict");
    });
    console.log("MSK_FINANCIAL_DASHBOARD_DESKTOP",JSON.stringify(design));
    assert.match(design.heading,/Research Dashboard/);
-   assert.equal(design.actions,8);
+   assert.equal(design.actions,9);
    assert(design.sidebarWidth>=200&&design.sidebarWidth<=280);
    assert(design.headerHeight>=60);
    assert.equal(design.metricBackground,"rgb(255, 255, 255)");
@@ -91,7 +91,7 @@ const assert=require("node:assert/strict");
    assert(Math.abs(state.close-latest.close)<0.001,"Actual displayed EOD quote must match provider");
    mkdirSync("web_advisory/browser-proof",{recursive:true});
    await page.screenshot({path:"web_advisory/browser-proof/BEL-real-EOD-desktop.png",fullPage:true});
-   for(const key of ["overview","technical","fundamental","screener","breadth","pdf","chart","ai"]){
+   for(const key of ["overview","technical","fundamental","screener","breadth","pdf","chart","ai","portfolio"]){
      await page.locator('.action-card[data-go="'+key+'"]').click();
      const active=await page.evaluate(()=>window.MSKDashboard?.activeTab());
      assert.equal(active,key,"Inert financial module "+key);
