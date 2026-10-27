@@ -19,6 +19,13 @@
  const originalPanel=features.renderPanel;
  const originalAnswer=features.offlineAnswer;
  let selected=null;
+ let requestRevision=0;
+ let requestController=null;
+ const EOD_PROVIDER="https://api.tejhq.dev";
+ const MAX_STALENESS_DAYS=14;
+ // This preview is non-commercial and unindexed; TejHQ does not grant rights
+ // to commercially redistribute the underlying exchange bhavcopy.
+ const sourceLabel=s=>"TejHQ NSE bhavcopy • "+s+" • historical unadjusted EOD";
  const normalize=input=>String(input||"").toUpperCase().trim().replace(/^NSE:/,"").replace(/\.NS$/,"");
  const valid=input=>/^[A-Z][A-Z0-9&._-]{0,20}$/.test(input)&&!/^DEMO\d+$/.test(input);
  const text=(tag,content,cls)=>{const node=document.createElement(tag);if(content!==undefined)node.textContent=content;if(cls)node.className=cls;return node;};
@@ -30,8 +37,8 @@
  function providerCard(symbol){
    const card=text("div",undefined,"provider-disclosure");
    const main=text("div",undefined,"provider-disclosure-main");
-   main.append(text("strong","NSE:"+symbol+" · Third-party chart"));
-   main.append(text("p","Charts and delayed/live quotes are supplied and labelled by TradingView. No MSK price, ADX, volume, pattern or trade signal is calculated without an independent OHLCV dataset."));
+   main.append(text("strong","NSE:"+symbol+" · Source and Research"));
+   main.append(text("p","Historical NSE end-of-day chart loads from TejHQ where available. TradingView is an independent source link. Real-time intraday prices are NOT available."));
    const action=link(symbol,"View NSE:"+symbol+" directly");
    action.classList.add("provider-cta");
    card.append(main,action);
@@ -65,7 +72,84 @@
    hover.replaceChildren(text("span","NSE:"+symbol+" • Chart unavailable in embedded free provider. "));
    hover.append(link(symbol));
  }
+
+ async function fetchEOD(symbol,revision){
+   // TejHQ keyless EOD API. Official free docs: /v1/ohlcv/nse/{SYMBOL}
+   // Dates/data are supplied by provider, not generated from the symbol.
+   const now=new Date();
+   const end=now.toISOString().slice(0,10);
+   const from=new Date(now.getTime()-260*86400000).toISOString().slice(0,10);
+   const url=EOD_PROVIDER+"/v1/ohlcv/nse/"+encodeURIComponent(symbol)+
+        "?from="+from+"&to="+end;
+   const ctrl=new AbortController();requestController=ctrl;
+   const timeout=setTimeout(()=>ctrl.abort(),13000);
+   try{
+     const response=await fetch(url,{
+       mode:"cors",credentials:"omit",headers:{accept:"application/json"},
+       signal:ctrl.signal
+     });
+     if(!response.ok)throw Error("TejHQ EOD HTTP "+response.status);
+     const payload=await response.json();
+     if(payload?.meta?.symbol!==symbol||
+       String(payload.meta.exchange||"").toUpperCase()!=="NSE"||
+       !Array.isArray(payload.data))throw Error("Provider symbol/exchange mismatch");
+     const records=payload.data;
+     if(records.length<50)throw Error("Provider has fewer than 50 completed daily candles");
+     if(records.length>400)throw Error("Unexpectedly large OHLCV payload");
+     const bars=records.map(r=>{
+       const bar={date:r.date,open:Number(r.open),high:Number(r.high),
+         low:Number(r.low),close:Number(r.close),volume:Number(r.volume)};
+       if(!/^\d{4}-\d{2}-\d{2}$/.test(bar.date)||
+          ![bar.open,bar.high,bar.low,bar.close,bar.volume].every(Number.isFinite)||
+          Math.min(bar.open,bar.high,bar.low,bar.close)<=0||
+          bar.volume<0||bar.high<Math.max(bar.open,bar.close,bar.low)||
+          bar.low>Math.min(bar.open,bar.close,bar.high))
+         throw Error("Provider returned invalid OHLCV candle");
+       return bar;
+     }).sort((a,b)=>a.date.localeCompare(b.date));
+     for(let i=1;i<bars.length;i++){
+       if(bars[i].date===bars[i-1].date)throw Error("Duplicate trading session");
+     }
+     const last=bars.at(-1);
+     const age=(Date.now()-Date.parse(last.date+"T00:00:00Z"))/86400000;
+     if(age < -1||age>MAX_STALENESS_DAYS)
+       throw Error("Historical EOD provider is stale or future dated: "+last.date);
+     if(selected!==symbol||requestRevision!==revision)return;
+     features.library.clear(); // Never include DEMO rows in a real-symbol screener/breadth.
+     features.library.set(symbol,{
+       bars,source:"tej_eod",file:sourceLabel(symbol),
+       importedAt:Date.now(),asof:last.date
+     });
+     clearExternal();
+     originalChoose(symbol,false);
+     $("dataLabel").setAttribute("data-eod-provider","TejHQ");
+     $("dataLabel").setAttribute("data-market-asof",last.date);
+     $("hoverBar").textContent="NSE:"+symbol+" • TejHQ / NSE bhavcopy • "+bars.length+
+       " historical EOD sessions • latest "+last.date+". Hover candles for OHLCV.";
+   }catch(err){
+     if(selected!==symbol||requestRevision!==revision)return;
+     const message=err?.name==="AbortError"?"Data source timed out":
+        String(err?.message||"Data source unavailable").slice(0,180);
+     const mount=$("externalNseChart");
+     if(mount){
+       const label=mount.querySelector(".nse-unavailable-tag");
+       if(label)label.textContent="SOURCE NOT AVAILABLE";
+       const h=mount.querySelector(".nse-unavailable h3");
+       if(h)h.textContent="Historical NSE data could not be loaded";
+       const info=mount.querySelector(".nse-unavailable p");
+       if(info)info.textContent="TejHQ free EOD feed could not be verified: "+message+
+         ". No fallback prices were substituted. Open this instrument at its source or import dated OHLCV.";
+     }
+     $("dataLabel").textContent="NSE:"+symbol+
+       " • Historical data fetch failed safely: "+message+" • No price or signal shown.";
+   }finally{
+     clearTimeout(timeout);
+     if(requestController===ctrl)requestController=null;
+   }
+ }
  function clearExternal(){
+   requestRevision++;
+   if(requestController){requestController.abort();requestController=null;}
    selected=null;
    document.body.classList.remove("market-external");
    const mount=$("externalNseChart");if(mount)mount.remove();
@@ -111,11 +195,23 @@
    $("dataLabel").classList.add("hasData");
    plot(symbol);
    app.renderTab();
+   const info=$("externalNseChart")?.querySelector(".nse-unavailable h3");
+   if(info)info.textContent="Loading dated NSE end-of-day candles…";
+   const paragraph=$("externalNseChart")?.querySelector(".nse-unavailable p");
+   if(paragraph)paragraph.textContent="Checking TejHQ keyless historical bhavcopy for NSE:"+symbol+
+     ". This is NOT a live or intraday feed.";
+   const revision=++requestRevision;
+   // Fully async: no live provider data is assumed until response validates.
+   fetchEOD(symbol,revision);
    return true;
  }
  function choose(symbol,auto){
    const code=normalize(symbol);
    if(features.library.has(code)){
+     const cached=features.library.get(code);
+     if(cached?.source==="tej_eod"&&Date.now()-(cached.importedAt||0)>10*60*1000){
+       return external(code);
+     }
      clearExternal();
      return originalChoose(code,auto);
    }
@@ -130,7 +226,7 @@
  function panel(tab,parent){
    if(!selected)return originalPanel(tab,parent);
    const symbol=selected;
-   const intro="NSE:"+symbol+" · Price data shown only by TradingView. MSK has no independently sourced historical OHLCV for this stock.";
+   const intro="NSE:"+symbol+" · Historical TejHQ end-of-day feed is loading or unavailable. No MSK price or signal is displayed until validated.";
    if(tab==="overview"||tab==="chart"){
      paragraph(parent,intro,"warning");
      parent.append(providerCard(symbol));
