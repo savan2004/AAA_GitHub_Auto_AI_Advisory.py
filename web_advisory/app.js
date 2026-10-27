@@ -247,7 +247,7 @@
          ("Neon API online • AI "+(body.generative_ai==="disabled"?"not enabled":"login required")):
          "Research API did not pass health check");
      })
-     .catch(()=>text("backendIndicator","Research API offline • CSV research available"));
+     .catch(()=>{if(window.document?.getElementById("backendIndicator"))text("backendIndicator","Research API offline • CSV research available");});
  }
  renderTab();
 })();
