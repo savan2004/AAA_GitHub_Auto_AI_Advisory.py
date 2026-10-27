@@ -25,6 +25,8 @@
   function refreshBreadth(){
     const rows=window.MSKWeb?.features?.results?.()||[];
     const valid=rows.filter(v=>v?.q?.date&&Number.isFinite(v.change));
+    for(const id of ["trialAdvances","trialDeclines","trialUnchanged"])$(id).textContent="—";
+    $("trialBreadthStatus").textContent="Index constituents and live breadth unavailable. Load multiple valid stock series to calculate source-labelled sample breadth.";
     if(valid.length<2)return;
     const date=valid.map(v=>v.q.date).sort().at(-1);
     const same=valid.filter(v=>v.q.date===date);
