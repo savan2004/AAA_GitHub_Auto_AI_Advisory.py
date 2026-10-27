@@ -120,6 +120,7 @@ class PortfolioMigrationSafetyTests(unittest.TestCase):
         invalid_inputs = (
             '{"100":{"SBIN":{"qty":1,"avg":2},"SBIN":{"qty":4,"avg":5}}}',
             '{"001":{"SBIN":{"qty":1,"avg":2}}}',
+            '{"0":{"SBIN":{"qty":1,"avg":2}}}',
             '{"100":{"SBIN":{"qty":-1,"avg":2}}}',
             '{"100":{"SBIN":{"qty":true,"avg":2}}}',
             '{"100":{"SBIN":{"qty":1,"avg":NaN}}}',
