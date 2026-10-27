@@ -169,7 +169,11 @@
      else bubble("assistant","Generative AI not connected. Add a secure server endpoint; model keys must not be exposed in the browser.");
      return;
    }
-   if(st.kind==="synthetic"){bubble("assistant","Synthetic demo prices cannot be treated as real-market evidence. Import correctly sourced market data before requesting a market-specific AI analysis.");return;}
+   if(st.kind==="synthetic"){
+     bubble("assistant","SYNTHETIC DEMO • No market data sent to an external AI provider.\n"+
+       (window.MSKWeb?.features?.offlineAnswer(question)||"Local evidence not available."));
+     return;
+   }
    const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),14000);
    try{
      const payload={question:question.slice(0,550),symbol:sym(),
@@ -221,8 +225,10 @@
  window.addEventListener("resize",()=>{if(st.data.length)draw();});
  window.MSKWeb={state:st,dataLoaded,csvParse,demo,compute,draw,renderTab,paragraph,bubble,symbol:sym,format:fm};
  text("backendIndicator",api()?"Checking research API…":"Local research • AI provider offline");
- if(api()) {
-   fetch(api()+"/api/health",{credentials:"omit",signal:AbortSignal.timeout(8000)})
+ if(api() && typeof fetch === "function") {
+   fetch(api()+"/api/health",{credentials:"omit",
+     signal:typeof AbortSignal!=="undefined"&&typeof AbortSignal.timeout==="function"?
+       AbortSignal.timeout(8000):undefined})
      .then(async response=>{
        if(!response.ok)throw Error("health "+response.status);
        const body=await response.json();
