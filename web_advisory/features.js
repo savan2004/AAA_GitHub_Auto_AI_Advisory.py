@@ -229,7 +229,7 @@
        "NO DATED STOCK DATA LOADED";
    const footer="\nSource: "+mode+
      (e?" • Session "+e.session:"")+
-     "\nLOCAL RULE-BASED RESEARCH, not generative AI. No model provider enabled.";
+     "\nLOCAL RULE-BASED RESEARCH • NOT GENERATIVE AI. No model provider enabled.";
    // A question for a different stock must NEVER silently answer using the
    // currently displayed symbol. Ask user to load the requested company.
    const tickerLike=raw.match(/\b(?:NSE:)?([A-Z]{2,12})\b/g)||[];
