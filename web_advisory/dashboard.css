@@ -384,3 +384,6 @@ body.web-pro{background:#f4f7fb;color:#17263e;color-scheme:light;font-family:Int
 .web-pro[data-page="portfolio"] .below-grid{display:block}
 .web-pro[data-page="portfolio"] #researchDetail{width:100%;min-height:430px}
 .web-pro[data-page="portfolio"] #detailBody{overflow-x:auto}
+
+/* The mobile menu scrim must occupy only the uncovered area. Playwright and finger taps should never target the sidebar beneath it. */
+@media(max-width:750px){.web-pro .menu-scrim{left:266px;right:0;top:0;bottom:0}}
