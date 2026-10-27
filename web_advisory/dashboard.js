@@ -30,11 +30,33 @@
  }
  $("mobileMenuToggle")?.addEventListener("click",toggleMenu);
  document.addEventListener("keydown",e=>{if(e.key==="Escape")closeMenu();});
- function activateTab(tab,{scroll=true}={}){
+ const VIEWS={
+   overview:{title:"Research Dashboard",subtitle:"Your stock snapshot, source-dated candles and essential research tools."},
+   technical:{title:"Technical Analysis",subtitle:"Evaluate EMA trends, ADX strength, volume and historical price structure."},
+   fundamental:{title:"Fundamental Research",subtitle:"Work with company filings and source-dated financial metrics. Never infer earnings from candles."},
+   chart:{title:"Candlestick Chart",subtitle:"Study the selected instrument with actual historical OHLCV and indicator overlays."},
+   screener:{title:"Stock Screener",subtitle:"Filter the stocks actually loaded into your research universe."},
+   breadth:{title:"Market Breadth",subtitle:"Compare same-session advances, declines and participation across loaded constituents."},
+   pdf:{title:"Research Report",subtitle:"Inspect source-dated analysis and print an educational research sheet."},
+   ai:{title:"Ask Research",subtitle:"Evidence-grounded educational Q&A; generative AI is not connected."}
+ };
+ function setView(tab){
+   const meta=VIEWS[tab]||VIEWS.overview;
+   root.dataset.page=tab;
+   const title=document.querySelector(".heading-block h1");
+   const sub=document.querySelector(".heading-block p");
+   if(title)title.textContent=meta.title;
+   if(sub)sub.textContent=meta.subtitle;
+   document.title="MSK Research | "+meta.title;
+ }
+ function activateTab(tab,{scroll=true,updateHistory=true}={}){
    const target=nav.find(b=>b.dataset.tab===tab);
    if(!target)return false;
-   target.click(); // Use existing real app.js button handler, never a fake tab.
+   target.click(); // Real shared engine handler, no cosmetic-only navigation.
+   setView(tab);
    for(const a of actions)a.classList.toggle("active",a.dataset.go===tab);
+   if(updateHistory&&window.history?.pushState&&window.location.hash!=="#"+tab)
+     window.history.pushState({mskPage:tab},"","#"+tab);
    closeMenu();
    const region=tab==="ai"?$("aiPanel"):$("researchDetail");
    if(scroll&&region&&typeof region.scrollIntoView==="function")
@@ -46,7 +68,10 @@
  }
  for(const item of nav){
    item.addEventListener("click",()=>{
+     setView(item.dataset.tab);
      for(const action of actions)action.classList.toggle("active",action.dataset.go===item.dataset.tab);
+     if(window.history?.pushState&&window.location.hash!=="#"+item.dataset.tab)
+       window.history.pushState({mskPage:item.dataset.tab},"","#"+item.dataset.tab);
      closeMenu();
      if(item.dataset.tab!=="overview"){
        const anchor=item.dataset.tab==="ai"?$("aiPanel"):$("researchDetail");
@@ -103,6 +128,31 @@
    observer.observe(feed,{attributes:true,childList:true,subtree:true});
    syncEvidence();
  }
+ function syncFromLocation(){
+   const tab=window.location.hash.replace(/^#/,"");
+   activateTab(VIEWS[tab]?tab:"overview",{scroll:false,updateHistory:false});
+ }
+ window.addEventListener("popstate",syncFromLocation);
+ window.addEventListener("hashchange",syncFromLocation);
+ // Deep link supports /?symbol=SBIN#fundamental or #ai,
+ // and browser Back/Forward returns to the prior research workspace.
+ syncFromLocation();
+ // The draft action produces a local text summary in the Ask Research panel.
+ // After its existing text-generation handler, take the user where it is visible.
+ $("explain")?.addEventListener("click",()=>activateTab("ai"));
+ document.addEventListener("msk:stock-ready",event=>{
+   if(!window.document?.body)return;
+   const symbol=event.detail?.symbol||$("ticker")?.value||"";
+   const history=$("chatHistory");
+   if(history){
+     history.replaceChildren();
+     const notice=document.createElement("div");
+     notice.className="bubble assistant";
+     notice.textContent="Now researching "+symbol+". Market observations are historical, not real time. Ask for explanations, not guaranteed targets.";
+     history.append(notice);
+   }
+   syncEvidence();
+ });
  // Easy to identify via click-through regression. These are honest "working"
  // controls: they dispatch their actual navigation and stock data requests.
  window.MSKDashboard={
