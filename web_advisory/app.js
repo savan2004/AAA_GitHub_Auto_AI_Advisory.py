@@ -152,7 +152,7 @@
  function renderTab(){
    const panel=el("detailBody"),tab=st.tab,c=st.calc;
    const titles={overview:"Research Overview",technical:"Technical Analysis",fundamental:"Fundamental Research",chart:"Trading Chart",
-     screener:"Stock Screener",breadth:"Market Breadth",pdf:"Research Report",ai:"Direct AI Analyst"};
+     screener:"Stock Screener",breadth:"Market Breadth",pdf:"Research Report",ai:"Direct AI Analyst",portfolio:"Portfolio Health"};
    text("detailTitle",titles[tab]||"Overview");text("detailLabel",tab.toUpperCase()+" • SOURCE AWARE");panel.replaceChildren();
    el("analysisRegion").hidden=tab==="ai";
    if(window.MSKWeb&&window.MSKWeb.features&&window.MSKWeb.features.renderPanel(tab,panel))return;
