@@ -94,13 +94,17 @@ def recall(chat_id, topic, *, now=None):
         return body
 
 
+_MARKET_CLAIM_TERMS = re.compile(
+    r"(?<!\\w)(?:price|ltp|target|buy|sell|nifty|stock|today|returns?|"
+    r"ratios?|p/?e|roe|growth|moving average|fundamentals?|technical|"
+    r"dividend|market|current|अब|भाव|आज|खरीद|बेच|निफ्टी|शेयर)(?!\\w)",
+    re.I,
+)
+
+
 def _is_market_claim(message):
-    return any(s in message.lower() for s in (
-        "price", "ltp", "target", "buy", "sell", "nifty", "stock", "today",
-        "returns", "ratio", "pe", "roe", "growth", "moving average",
-        "fundamental", "technical", "dividend", "market", "current", "अब",
-        "भाव", "आज", "खरीद", "बेच", "निफ्टी", "शेयर",
-    ))
+    """Match whole financial terms; 'pe' inside 'types' is not a market claim."""
+    return bool(_MARKET_CLAIM_TERMS.search(message))
 
 
 def _draft_prompt(topic, question, facts):
