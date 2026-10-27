@@ -17,7 +17,11 @@ jobs:
         with:
           node-version: '22'
       - name: Validate offline application JavaScript syntax
-        run: node --check web_advisory/app.js && node --check web_advisory/config.js
+        run: node --check web_advisory/app.js && node --check web_advisory/config.js && node --check web_advisory/features.js
+      - name: Install lightweight browser simulator
+        run: npm install --no-save --no-audit --no-fund jsdom@26
+      - name: Click-through tests for every button and every CSV/AI route
+        run: node --test web_advisory/tests/ui.test.cjs
       - name: Verify no Telegram keys, no live-data claims, source-aware MVP
         run: |
           python - <<'PY'
