@@ -65,6 +65,23 @@ class ConservativeModelTests(unittest.TestCase):
         self.assertEqual(model["status"], "insufficient_verified_candidates")
         self.assertGreaterEqual(len(model["rejected"]), 2)
 
+    def test_numeric_text_does_not_crash_selector(self):
+        """External financial feeds may return strings instead of floats."""
+        for profile in ("conservative", "moderate", "aggressive"):
+            rows = [candidate(i) for i in range(10)]
+            rows[0]["price"] = "300.00"
+            rows[0]["turnover"] = "25.0"
+            model = select_model(rows, profile, now=NOW)
+            self.assertEqual(model["status"], "complete")
+
+    def test_negative_numeric_text_is_rejected_without_crash(self):
+        for field in ("price", "turnover"):
+            rows = [candidate(i) for i in range(10)]
+            rows[0][field] = "-1"
+            model = select_model(rows, "moderate", now=NOW)
+            self.assertEqual(model["status"], "insufficient_verified_candidates")
+            self.assertEqual(model["holdings"], [])
+
     def test_rejects_low_liquidity_nan_and_unverified_finance(self):
         rows = [candidate(i) for i in range(10)]
         rows[0]["turnover"] = 4.0
