@@ -58,6 +58,22 @@ class DraftContextContracts(unittest.TestCase):
         self.assertIn("ROE measures",content)
         self.assertEqual(len(responses),1)
 
+    def test_market_claim_detection_uses_whole_terms(self):
+        # 'pe' inside ordinary words previously triggered a false market claim.
+        for question in ("List the types of diversification",
+                         "Help me prepare a budget", "Explain personal goals"):
+            self.assertFalse(assist._is_market_claim(question))
+        for question in ("INFY P/E", "NIFTY price", "Current stock target"):
+            self.assertTrue(assist._is_market_claim(question))
+
+    def test_general_nonmarket_question_without_feed_can_use_ai(self):
+        def fake(*_args):
+            return "A budget helps organize income and expenses.", ""
+        answer, used = assist.draft(9, "general",
+                                   "Help me prepare a budget", caller=fake)
+        self.assertTrue(used)
+        self.assertIn("budget", answer)
+
     def test_no_latest_price_question_without_evidence(self):
         def bad(*args):
             raise AssertionError("Should not send unfounded quote question")
