@@ -61,7 +61,7 @@ test("all menu buttons respond after ten-stock synthetic demo",()=>{
  assert.equal(F.choose("BEL",false),true);
  assert.equal(F.getExternalSymbol(),"BEL");
  assert.match(w.document.getElementById("dataLabel").textContent,/NSE:BEL/);
- assert.equal(w.document.getElementById("lastPrice").textContent,"Unavailable");
+ assert.equal(w.document.getElementById("lastPrice").textContent,"No MSK quote");
  assert.equal(w.document.getElementById("signal").textContent,"NOT ASSESSED");
  assert.equal(w.document.body.classList.contains("market-external"),true);
  assert.equal(w.document.getElementById("chartCanvas").hidden,true);
@@ -128,7 +128,7 @@ test("BEL search button and all research tabs use TradingView without demo price
  assert.match(doc.getElementById("chartTitle").textContent,/NSE:BEL/);
  assert.equal(doc.body.classList.contains("market-external"),true);
  assert.equal(doc.getElementById("signal").textContent,"NOT ASSESSED");
- assert.equal(doc.getElementById("lastPrice").textContent,"Unavailable");
+ assert.equal(doc.getElementById("lastPrice").textContent,"No MSK quote");
  assert.equal(doc.getElementById("adx").textContent,"—");
  assert.equal(doc.getElementById("vol").textContent,"—");
  assert.match(doc.getElementById("dataLabel").textContent,/no imported MSK market data/);
