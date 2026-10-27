@@ -27,9 +27,10 @@ function build(){
  return w;
 }
 function clickTab(w,tab){const el=w.document.querySelector('[data-tab="'+tab+'"]');assert.ok(el,"missing button "+tab);el.click();return w.document.getElementById("detailBody");}
-test("website opens with prominently labelled fictional demo, not a fake live quote",()=>{
- const w=build();assert.match(w.document.getElementById("dataLabel").textContent,/SYNTHETIC/);
- assert.equal(w.document.getElementById("ticker").value,"DEMO01");
+test("website defaults to real BEL EOD request, with no invented quote before load",()=>{
+ const w=build();assert.match(w.document.getElementById("dataLabel").textContent,/NSE:BEL/);
+ assert.equal(w.document.getElementById("ticker").value,"BEL");
+ assert.equal(w.document.getElementById("lastPrice").textContent,"No MSK quote");
  assert.match(w.document.getElementById("backendIndicator").textContent,/Checking research API|offline|Neon API/);
  assert.ok(w.MSKWeb.features);w.close();
 });
