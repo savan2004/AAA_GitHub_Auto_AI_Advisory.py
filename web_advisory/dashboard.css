@@ -249,3 +249,85 @@ body.web-pro{background:#f4f7fb;color:#17263e;color-scheme:light;font-family:Int
  .web-pro .chart-panel{break-inside:avoid}
  .web-pro .canvas-wrap{print-color-adjust:exact}
 }
+
+
+/* Independent module workspaces. Every research button now owns a distinct
+   screen, with real addressable URL hash + browser history. On each screen,
+   unrelated dashboard cards are hidden instead of remaining a single long page.
+   Source/status and stock search stay available on all research screens. */
+.web-pro[data-page]:not([data-page="overview"]) .quick-actions,
+.web-pro[data-page]:not([data-page="overview"]) .section-heading{
+ display:none!important;
+}
+.web-pro[data-page]:not([data-page="overview"]) .heading-block{
+ margin-bottom:21px;
+}
+.web-pro[data-page="fundamental"] #analysisRegion,
+.web-pro[data-page="screener"] #analysisRegion,
+.web-pro[data-page="breadth"] #analysisRegion,
+.web-pro[data-page="ai"] #analysisRegion{
+ display:none!important;
+}
+.web-pro[data-page="fundamental"] .snapshot-grid,
+.web-pro[data-page="screener"] .snapshot-grid,
+.web-pro[data-page="breadth"] .snapshot-grid,
+.web-pro[data-page="ai"] .snapshot-grid{
+ display:none!important;
+}
+.web-pro[data-page="fundamental"] .below-grid,
+.web-pro[data-page="screener"] .below-grid,
+.web-pro[data-page="breadth"] .below-grid,
+.web-pro[data-page="pdf"] .below-grid,
+.web-pro[data-page="chart"] .below-grid,
+.web-pro[data-page="technical"] .below-grid{
+ display:block;
+}
+.web-pro[data-page="fundamental"] #researchDetail,
+.web-pro[data-page="screener"] #researchDetail,
+.web-pro[data-page="breadth"] #researchDetail{
+ min-height:340px;
+}
+.web-pro[data-page="fundamental"] #aiPanel,
+.web-pro[data-page="screener"] #aiPanel,
+.web-pro[data-page="breadth"] #aiPanel,
+.web-pro[data-page="pdf"] #aiPanel,
+.web-pro[data-page="chart"] #aiPanel,
+.web-pro[data-page="technical"] #aiPanel{
+ display:none!important;
+}
+.web-pro[data-page="ai"] .below-grid{
+ display:block;
+}
+.web-pro[data-page="ai"] #researchDetail{display:none!important}
+.web-pro[data-page="ai"] #aiPanel{width:100%;max-width:940px;margin:auto}
+.web-pro[data-page="ai"] .chat-history{
+ min-height:330px;max-height:580px;
+}
+.web-pro[data-page="ai"] .chat-panel .muted{font-size:13px}
+.web-pro[data-page="chart"] #researchDetail{
+ max-width:none;
+}
+.web-pro[data-page="chart"] .insights{display:none!important}
+.web-pro[data-page="technical"] .insights{display:grid!important}
+.web-pro[data-page="fundamental"] #detailBody,
+.web-pro[data-page="breadth"] #detailBody,
+.web-pro[data-page="screener"] #detailBody{
+ font-size:13px;
+}
+.web-pro[data-page="screener"] #detailBody table,
+.web-pro[data-page="breadth"] #detailBody table{
+ width:100%;
+}
+.web-pro[data-page="pdf"] #researchDetail{border-left:4px solid #21a88e}
+.web-pro .research-module-header{
+ font-weight:800;
+}
+/* Preserve correct report layout when printing from the Report module,
+   regardless of the currently selected screen. */
+@media print{
+ .web-pro[data-page="pdf"] #analysisRegion{display:block!important}
+ .web-pro[data-page="pdf"] .chart-panel{display:block!important}
+ .web-pro[data-page="pdf"] .insights{display:block!important}
+ .web-pro[data-page="pdf"] #researchDetail{display:block!important}
+ .web-pro[data-page="pdf"] #aiPanel{display:none!important}
+}
