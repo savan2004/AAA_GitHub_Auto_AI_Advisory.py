@@ -175,9 +175,20 @@
      const payload={question:question.slice(0,550),symbol:sym(),
        context:st.calc?{source:st.kind,asof:st.calc.date,trend:st.calc.trend,adx:st.calc.adx,volume_multiple:st.calc.ratio,pattern:st.calc.pattern,signal:st.calc.signal}:null};
      const res=await fetch(base+"/api/ai/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),signal:ctrl.signal,credentials:"omit"});
+     if(res.status===503||res.status===403){
+       bubble("assistant","Neon backend reached, but generative AI is not yet authorized or configured. "+
+         "Here is a clearly labelled local rule-based answer:\n\n"+
+         (window.MSKWeb?.features?.offlineAnswer(question)||"No local research context."));
+       return;
+     }
      if(!res.ok)throw Error("HTTP "+res.status);
-     const value=await res.json();bubble("assistant",typeof value.answer==="string"?value.answer:"AI returned no verified answer.");
-   }catch(err){bubble("assistant","AI service unavailable. "+err.message+". The research chart is unaffected.");}finally{clearTimeout(timer);}
+     const value=await res.json();
+     bubble("assistant",typeof value.answer==="string"&&value.answer?value.answer:
+       (window.MSKWeb?.features?.offlineAnswer(question)||"No verified AI response."));
+   }catch(err){
+     bubble("assistant","Backend connection unavailable ("+err.message+"). "+
+       "Local evidence answer:\n"+(window.MSKWeb?.features?.offlineAnswer(question)||"Not available."));
+   }finally{clearTimeout(timer);}
  }
  function draft(){
    const c=st.calc;if(!c){bubble("assistant","No data loaded. Import a verified-source CSV to create a transparent evidence summary.");return;}
@@ -209,6 +220,17 @@
  });
  window.addEventListener("resize",()=>{if(st.data.length)draw();});
  window.MSKWeb={state:st,dataLoaded,csvParse,demo,compute,draw,renderTab,paragraph,bubble,symbol:sym,format:fm};
- text("backendIndicator",api()?"AI endpoint configured":"Local research • AI provider offline");
+ text("backendIndicator",api()?"Checking research API…":"Local research • AI provider offline");
+ if(api()) {
+   fetch(api()+"/api/health",{credentials:"omit",signal:AbortSignal.timeout(8000)})
+     .then(async response=>{
+       if(!response.ok)throw Error("health "+response.status);
+       const body=await response.json();
+       text("backendIndicator",body.ok?
+         ("Neon API online • AI "+(body.generative_ai==="disabled"?"not enabled":"login required")):
+         "Research API did not pass health check");
+     })
+     .catch(()=>text("backendIndicator","Research API offline • CSV research available"));
+ }
  renderTab();
 })();
