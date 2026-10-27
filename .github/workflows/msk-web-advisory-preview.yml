@@ -35,8 +35,11 @@ jobs:
           a=Path('web_advisory/app.js').read_text()
           s=Path('web_advisory/config.js').read_text()
           assert all(x in h for x in ['csvFile','chartCanvas','chatForm','dataLabel'])
-          assert all(x in a for x in ['No clean pattern','SYNTHETIC','AI backend not configured','timestamp','volume'])
-          assert 'TELEGRAM_TOKEN' not in s
-          assert 'GROQ_API_KEY' not in s
+          f=Path('web_advisory/features.js').read_text()
+          assert all(x in a for x in ['No clean pattern','SYNTHETIC','timestamp','volume'])
+          assert all(x in f for x in ['offlineAnswer','fundamentalTab','screenerTab','breadthTab','importBars'])
+          assert 'window.MSK_WEB_API = "";' in s
+          import re
+          assert not re.search(r'(?m)^\s*(?:TELEGRAM_TOKEN|GROQ_API_KEY|GEMINI_API_KEY)\s*=', s)
           print('MSK_WEB_PREVIEW_SECURITY_CHECKS_OK')
           PY
