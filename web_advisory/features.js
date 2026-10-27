@@ -196,39 +196,88 @@
    ],"msk-breadth-"+asof+".csv")));
  }
  function currentEvidence(){
-   const row=library.get(active);if(!row)return null;
-   const q=core.compute(row.bars);return {symbol:active,kind:row.source,session:q.date,
+   // Never reuse old loaded stock data when a new symbol is loading,
+   // or mistake actual NSE historical bars for a CSV upload.
+   const row=library.get(active),st=core.state;
+   if(!row||!st.calc||!st.data?.length||st.kind!==row.source||
+      cleanSymbol(ui.ticker.value)!==active||st.calc.date!==row.bars.at(-1)?.date)return null;
+   const q=st.calc;
+   const real=st.kind==="tej_eod",demo=st.kind==="synthetic";
+   const signal=real?"RESEARCH ONLY":q.signal;
+   const quality=real?"Not backtested":q.quality;
+   const bars=row.bars;
+   const recent=bars.slice(-Math.min(60,bars.length));
+   return {symbol:active,kind:row.source,session:q.date,
      close:q.last,trend:q.trend,adx:q.adx,adxLabel:q.adxLabel,
-     multiple:q.ratio,volumeLabel:q.volLabel,pattern:q.pattern,signal:q.signal,
-     quality:q.quality,ema20:q.e20.at(-1),ema50:q.e50.at(-1),
+     multiple:q.ratio,volumeLabel:q.volLabel,pattern:q.pattern,
+     signal,quality,ema20:q.e20.at(-1),ema50:q.e50.at(-1),
+     high60:Math.max(...recent.map(b=>b.high)),
+     low60:Math.min(...recent.map(b=>b.low)),
+     recentBars:recent.length,verified:!demo,
      fundamental:statements.get(active)||null};
  }
  function offlineAnswer(question){
-   const raw=String(question||"").slice(0,550),q=raw.toLowerCase(),e=currentEvidence();
-   const suffix="\nData mode: "+(e?(e.kind==="synthetic"?"SYNTHETIC DEMO — NOT REAL NSE DATA":"USER CSV — SOURCE UNVERIFIED"):"NO MARKET DATA LOADED")+"\nLOCAL RULE-BASED RESEARCH • NOT GENERATIVE AI. No provider connection is configured.";
+   const raw=String(question||"").trim().slice(0,550);
+   const q=raw.toLowerCase(),e=currentEvidence();
+   const mode=e?e.kind==="tej_eod"?"TejHQ • NSE historical EOD • raw/unadjusted • NOT LIVE":
+     e.kind==="synthetic"?"FICTIONAL SYNTHETIC DATA (not NSE)":
+       "USER-UPLOADED CSV • source not independently verified":
+       "NO DATED STOCK DATA LOADED";
+   const footer="\nSource: "+mode+
+     (e?" • Session "+e.session:"")+
+     "\nLOCAL RULE-BASED RESEARCH, not generative AI. No model provider enabled.";
+   // A question for a different stock must NEVER silently answer using the
+   // currently displayed symbol. Ask user to load the requested company.
+   const tickerLike=raw.match(/\b(?:NSE:)?([A-Z]{2,12})\b/g)||[];
+   const requested=tickerLike.map(x=>x.replace(/^NSE:/,"")).filter(x=>
+      ["SBIN","BEL","RELIANCE","INFY","TCS","HDFCBANK","ICICIBANK","ITC","WIPRO","TATAMOTORS","LT","NTPC"].includes(x));
+   if(e&&requested.some(x=>x!==e.symbol))
+     return "The chart currently shows "+e.symbol+", but you asked about "+
+       requested.filter(x=>x!==e.symbol).join(", ")+
+       ". Select that exact stock first; I will not reuse another company's figures."+footer;
+   if(!e)return "No verified stock observations are loaded yet. Enter an NSE stock in Search and let dated end-of-day candles finish loading; no previous or demo price will be substituted."+footer;
+   const intro=e.symbol+" | historical close ₹"+fmt(e.close)+" ("+e.session+")"+
+     "\nTrend "+e.trend+"; EMA20 ₹"+fmt(e.ema20)+
+     "; EMA50 ₹"+fmt(e.ema50)+
+     "; ADX14 "+fmt(e.adx,1)+" ("+e.adxLabel+")"+
+     "; volume "+fmt(e.multiple)+"× ("+e.volumeLabel+")"+
+     "\nPattern: "+e.pattern+"; model: "+e.signal+" ("+e.quality+").";
    if(/what is|meaning|define|explain|क्या है|શું છે/.test(q)){
-     if(/\badx\b/.test(q))return "ADX measures TREND STRENGTH, not direction. Below 20 is weak; 20–25 building; 25–35 strong; above 35 very strong."+suffix;
-     if(/\broe\b/.test(q))return "ROE = net income / average shareholder equity. Use the company's financial filings and period; OHLC candles cannot supply this."+suffix;
-     if(/\bpe\b|\bp\/e\b/.test(q))return "P/E compares current share price to earnings per share. Earnings definitions, reporting date and adjusted results matter."+suffix;
-     if(/volume|vol/.test(q))return "Relative volume compares a candle's volume with the preceding 20 sessions. 1.5x is above normal, 2x high, 3x explosive."+suffix;
+     if(/\badx\b/.test(q))return "ADX measures trend strength, not direction. Current "+e.symbol+
+       " ADX14 is "+fmt(e.adx,1)+"; this does NOT imply a bullish forecast."+footer;
+     if(/\broe\b/.test(q))return "ROE = net income / average equity. A dated company filing is required; OHLCV does not contain ROE."+footer;
+     if(/\bpe\b|\bp\/e\b/.test(q))return "P/E compares equity price to earnings per share. A credible figure requires dated earnings and consistent definitions."+footer;
+     if(/volume|vol/.test(q))return "Relative volume is latest volume divided by the preceding 20 sessions' average. "+
+        e.symbol+" "+fmt(e.multiple)+"×; this is an observation, not a buy/sell instruction."+footer;
    }
-   if(!e)return "No company evidence loaded. Choose SYNTHETIC TEST to explore, or upload OHLCV CSV for your stock. Stock search alone is not a live feed."+suffix;
-   const caution=e.kind==="synthetic"?"SYNTHETIC DATA — NOT NSE QUOTES":e.kind==="tej_eod"?"TejHQ NSE bhavcopy EOD only; raw unadjusted historical data, NOT live":"User-uploaded price data; original source not independently verified.";
-   const evidence="Stock "+e.symbol+" ("+e.session+"): "+caution+"\nLast close ₹"+fmt(e.close)+
-     "; trend "+e.trend+"; EMA20 ₹"+fmt(e.ema20)+"; EMA50 ₹"+fmt(e.ema50)+
-     "; ADX "+fmt(e.adx,1)+" ("+e.adxLabel+"); Volume "+fmt(e.multiple)+"x ("+e.volumeLabel+").\n"+
-     "Pattern "+e.pattern+". Signal "+e.signal+" / "+e.quality+".";
+   const target=/target|upside|upper|potential|forecast|projection|price in|resistance|support|3.month|three.month|quarter|months?/.test(q);
+   if(target){
+     const upper=fmt(e.high60),lower=fmt(e.low60);
+     return e.symbol+" • Three-month outlook request\n"+
+       "A dependable upper price target for the coming 3 months is NOT available from this system. "+
+       "No forward backtest, analyst earnings estimates or validated scenario model is connected.\n"+
+       "For context only, the highest observed HIGH across the last "+e.recentBars+
+       " daily sessions was ₹"+upper+" and the lowest LOW was ₹"+lower+
+       ". These are historical reference levels, NOT a three-month prediction, stop-loss or guaranteed price.\n"+
+       intro+"\nADX strength does not establish upward direction. "+
+       "A defensible forecast needs adjusted longer price history, company filings, catalysts, "+
+       "risk assumptions and out-of-sample validation."+footer;
+   }
    if(/fundamental|roe|valuation|profit|earnings|debt|revenue|\bpe\b|\bp\/e\b/.test(q)){
-     if(!e.fundamental)return evidence+"\nFinancial results NOT IMPORTED: P/E, ROE, debt/equity and earnings cannot be inferred from price bars."+suffix;
-     const f=e.fundamental;return evidence+"\nUSER-SUPPLIED financial statement "+f.asof+"; source "+f.source+"; P/E "+fmt(f.pe)+
-       "; ROE "+fmt(f.roe_percent)+"%; Debt/equity "+fmt(f.debt_equity_ratio)+"x."+suffix;
+     if(!e.fundamental)return intro+"\nFinancial results have not been imported for "+e.symbol+
+       ". Price bars cannot prove revenue, P/E, ROE, valuation or a three-month target."+footer;
+     const f=e.fundamental;
+     return intro+"\nUSER-SUPPLIED filing "+f.asof+" from "+f.source+
+       "; P/E "+fmt(f.pe)+"; ROE "+fmt(f.roe_percent)+"%; D/E "+fmt(f.debt_equity_ratio)+"×. Not independently audited."+footer;
    }
-   if(/breadth|advance|decline|screener|scan|universe/.test(q))return evidence+
-     "\n"+library.size+" uploaded symbols in local screener; use the Breadth or Screener button for full cross-sectional calculations."+suffix;
-   if(/buy|sell|target|entry|stop|trade|support|resistance|pattern|risk|chart|trend|adx|volume|analyse|analysis|view|outlook/.test(q)){
-     return evidence+"\nRisk check: no issuer filings, audited price feed, confirmed timestamp licensing, paper-trade verification, or tested execution edge. No price target is inferred."+suffix;
+   if(/breadth|advance|decline|screener|scan|universe/.test(q)){
+     return intro+"\nCurrent screened set contains "+library.size+" loaded instrument(s). "+
+       "It is not the full NSE/Nifty index. Use Market Breadth or Screener with a dated multi-stock CSV."+footer;
    }
-   return evidence+"\nAsk about trend, ADX, volume, risk, fundamental imports, screening or breadth. Real generative analysis requires a secured server-side AI connection."+suffix;
+   if(/buy|sell|entry|stop|trade|pattern|risk|chart|trend|adx|volume|analyse|analysis|view|outlook/.test(q)){
+     return intro+"\nThis is descriptive technical research only. No executable entry, stop-loss or directional trade has been validated."+footer;
+   }
+   return intro+"\nAsk about the trend, volume, ADX, historical highs/lows, financial filings or uncertainty. For personalised forecasts, an authenticated and evidence-gated AI backend is not yet available."+footer;
  }
  function renderPanel(tab,panel){
    if(tab==="fundamental"){fundamentalTab(panel);return true;}
