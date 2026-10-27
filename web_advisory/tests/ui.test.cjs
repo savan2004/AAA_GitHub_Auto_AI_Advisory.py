@@ -262,15 +262,15 @@ test("Stale NSE EOD provider history must fail closed",async()=>{
 test("professional dashboard displays and routes ALL eight real research actions",()=>{
  const w=build(),d=w.document;
  assert.match(d.querySelector("h1").textContent,/Research Dashboard/);
- assert.equal(d.querySelectorAll(".nav[data-tab]").length,8);
- assert.equal(d.querySelectorAll(".action-card[data-go]").length,8);
+ assert.equal(d.querySelectorAll(".nav[data-tab]").length,9);
+ assert.equal(d.querySelectorAll(".action-card[data-go]").length,9);
  assert.equal(d.querySelectorAll(".watch-stock[data-stock]").length,4);
  assert.ok(d.getElementById("researchDetail"));
  assert.ok(d.getElementById("aiPanel"));
  assert.ok(d.querySelector('link[href="dashboard.css"]'));
  assert.ok(w.MSKDashboard);
  d.getElementById("loadSample").click();
- for(const tab of ["technical","fundamental","screener","pdf","chart","breadth","ai","overview"]){
+ for(const tab of ["technical","fundamental","screener","pdf","chart","breadth","ai","portfolio","overview"]){
    const action=d.querySelector('.action-card[data-go="'+tab+'"]');
    action.click();
    assert.equal(w.MSKDashboard.activeTab(),tab);
@@ -330,7 +330,7 @@ test("Private portfolio importer rejects wrong rows and does not invent prices",
  const w=build(),D=w.MSKImport;
  assert.throws(()=>D.holdings("symbol,quantity,buy_price\nBEL,-1,150"),/Invalid holdings/);
  const x=D.holdings("symbol,quantity,buy_price\nBEL,10,100\nTCS,4,3000");
- assert.deepEqual(x,{count:2,matched:0});
+ assert.equal(x.count,2);assert.equal(x.matched,0);
  assert.equal(w.MSKPortfolio.rows[0].estimated_value,null);
  assert.equal(w.MSKPortfolio.rows[0].source,"none");
  w.close();
@@ -350,5 +350,17 @@ test("Ask Research 3-month question discloses non-forecastable target and correc
  assert.match(a,/TejHQ.*NSE historical EOD/);
  assert.match(a,/RESEARCH ONLY/);
  assert.doesNotMatch(a,/USER-UPLOADED CSV|guaranteed target/);
+ w.close();
+});
+
+test("Portfolio tab is real, source-labelled and does not invent P&L",()=>{
+ const w=build(),d=w.document;
+ w.MSKImport.holdings("symbol,quantity,buy_price\nBEL,10,100\nRELIANCE,2,800");
+ w.MSKDashboard.go("portfolio",{scroll:false});
+ assert.equal(w.MSKDashboard.activeTab(),"portfolio");
+ assert.match(d.getElementById("detailBody").textContent,/Holdings 2/);
+ assert.match(d.getElementById("detailBody").textContent,/Not calculated|No aggregate P&L/);
+ assert.match(d.querySelector(".heading-block h1").textContent,/Portfolio Health/);
+ assert.equal(w.location.hash,"#portfolio");
  w.close();
 });
