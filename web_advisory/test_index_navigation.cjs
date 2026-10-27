@@ -1,0 +1,13 @@
+"use strict";
+const assert=require("node:assert/strict");
+const fs=require("node:fs");
+const js=fs.readFileSync(__dirname+"/index_search.js","utf8");
+const feature=fs.readFileSync(__dirname+"/features.js","utf8");
+const html=fs.readFileSync(__dirname+"/index.html","utf8");
+assert.match(js,/NIFTY 50/);
+assert.match(js,/NIFTY BANK/);
+assert.match(js,/nseindia.com\/market-data\/live-market-indices/);
+assert.match(js,/stopImmediatePropagation/);
+assert.match(feature,/Index levels are not stock constituents/);
+assert.match(html,/index_search.js/);
+console.log("Index navigation static regression checks passed");
