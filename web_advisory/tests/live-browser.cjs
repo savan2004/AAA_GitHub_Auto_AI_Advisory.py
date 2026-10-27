@@ -74,7 +74,7 @@ const assert=require("node:assert/strict");
    assert(mobile.scrollWidth<=mobile.viewport+2);
    await page.screenshot({path:"web_advisory/browser-proof/BEL-real-EOD-mobile.png",fullPage:true});
    await page.getByRole("button",{name:/fundamentals/i}).click();
-   assert((await page.locator("#detailBody").innerText()).includes("Unavailable"));
+   assert(/No financial statements imported|Unavailable|financial-statement CSV/i.test(await page.locator("#detailBody").innerText()),"No financial ratios may be invented from a price chart");
    console.log("MSK_BEL_EOD_REAL_CHROME_PASS",state.asof,state.close);
  }finally{await browser.close();}
 })().catch(err=>{console.error("MSK_BEL_EOD_REAL_CHROME_FAIL",err.stack||String(err));process.exitCode=1});
