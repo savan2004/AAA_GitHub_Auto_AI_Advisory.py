@@ -139,9 +139,9 @@
      }
      setMessage("Imported successfully: "+safe(current.name)+". Source data remains in this browser session.");
      const target=mode==="price"?"chart":mode==="fundamental"?"fundamental":"portfolio";
-     if(mode!=="portfolio")window.MSKDashboard?.go(target,{scroll:false});
+     window.MSKDashboard?.go(target,{scroll:false});
      document.dispatchEvent(new CustomEvent("msk:import-done",{detail:{kind:mode,name:current.name}}));
-     if(mode!=="portfolio")close();
+     close();
    }catch(e){$("confirmImport").disabled=false;setMessage("Import failed: "+e.message,true);}
  }
  openBtn.addEventListener("click",()=>open("price"));
