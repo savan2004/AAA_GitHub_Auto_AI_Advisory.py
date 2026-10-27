@@ -6,14 +6,9 @@
  * default NASDAQ:AAPL even when our webpage said NSE:BEL. In financial
  * research a wrong-symbol chart is a critical integrity failure.
  *
- * Modern official TradingView Web Components take the symbol via an explicit
- * DOM attribute. The only provider-rendered prices are inside that isolated
- * provider component, never copied into MSK indicators, trading signals, CSV
- * or AI. A direct provider link remains available if the widget cannot load.
- *
- * Required module imports in index.html:
- * https://widgets.tradingview-widget.com/w/en/tv-advanced-chart.js
- * https://widgets.tradingview-widget.com/w/en/tv-technical-analysis.js
+ * Official widget data FAQs confirm restricted exchange symbols can only
+ * be displayed on TradingView itself. This module refuses to show a
+ * wrong-symbol chart and links to the legitimate provider instead.
  */
 (() => {
  const app=window.MSKWeb;
@@ -42,17 +37,6 @@
    card.append(main,action);
    return card;
  }
- function symbolWidget(tag,symbol,attrs={}){
-   const element=document.createElement(tag);
-   element.setAttribute("symbol","NSE:"+symbol);
-   element.setAttribute("theme","dark");
-   element.setAttribute("locale","en");
-   element.setAttribute("data-expected-symbol","NSE:"+symbol);
-   for(const [key,val] of Object.entries(attrs))element.setAttribute(key,String(val));
-   element.style.display="block";
-   element.style.width="100%";
-   return element;
- }
  function plot(symbol){
    const wrap=$("chartCanvas").parentElement;
    $("chartCanvas").hidden=true;
@@ -62,16 +46,23 @@
    let mount=$("externalNseChart");
    if(!mount){mount=text("div",undefined,"external-nse-chart");mount.id="externalNseChart";wrap.append(mount);}
    mount.replaceChildren();
-   // Unlike the legacy script's AAPL fallback, the new web component accepts
-   // an explicit symbol property/attribute. No innerHTML or script injection.
-   const element=symbolWidget("tv-advanced-chart",symbol,{
-     interval:"1D",timezone:"Asia/Kolkata",style:"1",
-     "allow-symbol-change":"false","hide-volume":"false"
-   });
-   element.classList.add("msk-tv-advanced-chart");
-   mount.append(element,providerCard(symbol));
+   // Real Chromium found TradingView refusing NSE:BEL with:
+   // "This symbol is only available on TradingView".
+   // Official docs explain that some exchange symbols CANNOT be embedded on
+   // ANY timeframe. Do not replace it with NASDAQ:AAPL or another chart.
+   const empty=text("div",undefined,"nse-unavailable");
+   empty.setAttribute("data-symbol","NSE:"+symbol);
+   empty.append(text("div","DATA ACCESS RESTRICTED","nse-unavailable-tag"));
+   empty.append(text("div","NSE:"+symbol,"nse-unavailable-symbol"));
+   empty.append(text("h3","Real candles require a permitted data source"));
+   empty.append(text("p","TradingView does not permit this NSE symbol inside third-party website widgets. Showing Apple, another stock, or invented candles would be misleading. The correct stock can be viewed on TradingView."));
+   const action=link(symbol,"View actual NSE:"+symbol+" chart");
+   action.classList.add("provider-cta","nse-open-btn");
+   empty.append(action);
+   empty.append(text("p","MSK chart and indicators will activate automatically if you import ≥50 dated daily OHLCV candles for this stock.","nse-import-note"));
+   mount.append(empty);
    const hover=$("hoverBar");
-   hover.replaceChildren(text("span","NSE:"+symbol+" provider viewer · Daily candles · No MSK-derived trade signal. "));
+   hover.replaceChildren(text("span","NSE:"+symbol+" • Chart unavailable in embedded free provider. "));
    hover.append(link(symbol));
  }
  function clearExternal(){
@@ -147,15 +138,9 @@
      return true;
    }
    if(tab==="technical"){
-     paragraph(parent,"TradingView technical ratings (their own analytics, not MSK recommendations). Check the symbol and period displayed by the provider.","warning");
-     const container=text("div",undefined,"provider-data-widget");
-     container.id="externalTechnicalRating";
-     const widget=symbolWidget("tv-technical-analysis",symbol,{"interval":"1D"});
-     widget.classList.add("msk-tv-technical");
-     container.append(widget);
-     parent.append(container);
-     parent.append(link(symbol));
-     paragraph(parent,"MSK indicators and BUY/SELL confirmation are unavailable until OHLCV is imported.");
+     paragraph(parent,"TradingView's free external widget cannot display this NSE symbol. MSK has no historical OHLCV to calculate a real rating, indicator or breakout.","warning");
+     parent.append(link(symbol,"View this stock's chart and technicals at source"));
+     paragraph(parent,"Import dated OHLCV CSV with ≥50 candles for actual EMA20/EMA50, ADX14 and volume analysis in the MSK Technical button.");
      return true;
    }
    if(tab==="fundamental"){
