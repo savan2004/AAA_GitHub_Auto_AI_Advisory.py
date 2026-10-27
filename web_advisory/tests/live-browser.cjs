@@ -65,14 +65,13 @@ const assert=require("node:assert/strict");
      const sidebar=$(".side").getBoundingClientRect();
      const header=$(".app-header").getBoundingClientRect();
      const metric=$(".snapshot-grid .metric");
-     return {heading:$("h1").textContent,nav:$(".dummy"),actions:document.querySelectorAll(".action-card[data-go]").length,
+     return {heading:$("h1").textContent,nav:document.querySelectorAll(".nav[data-tab]").length,actions:document.querySelectorAll(".action-card[data-go]").length,
        sidebarWidth:sidebar.width,headerHeight:header.height,
        metricBackground:getComputedStyle(metric).backgroundColor,
        bg:getComputedStyle(document.body).backgroundColor,
        chartPanelWidth:$(".chart-panel").getBoundingClientRect().width,
        scrollWidth:document.documentElement.scrollWidth,viewport:innerWidth,
        js:typeof window.MSKDashboard?.go};
-     function $(s){return document.querySelectorAll(s).length;}
    });
    console.log("MSK_FINANCIAL_DASHBOARD_DESKTOP",JSON.stringify(design));
    assert.match(design.heading,/Research Dashboard/);
