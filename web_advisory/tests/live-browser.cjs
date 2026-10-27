@@ -102,15 +102,23 @@ const assert=require("node:assert/strict");
    assert((await page.locator("#detailBody").innerText()).includes("EMA20"));
    await page.locator('.nav[data-tab="chart"]').click();
    await page.setViewportSize({width:390,height:844});
+   // Wait for sidebar responsive slide-out transition to complete before
+   // taking visual evidence; otherwise the screenshot catches an overlay
+   // halfway through its 200ms animation and falsely looks broken.
+   await page.waitForTimeout(400);
    const mobile=await page.evaluate(()=>{
      const c=document.querySelector("#chartCanvas");
+     const nav=document.getElementById("sidebar").getBoundingClientRect();
      return {width:c.getBoundingClientRect().width,height:c.getBoundingClientRect().height,
-       viewport:window.innerWidth,scrollWidth:document.documentElement.scrollWidth};
+       viewport:window.innerWidth,scrollWidth:document.documentElement.scrollWidth,
+       sidebarRight:nav.right,menuOpen:document.body.classList.contains("menu-open")};
    });
    console.log("MSK_EOD_REAL_BROWSER_MOBILE",JSON.stringify(mobile));
    assert(mobile.width>=260&&mobile.width<=mobile.viewport+1);
    assert(mobile.height>=430);
    assert(mobile.scrollWidth<=mobile.viewport+2);
+   assert.equal(mobile.menuOpen,false,"Mobile nav should not open without a user click");
+   assert(mobile.sidebarRight<=1,"Mobile sidebar is covering content without user interaction");
    await page.screenshot({path:"web_advisory/browser-proof/BEL-real-EOD-mobile.png",fullPage:true});
    assert(await page.locator("#mobileMenuToggle").isVisible());
    await page.locator("#mobileMenuToggle").click();
