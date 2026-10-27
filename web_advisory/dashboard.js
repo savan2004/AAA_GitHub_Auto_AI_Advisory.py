@@ -55,6 +55,7 @@
    });
  }
  function syncWatch(){
+   if(!window.document?.body)return;
    const symbol=$("ticker")?.value?.trim()?.toUpperCase()||"";
    for(const item of watch)item.classList.toggle("selected",item.dataset.stock===symbol);
  }
@@ -74,7 +75,7 @@
  $("ticker")?.addEventListener("change",syncWatch);
  const feed=$("dataLabel"),trust=$("feedTrustLabel");
  function syncEvidence(){
-   if(!feed||!trust)return;
+   if(!window.document?.body||!feed||!trust)return;
    const mode=existing.state.kind;
    const source=feed.dataset.eodProvider;
    if(mode==="tej_eod"&&source==="TejHQ"){
