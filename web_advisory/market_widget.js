@@ -162,6 +162,7 @@
  function external(symbol){
    if(!valid(symbol))return false;
    selected=symbol;
+   document.body.classList.remove("market-eod");
    document.body.classList.add("market-external");
    $("ticker").value=symbol;
    // CRITICAL isolation of previously loaded demo/CSV values.
