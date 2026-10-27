@@ -251,6 +251,31 @@ class PostgresPortfolioOfflineTests(unittest.TestCase):
         self.assertEqual(restarted.get(100), {})
         self.assertEqual(restarted.get(200)["HDFCBANK"]["qty"], 3.0)
 
+    def test_import_detects_corrupted_cost_with_same_row_count_and_rolls_back(self):
+        from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
+
+        class CorruptingConnection(_SQLitePostgresConnection):
+            def execute(self, query, params=()):
+                # Simulate a storage/adapter fault: count is correct, but the
+                # second imported position has an incorrect average cost.
+                if (query.startswith("INSERT INTO holdings(uid, symbol")
+                        and len(params) == 4 and params[1] == "HDFCBANK"):
+                    params = (params[0], params[1], params[2], "1501.5")
+                return super().execute(query, params)
+
+        connector = lambda _: CorruptingConnection(str(self.database))
+        with self.assertRaisesRegex(PortfolioStorageError, "readback mismatch"):
+            import_legacy_to_postgres(
+                self.source, self.dsn, connector=connector, apply=True
+            )
+        with self.connector(self.dsn) as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM portfolio_cutover").fetchone()[0], 0
+            )
+
     def test_reimport_same_snapshot_no_duplicate_or_loss(self):
         from postgres_portfolio import import_legacy_to_postgres
         import_legacy_to_postgres(self.source, self.dsn,
