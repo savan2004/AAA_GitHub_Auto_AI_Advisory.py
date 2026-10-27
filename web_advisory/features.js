@@ -124,7 +124,11 @@
      temp.set(key,info);
    }
    for(const [k,v] of temp)statements.set(k,v);
-   status("Imported fundamentals for "+temp.size+" companies. Source is USER-DECLARED, not audited by MSK.");
+   // Preserve the EOD price-source badge. A financial-statement CSV does
+   // not change the quote provider or latest candle timestamp.
+   const importNote=document.getElementById("fundamentalImportNotice");
+   if(importNote)importNote.textContent="Financial statements imported for "+temp.size+
+     " companies (user-declared; not audited).";
    core.renderTab();
  }
  function results(){
