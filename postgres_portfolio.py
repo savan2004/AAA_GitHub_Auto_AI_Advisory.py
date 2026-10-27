@@ -149,7 +149,7 @@ class PostgresPortfolioStore:
             return result.rowcount > 0
 
 
-def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False):
+def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow_empty=False):
     """Import all holdings and commit a cutover marker atomically.
 
     Dry-run by default. Requires an operator-frozen, securely backed-up JSON source.
@@ -161,6 +161,10 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False):
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     if not apply:
         return {"status": "dry-run", "positions": len(rows)}
+    if not rows and not allow_empty:
+        raise PortfolioStorageError(
+            "Empty legacy portfolio snapshot; explicit allow_empty required for import"
+        )
     connect = connector or _connect_postgres
     with connect(dsn) as conn:
         _create_schema(conn)
@@ -215,12 +219,14 @@ def main():
         description="Safely import a frozen legacy JSON portfolio into PostgreSQL"
     )
     parser.add_argument("legacy_json", type=Path)
+    parser.add_argument("--allow-empty", action="store_true",
+                        help="Explicitly approve importing an empty legacy snapshot")
     parser.add_argument("--apply", action="store_true",
                         help="Perform the import (default is read-only dry-run)")
     args = parser.parse_args()
     dsn = os.getenv("PORTFOLIO_DATABASE_URL")
     outcome = import_legacy_to_postgres(
-        args.legacy_json, dsn, apply=args.apply
+        args.legacy_json, dsn, apply=args.apply, allow_empty=args.allow_empty
     )
     # Emit aggregate counters only; never emit credentials or client holdings.
     print(json.dumps(outcome, sort_keys=True))
