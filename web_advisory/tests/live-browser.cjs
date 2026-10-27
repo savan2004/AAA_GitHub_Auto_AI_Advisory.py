@@ -12,6 +12,15 @@ const assert=require("node:assert/strict");
  try{
    const external=[];
    page.on("requestfailed",r=>{if(/api\.tejhq\.dev/i.test(r.url()))external.push(r.url()+": "+r.failure()?.errorText);});
+   // The ROOT website must open a REAL EOD stock, not silently default
+   // to fictional DEMO01 price. The demo button remains deliberately opt-in.
+   await page.goto("https://msk-web-advisory-preview.onrender.com/",{waitUntil:"domcontentloaded",timeout:30000});
+   await page.waitForSelector(".market-eod #dataLabel[data-eod-provider='TejHQ']",{
+     state:"attached",timeout:25000
+   });
+   assert.equal(await page.locator("#ticker").inputValue(),"BEL");
+   assert.match(await page.locator("#lastPrice").innerText(),/₹/);
+   console.log("MSK_ROOT_REAL_EOD_PASS",await page.locator("#priceMeta").innerText());
    await page.goto(root,{waitUntil:"domcontentloaded",timeout:30000});
    await page.waitForSelector(".market-eod #dataLabel[data-eod-provider='TejHQ']",{
      state:"attached",timeout:25000
