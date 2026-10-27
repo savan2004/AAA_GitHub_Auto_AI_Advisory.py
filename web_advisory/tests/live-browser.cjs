@@ -92,6 +92,9 @@ const assert=require("node:assert/strict");
    mkdirSync("web_advisory/browser-proof",{recursive:true});
    await page.screenshot({path:"web_advisory/browser-proof/BEL-real-EOD-desktop.png",fullPage:true});
    for(const key of ["overview","technical","fundamental","screener","breadth","pdf","chart","ai","portfolio"]){
+     // Quick-action cards live on the Dashboard; return via persistent
+     // sidebar between each action as an actual user would.
+     await page.locator('.nav[data-tab="overview"]').click();
      await page.locator('.action-card[data-go="'+key+'"]').click();
      const active=await page.evaluate(()=>window.MSKDashboard?.activeTab());
      assert.equal(active,key,"Inert financial module "+key);
