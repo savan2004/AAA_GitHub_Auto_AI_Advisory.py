@@ -194,3 +194,64 @@ test("restricted NSE symbols show honest stock-specific source links, never defa
  assert.equal(doc.getElementById("explain").hidden,false);
  w.close();
 });
+
+test("BEL TejHQ EOD response creates real historical candles and never mixes demo rows",async()=>{
+ const w=build(),f=w.MSKWeb.features;
+ const bars=[];
+ for(let i=119;i>=0;i--){
+   const date=new Date(Date.UTC(2026,9,26-i)).toISOString().slice(0,10);
+   const v=350+(120-i)*.12;
+   bars.push({date,open:v,high:v+2,low:v-2,close:v+.4,volume:700000+i*200});
+ }
+ let requested="";
+ w.fetch=async(url)=>{
+   requested=String(url);
+   return {ok:true,json:async()=>({meta:{symbol:"BEL",exchange:"NSE",count:bars.length},data:bars})};
+ };
+ f.choose("BEL",false);
+ await new Promise(resolve=>setTimeout(resolve,100));
+ assert.match(requested,/api\.tejhq\.dev\/v1\/ohlcv\/nse\/BEL/);
+ assert.equal(f.getExternalSymbol(),null);
+ assert.equal(f.library.size,1,"Synthetic DEMO stocks must never mix with actual EOD");
+ assert.equal(f.library.get("BEL").source,"tej_eod");
+ assert.equal(w.document.getElementById("dataLabel").getAttribute("data-eod-provider"),"TejHQ");
+ assert.equal(w.document.getElementById("dataLabel").getAttribute("data-market-asof"),"2026-10-26");
+ assert.match(w.document.getElementById("dataLabel").textContent,/NSE END-OF-DAY.*NOT INTRADAY\/LIVE/);
+ assert.equal(w.document.body.classList.contains("market-eod"),true);
+ assert.equal(w.document.getElementById("chartCanvas").hidden,false);
+ assert.equal(w.document.getElementById("externalNseChart"),null);
+ assert.match(w.document.getElementById("lastPrice").textContent,/₹/);
+ assert.match(w.document.getElementById("priceMeta").textContent,/NSE EOD.*not live/);
+ assert.equal(w.document.getElementById("signal").textContent,"RESEARCH ONLY");
+ assert.match(w.document.getElementById("adx").textContent,/\d/);
+ assert.match(w.document.getElementById("vol").textContent,/x/);
+ assert.match(f.offlineAnswer("Analyze BEL trend and volume"),/TejHQ NSE bhavcopy EOD only/);
+ w.close();
+});
+test("Wrong provider symbol cannot overwrite BEL with AAPL candles",async()=>{
+ const w=build(),f=w.MSKWeb.features;
+ w.fetch=async()=>({ok:true,json:async()=>({meta:{symbol:"AAPL",exchange:"NASDAQ"},data:[]})});
+ f.choose("BEL",false);
+ await new Promise(resolve=>setTimeout(resolve,50));
+ assert.equal(f.getExternalSymbol(),"BEL");
+ assert.equal(w.document.getElementById("lastPrice").textContent,"No MSK quote");
+ assert.match(w.document.getElementById("dataLabel").textContent,/Provider symbol\/exchange mismatch/);
+ assert.equal(w.document.body.classList.contains("market-eod"),false);
+ assert.equal(w.document.querySelector("tv-advanced-chart"),null);
+ w.close();
+});
+test("Stale NSE EOD provider history must fail closed",async()=>{
+ const w=build(),f=w.MSKWeb.features;
+ const bars=[];
+ for(let i=0;i<75;i++){
+   const date=new Date(Date.UTC(2020,0,1+i)).toISOString().slice(0,10);
+   bars.push({date,open:100,high:103,low:97,close:101,volume:180000});
+ }
+ w.fetch=async()=>({ok:true,json:async()=>({meta:{symbol:"BEL",exchange:"NSE"},data:bars})});
+ f.choose("BEL",false);
+ await new Promise(resolve=>setTimeout(resolve,50));
+ assert.equal(f.getExternalSymbol(),"BEL");
+ assert.equal(w.document.getElementById("lastPrice").textContent,"No MSK quote");
+ assert.match(w.document.getElementById("dataLabel").textContent,/stale or future dated/);
+ w.close();
+});
