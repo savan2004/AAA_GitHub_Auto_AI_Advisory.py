@@ -142,12 +142,13 @@
  }
  function barList(parent,title,columns,rows){p(parent,title);if(rows.length)table(parent,columns,rows);else p(parent,"No matched companies.","warning");}
  function fundamentalTab(panel){
+   const symbol=cleanSymbol(ui.ticker.value)||active;
    p(panel,"Upload optional financial-statement CSV. All figures are supplied by you, with a source and reporting date. Price-only history cannot produce P/E, ROE or revenue growth.","warning");
    const inp=document.createElement("input");inp.type="file";inp.accept=".csv,text/csv";inp.id="fundCSV";inp.setAttribute("aria-label","Import financial statement CSV");panel.append(inp);
    inp.addEventListener("change",async e=>{try{if(e.target.files?.[0])fundamentalsImport(await e.target.files[0].text());}catch(error){status(error.message,true);}});
-   const t=statements.get(active);
+   const t=statements.get(symbol);
    if(t){
-     p(panel,"Company "+active+" • Report date "+t.asof+" • User-supplied source: "+t.source);
+     p(panel,"Company "+symbol+" • Report date "+t.asof+" • User-supplied source: "+t.source);
      table(panel,["Financial measure","Reported value"],[
        ["P/E",fmt(t.pe)],["Return on equity",t.roe_percent===null?"Unavailable":fmt(t.roe_percent)+"%"],
        ["Revenue growth",t.revenue_growth_percent===null?"Unavailable":fmt(t.revenue_growth_percent)+"%"],
@@ -155,7 +156,7 @@
        ["Debt/equity",t.debt_equity_ratio===null?"Unavailable":fmt(t.debt_equity_ratio)+"x"]]);
    }else p(panel,"No financial statements imported for "+(active||"this company")+". No fabricated ratios will be shown.","warning");
    p(panel,"Financial CSV header: symbol,asof,source,pe,roe_percent,revenue_growth_percent,market_cap_inr,debt_equity_ratio");
-   panel.append(btn("Download Blank Fundamentals Template",()=>csvDownload([["symbol","asof","source","pe","roe_percent","revenue_growth_percent","market_cap_inr","debt_equity_ratio"],[active||"INFY","2026-09-30","Annual report page URL","","","","",""]],"msk-fundamentals-template.csv"),"btn ghost"));
+   panel.append(btn("Download Blank Fundamentals Template",()=>csvDownload([["symbol","asof","source","pe","roe_percent","revenue_growth_percent","market_cap_inr","debt_equity_ratio"],[symbol||"INFY","2026-09-30","Annual report page URL","","","","",""]],"msk-fundamentals-template.csv"),"btn ghost"));
  }
  function screenerTab(panel){
    const list=results();if(!list.length){p(panel,"Upload one or more symbols in price CSV, or run the synthetic test universe.","warning");return;}
