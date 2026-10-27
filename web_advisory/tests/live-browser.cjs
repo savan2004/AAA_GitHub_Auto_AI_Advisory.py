@@ -129,7 +129,10 @@ const assert=require("node:assert/strict");
    assert(await page.locator("#mobileScrim").count()===1,"Mobile scrim missing");
    await page.locator("#mobileScrim").click({position:{x:350,y:100}});
    assert(await page.locator("body.menu-open").count()===0,"Mobile sidebar did not close");
-   await page.locator('.action-card[data-go="fundamental"]').click();
+   // The dashboard quick-cards are deliberately hidden in the standalone
+   // Chart screen. Use the mobile sidebar exactly as the visitor would.
+   await page.locator("#mobileMenuToggle").click();
+   await page.locator('.nav[data-tab="fundamental"]').click();
    assert.equal(await page.evaluate(()=>window.MSKDashboard.activeTab()),"fundamental");
    assert(/No financial statements imported|Unavailable|financial-statement CSV/i.test(await page.locator("#detailBody").innerText()),"No financial ratios may be invented from a price chart");
    console.log("MSK_BEL_EOD_REAL_CHROME_PASS",state.asof,state.close);
