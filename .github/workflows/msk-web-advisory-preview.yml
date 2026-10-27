@@ -38,8 +38,19 @@ jobs:
           f=Path('web_advisory/features.js').read_text()
           assert all(x in a for x in ['No clean pattern','SYNTHETIC','timestamp','volume'])
           assert all(x in f for x in ['offlineAnswer','fundamentalTab','screenerTab','breadthTab','importBars'])
-          assert 'window.MSK_WEB_API = "";' in s
+          assert 'window.MSK_WEB_API = "https://br-cool-poetry-a1bhjhc3-mskwebapi.compute.c-1.ap-southeast-1.aws.neon.tech";' in s
           import re
           assert not re.search(r'(?m)^\s*(?:TELEGRAM_TOKEN|GROQ_API_KEY|GEMINI_API_KEY)\s*=', s)
           print('MSK_WEB_PREVIEW_SECURITY_CHECKS_OK')
           PY
+      - name: Verify live Neon API health, legal-data flag and browser CORS
+        run: |
+          node --input-type=module <<'JS'
+          const url = 'https://br-cool-poetry-a1bhjhc3-mskwebapi.compute.c-1.ap-southeast-1.aws.neon.tech';
+          const response = await fetch(url + '/api/health', {headers: {origin: 'https://msk-web-advisory-preview.onrender.com'},signal:AbortSignal.timeout(18000)});
+          if (!response.ok) throw new Error('Neon API HTTP ' + response.status);
+          const body = await response.json();
+          if (!body.ok || body.generative_ai !== 'disabled' || body.live_market_feed !== 'not_configured') throw new Error('Unexpected backend capability status');
+          if (response.headers.get('access-control-allow-origin') !== 'https://msk-web-advisory-preview.onrender.com') throw new Error('CORS origin mismatch');
+          console.log('MSK_NEON_API_HEALTH_OK — AI disabled until secured; no market-feed license inferred');
+          JS
