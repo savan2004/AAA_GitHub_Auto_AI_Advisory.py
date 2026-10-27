@@ -72,3 +72,26 @@ html,body{max-width:100%;overflow-x:hidden}
  .nse-unavailable h3{font-size:17px}
  .nse-unavailable p{font-size:12px}
 }
+
+/* Readable full-width true EOD research layout, deliberately not a live ticker */
+.market-eod .chart-grid{grid-template-columns:minmax(0,1fr)}
+.market-eod .chart-panel{padding:22px 24px}
+.market-eod .canvas-wrap{min-height:535px!important;height:535px!important}
+.market-eod #chartCanvas{height:535px!important}
+.market-eod .insights{display:grid;grid-template-columns:220px 1fr;align-items:center;gap:14px 28px}
+.market-eod .insights>.eyebrow,.market-eod .insights>h2{grid-column:1/-1}
+.market-eod .insights .signal{grid-column:1;grid-row:3;background:#172b3c;color:#a9daf3!important;border-color:#2e5268}
+.market-eod .insights .readout{grid-column:2;grid-row:3;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:19px}
+.market-eod .insights .readout>div{display:flex;flex-direction:column;gap:6px}
+.market-eod .insights .readout>div b{text-align:left}
+.market-eod .insights .insight-note{grid-column:1/-1}
+.market-eod .insights .btn{grid-column:1/-1;margin:0;max-width:360px}
+.market-eod #detailBadge{background:#21393d;border-color:#387d75;color:#aef4e5}
+@media(max-width:750px){
+ .market-eod .canvas-wrap{min-height:445px!important;height:445px!important}
+ .market-eod #chartCanvas{height:445px!important}
+ .market-eod .insights{display:block}
+ .market-eod .insights .readout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .market-eod .insights .signal{padding:12px;margin:12px 0}
+ .market-eod .chart-panel{padding:13px}
+}
