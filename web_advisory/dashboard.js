@@ -38,7 +38,8 @@
    screener:{title:"Stock Screener",subtitle:"Filter the stocks actually loaded into your research universe."},
    breadth:{title:"Market Breadth",subtitle:"Compare same-session advances, declines and participation across loaded constituents."},
    pdf:{title:"Research Report",subtitle:"Inspect source-dated analysis and print an educational research sheet."},
-   ai:{title:"Ask Research",subtitle:"Evidence-grounded educational Q&A; generative AI is not connected."}
+   ai:{title:"Ask Research",subtitle:"Evidence-grounded educational Q&A; generative AI is not connected."},
+   portfolio:{title:"Portfolio Health",subtitle:"Private holdings analysis from CSV; historical valuations only when matching EOD prices exist."}
  };
  function setView(tab){
    const meta=VIEWS[tab]||VIEWS.overview;
