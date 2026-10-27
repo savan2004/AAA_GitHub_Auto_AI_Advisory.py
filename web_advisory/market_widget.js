@@ -295,4 +295,5 @@
  const params=new URL(window.location.href).searchParams;
  const fromURL=params.get("symbol")||params.get("tvwidgetsymbol")?.replace(/^NSE:/i,"");
  if(fromURL&&valid(normalize(fromURL)))external(normalize(fromURL));
+ else if(!params.has("demo"))external("BEL"); // Actual NSE EOD homepage, demo remains opt-in
 })();
