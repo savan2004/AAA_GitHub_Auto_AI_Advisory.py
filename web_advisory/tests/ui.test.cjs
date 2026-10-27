@@ -145,7 +145,7 @@ test("BEL search button and all research tabs use TradingView without demo price
  clickTab(w,"fundamental");
  assert.match(doc.getElementById("detailBody").textContent,/Check official financial disclosures/);
  assert.equal(doc.querySelector("#externalFundamentals"),null);
- assert.match(w.MSKWeb.features.offlineAnswer("Analyze BEL with buy target"),/does not have validated historical OHLCV/);
+ assert.match(w.MSKWeb.features.offlineAnswer("Analyze BEL with buy target"),/no licensed OHLCV or filings/);
  input.value="INVALID$TICKER";doc.getElementById("analyzeSymbol").click();
  assert.equal(w.MSKWeb.features.getExternalSymbol(),"BEL","invalid text must not select arbitrary untrusted symbols");
  w.close();
