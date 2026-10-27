@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: '22'
       - name: Validate offline application JavaScript syntax
-        run: node --check web_advisory/app.js && node --check web_advisory/config.js && node --check web_advisory/features.js
+        run: node --check web_advisory/app.js && node --check web_advisory/config.js && node --check web_advisory/features.js && node --check web_advisory/market_widget.js
       - name: Install lightweight browser simulator
         run: npm install --no-save --no-audit --no-fund jsdom@26
       - name: Click-through tests for every button and every CSV/AI route
@@ -34,10 +34,12 @@ jobs:
           h=Path('web_advisory/index.html').read_text()
           a=Path('web_advisory/app.js').read_text()
           s=Path('web_advisory/config.js').read_text()
-          assert all(x in h for x in ['csvFile','chartCanvas','chatForm','dataLabel'])
+          assert all(x in h for x in ['csvFile','chartCanvas','chatForm','dataLabel','market_widget.js'])
           f=Path('web_advisory/features.js').read_text()
           assert all(x in a for x in ['No clean pattern','SYNTHETIC','timestamp','volume'])
           assert all(x in f for x in ['offlineAnswer','fundamentalTab','screenerTab','breadthTab','importBars'])
+          w=Path('web_advisory/market_widget.js').read_text()
+          assert all(x in w for x in ['NSE:', 'embed-widget-advanced-chart.js', 'no BUY', 'imported OHLCV'])
           assert 'window.MSK_WEB_API = "https://br-cool-poetry-a1bhjhc3-mskwebapi.compute.c-1.ap-southeast-1.aws.neon.tech";' in s
           import re
           assert not re.search(r'(?m)^\s*(?:TELEGRAM_TOKEN|GROQ_API_KEY|GEMINI_API_KEY)\s*=', s)
@@ -62,6 +64,7 @@ jobs:
             ['/', 'features.js'],
             ['/app.js', 'window.MSKWeb='],
             ['/features.js', 'DEMO01'],
+            ['/market_widget.js', 'embed-widget-advanced-chart.js'],
             ['/config.js', 'br-cool-poetry-a1bhjhc3-mskwebapi']
           ]) {
             const response = await fetch(host + route, {signal:AbortSignal.timeout(15000)});
