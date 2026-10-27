@@ -48,14 +48,14 @@ async function step(id,section,action){
   });
   await step("dashboard","Dashboard",async()=>{
     const n=await page.locator(".action-card[data-go]").count();
-    return ok(n===8,"Dashboard action cards "+n+"; heading "+await page.locator("h1").first().innerText());
+    return ok(n===9,"Dashboard action cards "+n+"; heading "+await page.locator("h1").first().innerText());
   });
   await step("search-bel-eod","Research",async()=>{
     await page.waitForFunction(()=>document.body.classList.contains("market-eod"),{timeout:25000}).catch(()=>{});
     const evidence=await page.evaluate(()=>({symbol:document.getElementById("ticker").value,kind:window.MSKWeb?.state.kind,source:document.getElementById("dataLabel")?.textContent,metric:document.getElementById("lastPrice")?.textContent,session:document.getElementById("dataLabel")?.dataset.marketAsof}));
     return ok(evidence.kind==="tej_eod"&&evidence.symbol==="BEL",JSON.stringify(evidence));
   });
-  for(const tab of ["overview","technical","fundamental","chart","screener","breadth","pdf","ai"]){
+  for(const tab of ["overview","technical","fundamental","chart","screener","breadth","pdf","ai","portfolio"]){
     await step("nav-"+tab,"Navigation",async()=>{
       const b=page.locator('.nav[data-tab="'+tab+'"]');
       await b.click({timeout:8000});
