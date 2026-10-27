@@ -137,7 +137,7 @@ test("BEL search button and research tabs refuse restricted embed without demo p
  assert.ok(doc.querySelector("#externalNseChart a[href='https://in.tradingview.com/symbols/NSE-BEL/']"));
  for(const name of ["overview","technical","fundamental","chart","screener","breadth","pdf","ai"]){
    const detail=clickTab(w,name);
-   assert.match(detail.textContent,/NSE:BEL|TradingView|unavailable|Unavailable|third-party|data|OHLCV|MSK research PDF|financial-statement CSV|Financial Statements/,name);
+   assert.match(detail.textContent,/NSE:BEL|TradingView|unavailable|Unavailable|third-party|data|OHLCV|MSK research PDF|financial-statement CSV|Financial Statements|Upload one or more symbols|Breadth requires|No stock data loaded/,name);
    assert.doesNotMatch(detail.textContent,/DEMO01.*₹/,name);
  }
  assert.equal(doc.querySelector("#externalFundamentals"),null,
@@ -146,7 +146,7 @@ test("BEL search button and research tabs refuse restricted embed without demo p
  assert.equal(doc.querySelector("#externalTechnicalRating"),null);
  assert.match(doc.getElementById("detailBody").textContent,/cannot display this NSE symbol/);
  clickTab(w,"fundamental");
- assert.match(doc.getElementById("detailBody").textContent,/Check official financial disclosures/);
+ assert.match(doc.getElementById("detailBody").textContent,/Import Financial Statements \(CSV\)/);
  assert.equal(doc.querySelector("#externalFundamentals"),null);
  assert.match(w.MSKWeb.features.offlineAnswer("Analyze BEL with buy target"),/no licensed OHLCV or filings/);
  input.value="INVALID$TICKER";doc.getElementById("analyzeSymbol").click();
