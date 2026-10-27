@@ -116,6 +116,9 @@
      kind==="tej_eod"?"Daily exchange-bhavcopy-derived data from TejHQ; unadjusted for corporate actions. Experimental indicators, NOT verified trade signals.":
      "User-supplied source has not been exchange-verified; no guaranteed signal.");
    draw();renderTab();
+   document.dispatchEvent(new CustomEvent("msk:stock-ready",{detail:{
+     symbol:sym(),source:kind,session:c.date
+   }}));
  }
  function draw(){
    if(!st.data.length)return;
@@ -175,35 +178,14 @@
  }
  function bubble(role,msg){let x=document.createElement("div");x.className="bubble "+role;x.textContent=msg;el("chatHistory").append(x);el("chatHistory").scrollTop=el("chatHistory").scrollHeight;}
  async function ask(question){
-   const base=api();if(!base){
-     if(window.MSKWeb&&window.MSKWeb.features){bubble("assistant",window.MSKWeb.features.offlineAnswer(question));}
-     else bubble("assistant","Generative AI not connected. Add a secure server endpoint; model keys must not be exposed in the browser.");
-     return;
+   // A secure logged-in generative AI provider is NOT installed. A configured
+   // Neon HEALTH endpoint is not AI; never send a visitor's question to it,
+   // claim an API call or present deterministic text as generated research.
+   const F=window.MSKWeb?.features;
+   if(!F?.offlineAnswer){
+     bubble("assistant","Research engine unavailable. Reload this page.");return;
    }
-   if(st.kind==="synthetic"){
-     bubble("assistant","SYNTHETIC DEMO • No market data sent to an external AI provider.\n"+
-       (window.MSKWeb?.features?.offlineAnswer(question)||"Local evidence not available."));
-     return;
-   }
-   const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),14000);
-   try{
-     const payload={question:question.slice(0,550),symbol:sym(),
-       context:st.calc?{source:st.kind,asof:st.calc.date,trend:st.calc.trend,adx:st.calc.adx,volume_multiple:st.calc.ratio,pattern:st.calc.pattern,signal:st.calc.signal}:null};
-     const res=await fetch(base+"/api/ai/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),signal:ctrl.signal,credentials:"omit"});
-     if(res.status===503||res.status===403){
-       bubble("assistant","Neon backend reached, but generative AI is not yet authorized or configured. "+
-         "Here is a clearly labelled local rule-based answer:\n\n"+
-         (window.MSKWeb?.features?.offlineAnswer(question)||"No local research context."));
-       return;
-     }
-     if(!res.ok)throw Error("HTTP "+res.status);
-     const value=await res.json();
-     bubble("assistant",typeof value.answer==="string"&&value.answer?value.answer:
-       (window.MSKWeb?.features?.offlineAnswer(question)||"No verified AI response."));
-   }catch(err){
-     bubble("assistant","Backend connection unavailable ("+err.message+"). "+
-       "Local evidence answer:\n"+(window.MSKWeb?.features?.offlineAnswer(question)||"Not available."));
-   }finally{clearTimeout(timer);}
+   bubble("assistant",F.offlineAnswer(question));
  }
  function draft(){
    const c=st.calc;if(!c){bubble("assistant","No data loaded. Import a verified-source CSV to create a transparent evidence summary.");return;}
