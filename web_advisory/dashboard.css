@@ -375,3 +375,12 @@ body.web-pro{background:#f4f7fb;color:#17263e;color-scheme:light;font-family:Int
  .import-actions{display:block}
  .import-privacy{padding:12px 15px}
 }
+
+.web-pro[data-page="portfolio"] .quick-actions,
+.web-pro[data-page="portfolio"] .section-heading,
+.web-pro[data-page="portfolio"] #analysisRegion,
+.web-pro[data-page="portfolio"] .snapshot-grid,
+.web-pro[data-page="portfolio"] #aiPanel{display:none!important}
+.web-pro[data-page="portfolio"] .below-grid{display:block}
+.web-pro[data-page="portfolio"] #researchDetail{width:100%;min-height:430px}
+.web-pro[data-page="portfolio"] #detailBody{overflow-x:auto}
