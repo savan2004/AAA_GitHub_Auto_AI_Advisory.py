@@ -1,0 +1,45 @@
+name: MSK Website Market-First Trial
+on:
+  push:
+    branches: [trial/company-journey-20261027]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-web-market-trial.yml'
+  pull_request:
+    branches: [trial/market-first-home-20261027]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-web-market-trial.yml'
+permissions:
+  contents: read
+jobs:
+  trial-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check browser module syntax
+        run: |
+          node --check web_advisory/market_first.js
+          node --check web_advisory/company_journey.js
+          node --check web_advisory/tests/market_first_trial.test.cjs
+          node --check web_advisory/tests/trial-browser.cjs
+      - name: Install browser test dependencies
+        run: npm install --no-save --no-audit --no-fund jsdom@26 playwright-core@1.56.1
+      - name: All website DOM regressions
+        run: node --test web_advisory/tests/ui.test.cjs web_advisory/tests/market_first_trial.test.cjs
+      - name: Real Chromium against trial branch locally, not production
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory web_advisory >/tmp/msk-trial-http.log 2>&1 &
+          CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/trial-browser.cjs
+      - name: Save browser proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-market-first-trial-browser
+          path: web_advisory/browser-proof/trial-*.png
+          if-no-files-found: ignore
+          retention-days: 7
