@@ -79,7 +79,7 @@ def _validate_evidence(row, rupees_each, now):
     for field in ("roe", "growth", "debt", "cap", "pe", "vol", "price", "turnover", "fetched_at"):
         if _finite(row.get(field)) is None:
             return f"missing or invalid {field}"
-    if row["price"] <= 0 or row["turnover"] <= 0:
+    if _finite(row["price"]) <= 0 or _finite(row["turnover"]) <= 0:
         return "invalid price or liquidity"
     fetched = _finite(row["fetched_at"])
     if not 0 <= now - fetched <= 86400:
