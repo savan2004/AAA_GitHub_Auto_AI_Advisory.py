@@ -39,10 +39,11 @@ jobs:
           assert all(x in a for x in ['No clean pattern','SYNTHETIC','timestamp','volume'])
           assert all(x in f for x in ['offlineAnswer','fundamentalTab','screenerTab','breadthTab','importBars'])
           w=Path('web_advisory/market_widget.js').read_text()
-          assert all(x in w for x in ['NSE:', 'tv-advanced-chart', 'NOT ASSESSED', 'imported MSK market data'])
+          assert all(x in w for x in ['NSE:', 'DATA ACCESS RESTRICTED', 'NOT ASSESSED', 'imported MSK market data'])
           assert 'embed-widget-advanced-chart.js' not in w
           assert 'embed-widget-financials.js' not in w
-          assert 'tv-advanced-chart.js' in h
+          assert 'tv-technical-analysis.js' not in h
+          assert 'tv-advanced-chart.js' not in h
           assert 'window.MSK_WEB_API = "https://br-cool-poetry-a1bhjhc3-mskwebapi.compute.c-1.ap-southeast-1.aws.neon.tech";' in s
           import re
           assert not re.search(r'(?m)^\s*(?:TELEGRAM_TOKEN|GROQ_API_KEY|GEMINI_API_KEY)\s*=', s)
@@ -67,7 +68,7 @@ jobs:
             ['/', 'features.js'],
             ['/app.js', 'window.MSKWeb='],
             ['/features.js', 'DEMO01'],
-            ['/market_widget.js', 'tv-advanced-chart'],
+            ['/market_widget.js', 'DATA ACCESS RESTRICTED'],
             ['/config.js', 'br-cool-poetry-a1bhjhc3-mskwebapi']
           ]) {
             const response = await fetch(host + route, {signal:AbortSignal.timeout(15000)});
