@@ -13,8 +13,10 @@ A separate Render STATIC SITE on an isolated GitHub branch, without Telegram dep
 - Read-only browser operation; CSV/portfolio entries never transmitted to our server
 
 ## Data accuracy / legal scope
-- The website does **NOT** fetch NSE quotes, company filings, breadth universes or fundamental ratios from public third-party APIs. No rights to redistribute Yahoo/Screener market data are presumed.
-- There is no current price/LTP. Imported data is user-supplied and source-unverified.
+- For private, non-commercial evaluation the preview now connects directly to **TejHQ keyless NSE end-of-day bhavcopy-derived OHLCV** (`https://api.tejhq.dev/v1/ohlcv/nse/{SYMBOL}`). It validates exact symbol/exchange, OHLC integrity, chronology, 50+ bars and 14-day session freshness before rendering. This is **not live/intraday**; historical close is displayed as such.
+- These TejHQ raw prices are **not split/dividend-adjusted**. The feed is built from exchange bhavcopy; commercial/public redistribution permissions are NOT granted by its MIT code licence (see https://huggingface.co/datasets/tejhq/indian-markets). Keep this a noindex research preview until legal use rights are checked with NSE/BSE and TejHQ. Never advertise it as market-authorized data.
+- When provider API access fails or returns a wrong symbol, our site displays no substitute candles or prices and retains an explicit direct TradingView source link. User-uploaded CSV remains available.
+- There is no **live intraday** price/LTP or authenticated brokerage integration.
 - Market Breadth, multi-stock Screener and Fundamentals disclose missing data instead of generating false numbers.
 - Direct Ask AI interface exists but **does not call any LLM until a secured backend and explicit provider configuration are deployed**. No fake AI replies, no exposed keys or billing.
 - AI later must use separate provider credentials, per-user rate limits, abuse protection, consent, source/date grounding and backend-only secrets. Never put API keys in config.js.
@@ -35,3 +37,6 @@ The main website hosting and Neon Free project can be managed here via connected
 
 ## Acceptance and limits
 Run built-in static JS syntax check via GitHub Actions. Manually verify Chrome/Android layout, demo candlestick hover, CSV import with real sourced data, Print PDF, all buttons and unavailable-AI message. No historical ROI, live market accuracy, SEBI regulatory approval or production-grade uptime is claimed.
+
+## New automatic NSE historical research flow (27 October 2026)
+Search `BEL` or open `/?symbol=BEL`. Browser requests source OHLCV from TejHQ free keyless API; status shows latest trading date. Source-validated candles populate **our own canvas** and EMA20/50, ADX14, previous-20-day volume multiple, observed pattern. **Directional BUY/SELL is disabled on historical external data until out-of-sample accuracy and trading execution validity are measured.** Indicators are explanatory only. Multi-stock screener and breadth require independently loaded full datasets. Fundamentals need dated financial statements. Generative LLM remains disabled pending secure opt-in/login. The public Render preview is not an authorized commercial redistribution platform.
