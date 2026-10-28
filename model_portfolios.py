@@ -22,16 +22,22 @@ PROFILES = {
         "label": "🏦 CONSERVATIVE",
         "cash_pct": 20,
         "focus": "Quality, leverage control and lower volatility",
+        "horizon": "3–6 months", "stop_sigma": 1.3,
+        "min_stop_pct": 5.0, "max_stop_pct": 12.0, "reward_risk": 1.8,
     },
     "moderate": {
         "label": "⚖️ MODERATE",
         "cash_pct": 10,
         "focus": "Quality-growth balance and controlled valuation risk",
+        "horizon": "1–3 months", "stop_sigma": 1.6,
+        "min_stop_pct": 7.0, "max_stop_pct": 16.0, "reward_risk": 2.0,
     },
     "aggressive": {
         "label": "🚀 AGGRESSIVE",
         "cash_pct": 5,
         "focus": "High growth with strict data, sector and liquidity gates",
+        "horizon": "2–8 weeks", "stop_sigma": 2.0,
+        "min_stop_pct": 9.0, "max_stop_pct": 22.0, "reward_risk": 2.2,
     },
 }
 
@@ -44,6 +50,37 @@ def _finite(value):
         return result if math.isfinite(result) else None
     except (TypeError, ValueError):
         return None
+
+
+def _illustrative_levels(row, profile):
+    """Volatility-derived hypothetical risk budget, NOT predicted prices.
+
+    The annualized volatility comes from the completed historical closes
+    in research_upgrade.evaluate. Approximate a 20-session move, clamp
+    stop distance per profile, then calculate a reward/risk target.
+    """
+    cfg = PROFILES[profile]
+    close = _finite(row.get("price"))
+    annual_vol = _finite(row.get("vol"))
+    if close is None or annual_vol is None or close <= 0 or annual_vol <= 0:
+        raise ValueError("positive dated close and realized volatility required")
+    move_pct = annual_vol * math.sqrt(20 / 252)
+    stop_pct = min(cfg["max_stop_pct"], max(
+        cfg["min_stop_pct"], move_pct * cfg["stop_sigma"]
+    ))
+    risk_rupees = close * stop_pct / 100
+    stop = round(close - risk_rupees, 2)
+    target = round(close + risk_rupees * cfg["reward_risk"], 2)
+    if stop <= 0 or target <= close or stop >= close:
+        raise ValueError("computed price levels invalid")
+    return {
+        "reference_price": round(close, 2),
+        "stop_loss": stop,
+        "target": target,
+        "timeframe": cfg["horizon"],
+        "stop_distance_pct": round(stop_pct, 2),
+        "reward_risk": cfg["reward_risk"],
+    }
 
 
 def _validate_evidence(row, rupees_each, now):
@@ -79,7 +116,7 @@ def _validate_evidence(row, rupees_each, now):
     for field in ("roe", "growth", "debt", "cap", "pe", "vol", "price", "turnover", "fetched_at"):
         if _finite(row.get(field)) is None:
             return f"missing or invalid {field}"
-    if row["price"] <= 0 or row["turnover"] <= 0:
+    if row["price"] <= 0 or row["turnover"] <= 0 or row["vol"] <= 0:
         return "invalid price or liquidity"
     fetched = _finite(row["fetched_at"])
     if not 0 <= now - fetched <= 86400:
@@ -135,7 +172,13 @@ def select_model(rows, profile, now=None, capital_rupees=MODEL_CAPITAL_RUPEES):
             rejected["sector concentration limit"] += 1
             continue
         sector_count[sector] += 1
-        holdings.append(dict(row, allocation_rupees=one_allocation))
+        try:
+            levels = _illustrative_levels(row, profile)
+        except ValueError:
+            rejected["invalid illustrative levels"] += 1
+            sector_count[sector] -= 1
+            continue
+        holdings.append(dict(row, allocation_rupees=one_allocation, **levels))
         if len(holdings) == MODEL_SIZE:
             break
     complete = len(holdings) == MODEL_SIZE
@@ -187,13 +230,16 @@ def format_model(result, snap):
     holdings = result["holdings"]
     messages = [head + f"Cash reserve: ₹{result['cash_rupees']/1e7:,.2f} Cr ({cfg['cash_pct']}%).\n"
                 f"Ten holdings, at most {MAX_STOCKS_PER_SECTOR} from one sector.\n"
-                "Scores are unbacktested heuristics. Amounts are illustrative risk budgets, not share orders."]
+                "Scores, target and stop are unbacktested volatility rules, NOT forecasts.\\n"
+                "Historical closes only; no execution, gaps, fees, or slippage assumed."]
     for start in (0, 5):
         blocks = []
         for number, h in enumerate(holdings[start:start + 5], start + 1):
             blocks.append(
                 f"<b>{number}. {escape(h['name'])} ({escape(h['symbol'])})</b> | {escape(h['sector'])}\n"
-                f"Virtual allocation ₹{h['allocation_rupees']/1e7:.2f} Cr\n"
+                f"Timeframe {escape(h['timeframe'])} | Reference close ₹{h['reference_price']:,.2f} ({escape(h['asof'])})\\n"
+                f"Target ₹{h['target']:,.2f} | SL ₹{h['stop_loss']:,.2f} | R:R {h['reward_risk']:.1f}:1\\n"
+                f"Allocation ₹{h['allocation_rupees']:,.0f} ({h['allocation_rupees']/result['capital_rupees']*100:.1f}% of hypothetical corpus)\\n"
                 f"Score {h['score']:.1f}/100 (unbacktested) | Trend {escape(str(h['timing']))}\n"
                 f"ROE {h['roe']:.1f}% | Annual sales YoY {h['growth']:.1f}%\n"
                 f"P/E {h['pe']:.1f} | Borrowings/Equity {h['debt']:.2f} | Volatility {h['vol']:.1f}%\n"
@@ -203,7 +249,8 @@ def format_model(result, snap):
                 f"Financial source: {escape(h['provider'])} | {escape(h['provider_url'])}"
             )
         messages.append("\n\n".join(blocks))
-    messages.append("⚠️ Screened research only. No real holdings, executed trades, NAV, "
+    messages.append("⚠️ TARGET/SL are hypothetical volatility-based levels, NOT validated forecasts. "
+                    "Price gaps can exceed the SL. Screened research only. No real holdings, executed trades, NAV, "
                     "P&L, returns or forecast. Fundamental filing periods may predate "
                     "the retrieval timestamp. Banks/NBFCs excluded until validated separately.")
     return messages, [h["symbol"] for h in holdings]
