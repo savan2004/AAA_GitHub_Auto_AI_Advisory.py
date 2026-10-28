@@ -72,7 +72,7 @@ class TelegramMockSessionTests(unittest.TestCase):
             "StateManager", "PortfolioManager", "safe_send",
             "cmd_start", "cmd_help", "cmd_buy", "cmd_sell",
             "cmd_portfolio", "build_portfolio_card",
-            "handle_analysis_callback", "_process_webhook", "webhook",
+            "handle_analysis_callback", "_process_webhook", "webhook", "_allow_heavy",
         }
         nodes = []
         for node in tree.body:
@@ -144,6 +144,9 @@ class TelegramMockSessionTests(unittest.TestCase):
             "logger": logging.getLogger("telegram-mock-smoke"),
             "deque": deque, "bot": bot,
             "executor": ImmediateExecutor(),
+            "webhook_executor": ImmediateExecutor(),
+            "API_RATE_LIMITER": SimpleNamespace(is_allowed=lambda uid: True),
+            "RATE_LIMIT_WINDOW": 60,
             "telebot": SimpleNamespace(
                 types=SimpleNamespace(
                     Update=SimpleNamespace(de_json=staticmethod(json.loads))
