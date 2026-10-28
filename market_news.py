@@ -204,7 +204,7 @@ def get_stock_news(symbol: str, n: int = 2) -> str:
     # Validate: if we have headlines, format & return
     if headlines:
         result = "\n".join(
-            "📰 " + html.escape(str(h)[:87] + ("…" if len(str(h)) > 87 else ""), quote=False)
+            "📰 " + html.escape(str(h)[:87] + ("…" if len(str(h)) > 87 else ""), quote=False) + " [date unverified]"
             for h in headlines[:n]
         )
         logger.info(f"stock_news {symbol}: Returning {len(headlines[:n])} headlines")
