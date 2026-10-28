@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 _LOCK = threading.Lock()
 _SNAPSHOT = None
+_REFRESH_CURSOR = 0  # Round-robin over missing priority symbols; prevents starvation.
 _PROFILES = {
     "conservative": dict(roe=12, growth=0, debt=0.7, vol=35, cap=20000, pe=50),
     "moderate": dict(roe=10, growth=0, debt=1.2, vol=50, cap=5000, pe=70),
@@ -114,7 +115,7 @@ def rank(rows, profile, size=10):
     return selected
 
 def snapshot(universe, cached_get, get_info, bulk_history, priority=None):
-    global _SNAPSHOT
+    global _SNAPSHOT, _REFRESH_CURSOR
     with _LOCK:
         now = time.time()
         if _SNAPSHOT and now-_SNAPSHOT["created"] < _SNAPSHOT.get("ttl", 900):
@@ -128,10 +129,18 @@ def snapshot(universe, cached_get, get_info, bulk_history, priority=None):
             else:
                 missing.append(s)
         budget = min(8,max(0,int(os.getenv("RESEARCH_REFRESH_BUDGET","8"))))
-        # Only the curated priority list is ever refreshed on click (<=30 get_info per 24h).
-        prio = {str(s).upper().removesuffix(".NS") for s in (priority or [])}
-        refresh = [s for s in missing if s in prio]
-        for s in refresh[:budget]:
+        # Keep priority order and rotate across failures: retrying the same
+        # alphabetically-first eight symbols prevented all other NSE names
+        # from ever being inspected when a source returned missing data.
+        missing_set = set(missing)
+        refresh = [s for s in dict.fromkeys(
+            str(s).upper().removesuffix(".NS") for s in (priority or [])
+        ) if s in missing_set]
+        start = _REFRESH_CURSOR % len(refresh) if refresh else 0
+        ordered = refresh[start:] + refresh[:start]
+        to_fetch = ordered[:budget]
+        _REFRESH_CURSOR = ((start + len(to_fetch)) % len(refresh)) if refresh else 0
+        for s in to_fetch:
             try:
                 info = get_info(s)
                 if info:
@@ -154,10 +163,18 @@ def snapshot(universe, cached_get, get_info, bulk_history, priority=None):
                 rows.append(row)
             else:
                 reasons[reason] = reasons.get(reason,0)+1
-        pending = max(0, len(refresh) - budget)
+        # History downloads have their own small budget. Without this count,
+        # the snapshot froze for 15 minutes with only 2/10 histories loaded.
+        pending_history = sum(
+            1 for s in candidates
+            if s not in history or history[s] is None or getattr(history[s], "empty", False)
+        )
+        pending = max(0, len(refresh) - len(to_fetch))
         _SNAPSHOT = dict(created=now, universe=len(symbols), cached=len(infos),
                          checked=len(candidates), rows=rows, rejected=reasons,
-                         ttl=120 if pending else 900, pending=pending)
+                         ttl=120 if pending or pending_history else 900,
+                         pending=pending, pending_history=pending_history,
+                         refreshed=len(to_fetch))
         return _SNAPSHOT
 
 def render(profile, snap):
