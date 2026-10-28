@@ -12,7 +12,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, date
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import hmac
 
@@ -505,63 +505,6 @@ def build_fundamental_text(sym, cname=None):
     return "\n".join(rows)
 
 
-# ── Screener Card ─────────────────────────────────────────────────────────
-SCREENER_STOCKS = {
-    "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
-    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
-    "aggressive": ["TATAMOTORS", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ZOMATO", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
-}
-
-
-def build_scan(profile):
-    syms = SCREENER_STOCKS.get(profile, [])
-    if not syms:
-        return "❌ Unknown profile."
-    labels = {"conservative": "🏦 CONSERVATIVE", "moderate": "⚖️ MODERATE", "aggressive": "🚀 AGGRESSIVE"}
-    lines = [f"📊 <b>{labels.get(profile, 'SCREENER')}</b>", f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
-
-    def _fetch(sym):
-        try:
-            df = get_hist(sym, "6mo")
-            if df is None or df.empty or len(df) < 28:
-                return None
-            c = df["Close"]
-            ltp = round(float(c.iloc[-1]), 2)
-            prev = float(c.iloc[-2])
-            chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
-            rsi_val = calc_rsi(c)
-            trend_val = trend_label(c)
-            signal_val = swing_signal(rsi_val, trend_val, chg)
-            return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi_val, "trend": trend_val, "signal": signal_val}
-        except Exception:
-            return None
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        futs = {pool.submit(_fetch, s): s for s in syms}
-        for f in as_completed(futs, timeout=15):
-            sym = futs[f]
-            try:
-                r = f.result()
-                if r:
-                    results[sym] = r
-            except Exception:
-                pass
-
-    for s in syms:
-        r = results.get(s)
-        if not r:
-            continue
-        icon = "🟢" if r["chg"] >= 0 else "🔴"
-        rsi_b = "🔴OB" if r["rsi"] > 70 else ("🟢OS" if r["rsi"] < 30 else "🟡")
-        lines.append(f"{icon} <b>{s}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n   RSI:{r['rsi']} {rsi_b}  |  {r['trend']}  |  <b>{r['signal']}</b>")
-
-    if not results:
-        lines.append("❌ Data unavailable.")
-    lines.append("\n⚠️ Educational only.")
-    return "\n".join(lines)
-
-
 # ── Build Market Breadth ─────────────────────────────────────────────────────
 def build_breadth():
     from market_breadth import get_breadth, format_breadth
@@ -620,7 +563,6 @@ def build_portfolio_card(uid):
 def main_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     kb.add("🔍 Analysis", "📊 Breadth", "🔥 Stocks Buzz")
-    kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
     kb.add("🏭 Sector Report")
@@ -1008,21 +950,6 @@ def stat_btn(m):
     cmd_status(m)
 
 
-@bot.message_handler(func=lambda m: m.text in ["🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"])
-def scan_btn(m):
-    p = {"🏦 Conservative": "conservative", "⚖️ Moderate": "moderate", "🚀 Aggressive": "aggressive"}[m.text]
-    safe_send(m.chat.id, f"⏳ Scanning {m.text}…")
-
-    def _run(chat_id=m.chat.id, prof=p):
-        try:
-            safe_send(chat_id, build_scan(prof))
-        except Exception as e:
-            logger.error(f"Screener err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Error: {e}")
-
-    executor.submit(_run)
-
-
 @bot.message_handler(func=lambda m: m.text == "📊 Breadth")
 def breadth_btn(m):
     safe_send(m.chat.id, "⏳ Fetching…")
@@ -1306,6 +1233,13 @@ def handle_text(m):
         return
     uid = m.chat.id
     text = m.text.strip()
+
+    # Telegram may keep old reply keyboards on clients after a deployment.
+    # Retired emoji-prefixed strategy buttons must not enter stock lookup.
+    if text.startswith(("🏦", "⚖", "🚀")):
+        safe_send(uid, "ℹ️ That old menu action is retired. Use the current menu.",
+                  reply_markup=main_keyboard())
+        return
 
     if not API_RATE_LIMITER.is_allowed(uid):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
