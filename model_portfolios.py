@@ -124,7 +124,13 @@ def select_model(rows, profile, now=None, capital_rupees=MODEL_CAPITAL_RUPEES):
         if reason:
             rejected[reason] += 1
         else:
-            screened.append(row)
+            # Provider adapters may supply finite numeric strings. Normalize all
+            # numeric fields before ranking and Telegram formatting; validation
+            # alone is not sufficient because format specifiers reject strings.
+            normalized = dict(row)
+            for field in ("roe", "growth", "debt", "cap", "pe", "vol", "price", "turnover", "fetched_at"):
+                normalized[field] = _finite(row[field])
+            screened.append(normalized)
     # Existing research_upgrade.rank applies each profile's hard minimum
     # ROE/growth/size, maximum debt/PE/volatility and deterministic score.
     ranked = rank(screened, profile, size=len(screened))
