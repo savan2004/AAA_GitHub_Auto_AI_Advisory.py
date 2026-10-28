@@ -11,7 +11,7 @@ import unittest
 MAIN = Path(__file__).resolve().parents[1] / "main.py"
 
 
-def load_health_endpoints(*, shutdown=False, url="https://bot.example", secret="mock-secret"):
+def load_health_endpoints(*, shutdown=False, webhook_shutdown=False, url="https://bot.example", secret="mock-secret"):
     tree = ast.parse(MAIN.read_text(encoding="utf-8"))
     names = {"health_live", "health_ready"}
     funcs = []
@@ -26,6 +26,7 @@ def load_health_endpoints(*, shutdown=False, url="https://bot.example", secret="
         "time": types.SimpleNamespace(monotonic=lambda: 180.0),
         "_PROCESS_START_MONOTONIC": 60.0,
         "executor": types.SimpleNamespace(_shutdown=shutdown),
+        "webhook_executor": types.SimpleNamespace(_shutdown=webhook_shutdown),
         "WEBHOOK_URL": url,
         "WEBHOOK_SECRET": secret,
     }
@@ -52,6 +53,11 @@ class HealthEndpointTests(unittest.TestCase):
 
     def test_shutdown_executor_fails_closed(self):
         payload, status = load_health_endpoints(shutdown=True)["health_ready"]()
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["status"], "degraded")
+
+    def test_shutdown_webhook_executor_fails_closed(self):
+        payload, status = load_health_endpoints(webhook_shutdown=True)["health_ready"]()
         self.assertEqual(status, 503)
         self.assertEqual(payload["status"], "degraded")
 

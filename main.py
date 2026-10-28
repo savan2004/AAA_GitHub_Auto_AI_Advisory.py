@@ -79,7 +79,9 @@ app.config["MAX_CONTENT_LENGTH"] = 256_000
 from internal_report_bridge import bp as full_research_bp
 app.register_blueprint(full_research_bp)
 bot = telebot.TeleBot(TOKEN, threaded=False)
-executor = ThreadPoolExecutor(max_workers=20)
+executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="msk-heavy")
+# Reserve a separate pool for Telegram update intake.
+webhook_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="msk-webhook")
 # This measures only the current Python process lifespan, NOT 24-hour service uptime.
 _PROCESS_START_MONOTONIC = time.monotonic()
 
@@ -167,7 +169,7 @@ state = StateManager()
 _processed_updates = deque(maxlen=1000)
 _processed_updates_set = set()
 _webhook_lock = threading.Lock()
-_webhook_slots = threading.BoundedSemaphore(value=40)
+_webhook_slots = threading.BoundedSemaphore(value=16)
 
 
 # ── Thread-Safe Portfolio Manager ────────────────────────────────────────────
@@ -710,6 +712,19 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
                                type(fallback_error).__name__)
 
 
+def _allow_heavy(m):
+    """Guard direct commands/buttons that bypass the rate-limited text handler.
+    Clear a stale analysis/report prompt when the user navigates elsewhere.
+    """
+    state.clear(m.chat.id)
+    user_id = getattr(getattr(m, "from_user", None), "id", None)
+    uid = user_id if user_id is not None else m.chat.id
+    if API_RATE_LIMITER.is_allowed(uid):
+        return True
+    safe_send(m.chat.id, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
+    return False
+
+
 # ── Command Handlers ─────────────────────────────────────────────────────────
 @bot.message_handler(commands=["start"])
 def cmd_start(m):
@@ -785,6 +800,8 @@ def run_report(chat_id, query):
 
 @bot.message_handler(commands=["report"])
 def cmd_report(m):
+    if not _allow_heavy(m):
+        return
     parts = m.text.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         safe_send(m.chat.id,
@@ -838,6 +855,15 @@ def handle_analysis_callback(call):
     except Exception:
         action, sym = "", ""
     chat_id = call.message.chat.id
+    state.clear(chat_id)
+    sender_id = getattr(getattr(call, "from_user", None), "id", None)
+    uid = sender_id if sender_id is not None else chat_id
+    if not API_RATE_LIMITER.is_allowed(uid):
+        try:
+            bot.answer_callback_query(call.id, text="Rate limit reached; retry later.")
+        except Exception:
+            pass
+        return
 
     if not action or not sym or not re.fullmatch(r"[A-Za-z0-9&_.-]{1,30}", sym):
         try:
@@ -903,6 +929,8 @@ def handle_analysis_callback(call):
 
 @bot.message_handler(commands=["status"])
 def cmd_status(m):
+    if not _allow_heavy(m):
+        return
     cid = m.chat.id
     safe_send(cid, "⏳ Checking status…")
 
@@ -930,6 +958,8 @@ def cmd_status(m):
 
 @bot.message_handler(commands=["chart"])
 def cmd_chart(m):
+    if not _allow_heavy(m):
+        return
     parts = m.text.strip().split()
     if len(parts) < 2:
         safe_send(m.chat.id, "📈 Usage: <code>/chart SYMBOL [period]</code>")
@@ -969,6 +999,8 @@ def cmd_chart(m):
 
 @bot.message_handler(func=lambda m: m.text == "📈 Chart")
 def chart_button(m):
+    if not _allow_heavy(m):
+        return
     safe_send(m.chat.id, "📈 Scanning Nifty 250 for best crossover… (~30s)")
 
     def _run(chat_id=m.chat.id):
@@ -991,6 +1023,8 @@ def chart_button(m):
 
 @bot.message_handler(commands=["buy"])
 def cmd_buy(m):
+    if not _allow_heavy(m):
+        return
     parts = m.text.strip().split()
     if len(parts) != 4:
         safe_send(m.chat.id, "Usage: <code>/buy SYM QTY PRICE</code>")
@@ -1025,6 +1059,8 @@ def cmd_sell(m):
 
 @bot.message_handler(commands=["portfolio"])
 def cmd_portfolio(m):
+    if not _allow_heavy(m):
+        return
     safe_send(m.chat.id, "⏳ Loading…")
 
     def _run(chat_id=m.chat.id):
@@ -1056,6 +1092,8 @@ def stat_btn(m):
 
 @bot.message_handler(func=lambda m: m.text in ["🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"])
 def scan_btn(m):
+    if not _allow_heavy(m):
+        return
     p = {"🏦 Conservative": "conservative", "⚖️ Moderate": "moderate", "🚀 Aggressive": "aggressive"}[m.text]
     safe_send(m.chat.id, f"⏳ Scanning {m.text}…")
 
@@ -1071,6 +1109,8 @@ def scan_btn(m):
 
 @bot.message_handler(func=lambda m: m.text == "📊 Breadth")
 def breadth_btn(m):
+    if not _allow_heavy(m):
+        return
     safe_send(m.chat.id, "⏳ Fetching…")
 
     def _run(chat_id=m.chat.id):
@@ -1085,6 +1125,8 @@ def breadth_btn(m):
 
 @bot.message_handler(func=lambda m: m.text in ["🎯 Swing (Safe)", "🚀 Swing (Agr)"])
 def swing_btn(m):
+    if not _allow_heavy(m):
+        return
     mode = "conservative" if "Safe" in m.text else "aggressive"
     safe_send(m.chat.id, f"⏳ Swing scanning… (~25s)")
 
@@ -1203,11 +1245,15 @@ def run_buzz(chat_id):
 
 @bot.message_handler(commands=["buzz"])
 def cmd_buzz(m):
+    if not _allow_heavy(m):
+        return
     executor.submit(run_buzz, m.chat.id)
 
 
 @bot.message_handler(func=lambda m: m.text == "🔥 Stocks Buzz")
 def buzz_btn(m):
+    if not _allow_heavy(m):
+        return
     executor.submit(run_buzz, m.chat.id)
 
 
@@ -1276,11 +1322,15 @@ def run_sector_report(chat_id):
 
 @bot.message_handler(commands=["sectors", "sector"])
 def cmd_sectors(m):
+    if not _allow_heavy(m):
+        return
     executor.submit(run_sector_report, m.chat.id)
 
 
 @bot.message_handler(func=lambda m: m.text == "🏭 Sector Report")
 def sector_btn(m):
+    if not _allow_heavy(m):
+        return
     executor.submit(run_sector_report, m.chat.id)
 
 
@@ -1415,7 +1465,8 @@ def health_live():
 def health_ready():
     # A dead submission executor cannot accept webhook updates even while
     # the Flask process is responding. Do not claim Telegram delivery is OK.
-    can_accept = not getattr(executor, "_shutdown", True)
+    can_accept = (not getattr(executor, "_shutdown", True)
+                  and not getattr(webhook_executor, "_shutdown", True))
     configured = not WEBHOOK_URL or bool(WEBHOOK_SECRET)
     ready = bool(can_accept and configured)
     return jsonify({
@@ -1463,7 +1514,7 @@ def webhook():
                 _processed_updates_set.discard(_processed_updates[0])
             _processed_updates.append(uid)
             _processed_updates_set.add(uid)
-        future = executor.submit(_process_webhook, json.dumps(payload))
+        future = webhook_executor.submit(_process_webhook, json.dumps(payload))
         future.add_done_callback(lambda _: _webhook_slots.release())
     except Exception:
         with _webhook_lock:
