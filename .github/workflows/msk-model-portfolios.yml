@@ -9,6 +9,7 @@ on:
       - 'research_upgrade.py'
       - 'main.py'
       - 'tests/test_model_portfolios.py'
+      - 'tests/test_research_snapshot_progress.py'
       - 'model_financial_data.py'
       - 'requirements.txt'
       - 'tests/demo_model_portfolios.py'
@@ -23,6 +24,7 @@ on:
       - 'research_upgrade.py'
       - 'main.py'
       - 'tests/test_model_portfolios.py'
+      - 'tests/test_research_snapshot_progress.py'
       - 'model_financial_data.py'
       - 'requirements.txt'
       - 'tests/demo_model_portfolios.py'
@@ -46,6 +48,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_model_financial_data.py' -v
       - name: Test three model profiles without network/AI keys
         run: python -m unittest discover -s tests -p 'test_model_portfolios.py' -v
+      - name: Verify snapshot refresh progresses despite provider/history failures
+        run: python -m unittest discover -s tests -p 'test_research_snapshot_progress.py' -v
       - name: Simulate exact Telegram output using synthetic evidence
         run: python tests/demo_model_portfolios.py
       - name: Install public-data audit dependencies
