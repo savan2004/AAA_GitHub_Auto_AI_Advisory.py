@@ -35,7 +35,7 @@ def helper_environment(allowed):
 
 class IsolationTests(unittest.TestCase):
     def test_webhook_pool_is_not_heavy_job_executor(self):
-        root_assign = ast.get_source_segment(SOURCE, TREE)
+        root_assign = SOURCE
         self.assertIn("webhook_executor = ThreadPoolExecutor(", root_assign)
         self.assertIn("executor = ThreadPoolExecutor(", root_assign)
         webhook_source = ast.get_source_segment(SOURCE, function("webhook"))
