@@ -225,7 +225,7 @@ class UserRequestedDeliveryFieldsTests(unittest.TestCase):
                 )
                 self.assertEqual(len(symbols), 10)
                 self.assertEqual(len(messages), 4)
-                rendered = "\\n".join(messages[1:3])
+                rendered = "\n".join(messages[1:3])
                 self.assertEqual(rendered.count("Target ₹"), 10)
                 self.assertEqual(rendered.count("SL ₹"), 10)
                 self.assertEqual(rendered.count("Timeframe "), 10)
