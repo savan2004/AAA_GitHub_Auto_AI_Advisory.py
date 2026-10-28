@@ -53,7 +53,7 @@ def connection():
         raise ValueError("COLLECTOR_DATABASE_URL must be PostgreSQL")
     # psycopg defaults to TLS verification based on supplied URL parameters.
     # Require explicit verified TLS for remote connections.
-    return psycopg.connect(url, connect_timeout=10, sslmode="verify-full")
+    return psycopg.connect(url, connect_timeout=10, sslmode="verify-full", autocommit=True)
 
 def initialize(conn):
     with conn.transaction():
