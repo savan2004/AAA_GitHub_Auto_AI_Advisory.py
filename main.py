@@ -12,9 +12,10 @@ import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, date
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 import threading
 import hmac
+import html
 
 import requests
 import pandas as pd
@@ -506,60 +507,105 @@ def build_fundamental_text(sym, cname=None):
 
 
 # ── Screener Card ─────────────────────────────────────────────────────────
+# A single bounded pool and gate prevent repeated scans from accumulating
+# network threads. A 15s presentation deadline does NOT cancel running I/O.
 SCREENER_STOCKS = {
     "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
     "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
-    "aggressive": ["TATAMOTORS", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ZOMATO", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
+    # Exchange-approved new symbols following the 2025 corporate actions.
+    "aggressive": ["TMPV", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ETERNAL", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
 }
+_SCAN_TIMEOUT_SECONDS = 15
+_SCAN_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="msk-scan")
+_SCAN_GATE = threading.BoundedSemaphore(value=1)
 
 
 def build_scan(profile):
     syms = SCREENER_STOCKS.get(profile, [])
     if not syms:
         return "❌ Unknown profile."
+    if not _SCAN_GATE.acquire(blocking=False):
+        return "⏳ A stock scan is still running. Please retry when the previous scan completes."
+
     labels = {"conservative": "🏦 CONSERVATIVE", "moderate": "⚖️ MODERATE", "aggressive": "🚀 AGGRESSIVE"}
-    lines = [f"📊 <b>{labels.get(profile, 'SCREENER')}</b>", f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
+    lines = [f"📊 <b>{labels[profile]}</b>",
+             f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
+    futures = {}
+    deferred_release = False
 
     def _fetch(sym):
         try:
             df = get_hist(sym, "6mo")
             if df is None or df.empty or len(df) < 28:
                 return None
-            c = df["Close"]
-            ltp = round(float(c.iloc[-1]), 2)
-            prev = float(c.iloc[-2])
+            close = df["Close"]
+            ltp = round(float(close.iloc[-1]), 2)
+            prev = float(close.iloc[-2])
             chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
-            rsi_val = calc_rsi(c)
-            trend_val = trend_label(c)
-            signal_val = swing_signal(rsi_val, trend_val, chg)
-            return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi_val, "trend": trend_val, "signal": signal_val}
+            rsi = calc_rsi(close)
+            trend = trend_label(close)
+            signal = swing_signal(rsi, trend, chg)
+            return {"ltp": ltp, "chg": chg, "rsi": rsi, "trend": trend, "signal": signal}
         except Exception:
+            # A single upstream quote failure must never abort the whole scan.
+            logger.debug("Screener quote unavailable for %s", sym)
             return None
 
-    results = {}
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        futs = {pool.submit(_fetch, s): s for s in syms}
-        for f in as_completed(futs, timeout=15):
-            sym = futs[f]
+    try:
+        futures = {_SCAN_POOL.submit(_fetch, sym): sym for sym in syms}
+        completed, unfinished = wait(futures, timeout=_SCAN_TIMEOUT_SECONDS)
+        results = {}
+        for future in completed:
+            sym = futures[future]
             try:
-                r = f.result()
-                if r:
-                    results[sym] = r
+                row = future.result()
+                if row:
+                    results[sym] = row
             except Exception:
-                pass
+                logger.debug("Screener worker failed for %s", sym)
+        if unfinished:
+            for future in unfinished:
+                future.cancel()
+            logger.warning("Screener %s partial: %d/%d futures unfinished at deadline",
+                           profile, len(unfinished), len(futures))
 
-    for s in syms:
-        r = results.get(s)
-        if not r:
-            continue
-        icon = "🟢" if r["chg"] >= 0 else "🔴"
-        rsi_b = "🔴OB" if r["rsi"] > 70 else ("🟢OS" if r["rsi"] < 30 else "🟡")
-        lines.append(f"{icon} <b>{s}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n   RSI:{r['rsi']} {rsi_b}  |  {r['trend']}  |  <b>{r['signal']}</b>")
+        for sym in syms:
+            row = results.get(sym)
+            if row is None:
+                continue
+            icon = "🟢" if row["chg"] >= 0 else "🔴"
+            rsi_band = "🔴OB" if row["rsi"] > 70 else ("🟢OS" if row["rsi"] < 30 else "🟡")
+            # NSE symbols such as M&M must be escaped for Telegram HTML.
+            safe_sym = html.escape(sym, quote=False)
+            lines.append(
+                f"{icon} <b>{safe_sym}</b>  ₹{row['ltp']:,.2f} ({row['chg']:+.2f}%)\n"
+                f"   RSI:{row['rsi']} {rsi_band}  |  {row['trend']}  |  <b>{row['signal']}</b>"
+            )
 
-    if not results:
-        lines.append("❌ Data unavailable.")
-    lines.append("\n⚠️ Educational only.")
-    return "\n".join(lines)
+        if not results:
+            lines.append("⚠️ No valid quotes returned before the scan deadline. Please retry.")
+        elif len(results) < len(syms):
+            lines.append(
+                f"ℹ️ Partial scan: {len(results)}/{len(syms)} stocks returned valid data; "
+                f"{len(syms) - len(results)} missing, invalid or timed out."
+            )
+        lines.append("\n⚠️ Educational only. Screening data may be delayed.")
+        return "\n".join(lines)
+    finally:
+        # Do not block the Telegram response while network calls finish.
+        # Keep the scan gate closed until every outstanding task terminates;
+        # this prevents a flood of abandoned per-request pools/threads.
+        if futures and any(not f.done() for f in futures):
+            def _release_on_completion(tasks=tuple(futures)):
+                try:
+                    wait(tasks)
+                finally:
+                    _SCAN_GATE.release()
+            threading.Thread(target=_release_on_completion, daemon=True,
+                             name="msk-scan-drain").start()
+            deferred_release = True
+        if not deferred_release:
+            _SCAN_GATE.release()
 
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
