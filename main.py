@@ -612,8 +612,10 @@ def build_scan(profile):
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
 def build_breadth():
-    from market_breadth import get_breadth, format_breadth
-    return format_breadth(get_breadth())
+    # Quick, clearly sourced market context. A low-coverage Nifty-500 download
+    # must not prevent the user receiving verified Nifty/ATR information.
+    from market_pulse import build_market_pulse
+    return build_market_pulse()
 
 
 # ── Build Portfolio Card ─────────────────────────────────────────────────────
