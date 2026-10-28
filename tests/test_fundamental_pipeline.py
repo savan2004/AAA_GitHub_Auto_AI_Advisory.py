@@ -437,7 +437,7 @@ class T09_Failures(Base):
 # 10. existing features untouched
 class T10_ExistingFeaturesIntact(unittest.TestCase):
     ORIG = "/mnt/user-data/uploads/AAA_GitHub_Auto_AI_Advisory_py-main.zip"
-    UNTOUCHED = ["main.py", "universe.py", "stocks_buzz.py", "swing_trades.py", "sector_report.py", "ai_engine.py",
+    UNTOUCHED = ["universe.py", "stocks_buzz.py", "swing_trades.py", "sector_report.py", "ai_engine.py",
                  "data_engine.py", "fundamentals.py", "research_data.py", "nifty500_collector.py", "market_news.py", "config.py"]
 
     @unittest.skipUnless(os.path.exists(ORIG), "original zip not available")
@@ -448,13 +448,18 @@ class T10_ExistingFeaturesIntact(unittest.TestCase):
             self.assertEqual(hashlib.sha256(z.read(base + f)).hexdigest(),
                              hashlib.sha256(pathlib.Path(ROOT, f).read_bytes()).hexdigest(), f)
 
-    def test_portfolio_profiles_and_menu_still_defined(self):
+    def test_active_menu_and_reports_survive_tier_scan_retirement(self):
         src = pathlib.Path(ROOT, "main.py").read_text(encoding="utf-8")
         names = {n.name for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef)}
-        for fn in ("build_scan", "main_keyboard", "scan_btn", "run_report", "cmd_report"):
+        for fn in ("main_keyboard", "build_portfolio_card", "swing_btn", "run_report", "cmd_report"):
             self.assertIn(fn, names)
-        for prof in ("Conservative", "Moderate", "Aggressive"):
-            self.assertIn(prof, src)
+        for retired in ("build_scan", "scan_btn"):
+            self.assertNotIn(retired, names)
+        menu = src.split("def main_keyboard():", 1)[1].split("def analysis_choice_keyboard", 1)[0]
+        for label in ("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"):
+            self.assertNotIn(label, menu)
+        for active in ("💼 Portfolio", "🎯 Swing (Safe)", "🚀 Swing (Agr)", "📊 Breadth"):
+            self.assertIn(active, menu)
 
     def test_public_report_api_unchanged(self):
         self.assertEqual(str(inspect.signature(rg.generate_stock_report_pdf)), "(symbol: str) -> Tuple[bool, str, Optional[str]]")
