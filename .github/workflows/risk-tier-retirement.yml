@@ -1,0 +1,29 @@
+name: Risk Tier Retirement Regression
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'tests/test_retired_tier_buttons.py'
+      - 'test_fundamental_pipeline.py'
+      - 'tests/test_fundamental_pipeline.py'
+      - '.github/workflows/risk-tier-retirement.yml'
+permissions:
+  contents: read
+jobs:
+  tier-retirement:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile changed Python sources
+        run: |
+          python -m py_compile main.py
+          python -m py_compile tests/test_retired_tier_buttons.py
+          python -m py_compile tests/test_fundamental_pipeline.py
+          python -m py_compile test_fundamental_pipeline.py
+      - name: Verify retired routes and unrelated bot features
+        run: python -m unittest discover -s tests -p 'test_retired_tier_buttons.py' -v
