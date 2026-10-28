@@ -272,6 +272,18 @@ def get_research_snapshot():
         if not any(word in sector.lower() for word in ("banking", "finance", "insurance"))
     ]
     universe = sorted(set(symbol for group in sectors for symbol in group))
+    # Fail immediately and visibly when a commercially usable source has not
+    # been configured. Repeated button presses must not masquerade as cache
+    # warming or silently fetch unlicensed provider pages.
+    if (not os.getenv("MODEL_APPROVED_DATA_PATH") and
+            os.getenv("MODEL_SCREENER_USE_AUTHORIZED", "").lower() != "true"):
+        return {
+            "rows": [], "checked": 0, "cached": 0, "universe": len(universe),
+            "pending": 0, "rejected": {},
+            "provider_failures": {
+                "financial_source": "No approved financial-statement dataset configured"
+            },
+        }
     priority = []
     for index in range(max((len(group) for group in sectors), default=0)):
         for group in sectors:
