@@ -7,6 +7,8 @@ import json
 import logging
 import math
 import os
+import re
+import html
 from pathlib import Path
 import tempfile
 import threading
@@ -148,7 +150,6 @@ class TelegramMockSessionTests(unittest.TestCase):
         from datetime import date
         import hmac
         import re
-import html
         from types import SimpleNamespace
 
         source = MAIN_FILE.read_text(encoding="utf-8")
