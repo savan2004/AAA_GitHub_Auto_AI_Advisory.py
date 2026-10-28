@@ -20,7 +20,6 @@ from market_breadth import IST, completed_prices, expected_completed_session, ge
 
 _LOG = logging.getLogger(__name__)
 _FEEDS = (
-    ("ET Markets", "https://economictimes.indiatimes.com/markets/rss.cms"),
     ("Moneycontrol", "https://www.moneycontrol.com/rss/marketreports.xml"),
 )
 _POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="msk-breadth-refresh")
