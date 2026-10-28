@@ -4,6 +4,9 @@ from pathlib import Path
 import re
 import unittest
 
+# Include isolated Fundamental numeric tests in the existing CI entry point.
+from test_fundamental_numeric_validation import FundamentalNumericValidationTests
+
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = (ROOT / "main.py").read_text(encoding="utf-8")
 CONFIG = (ROOT / "config.py").read_text(encoding="utf-8")
