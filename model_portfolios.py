@@ -230,16 +230,16 @@ def format_model(result, snap):
     holdings = result["holdings"]
     messages = [head + f"Cash reserve: ₹{result['cash_rupees']/1e7:,.2f} Cr ({cfg['cash_pct']}%).\n"
                 f"Ten holdings, at most {MAX_STOCKS_PER_SECTOR} from one sector.\n"
-                "Scores, target and stop are unbacktested volatility rules, NOT forecasts.\\n"
+                "Scores, target and stop are unbacktested volatility rules, NOT forecasts.\n"
                 "Historical closes only; no execution, gaps, fees, or slippage assumed."]
     for start in (0, 5):
         blocks = []
         for number, h in enumerate(holdings[start:start + 5], start + 1):
             blocks.append(
                 f"<b>{number}. {escape(h['name'])} ({escape(h['symbol'])})</b> | {escape(h['sector'])}\n"
-                f"Timeframe {escape(h['timeframe'])} | Reference close ₹{h['reference_price']:,.2f} ({escape(h['asof'])})\\n"
-                f"Target ₹{h['target']:,.2f} | SL ₹{h['stop_loss']:,.2f} | R:R {h['reward_risk']:.1f}:1\\n"
-                f"Allocation ₹{h['allocation_rupees']:,.0f} ({h['allocation_rupees']/result['capital_rupees']*100:.1f}% of hypothetical corpus)\\n"
+                f"Timeframe {escape(h['timeframe'])} | Reference close ₹{h['reference_price']:,.2f} ({escape(h['asof'])})\n"
+                f"Target ₹{h['target']:,.2f} | SL ₹{h['stop_loss']:,.2f} | R:R {h['reward_risk']:.1f}:1\n"
+                f"Allocation ₹{h['allocation_rupees']:,.0f} ({h['allocation_rupees']/result['capital_rupees']*100:.1f}% of hypothetical corpus)\n"
                 f"Score {h['score']:.1f}/100 (unbacktested) | Trend {escape(str(h['timing']))}\n"
                 f"ROE {h['roe']:.1f}% | Annual sales YoY {h['growth']:.1f}%\n"
                 f"P/E {h['pe']:.1f} | Borrowings/Equity {h['debt']:.2f} | Volatility {h['vol']:.1f}%\n"
