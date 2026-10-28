@@ -68,7 +68,6 @@ Add chart button to the main keyboard in `main_keyboard()`:
 def main_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     kb.add("🔍 Analysis", "📊 Breadth", "📈 Chart")  # NEW: 📈 Chart
-    kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📰 News", "📈 Status")
     return kb
