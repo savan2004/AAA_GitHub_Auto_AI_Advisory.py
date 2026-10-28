@@ -1,21 +1,9 @@
-"""
-market_news.py — Dynamic Multi-Source News v3.1 (FIX 7.0 Complete)
-
-FIX 7.0 Changes (this pass):
-- get_stock_news() now GUARANTEES non-empty result with fallback
-- Added explicit logging when fallback is used
-- Validates that news is non-empty before returning
-- Handles empty-list returns from all sources gracefully
-
-FIX 6.0 Changes:
-- Increased timeouts: Tavily 12s, RSS 10s (was 10s/8s)
-- Relaxed junk patterns: Removed domain names, focus on actual junk titles
-- Added multi-format RSS parsing (CDATA + plain title + description fallback)
-- Added static fallback when all sources fail
-- Better error handling with logging
+"""Source-reported market and stock news only. Never fabricate fallback headlines.
+Publication times are unverified by the legacy title-only adapters.
 """
 
 import os
+import html
 import re
 import logging
 import requests
@@ -48,23 +36,8 @@ _MARKET_KEYWORDS = ["nifty", "sensex", "market", "stock", "sebi", "rbi", "bse", 
 TIMEOUT_TAVILY = 12  # was 10
 TIMEOUT_RSS = 10     # was 8
 
-# FIX 6.0: Static fallback headlines
-_STATIC_HEADLINES = [
-    "Nifty 50 remains in bullish zone above 25,000",
-    "Banking sector shows resilience amid rate hold expectations",
-    "IT stocks gain on strong Q1 results",
-    "Small-cap rally continues on earnings optimism",
-    "RBI likely to hold policy rates as inflation cools",
-]
-
-# FIX 7.0: Per-stock fallback when no news found
-_STOCK_NEWS_FALLBACK = {
-    "RELIANCE": "Strong performance on energy & telecom segments; fundamentals remain robust.",
-    "TCS": "IT bellwether tracking global tech demand; Q1 results beat estimates.",
-    "INFY": "Digital transformation play; margins stable on rupee depreciation headwinds.",
-    "HDFC": "Banking leader; Q1 NPA improvements support growth narrative.",
-    "ITC": "Diversified conglomerate; agro & cigarette segments performing well.",
-}
+# Legacy report_generator compatibility; empty rather than invented stock copy.
+_STOCK_NEWS_FALLBACK = {}
 
 def _is_headline(title: str) -> bool:
     if not title or len(title) < 20:
@@ -170,23 +143,22 @@ def get_market_news(n: int = 5) -> str:
 
     headlines = list(dict.fromkeys(h for h in headlines if _is_headline(h)))[:n]
 
-    # FIX 7.0: GUARANTEE non-empty result
     if not headlines:
-        headlines = _STATIC_HEADLINES[:n]
-        logger.warning(f"market_news: All sources failed, using static fallback")
-        result = "📰 <b>MARKET NEWS</b> (Auto-generated)\n━━━━━━━━━━━━━━━━━━━━\n"
-    else:
-        result = "📰 <b>MARKET NEWS</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-    
-    result += "\n".join(f"• {h[:100]}" for h in headlines)
+        logger.warning("market_news: no source-reported market headlines available")
+        return "📰 <b>MARKET NEWS</b>\n⚠️ Source headlines unavailable. No news has been invented."
+    # Upstream title-only feeds do not consistently verify publisher timestamps.
+    result = ("📰 <b>MARKET NEWS</b>\n"
+              "<i>Source-reported headlines; publication times unverified.</i>\n"
+              "━━━━━━━━━━━━━━━━━━━━\n")
+    result += "\n".join(f"• {html.escape(str(h)[:100], quote=False)}" for h in headlines)
     result += "\n━━━━━━━━━━━━━━━━━━━━"
     return result
 
 
 def get_stock_news(symbol: str, n: int = 2) -> str:
     """
-    Per-stock news. Tavily → Finnhub → MoneyControl RSS → per-stock fallback → generic fallback.
-    FIX 7.0: GUARANTEED to return non-empty news string.
+    Per-stock headlines from providers; no static or invented fallback.
+    The upstream title-only adapters do not verify publication date.
     """
     headlines = []
     from_date = (date.today() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -231,18 +203,12 @@ def get_stock_news(symbol: str, n: int = 2) -> str:
 
     # Validate: if we have headlines, format & return
     if headlines:
-        result = "\n".join(f"📰 {h[:87] + '…' if len(h) > 87 else h}" for h in headlines[:n])
+        result = "\n".join(
+            "📰 " + html.escape(str(h)[:87] + ("…" if len(str(h)) > 87 else ""), quote=False)
+            for h in headlines[:n]
+        )
         logger.info(f"stock_news {symbol}: Returning {len(headlines[:n])} headlines")
         return result
 
-    # FIX 7.0: Per-stock fallback (symbol-specific generic news)
-    logger.warning(f"stock_news {symbol}: All sources failed, checking symbol fallback")
-    fallback = _STOCK_NEWS_FALLBACK.get(symbol.upper())
-    if fallback:
-        logger.info(f"stock_news {symbol}: Using symbol-specific fallback")
-        return f"📰 {fallback}"
-
-    # FIX 7.0: Generic fallback (applies to any stock)
-    logger.warning(f"stock_news {symbol}: Using generic fallback")
-    generic_fallback = f"📰 Latest market conditions favorable for {symbol}. Recommend checking company announcements and financial disclosures for specific updates."
-    return generic_fallback
+    logger.warning("stock_news %s: no source-reported headlines; no fallback", symbol)
+    return ""
