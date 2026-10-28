@@ -19,7 +19,7 @@ def load_portfolio_manager():
     source = MAIN_FILE.read_text(encoding="utf-8")
     tree = ast.parse(source)
     node = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "PortfolioManager")
-    namespace = {"os": os, "json": json, "math": math, "threading": threading, "logger": logging.getLogger(__name__)}
+    namespace = {"os": os, "json": json, "math": math, "re": re, "threading": threading, "logger": logging.getLogger(__name__)}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(MAIN_FILE), "exec"), namespace)
     return namespace["PortfolioManager"]
 
@@ -148,6 +148,7 @@ class TelegramMockSessionTests(unittest.TestCase):
         from datetime import date
         import hmac
         import re
+import html
         from types import SimpleNamespace
 
         source = MAIN_FILE.read_text(encoding="utf-8")
@@ -224,7 +225,7 @@ class TelegramMockSessionTests(unittest.TestCase):
         bot = MockBot()
         namespace = {
             "os": os, "json": json, "math": math, "threading": threading,
-            "re": re, "hmac": hmac, "date": date,
+            "re": re, "html": html, "hmac": hmac, "date": date,
             "logger": logging.getLogger("telegram-mock-smoke"),
             "deque": deque, "bot": bot,
             "executor": ImmediateExecutor(),
