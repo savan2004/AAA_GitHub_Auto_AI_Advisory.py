@@ -701,7 +701,13 @@ def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
         # making missing discussion replies impossible to diagnose on Render.
         logger.warning("[Telegram delivery] send failed: HTTP %s (%s)",
                        getattr(e, "error_code", "unknown"), type(e).__name__)
+        # A transport timeout is ambiguous: Telegram may have accepted the message.
+        # Do not retry automatically, since that could duplicate a financial alert.
         err_str = str(e).lower()
+        if isinstance(e, (requests.exceptions.Timeout, TimeoutError)) or "timeout" in type(e).__name__.lower():
+            logger.error("[Telegram delivery] AMBIGUOUS_TIMEOUT: outcome unknown; "
+                         "reconcile delivery before attempting a manual resend")
+            return False
         if "can't parse" in err_str or "bad request" in err_str:
             try:
                 plain = re.sub(r"<[^>]+>", "", str(text))
