@@ -188,37 +188,63 @@ class PortfolioManager:
         except Exception as e:
             logger.warning(f"Portfolio load error: {e}")
 
-    def _save(self):
+    def _save_locked(self):
+        """Persist a snapshot atomically; caller must hold self._lock."""
+        import tempfile
+        directory = os.path.dirname(os.path.abspath(self._file))
+        temp_path = None
         try:
-            with self._lock:
-                with open(self._file, "w") as f:
-                    json.dump(self._data, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Portfolio save error: {e}")
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=directory,
+                prefix=".portfolio-", suffix=".tmp", delete=False
+            ) as f:
+                temp_path = f.name
+                json.dump(self._data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self._file)
+            return True
+        except Exception:
+            logger.exception("Portfolio save failed")
+            return False
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    def _save(self):
+        with self._lock:
+            return self._save_locked()
 
     def get(self, uid):
         with self._lock:
-            return self._data.setdefault(uid, {}).copy()
+            return self._data.get(uid, {}).copy()
 
     def add(self, uid, sym, qty, price):
         with self._lock:
             p = self._data.setdefault(uid, {})
+            previous = p.get(sym, None)
             if sym in p:
                 oq, oa = p[sym]["qty"], p[sym]["avg"]
                 nq = oq + qty
                 p[sym] = {"qty": nq, "avg": round((oq * oa + qty * price) / nq, 2)}
             else:
                 p[sym] = {"qty": qty, "avg": round(price, 2)}
-        self._save()
+            if not self._save_locked():
+                if previous is None:
+                    del p[sym]
+                else:
+                    p[sym] = previous
+                raise OSError("Portfolio change could not be saved")
 
     def remove(self, uid, sym):
         with self._lock:
             if uid not in self._data or sym not in self._data[uid]:
                 return False
-            del self._data[uid][sym]
-        # _save acquires the same lock; never call it while holding the lock.
-        self._save()
-        return True
+            previous = self._data[uid].pop(sym)
+            if not self._save_locked():
+                self._data[uid][sym] = previous
+                raise OSError("Portfolio change could not be saved")
+            return True
 
 
 portfolio = PortfolioManager()
