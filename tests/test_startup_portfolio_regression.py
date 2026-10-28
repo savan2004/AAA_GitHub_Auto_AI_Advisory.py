@@ -5,6 +5,7 @@ Runs without importing main.py, which needs live Telegram credentials.
 import ast
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -18,7 +19,7 @@ def load_portfolio_manager():
     source = MAIN_FILE.read_text(encoding="utf-8")
     tree = ast.parse(source)
     node = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "PortfolioManager")
-    namespace = {"os": os, "json": json, "threading": threading, "logger": logging.getLogger(__name__)}
+    namespace = {"os": os, "json": json, "math": math, "threading": threading, "logger": logging.getLogger(__name__)}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(MAIN_FILE), "exec"), namespace)
     return namespace["PortfolioManager"]
 
@@ -42,6 +43,47 @@ class PortfolioRegressionTests(unittest.TestCase):
         cls = load_portfolio_manager()
         with tempfile.TemporaryDirectory() as folder:
             self.assertFalse(cls(str(Path(folder) / "positions.json")).remove(1, "MISSING"))
+
+
+    def test_storage_write_error_does_not_modify_holdings(self):
+        from unittest.mock import patch
+        cls = load_portfolio_manager()
+        with tempfile.TemporaryDirectory() as folder:
+            manager = cls(str(Path(folder) / "positions.json"))
+            manager.add(100, "SBIN", 2, 500)
+            before = manager.get(100)
+            with patch("os.replace", side_effect=OSError("synthetic disk failure")):
+                with self.assertRaisesRegex(RuntimeError, "could not be saved"):
+                    manager.add(100, "SBIN", 2, 600)
+            self.assertEqual(manager.get(100), before)
+            self.assertEqual(cls(str(Path(folder) / "positions.json")).get(100), before)
+
+    def test_nonfinite_buy_values_are_rejected(self):
+        cls = load_portfolio_manager()
+        with tempfile.TemporaryDirectory() as folder:
+            manager = cls(str(Path(folder) / "positions.json"))
+            for bad in (float("nan"), float("inf"), float("-inf"), 0, -1):
+                with self.subTest(price=bad):
+                    with self.assertRaises(ValueError):
+                        manager.add(100, "SBIN", 2, bad)
+            self.assertEqual(manager.get(100), {})
+
+    def test_corrupt_file_fails_closed_instead_of_erasing(self):
+        cls = load_portfolio_manager()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "positions.json"
+            path.write_text('{"incomplete":', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "manual recovery required"):
+                cls(str(path))
+
+    def test_external_get_cannot_modify_holdings(self):
+        cls = load_portfolio_manager()
+        with tempfile.TemporaryDirectory() as folder:
+            manager = cls(str(Path(folder) / "positions.json"))
+            manager.add(100, "SBIN", 2, 500)
+            local = manager.get(100)
+            local["SBIN"]["qty"] = 99999
+            self.assertEqual(manager.get(100)["SBIN"]["qty"], 2)
 
 
 class WebhookSecurityTests(unittest.TestCase):
@@ -139,7 +181,7 @@ class TelegramMockSessionTests(unittest.TestCase):
         secret = "mock-only-secret-123456789"
         bot = MockBot()
         namespace = {
-            "os": os, "json": json, "threading": threading,
+            "os": os, "json": json, "math": math, "threading": threading,
             "re": re, "hmac": hmac, "date": date,
             "logger": logging.getLogger("telegram-mock-smoke"),
             "deque": deque, "bot": bot,
