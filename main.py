@@ -504,60 +504,10 @@ def build_fundamental_text(sym, cname=None):
 
 
 # ── Screener Card ─────────────────────────────────────────────────────────
-SCREENER_STOCKS = {
-    "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
-    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
-    "aggressive": ["TATAMOTORS", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ZOMATO", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
-}
-
-
 def build_scan(profile):
-    syms = SCREENER_STOCKS.get(profile, [])
-    if not syms:
-        return "❌ Unknown profile."
-    labels = {"conservative": "🏦 CONSERVATIVE", "moderate": "⚖️ MODERATE", "aggressive": "🚀 AGGRESSIVE"}
-    lines = [f"📊 <b>{labels.get(profile, 'SCREENER')}</b>", f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
-
-    def _fetch(sym):
-        try:
-            df = get_hist(sym, "6mo")
-            if df is None or df.empty or len(df) < 28:
-                return None
-            c = df["Close"]
-            ltp = round(float(c.iloc[-1]), 2)
-            prev = float(c.iloc[-2])
-            chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
-            rsi_val = calc_rsi(c)
-            trend_val = trend_label(c)
-            signal_val = swing_signal(rsi_val, trend_val, chg)
-            return {"sym": sym, "ltp": ltp, "chg": chg, "rsi": rsi_val, "trend": trend_val, "signal": signal_val}
-        except Exception:
-            return None
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        futs = {pool.submit(_fetch, s): s for s in syms}
-        for f in as_completed(futs, timeout=15):
-            sym = futs[f]
-            try:
-                r = f.result()
-                if r:
-                    results[sym] = r
-            except Exception:
-                pass
-
-    for s in syms:
-        r = results.get(s)
-        if not r:
-            continue
-        icon = "🟢" if r["chg"] >= 0 else "🔴"
-        rsi_b = "🔴OB" if r["rsi"] > 70 else ("🟢OS" if r["rsi"] < 30 else "🟡")
-        lines.append(f"{icon} <b>{s}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%)\n   RSI:{r['rsi']} {rsi_b}  |  {r['trend']}  |  <b>{r['signal']}</b>")
-
-    if not results:
-        lines.append("❌ Data unavailable.")
-    lines.append("\n⚠️ Educational only.")
-    return "\n".join(lines)
+    """Three research-first model portfolios; no stale fixed ten-stock lists."""
+    from model_portfolios import run_model
+    return run_model(profile)
 
 
 # ── Build Market Breadth ─────────────────────────────────────────────────────
@@ -1013,7 +963,19 @@ def scan_btn(m):
 
     def _run(chat_id=m.chat.id, prof=p):
         try:
-            safe_send(chat_id, build_scan(prof))
+            messages, symbols = build_scan(prof)
+            if symbols:
+                keyboard = types.InlineKeyboardMarkup(row_width=5)
+                buttons = [
+                    types.InlineKeyboardButton(sym, callback_data=f"menu|{sym}")
+                    for sym in symbols
+                ]
+                keyboard.add(*buttons)
+            else:
+                keyboard = None
+            for index, message in enumerate(messages):
+                markup = keyboard if index == len(messages) - 1 else None
+                safe_send(chat_id, message, reply_markup=markup)
         except Exception as e:
             logger.error(f"Screener err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")

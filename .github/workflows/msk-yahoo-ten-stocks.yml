@@ -1,0 +1,23 @@
+name: MSK Yahoo Ten Real Companies
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/simulate_yahoo_10_stocks.py'
+      - 'yahoo_session_fundamentals.py'
+      - '.github/workflows/msk-yahoo-ten-stocks.yml'
+  workflow_dispatch:
+
+jobs:
+  ten-real-company-fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install exact production Yahoo dependencies
+        run: python -m pip install "yfinance==0.2.61" "curl_cffi==0.7.4"
+      - name: Fetch ten distinct NSE companies from Yahoo, showing missing fields
+        run: python -u tests/simulate_yahoo_10_stocks.py

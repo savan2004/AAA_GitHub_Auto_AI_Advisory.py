@@ -1,0 +1,67 @@
+name: MSK Model Portfolios Regression
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'model_portfolios.py'
+      - 'model_financial_data.py'
+      - 'requirements.txt'
+      - 'research_upgrade.py'
+      - 'main.py'
+      - 'tests/test_model_portfolios.py'
+      - 'tests/test_research_snapshot_progress.py'
+      - 'tests/test_portfolio_telegram_delivery.py'
+      - 'model_financial_data.py'
+      - 'requirements.txt'
+      - 'tests/demo_model_portfolios.py'
+      - 'tests/live_model_research_audit.py'
+      - '.github/workflows/msk-model-portfolios.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'model_portfolios.py'
+      - 'model_financial_data.py'
+      - 'requirements.txt'
+      - 'research_upgrade.py'
+      - 'main.py'
+      - 'tests/test_model_portfolios.py'
+      - 'tests/test_research_snapshot_progress.py'
+      - 'tests/test_portfolio_telegram_delivery.py'
+      - 'model_financial_data.py'
+      - 'requirements.txt'
+      - 'tests/demo_model_portfolios.py'
+      - 'tests/live_model_research_audit.py'
+      - '.github/workflows/msk-model-portfolios.yml'
+  workflow_dispatch:
+
+jobs:
+  model-portfolio-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Compile research and bot routing
+        run: python -m py_compile model_financial_data.py model_portfolios.py research_upgrade.py main.py
+      - name: Install financial parser dependencies
+        run: python -m pip install beautifulsoup4==4.13.4 requests==2.32.3
+      - name: Test strict statement period parser
+        run: python -m unittest discover -s tests -p 'test_model_financial_data.py' -v
+      - name: Test three model profiles without network/AI keys
+        run: python -m unittest discover -s tests -p 'test_model_portfolios.py' -v
+      - name: Verify snapshot refresh progresses despite provider/history failures
+        run: python -m unittest discover -s tests -p 'test_research_snapshot_progress.py' -v
+      - name: Test real Telegram button routing without sending messages
+        run: python -m unittest discover -s tests -p 'test_portfolio_telegram_delivery.py' -v
+      - name: Simulate exact Telegram output using synthetic evidence
+        run: python tests/demo_model_portfolios.py
+      - name: Install public-data audit dependencies
+        run: python -m pip install pandas==2.2.3 requests==2.32.3
+      - name: Audit five real NSE companies (manual and licensed use ONLY)
+        if: ${{ github.event_name == 'workflow_dispatch' && vars.MSK_SCREENER_USE_LICENSED == 'true' }}
+        env:
+          MODEL_SCREENER_USE_AUTHORIZED: 'true'
+        run: python tests/live_model_research_audit.py
+      - name: Check existing Telegram menu routing
+        run: python -m unittest discover -s tests -p 'test_msk_menu_audit.py' -v
