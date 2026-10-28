@@ -234,7 +234,7 @@ class UserRequestedDeliveryFieldsTests(unittest.TestCase):
                 for holding in result["holdings"]:
                     self.assertEqual(holding["timeframe"], horizon)
                     self.assertEqual(holding["allocation_rupees"],
-                                     MODEL_CAPITAL_RUPEES * allocation_pct / 1000)
+                                     MODEL_CAPITAL_RUPEES * allocation_pct / 100)
                     self.assertLess(holding["stop_loss"],
                                     holding["reference_price"])
                     self.assertGreater(holding["target"],
