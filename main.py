@@ -1046,6 +1046,9 @@ def cmd_buy(m):
 
 @bot.message_handler(commands=["sell"])
 def cmd_sell(m):
+    # Portfolio deletion must obey the same per-user guard as portfolio buying.
+    if not _allow_heavy(m):
+        return
     parts = m.text.strip().split()
     if len(parts) < 2:
         safe_send(m.chat.id, "Usage: <code>/sell SYM</code>")
