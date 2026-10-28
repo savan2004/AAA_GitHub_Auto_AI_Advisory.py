@@ -245,6 +245,31 @@ class UserRequestedDeliveryFieldsTests(unittest.TestCase):
                                      holding["target"])
                 self.assertIn("NOT forecasts", messages[0])
 
+    def test_missing_licensed_financial_source_displays_real_blocker(self):
+        import os
+        from unittest.mock import patch
+        from model_portfolios import get_research_snapshot, run_model
+        with patch.dict(os.environ,
+                        {"MODEL_APPROVED_DATA_PATH": "",
+                         "MODEL_SCREENER_USE_AUTHORIZED": "false"}):
+            with patch("model_financial_data.fetch_model_fundamentals") as fetch:
+                snap = get_research_snapshot()
+                self.assertEqual(snap["checked"], 0)
+                self.assertIn("financial_source", snap["provider_failures"])
+                for profile in ("conservative", "moderate", "aggressive"):
+                    messages, symbols = run_model(profile)
+                    self.assertFalse(symbols)
+                    self.assertIn("No approved financial-statement dataset", messages[0])
+                    self.assertNotIn("Target ₹", messages[0])
+                fetch.assert_not_called()
+
+    def test_telegram_message_chunks_under_4096_characters(self):
+        rows = [candidate(i) for i in range(10)]
+        for profile in ("conservative", "moderate", "aggressive"):
+            messages, _ = format_model(select_model(rows, profile, now=NOW),
+                                       {"checked": 10, "universe": 200})
+            self.assertTrue(all(len(message) <= 4096 for message in messages))
+
     def test_unverified_price_or_volatility_must_not_publish_levels(self):
         for invalid in (0, -1, float("nan"), float("inf")):
             rows = [candidate(i) for i in range(10)]
