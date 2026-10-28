@@ -202,5 +202,60 @@ class TelegramModelIntegrationTests(unittest.TestCase):
         self.assertNotIn("Cash reserve:", messages[0])
 
 
+class UserRequestedDeliveryFieldsTests(unittest.TestCase):
+    """Verify every approved-model stock has all six requested fields."""
+
+    def test_all_three_profiles_render_ten_complete_six_field_cards(self):
+        from model_portfolios import _illustrative_levels
+
+        fixtures = [candidate(i) for i in range(10)]
+        expectation = {
+            "conservative": ("3–6 months", 8.0, 20_000_000),
+            "moderate": ("1–3 months", 9.0, 10_000_000),
+            "aggressive": ("2–8 weeks", 9.5, 5_000_000),
+        }
+        for profile, (horizon, allocation_pct, reserve) in expectation.items():
+            with self.subTest(profile=profile):
+                result = select_model(fixtures, profile, now=NOW)
+                self.assertEqual(result["status"], "complete")
+                self.assertEqual(len(result["holdings"]), 10)
+                self.assertEqual(result["cash_rupees"], reserve)
+                messages, symbols = format_model(
+                    result, {"checked": 10, "universe": 10}
+                )
+                self.assertEqual(len(symbols), 10)
+                self.assertEqual(len(messages), 4)
+                rendered = "\\n".join(messages[1:3])
+                self.assertEqual(rendered.count("Target ₹"), 10)
+                self.assertEqual(rendered.count("SL ₹"), 10)
+                self.assertEqual(rendered.count("Timeframe "), 10)
+                self.assertEqual(rendered.count("Reference close ₹"), 10)
+                self.assertEqual(rendered.count("Allocation ₹"), 10)
+                for holding in result["holdings"]:
+                    self.assertEqual(holding["timeframe"], horizon)
+                    self.assertEqual(holding["allocation_rupees"],
+                                     MODEL_CAPITAL_RUPEES * allocation_pct / 1000)
+                    self.assertLess(holding["stop_loss"],
+                                    holding["reference_price"])
+                    self.assertGreater(holding["target"],
+                                       holding["reference_price"])
+                    self.assertEqual(holding["reference_price"],
+                                     round(holding["price"], 2))
+                    self.assertEqual(_illustrative_levels(holding, profile)["target"],
+                                     holding["target"])
+                self.assertIn("NOT forecasts", messages[0])
+
+    def test_unverified_price_or_volatility_must_not_publish_levels(self):
+        for invalid in (0, -1, float("nan"), float("inf")):
+            rows = [candidate(i) for i in range(10)]
+            rows[0]["vol"] = invalid
+            result = select_model(rows, "conservative", now=NOW)
+            self.assertEqual(result["holdings"], [])
+            self.assertEqual(result["status"], "insufficient_verified_candidates")
+            messages, symbols = format_model(result, {"checked": 10, "universe": 10})
+            self.assertEqual(symbols, [])
+            self.assertNotIn("Target ₹", " ".join(messages))
+
+
 if __name__ == "__main__":
     unittest.main()
