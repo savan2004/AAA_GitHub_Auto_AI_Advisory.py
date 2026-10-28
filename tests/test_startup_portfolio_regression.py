@@ -86,6 +86,48 @@ class PortfolioRegressionTests(unittest.TestCase):
             self.assertEqual(manager.get(100)["SBIN"]["qty"], 2)
 
 
+    def test_partial_portfolio_return_does_not_invent_zero_price(self):
+        from datetime import date
+        source = MAIN_FILE.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "build_portfolio_card")
+        namespace = {
+            "date": date, "math": math,
+            "portfolio": type("Portfolio", (), {"get": lambda self, uid: {
+                "SBIN": {"qty": 2, "avg": 500},
+                "TCS": {"qty": 4, "avg": 1000},
+            }})(),
+            "get_live_price": lambda symbol: 550 if symbol == "SBIN" else None,
+        }
+        exec(compile(ast.Module(body=[node], type_ignores=[]),
+                     "<portfolio-card>", "exec"), namespace)
+        rendered = namespace["build_portfolio_card"](100)
+        self.assertIn("Partial P&L: ₹+100.00", rendered)
+        self.assertIn("LTP:Unavailable", rendered)
+        self.assertIn("priced capital: ₹1,000.00", rendered)
+        self.assertNotIn("Total P&L:", rendered)
+
+    def test_all_missing_prices_suppress_profit_and_loss(self):
+        from datetime import date
+        source = MAIN_FILE.read_text(encoding="utf-8")
+        node = next(n for n in ast.parse(source).body
+                    if isinstance(n, ast.FunctionDef) and n.name == "build_portfolio_card")
+        namespace = {
+            "date": date, "math": math,
+            "portfolio": type("Portfolio", (), {"get": lambda self, uid: {
+                "TCS": {"qty": 4, "avg": 1000}
+            }})(),
+            "get_live_price": lambda symbol: float("nan"),
+        }
+        exec(compile(ast.Module(body=[node], type_ignores=[]),
+                     "<portfolio-card>", "exec"), namespace)
+        rendered = namespace["build_portfolio_card"](100)
+        self.assertIn("P&L unavailable", rendered)
+        self.assertNotIn("Total P&L:", rendered)
+        self.assertIn("LTP:Unavailable", rendered)
+
+
 class WebhookSecurityTests(unittest.TestCase):
     def test_token_not_permitted_in_webhook_base_url(self):
         source = MAIN_FILE.read_text(encoding="utf-8")
