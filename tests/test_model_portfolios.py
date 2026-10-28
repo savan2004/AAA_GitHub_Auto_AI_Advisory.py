@@ -73,6 +73,20 @@ class ConservativeModelTests(unittest.TestCase):
             rows[0]["turnover"] = "25.0"
             model = select_model(rows, profile, now=NOW)
             self.assertEqual(model["status"], "complete")
+            messages, symbols = format_model(model, {"checked": 10, "universe": 10})
+            self.assertEqual(len(symbols), 10)
+            self.assertIn("Close ₹300.00", " ".join(messages))
+
+    def test_all_numeric_text_fields_rank_and_format_safely(self):
+        for profile in ("conservative", "moderate", "aggressive"):
+            rows = [candidate(i) for i in range(10)]
+            for field in ("roe", "growth", "debt", "cap", "pe", "vol", "price", "turnover", "fetched_at"):
+                rows[0][field] = str(rows[0][field])
+            model = select_model(rows, profile, now=NOW)
+            self.assertEqual(model["status"], "complete")
+            messages, symbols = format_model(model, {"checked": 10, "universe": 10})
+            self.assertEqual(len(symbols), 10)
+            self.assertIn("ROE 22.0%", " ".join(messages))
 
     def test_negative_numeric_text_is_rejected_without_crash(self):
         for field in ("price", "turnover"):
