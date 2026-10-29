@@ -85,6 +85,20 @@ class FinanceRatingTests(unittest.TestCase):
         self.assertIsNone(row["fund_score"])
         self.assertIsNone(row["roe"])
 
+    def test_known_bad_debt_profit_or_expensive_pe_never_gets_provisional_pass(self):
+        import index_top5 as index
+        bad=deepcopy(STMT)
+        bad["years"][-1]["borrowings"]=3200
+        row=finance.rate_financial_evidence("aggressive",FV,bad,"Industrials",D)
+        self.assertEqual(row["fund_status"],"REJECTED")
+        self.assertIsNone(row["fund_score"])
+        self.assertEqual(index._select_top_five([
+            {"sym":"BAD","sector":"IT","score":98,"fund_status":"REJECTED"},
+            {"sym":"GOOD","sector":"IT","score":52,"fund_status":"UNVERIFIED"},
+        ])[0]["sym"],"GOOD")
+        excessive=finance.rate_financial_evidence("aggressive",dict(FV,pe=900),STMT,"IT",D)
+        self.assertEqual(excessive["fund_status"],"REJECTED")
+
     def test_bank_does_not_use_corporate_debt_equity(self):
         stm=deepcopy(STMT)
         stm["years"][-1]["borrowings"]=5000
