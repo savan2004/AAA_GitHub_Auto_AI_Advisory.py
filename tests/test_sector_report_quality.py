@@ -28,8 +28,8 @@ def load_functions(*names, globals_=None):
     return ns
 
 
-def bars(start="2026-01-01", periods=220):
-    dates = pd.bdate_range(start=start, periods=periods)
+def bars(periods=220):
+    dates = pd.bdate_range(end="2026-10-29", periods=periods)
     close = pd.Series(np.linspace(98, 115, periods), index=dates)
     return pd.DataFrame({"Close": close, "High": close+1,
                          "Low": close-1, "Volume": 1000.}, index=dates)
