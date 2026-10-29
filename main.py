@@ -695,7 +695,7 @@ def main_keyboard():
     kb.add("🔍 Analysis", "📊 Breadth", "🔥 Stocks Buzz")
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
-    kb.add("📈 Chart", "📄 Report", "📋 Status")
+    kb.add("📈 Chart", "📄 Report")
     kb.add("🏭 Sector Report")
     return kb
 
