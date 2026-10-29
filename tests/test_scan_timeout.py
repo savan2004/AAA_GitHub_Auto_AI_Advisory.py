@@ -4,7 +4,6 @@ This test imports only the scanner function AST, never Telegram or yfinance.
 import ast
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import date, datetime, timezone, timedelta
-from conservative_screener import CONSERVATIVE_CANDIDATES
 import html
 from pathlib import Path
 import threading
@@ -13,6 +12,19 @@ import unittest
 from unittest.mock import Mock
 
 SOURCE = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+# Reuse the candidate universe without importing pandas or live data providers
+# in this intentionally stdlib-only regression job.
+_UNIVERSE = ast.parse(
+    (Path(__file__).resolve().parents[1] / "conservative_screener.py").read_text(encoding="utf-8")
+)
+_SECTORS = next(n for n in _UNIVERSE.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "CONSERVATIVE_SECTORS"
+                        for t in n.targets))
+CONSERVATIVE_CANDIDATES = tuple(
+    (sym, sector)
+    for sector, tickers in ast.literal_eval(_SECTORS.value).items()
+    for sym in tickers
+)
 
 
 class FakeClose:
