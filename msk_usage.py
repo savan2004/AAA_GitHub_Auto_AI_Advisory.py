@@ -367,8 +367,10 @@ def daily_digest_loop(send_message, stop_event):
         try:
             stats = get_summary()
             if stats is not None:
-                send_message(owner_id, summary_text(stats), parse_mode="HTML")
-                status = "SENT"
+                receipt = send_message(owner_id, summary_text(stats), parse_mode="HTML")
+                message_id = getattr(receipt, "message_id", None)
+                if type(message_id) is int and message_id > 0:
+                    status = "SENT"
         except Exception as exc:
             LOG.warning("Daily owner summary delivery unverified (%s)", type(exc).__name__)
         finally:
