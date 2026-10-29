@@ -96,7 +96,7 @@ def extract_event(payload):
     if not callback and chat_type != "private":
         # Do not count unrelated group chatter or automatic channel forwards.
         if message.get("is_automatic_forward") or not (
-            text.startswith("/") or re.match(r"^msk\\b", text, re.I)
+            text.startswith("/") or re.match(r"^msk\b", text, re.I)
         ):
             return None
     username = user.get("username") or ""
@@ -350,7 +350,6 @@ def finish_digest(day, status):
                 """, (status, day))
     except Exception as exc:
         LOG.warning("Daily digest reconciliation unavailable (%s)", type(exc).__name__)
-)
 
 
 def daily_digest_loop(send_message, stop_event):
