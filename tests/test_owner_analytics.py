@@ -123,7 +123,7 @@ class AnalyticsTests(unittest.TestCase):
         self.assertIn('commands=["ownerstats", "ownerusers"]', source)
         self.assertIn('commands=["ownerclaim"]', source)
         self.assertIn("hmac.compare_digest(auth.password", source)
-        self.assertIn('usage_analytics.record_event', source)
+        self.assertIn('queue.submit(tracker.record_event', source)
         self.assertIn('usage_analytics.daily_digest_loop', source)
         self.assertIn("no-store, private", source)
         self.assertNotIn("usage_analytics.is_owner(m.chat.id)", source)
