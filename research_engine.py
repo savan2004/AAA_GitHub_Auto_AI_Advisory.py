@@ -484,6 +484,9 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
     wsum = sum(WEIGHTS[k] for k in avail)
     comp = sum(WEIGHTS[k] * v for k, v in avail.items()) / wsum if wsum else 0.0
     coverage = round(wsum * 100)
+    # The PDF shows rounded integer scores. Use the same number for stance
+    # boundaries or 47.7 becomes '48/100 CAUTIOUS' despite published bands.
+    display_comp = round(comp)
     fundamental_pillars = sum(s[k] is not None for k in ("Quality", "Valuation", "Growth"))
     # The presence of a vendor ratio alone does not establish a financial thesis.
     has_statements = bool(fv.get("has_statements"))
@@ -491,13 +494,13 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
     insufficient_evidence = (coverage < 70 or fundamental_pillars < 2 or
                              not has_statements or not has_valuation_basis)
     fund_missing = fundamental_pillars == 0
-    if comp >= 75:
+    if display_comp >= 75:
         stance, action = "HIGH-CONVICTION CONSTRUCTIVE", "Accumulate on dips; add on confirmed breakouts above resistance."
-    elif comp >= 62:
+    elif display_comp >= 62:
         stance, action = "CONSTRUCTIVE", "Accumulate in tranches near support; avoid chasing extended moves."
-    elif comp >= 48:
+    elif display_comp >= 48:
         stance, action = "NEUTRAL / WAIT", "Hold existing exposure; wait for trend or valuation to improve before adding."
-    elif comp >= 35:
+    elif display_comp >= 35:
         stance, action = "CAUTIOUS", "Avoid fresh longs; protect gains and respect stop-losses."
     else:
         stance, action = "NEGATIVE", "Avoid; reduce exposure into strength."
@@ -509,7 +512,7 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
             "Research only; no investment rating or actionable trade plan until financial evidence is complete.",
             True,
         )
-    elif s["Trend"] is not None and s["Trend"] < 35 and comp >= 48:
+    elif s["Trend"] is not None and s["Trend"] < 35 and display_comp >= 48:
         stance, action, veto = "NEUTRAL / WAIT", ("Fundamentals/valuation are not the problem — price trend is. "
                                                   "Wait for a reclaim of the 50-day EMA before committing."), True
 
@@ -528,7 +531,7 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
         horizons["Medium term (3–6 mths)"] = ("N/A", None)
         horizons["Long term (1–3 yrs)"] = ("N/A", None)
     return {"pillars": {k: (round(v) if v is not None else None) for k, v in s.items()},
-            "composite": round(comp), "coverage": coverage, "stance": stance, "action": action,
+            "composite": display_comp, "coverage": coverage, "stance": stance, "action": action,
             "veto": veto, "tech_only": fund_missing,
             "insufficient_evidence": insufficient_evidence,
             "fundamental_pillars": fundamental_pillars, "horizons": horizons}
