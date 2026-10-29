@@ -101,7 +101,14 @@ def assess_fundamentals(profile, fundamentals, statements, industry, today=None)
     p = POLICY[profile]
     roe = _numeric(fv.get("roe"))
     pe = _numeric(fv.get("pe"))
-    eps = _numeric(fv.get("eps"))
+    quote_eps = _numeric(fv.get("eps"))
+    annual_eps = _numeric(new.get("eps"))
+    # Screener/Yahoo annual statement EPS is already collected and tied to a
+    # completed fiscal period. It can prove positive reported earnings when
+    # Yahoo's trailing EPS field is missing; it is NOT trailing EPS for P/E math.
+    eps = quote_eps if quote_eps is not None else annual_eps
+    eps_basis = "trailing_quote" if quote_eps is not None else (
+        "completed_annual_statement" if annual_eps is not None else None)
     netprofit = _numeric(new.get("net_profit"))
     if roe is None or roe < p["min_roe"] or roe > 150:
         return None, "roe_missing_or_weak"
@@ -149,6 +156,8 @@ def assess_fundamentals(profile, fundamentals, statements, industry, today=None)
         + (8 if (is_fin or (debt_equity is not None and debt_equity <= .4)) else 3))))
     return {
         "fund_score": score, "roe": round(roe, 1), "pe": round(pe, 1),
+        "eps": round(eps, 2), "eps_basis": eps_basis,
+        "eps_annual_period": new_end.isoformat() if eps_basis == "completed_annual_statement" else None,
         "pb": round(pb, 2) if is_fin else None,
         "de": round(debt_equity, 2) if debt_equity is not None else None,
         "profit_growth": round(profit_growth, 1),
