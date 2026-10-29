@@ -9,6 +9,7 @@ import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -22,7 +23,8 @@ def load_functions(*names, globals_=None):
     missing = set(names) - set(found)
     if missing:
         raise AssertionError(f"missing functions: {missing}")
-    ns = dict(globals_ or {})
+    ns = {"Dict": Dict, "List": List, "Optional": Optional, "Tuple": Tuple}
+    ns.update(globals_ or {})
     exec(compile(ast.Module(body=[found[name] for name in names], type_ignores=[]),
                  "sector_report.py", "exec"), ns)
     return ns
