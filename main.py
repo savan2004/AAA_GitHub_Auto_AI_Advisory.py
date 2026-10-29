@@ -552,14 +552,7 @@ def build_scan(profile):
                 return None
             if profile == "conservative":
                 return evaluate_conservative(sym, df, today_ist)
-            close = df["Close"]
-            ltp = round(float(close.iloc[-1]), 2)
-            prev = float(close.iloc[-2])
-            chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
-            rsi = calc_rsi(close)
-            trend = trend_label(close)
-            signal = swing_signal(rsi, trend, chg)
-            return {"ltp": ltp, "chg": chg, "rsi": rsi, "trend": trend, "signal": signal}
+            return evaluate_candidate(sym, df, profile, datetime.now(timezone(timedelta(hours=5, minutes=30))))
         except Exception:
             # A single upstream quote failure must never abort the whole scan.
             logger.debug("Screener quote unavailable for %s", sym)
@@ -620,28 +613,7 @@ def build_scan(profile):
             )
             return "\n".join(lines)
 
-        for sym in syms:
-            row = results.get(sym)
-            if row is None:
-                continue
-            icon = "🟢" if row["chg"] >= 0 else "🔴"
-            rsi_band = "🔴OB" if row["rsi"] > 70 else ("🟢OS" if row["rsi"] < 30 else "🟡")
-            # NSE symbols such as M&M must be escaped for Telegram HTML.
-            safe_sym = html.escape(sym, quote=False)
-            lines.append(
-                f"{icon} <b>{safe_sym}</b>  ₹{row['ltp']:,.2f} ({row['chg']:+.2f}%)\n"
-                f"   RSI:{row['rsi']} {rsi_band}  |  {row['trend']}  |  <b>{row['signal']}</b>"
-            )
-
-        if not results:
-            lines.append("⚠️ No valid quotes returned before the scan deadline. Please retry.")
-        elif len(results) < len(syms):
-            lines.append(
-                f"ℹ️ Partial scan: {len(results)}/{len(syms)} stocks returned valid data; "
-                f"{len(syms) - len(results)} missing, invalid or timed out."
-            )
-        lines.append("\n⚠️ Educational only. Screening data may be delayed.")
-        return "\n".join(lines)
+        return format_shortlist(profile, list(results.values()), len(completed), len(syms), len(unfinished))
     finally:
         # Do not block the Telegram response while network calls finish.
         # Keep the scan gate closed until every outstanding task terminates;
