@@ -1,0 +1,34 @@
+name: MSK News No-Fabrication Safety
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'market_news.py'
+      - 'tests/test_news_safety.py'
+      - '.github/workflows/msk-news-safety.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'market_news.py'
+      - 'tests/test_news_safety.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  news-safety:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install small offline-test dependency
+        run: python -m pip install requests==2.32.3
+      - name: No fabricated headlines or unsafe HTML
+        run: python -m unittest discover -s tests -p 'test_news_safety.py' -v
+      - name: Syntax
+        run: python -m py_compile market_news.py tests/test_news_safety.py
