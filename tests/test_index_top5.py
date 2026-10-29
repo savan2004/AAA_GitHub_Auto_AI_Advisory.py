@@ -70,7 +70,7 @@ class Top5ScoringTests(unittest.TestCase):
         out = top5._format_index_result("conservative", universe, [], 20)
         self.assertIn("Insufficient price coverage", out)
         self.assertNotIn("1. S", out)
-        self.assertIn("No securities recommended", out)
+        self.assertIn("No stock suggestions", out)
 
     def test_format_five_never_six_and_carries_index_name(self):
         universe = {"symbols": tuple(f"S{i}" for i in range(100)), "cap": "Large Cap",
