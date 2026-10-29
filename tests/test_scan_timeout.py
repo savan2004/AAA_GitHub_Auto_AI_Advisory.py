@@ -3,7 +3,7 @@ This test imports only the scanner function AST, never Telegram or yfinance.
 """
 import ast
 from concurrent.futures import ThreadPoolExecutor, wait
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 import html
 from pathlib import Path
 import threading
@@ -12,6 +12,19 @@ import unittest
 from unittest.mock import Mock
 
 SOURCE = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+# Reuse the candidate universe without importing pandas or live data providers
+# in this intentionally stdlib-only regression job.
+_UNIVERSE = ast.parse(
+    (Path(__file__).resolve().parents[1] / "conservative_screener.py").read_text(encoding="utf-8")
+)
+_SECTORS = next(n for n in _UNIVERSE.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "CONSERVATIVE_SECTORS"
+                        for t in n.targets))
+CONSERVATIVE_CANDIDATES = tuple(
+    (sym, sector)
+    for sector, tickers in ast.literal_eval(_SECTORS.value).items()
+    for sym in tickers
+)
 
 
 class FakeClose:
@@ -41,7 +54,10 @@ def scanner_namespace(delays=None, timeout=0.05):
     listed = next(x for x in tree.body if isinstance(x, ast.Assign)
                   and any(isinstance(t, ast.Name) and t.id == "SCREENER_STOCKS"
                           for t in x.targets))
-    symbols = ast.literal_eval(listed.value)
+    # Conservative candidates are now generated from an expanded sector map.
+    parsed = {"CONSERVATIVE_CANDIDATES": CONSERVATIVE_CANDIDATES}
+    exec(compile(ast.Module(body=[listed], type_ignores=[]), "<universe>", "exec"), parsed)
+    symbols = parsed["SCREENER_STOCKS"]
     pool = ThreadPoolExecutor(max_workers=8)
     gate = threading.BoundedSemaphore(1)
     seen = []
@@ -61,6 +77,9 @@ def scanner_namespace(delays=None, timeout=0.05):
         "wait": wait,
         "html": html,
         "date": date,
+        "datetime": datetime,
+        "timezone": timezone,
+        "timedelta": timedelta,
         "get_hist": fake_hist,
         "calc_rsi": lambda close: 56,
         "trend_label": lambda close: "UP",

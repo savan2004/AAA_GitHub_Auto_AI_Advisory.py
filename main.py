@@ -10,7 +10,7 @@ import json
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, wait
 import threading
@@ -46,6 +46,9 @@ import stocks_buzz
 import sector_report
 from group_stock_requests import extract_stock_request
 from group_member_filter import is_member_message
+from conservative_screener import (
+    CONSERVATIVE_CANDIDATES, evaluate_conservative, pick_diversified,
+)
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -512,7 +515,7 @@ def build_fundamental_text(sym, cname=None):
 # A single bounded pool and gate prevent repeated scans from accumulating
 # network threads. A 15s presentation deadline does NOT cancel running I/O.
 SCREENER_STOCKS = {
-    "conservative": ["HDFCBANK", "TCS", "INFY", "ITC", "ONGC", "SBIN", "WIPRO", "NTPC", "POWERGRID", "COALINDIA"],
+    "conservative": [sym for sym, _sector in CONSERVATIVE_CANDIDATES],
     "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
     # Exchange-approved new symbols following the 2025 corporate actions.
     "aggressive": ["TMPV", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ETERNAL", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
@@ -530,8 +533,10 @@ def build_scan(profile):
         return "⏳ A stock scan is still running. Please retry when the previous scan completes."
 
     labels = {"conservative": "🏦 CONSERVATIVE", "moderate": "⚖️ MODERATE", "aggressive": "🚀 AGGRESSIVE"}
-    lines = [f"📊 <b>{labels[profile]}</b>",
-             f"📅 {date.today().strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
+    today_ist = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+    title = (labels[profile] + " | BULLISH WATCHLIST") if profile == "conservative" else labels[profile]
+    lines = [f"📊 <b>{title}</b>",
+             f"📅 {today_ist.strftime('%d-%b-%Y')}", "━━━━━━━━━━━━━━━━━━━━"]
     futures = {}
     deferred_release = False
 
@@ -540,6 +545,8 @@ def build_scan(profile):
             df = get_hist(sym, "6mo")
             if df is None or df.empty or len(df) < 28:
                 return None
+            if profile == "conservative":
+                return evaluate_conservative(sym, df, today_ist)
             close = df["Close"]
             ltp = round(float(close.iloc[-1]), 2)
             prev = float(close.iloc[-2])
@@ -555,7 +562,8 @@ def build_scan(profile):
 
     try:
         futures = {_SCAN_POOL.submit(_fetch, sym): sym for sym in syms}
-        completed, unfinished = wait(futures, timeout=_SCAN_TIMEOUT_SECONDS)
+        deadline = 25 if profile == "conservative" else _SCAN_TIMEOUT_SECONDS
+        completed, unfinished = wait(futures, timeout=deadline)
         results = {}
         for future in completed:
             sym = futures[future]
@@ -570,6 +578,42 @@ def build_scan(profile):
                 future.cancel()
             logger.warning("Screener %s partial: %d/%d futures unfinished at deadline",
                            profile, len(unfinished), len(futures))
+
+        if profile == "conservative":
+            picks = pick_diversified(
+                [{"sym": sym, **row} for sym, row in results.items()], limit=10
+            )
+            lines.append(
+                f"✅ <b>{len(picks)}/10 qualified bullish candidates</b> "
+                f"(checks finished: {len(completed)}/{len(syms)})"
+            )
+            if not picks:
+                lines.append("⚪ No stock passed every trend, liquidity and risk filter. Do not force a pick.")
+            for rank, row in enumerate(picks, 1):
+                sym = html.escape(row["sym"], quote=False)
+                lines.append(
+                    f"🟢 <b>{rank}. {sym}</b> [{row['sector']}]"
+                    f"\n   Last completed close: ₹{row['ltp']:,.2f} ({row['chg']:+.2f}%)"
+                    f"\n   EMA20 > EMA50 > EMA100 ✅ | RSI {row['rsi']}"
+                    f"\n   20D: {row['move20_pct']:+.1f}% | ATR: {row['atr_pct']:.2f}%"
+                    f" | Session: {row['asof']}"
+                )
+            if len(picks) < 10:
+                lines.append(
+                    f"ℹ️ Only {len(picks)} passed. Bearish/volatile stocks are excluded; "
+                    "missing data is not treated as a pass."
+                )
+            if unfinished:
+                lines.append(
+                    f"⏳ {len(unfinished)} data checks missed the deadline; "
+                    "results are incomplete."
+                )
+            lines.append(
+                "\n⚠️ Technical shortlist only — NOT 10 verified safe investments. "
+                "Financial strength, valuation, source dates and suitability "
+                "need separate review before any client recommendation."
+            )
+            return "\n".join(lines)
 
         for sym in syms:
             row = results.get(sym)
