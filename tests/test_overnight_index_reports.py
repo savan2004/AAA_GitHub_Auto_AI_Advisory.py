@@ -175,5 +175,55 @@ class OvernightLedgerTests(unittest.TestCase):
             self.assertEqual(n._session(),date(2026,10,30))
 
 
+
+class TejFallbackTests(unittest.TestCase):
+    def test_keyless_response_is_symbol_checked_and_session_checked(self):
+        from overnight_index_sources import fetch_tej_history
+        points=[]
+        for i in range(99,-1,-1):
+            day=date(2026,10,29)-n.timedelta(days=i)
+            v=400+i*.3
+            points.append(dict(date=day.isoformat(),open=v,high=v+3,
+                               low=v-2,close=v+1,volume=85000))
+        res=Mock(status_code=200)
+        res.json.return_value={"meta":{"symbol":"BEL","exchange":"NSE"},"data":points}
+        http=Mock(get=Mock(return_value=res))
+        chart=fetch_tej_history("BEL",date(2026,10,29),http=http)
+        self.assertIsNotNone(chart)
+        self.assertEqual(len(chart),100)
+        self.assertEqual(chart.index[-1].date().isoformat(),"2026-10-29")
+        self.assertEqual(chart.iloc[-1]["Close"],401)
+        self.assertTrue(http.get.call_args.args[0].endswith("/BEL"))
+        res.json.return_value["meta"]["symbol"]="AAPL"
+        self.assertIsNone(fetch_tej_history("BEL",date(2026,10,29),http=http))
+        res.json.return_value["meta"]["symbol"]="BEL"
+        res.json.return_value["data"][-1]["close"]=999999
+        self.assertIsNone(fetch_tej_history("BEL",date(2026,10,29),http=http))
+
+    def test_unavailable_primary_prices_get_secondary_EOD_without_provisional_topfive(self):
+        universe=make_universe("conservative",100)
+        with tempfile.TemporaryDirectory() as temp:
+            with n.EvidenceStore("sqlite:///"+str(Path(temp)/"x.db")) as store:
+                with patch.object(n,"get_index_universe",return_value=universe), \
+                     patch.dict(os.environ,{"MSK_INDEX_TEJ_FALLBACK":"1"}), \
+                     patch("market_data.bulk_history",return_value={}), \
+                     patch("overnight_index_sources.fetch_tej_history",
+                           return_value=Mock(empty=False)) as alternate, \
+                     patch("top5_technical_ratings.technical_candidate",
+                           side_effect=lambda sym,*args:technical(sym)), \
+                     patch("top5_company_ratings.fetch_company_evidence",
+                           return_value=evidence("conservative",status="PRELIMINARY")):
+                    n.collect_profile("conservative",store,date(2026,10,29),delay_s=0)
+                values=store.rows("2026-10-29","conservative")
+                self.assertEqual(alternate.call_count,100)
+                self.assertEqual(values["TEST000"]["price_source"],
+                                 "TejHQ / NSE bhavcopy (raw EOD)")
+                state,stats,msg=n.render_snapshot("conservative",universe,values,
+                                                  date(2026,10,29))
+                self.assertEqual(state,"READY")
+                self.assertEqual(stats["reviewed"],100)
+                self.assertEqual(stats["validated"],0)
+                self.assertNotIn("1. TEST",msg)
+
 if __name__=="__main__":
     unittest.main()
