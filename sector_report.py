@@ -754,7 +754,7 @@ def build_pdf(R: dict, path: str) -> str:
     _outlook(R, story)
     doc = SimpleDocTemplate(path, pagesize=rg.A4, topMargin=19 * mm, bottomMargin=18 * mm, leftMargin=16 * mm, rightMargin=16 * mm,
                             title="Index & Sectoral Update", author=BRAND)
-    meta = {"sym": "", "name": "", "generated": R["generated"], "kind": "Sector Report", "right": f"Index & Sectoral Update  ·  {R['asof']}"}
+    meta = {"brand": "MSK Bot", "sym": "", "name": "", "generated": R["generated"], "kind": "Sector Report", "right": f"Index & Sectoral Update  ·  {R['asof']}"}
     doc.build(story, canvasmaker=rg.make_canvas(meta))
     return path
 
