@@ -77,11 +77,15 @@ class Top5ScoringTests(unittest.TestCase):
                     "name": "Nifty 100", "source": "Official NSE constituent CSV",
                     "asof": "29 Oct 2026", "industries": {}}
         rows = [dict(sym=f"SYM{i}", sector=f"Industry{i%4}", score=100-i,
+                     combined_score=90-i, fund_score=80-i, roe=16.5, pe=21.0,
+                     de=.25, pb=None, fin=False, profit_growth=17.0,
+                     sales_growth=12.0, quarter="2026-06-30",
                      ltp=150, chg=1.2, rsi=60, entry=150, sl=140, t1=170,
                      t2=185, rr1=1.8, asof="2026-10-28") for i in range(12)]
         out = top5._format_index_result("conservative", universe, rows, 97)
         self.assertIn("Nifty 100", out)
-        self.assertIn("5/5 qualifying", out)
+        self.assertIn("5/5 qualified", out)
+        self.assertEqual(out.count("📘 ROE"), 5)
         self.assertEqual(out.count("Entry ref ₹"), 5)
         self.assertNotIn("SYM5", out)
 
