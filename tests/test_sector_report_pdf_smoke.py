@@ -67,7 +67,7 @@ ns = dict(rg=rg, BRAND="MSK Bot", INDICES=[1]*15, colors=colors,
           Table=Table, TableStyle=TableStyle, Spacer=Spacer, mm=mm,
           Tp=lambda t,style="c":para(t,"small"))
 tree=ast.parse(SOURCE)
-names={"_pct","_short","esc_d","_stance_hex","_quad_hex","_cover","_exhibit_movers"}
+names={"_pct","_short","esc_d","_stance_hex","_quad_hex","heat","_cover","_exhibit_movers"}
 picked=[x for x in tree.body if isinstance(x,ast.FunctionDef) and x.name in names]
 if {x.name for x in picked} != names:
     raise AssertionError("Sector PDF function missing from source")
