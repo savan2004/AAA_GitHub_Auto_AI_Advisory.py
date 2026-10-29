@@ -50,6 +50,8 @@ from group_member_filter import is_member_message
 from conservative_screener import (
     CONSERVATIVE_CANDIDATES, evaluate_conservative, pick_diversified,
 )
+from investment_screener import evaluate_candidate, format_shortlist
+from analysis_quality import inspect_history, format_snapshot
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -107,52 +109,48 @@ except Exception:
 
 
 def resolve_symbol(query: str) -> tuple:
-    """Resolves user query to (ticker_with_exchange, company_name)."""
-    q = query.upper().strip().replace(" ", "").replace(".NS", "").replace(".BO", "")
-    q_raw = query.strip()
-
-    # 1. Exact match
+    """Resolve only candidate NSE tickers; a name match is not price validation."""
+    raw = (query or "").strip()
+    if not raw or len(raw) > 90:
+        return None, None
+    q = raw.upper().replace("NSE:", "").replace(".NS", "").replace(".BO", "").replace(" ", "")
+    if not re.fullmatch(r"[A-Z0-9&_.-]{1,30}", q):
+        return None, None
     if q in _SYMBOL_MAP:
         return f"{_SYMBOL_MAP[q]}.NS", _SYMBOL_MAP[q]
-
-    # 2. Partial match
-    matches = [s for s in _ALL_NSE_SYMS if s.startswith(q)]
+    matches = sorted(set(stock for stock in _ALL_NSE_SYMS if stock.startswith(q)))
     if len(matches) == 1:
         return f"{matches[0]}.NS", matches[0]
     if len(matches) > 1:
-        best = sorted(matches, key=len)[0]
-        return f"{best}.NS", best
-
-    # 3. yfinance search (compatible with older yfinance versions)
+        return None, None
     try:
-        if hasattr(yf, 'Search'):
-            results = yf.Search(q_raw, max_results=5).quotes
-            for r in results:
-                sym_raw = r.get("symbol", "")
-                exch = r.get("exchange", "")
-                if sym_raw and exch in ("NSI", "BSE"):
-                    name = r.get("longname") or r.get("shortname") or sym_raw
-                    if sym_raw.endswith(".NS"):
-                        return sym_raw, name
-                    elif sym_raw.endswith(".BO"):
-                        return sym_raw.replace(".BO", ".NS"), name
-                    else:
-                        return f"{sym_raw}.NS", name
+        if hasattr(yf, "Search"):
+            quotes = getattr(yf.Search(raw, max_results=8), "quotes", []) or []
+            exact, named = [], []
+            for candidate in quotes:
+                ticker = str(candidate.get("symbol") or "").upper()
+                exchange = str(candidate.get("exchange") or "")
+                if not ticker.endswith(".NS") or exchange not in ("NSI", "NSE", ""):
+                    continue
+                bare = ticker[:-3]
+                if not re.fullmatch(r"[A-Z0-9&_.-]{1,30}", bare):
+                    continue
+                name = candidate.get("longname") or candidate.get("shortname") or bare
+                if bare == q:
+                    exact.append((ticker, name))
+                elif len(raw) > 3 and raw.casefold() in str(name).casefold():
+                    named.append((ticker, name))
+            if exact:
+                return exact[0]
+            if len(named) == 1:
+                return named[0]
+            if len(named) > 1:
+                return None, None
     except Exception:
-        pass
-
-    # 4. Direct ticker fallback
-    try:
-        _t = yf.Ticker(f"{q}.NS")
-        _h = _t.history(period="2d", progress=False)
-        if _h is not None and not _h.empty:
-            _name = (_t.info or {}).get("longName") or q
-            return f"{q}.NS", _name
-    except Exception:
-        pass
-
+        logger.debug("NSE symbol search unavailable")
+    if " " not in raw and 2 <= len(q) <= 15:
+        return f"{q}.NS", q  # provisional; Analysis validates market candles
     return None, None
-
 
 # ── Thread-Safe State Manager ────────────────────────────────────────────────
 class StateManager:
@@ -521,9 +519,11 @@ def build_fundamental_text(sym, cname=None):
 # network threads. A 15s presentation deadline does NOT cancel running I/O.
 SCREENER_STOCKS = {
     "conservative": [sym for sym, _sector in CONSERVATIVE_CANDIDATES],
-    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
+    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M",
+                 "HDFCBANK", "ICICIBANK", "SBIN", "INFY", "TCS", "HINDUNILVR", "ASIANPAINT", "ULTRACEMCO", "POWERGRID", "NTPC"],
     # Exchange-approved new symbols following the 2025 corporate actions.
-    "aggressive": ["TMPV", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ETERNAL", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
+    "aggressive": ["TMPV", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ETERNAL", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS",
+                   "TRENT", "DIXON", "BSE", "CDSL", "RVNL", "MAZDOCK", "COCHINSHIP", "SOLARINDS", "POLYCAB", "INDIGO"],
 }
 _SCAN_TIMEOUT_SECONDS = 15
 _SCAN_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="msk-scan")
@@ -552,14 +552,7 @@ def build_scan(profile):
                 return None
             if profile == "conservative":
                 return evaluate_conservative(sym, df, today_ist)
-            close = df["Close"]
-            ltp = round(float(close.iloc[-1]), 2)
-            prev = float(close.iloc[-2])
-            chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
-            rsi = calc_rsi(close)
-            trend = trend_label(close)
-            signal = swing_signal(rsi, trend, chg)
-            return {"ltp": ltp, "chg": chg, "rsi": rsi, "trend": trend, "signal": signal}
+            return evaluate_candidate(sym, df, profile, datetime.now(timezone(timedelta(hours=5, minutes=30))))
         except Exception:
             # A single upstream quote failure must never abort the whole scan.
             logger.debug("Screener quote unavailable for %s", sym)
@@ -620,28 +613,7 @@ def build_scan(profile):
             )
             return "\n".join(lines)
 
-        for sym in syms:
-            row = results.get(sym)
-            if row is None:
-                continue
-            icon = "🟢" if row["chg"] >= 0 else "🔴"
-            rsi_band = "🔴OB" if row["rsi"] > 70 else ("🟢OS" if row["rsi"] < 30 else "🟡")
-            # NSE symbols such as M&M must be escaped for Telegram HTML.
-            safe_sym = html.escape(sym, quote=False)
-            lines.append(
-                f"{icon} <b>{safe_sym}</b>  ₹{row['ltp']:,.2f} ({row['chg']:+.2f}%)\n"
-                f"   RSI:{row['rsi']} {rsi_band}  |  {row['trend']}  |  <b>{row['signal']}</b>"
-            )
-
-        if not results:
-            lines.append("⚠️ No valid quotes returned before the scan deadline. Please retry.")
-        elif len(results) < len(syms):
-            lines.append(
-                f"ℹ️ Partial scan: {len(results)}/{len(syms)} stocks returned valid data; "
-                f"{len(syms) - len(results)} missing, invalid or timed out."
-            )
-        lines.append("\n⚠️ Educational only. Screening data may be delayed.")
-        return "\n".join(lines)
+        return format_shortlist(profile, list(results.values()), len(completed), len(syms), len(unfinished))
     finally:
         # Do not block the Telegram response while network calls finish.
         # Keep the scan gate closed until every outstanding task terminates;
@@ -871,33 +843,27 @@ def cmd_report(m):
 # then offer Technical / Fundamental / Chart / Full Report as buttons so the
 # user picks exactly what they want.
 def send_symbol_menu(chat_id, query):
+    """No stock analysis choice until recent completed NSE-listed OHLC is checked."""
     try:
-        ticker, cname = resolve_symbol(query)
-        if ticker:
-            sym = ticker.replace(".NS", "").replace(".BO", "")
-        elif 2 <= len(query.upper().replace(".NS", "").replace(".BO", "")) <= 15:
-            sym = query.upper().replace(".NS", "").replace(".BO", "")
-        else:
-            safe_send(chat_id, f"❌ Not found: <b>{query}</b>", reply_markup=main_keyboard())
+        ticker, company = resolve_symbol(query)
+        if not ticker or not ticker.endswith(".NS"):
+            safe_send(chat_id, "❌ NSE ticker not unambiguous. Enter its full NSE symbol (e.g. SBIN).",
+                      reply_markup=main_keyboard())
             return
-
-        ltp_line = ""
-        try:
-            p = get_live_price(sym)
-            if p:
-                ltp_line = f"\n💰 LTP: ₹{p:,.2f}"
-        except Exception:
-            pass
-
-        safe_send(
-            chat_id,
-            f"✅ Found <b>{cname or sym}</b> ({sym}){ltp_line}\n\nWhat would you like to see?",
-            reply_markup=analysis_choice_keyboard(sym),
-        )
-    except Exception as e:
-        logger.error(f"Symbol menu err: {e}", exc_info=True)
-        safe_send(chat_id, f"❌ Error: {e}")
-
+        sym = ticker[:-3]
+        snapshot = inspect_history(get_hist(sym, "1y"))
+        if snapshot is None:
+            safe_send(chat_id,
+                      f"⚠️ <b>{html.escape(sym, quote=False)}</b>: recent completed price history "
+                      "could not be verified. No recommendation issued. Check the symbol or retry later.",
+                      reply_markup=main_keyboard())
+            return
+        safe_send(chat_id, format_snapshot(sym, company, snapshot),
+                  reply_markup=analysis_choice_keyboard(sym))
+    except Exception as exc:
+        logger.warning("Analysis symbol validation unavailable (%s)", type(exc).__name__)
+        safe_send(chat_id, "⚠️ Stock data verification unavailable. No unverified stock issued.",
+                  reply_markup=main_keyboard())
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_analysis_callback(call):
