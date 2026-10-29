@@ -365,3 +365,19 @@ test("Portfolio tab is real, source-labelled and does not invent P&L",()=>{
  assert.equal(w.location.hash,"#portfolio");
  w.close();
 });
+
+test("technical button displays historic support resistance EMA ADX and pattern without invented values",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ d.querySelector('[data-tab="technical"]').click();
+ const body=d.getElementById("detailBody").textContent;
+ for(const term of ["Historical support","Historical resistance","EMA 20","EMA 50","ADX (14)","Relative volume","Pattern finder","RESEARCH ONLY"]){
+   assert.ok(body.includes(term),"missing technical observation: "+term);
+ }
+ assert.match(body,/FICTIONAL DEMO/);
+ w.MSKWeb.features.choose("BEL",false);
+ d.querySelector('[data-tab="technical"]').click();
+ assert.match(d.getElementById("detailBody").textContent,/No validated price history/);
+ assert.doesNotMatch(d.getElementById("detailBody").textContent,/Historical support.*₹/);
+ w.close();
+});
