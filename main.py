@@ -109,52 +109,48 @@ except Exception:
 
 
 def resolve_symbol(query: str) -> tuple:
-    """Resolves user query to (ticker_with_exchange, company_name)."""
-    q = query.upper().strip().replace(" ", "").replace(".NS", "").replace(".BO", "")
-    q_raw = query.strip()
-
-    # 1. Exact match
+    """Resolve only candidate NSE tickers; a name match is not price validation."""
+    raw = (query or "").strip()
+    if not raw or len(raw) > 90:
+        return None, None
+    q = raw.upper().replace("NSE:", "").replace(".NS", "").replace(".BO", "").replace(" ", "")
+    if not re.fullmatch(r"[A-Z0-9&_.-]{1,30}", q):
+        return None, None
     if q in _SYMBOL_MAP:
         return f"{_SYMBOL_MAP[q]}.NS", _SYMBOL_MAP[q]
-
-    # 2. Partial match
-    matches = [s for s in _ALL_NSE_SYMS if s.startswith(q)]
+    matches = sorted(set(stock for stock in _ALL_NSE_SYMS if stock.startswith(q)))
     if len(matches) == 1:
         return f"{matches[0]}.NS", matches[0]
     if len(matches) > 1:
-        best = sorted(matches, key=len)[0]
-        return f"{best}.NS", best
-
-    # 3. yfinance search (compatible with older yfinance versions)
+        return None, None
     try:
-        if hasattr(yf, 'Search'):
-            results = yf.Search(q_raw, max_results=5).quotes
-            for r in results:
-                sym_raw = r.get("symbol", "")
-                exch = r.get("exchange", "")
-                if sym_raw and exch in ("NSI", "BSE"):
-                    name = r.get("longname") or r.get("shortname") or sym_raw
-                    if sym_raw.endswith(".NS"):
-                        return sym_raw, name
-                    elif sym_raw.endswith(".BO"):
-                        return sym_raw.replace(".BO", ".NS"), name
-                    else:
-                        return f"{sym_raw}.NS", name
+        if hasattr(yf, "Search"):
+            quotes = getattr(yf.Search(raw, max_results=8), "quotes", []) or []
+            exact, named = [], []
+            for candidate in quotes:
+                ticker = str(candidate.get("symbol") or "").upper()
+                exchange = str(candidate.get("exchange") or "")
+                if not ticker.endswith(".NS") or exchange not in ("NSI", "NSE", ""):
+                    continue
+                bare = ticker[:-3]
+                if not re.fullmatch(r"[A-Z0-9&_.-]{1,30}", bare):
+                    continue
+                name = candidate.get("longname") or candidate.get("shortname") or bare
+                if bare == q:
+                    exact.append((ticker, name))
+                elif len(raw) > 3 and raw.casefold() in str(name).casefold():
+                    named.append((ticker, name))
+            if exact:
+                return exact[0]
+            if len(named) == 1:
+                return named[0]
+            if len(named) > 1:
+                return None, None
     except Exception:
-        pass
-
-    # 4. Direct ticker fallback
-    try:
-        _t = yf.Ticker(f"{q}.NS")
-        _h = _t.history(period="2d", progress=False)
-        if _h is not None and not _h.empty:
-            _name = (_t.info or {}).get("longName") or q
-            return f"{q}.NS", _name
-    except Exception:
-        pass
-
+        logger.debug("NSE symbol search unavailable")
+    if " " not in raw and 2 <= len(q) <= 15:
+        return f"{q}.NS", q  # provisional; Analysis validates market candles
     return None, None
-
 
 # ── Thread-Safe State Manager ────────────────────────────────────────────────
 class StateManager:
