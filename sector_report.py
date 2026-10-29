@@ -186,9 +186,13 @@ def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
                 raise ValueError("invalid relative-rotation series")
             m["rs_ratio"] = round(current_ratio, 2)
             m["rs_mom"] = round(100 + current_ratio - prior_ratio, 2)
-            m["quad"] = ("Leading" if m["rs_ratio"] >= 100 and m["rs_mom"] >= 100 else
-                         "Weakening" if m["rs_ratio"] >= 100 else
-                         "Improving" if m["rs_mom"] >= 100 else "Lagging")
+            # Exact benchmark parity is NOT sector leadership.
+            if abs(m["rs_ratio"] - 100) <= 0.15 and abs(m["rs_mom"] - 100) <= 0.15:
+                m["quad"] = "Neutral"
+            else:
+                m["quad"] = ("Leading" if m["rs_ratio"] > 100 and m["rs_mom"] > 100 else
+                             "Weakening" if m["rs_ratio"] > 100 else
+                             "Improving" if m["rs_mom"] > 100 else "Lagging")
             # Benchmark and sector MUST share both endpoints of the same 3M
             # window; sparse holidays and provider gaps can shift raw offsets.
             ir, nr = _ret(j["i"], 63), _ret(j["n"], 63)
@@ -212,10 +216,23 @@ def stock_metrics(df: pd.DataFrame) -> Optional[dict]:
 
 
 def _pctile(vals: Dict[str, Optional[float]]) -> Dict[str, float]:
-    items = [(k, v) for k, v in vals.items() if v is not None]
-    items.sort(key=lambda kv: kv[1])
+    """Tied metrics MUST receive equal percentiles (average rank)."""
+    items = sorted(((k, float(v)) for k, v in vals.items()
+                    if v is not None and np.isfinite(float(v))), key=lambda kv: kv[1])
     n = len(items)
-    return {k: (i / (n - 1) * 100 if n > 1 else 50.0) for i, (k, _) in enumerate(items)}
+    if n <= 1:
+        return {k: 50.0 for k, _ in items}
+    ranked = {}
+    i = 0
+    while i < n:
+        j = i + 1
+        while j < n and items[j][1] == items[i][1]:
+            j += 1
+        score = (i + j - 1) / (2 * (n - 1)) * 100
+        for k, _ in items[i:j]:
+            ranked[k] = score
+        i = j
+    return ranked
 
 
 def analyze(hist: Dict[str, pd.DataFrame], now=None) -> dict:
@@ -545,7 +562,7 @@ def _stance_hex(s):
 
 
 def _quad_hex(q):
-    return {"Leading": rg.GREEN_H, "Improving": "#1E88E5", "Weakening": rg.AMBER_H, "Lagging": rg.RED_H}.get(q, rg.GREY_H)
+    return {"Leading": rg.GREEN_H, "Improving": "#1E88E5", "Weakening": rg.AMBER_H, "Lagging": rg.RED_H, "Neutral": rg.GREY_H}.get(q, rg.GREY_H)
 
 
 def _pct(v, nd=1):
@@ -605,6 +622,26 @@ def _cover(R, story):
                       "Risk = trend, last-20-session annualised volatility and sampled 50EMA breadth "
                       "(HIGH / ELEVATED / MODERATE, not a probability). "
                       "Sector score weighs relative 3M return 35%, RS momentum 25%, trend 25% and available breadth 15%.", "tiny"))
+    # Plain-language decision snapshot uses data from the same exact session.
+    ranked = sorted(rows, key=lambda v: -v["score"])
+    leaders = [v for v in ranked if v["stance"] == "OVERWEIGHT"
+               and v["quad"] in ("Leading", "Improving")][:2]
+    weak = [v for v in ranked[::-1] if v["stance"] == "UNDERWEIGHT"][:2]
+    narrative = []
+    for v in leaders:
+        narrative.append(
+            f"<b>WATCH LEADER — {rg.esc(v['name'])}:</b> strength {v['score']}/100; "
+            f"market-risk flag {v['risk']}; 3M relative return {_pct(v['rel3m'])}. "
+            "Favourable rotation alone is not a buy signal.")
+    for v in weak:
+        narrative.append(
+            f"<b>CAUTION — {rg.esc(v['name'])}:</b> score {v['score']}/100, "
+            f"risk {v['risk']}, 3M relative return {_pct(v['rel3m'])}. "
+            "Avoid chasing a bounce without trend confirmation.")
+    if narrative:
+        story.append(Spacer(1, 9))
+        story.append(rg.P("Client decision snapshot", "h2"))
+        story += rg.bullets(narrative, rg.NAVY_H)
 
 
 def esc_d(s):
@@ -668,18 +705,20 @@ def _exhibit_breadth(R, story):
                        f"Measured on {R['n_stocks']} tracked constituents (not the whole market)", R["charts"].get("breadth")):
         story += rg.section("Exhibit 4 — Sector breadth & breakouts", f"Measured on {R['n_stocks']} tracked constituents")
     story.append(Spacer(1, 5))
-    hdr = [Tp("Constituent group", "h"), Tp("Stocks", "hr"), Tp("% > 50EMA", "hr"), Tp("% > 200EMA", "hr"), Tp("Near 52W high", "hr"),
+    hdr = [Tp("Constituent group", "h"), Tp("Valid/map", "hr"), Tp("% > 50EMA", "hr"), Tp("% > 200EMA", "hr"), Tp("Near 52W high", "hr"),
            Tp("Median 1M", "hr"), Tp("Median 3M", "hr"), Tp("Breakouts", "hr"), Tp("Watch", "hr")]
     data, extra = [hdr], []
     for i, (k, b) in enumerate(sorted(R["breadth"].items(), key=lambda kv: -(kv[1]["p50"] or 0)), start=1):
-        data.append([Tp(rg.strip_emoji(k), "cb"), Tp(str(b["n"]), "r"), Tp(f"{b['p50']}%" if b["p50"] is not None else "—", "rb"),
+        data.append([Tp(rg.strip_emoji(k), "cb"), Tp(f"{b['n']}/{b.get('configured', b['n'])}", "r"), Tp(f"{b['p50']}%" if b["p50"] is not None else "—", "rb"),
                      Tp(f"{b['p200']}%" if b["p200"] is not None else "—", "r"), Tp(f"{b['near_high']}%" if b["near_high"] is not None else "—", "r"),
                      Tp(_pct(b["med1m"]), "r"), Tp(_pct(b["med3m"]), "r"), Tp(str(b["breakouts"]), "rb"), Tp(str(b["watch"]), "r")])
         extra += [("BACKGROUND", (2, i), (2, i), heat((b["p50"] or 50) - 50, 40)),
                   ("BACKGROUND", (5, i), (5, i), heat(b["med1m"], 6)), ("BACKGROUND", (6, i), (6, i), heat(b["med3m"], 12))]
     widths = [44 * mm, 13 * mm, 17 * mm, 18 * mm, 20 * mm, 17 * mm, 17 * mm, 20 * mm, 12 * mm]
     story.append(rg.table(data, widths, zebra=False, extra=extra + [("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3)]))
-    story.append(rg.P("Breakouts / watch = Stocks Buzz criteria (close above prior 20/55-day or 52-week high on volume, or within 2% of it).", "tiny"))
+    story.append(rg.P("Valid/map = aligned, usable stock price histories / configured sample tickers, "
+                      "NOT a full NSE constituent list. 200EMA percent denominator excludes companies "
+                      "without 200 completed sessions. Breakouts/watch use Stocks Buzz criteria.", "tiny"))
 
 
 def _exhibit_movers(R, story):
