@@ -105,40 +105,60 @@ class FullIndexIntegration(unittest.TestCase):
                 f"TEST{i:03d}": f"Industry {i % 5}" for i in range(100)
             },
         }
-        self.history = {s: Mock(empty=False) for s in self.universe["symbols"]}
+        self.history = {sym: Mock(empty=False) for sym in self.universe["symbols"]}
 
-    def _technical(self, symbol, frame, asof, sector_override=None):
-        i = int(symbol[4:])
-        if i >= 25:
+    def _technical(self, symbol, frame, profile, now):
+        idx = int(symbol[4:])
+        if idx >= 25:
             return None
-        return {"sym": symbol, "sector": sector_override, "score": 90-i,
-                "ltp": 185, "chg": 2.1, "rsi": 63, "atr_pct": 2.0, "asof": "2026-10-28"}
+        return {"sym": symbol, "score": 90-idx,
+                "tech_score": 90-idx, "ltp": 185, "chg": 2.1,
+                "rsi": 63, "adx": 22, "volx": 1.3, "risk_pct": 7.0,
+                "risk_label": "MEDIUM", "entry": 190,
+                "sl": 176, "t1": 218, "t2": 232,
+                "signal": "WAIT", "asof": "2026-10-28"}
 
-    def test_investment_never_bypasses_fundamentals(self):
+    def test_missing_financial_evidence_still_shows_explicit_research_watchlist(self):
+        incomplete = {
+            "fund_score": None, "fund_status": "UNVERIFIED",
+            "fund_reason": "provider_unavailable",
+            "roe": None, "pe": None, "de": None, "pb": None,
+            "fin": False, "profit_growth": None, "sales_growth": None,
+            "quarter": "unverified",
+        }
         with patch.object(top5, "get_index_universe", return_value=self.universe), patch(
                 "market_data.bulk_history", return_value=self.history), patch.object(
-                top5, "evaluate_conservative", side_effect=self._technical), patch.object(
-                top5, "fetch_and_assess", return_value=(None, "provider_unavailable")) as verify:
+                top5, "technical_candidate", side_effect=self._technical) as rate, patch.object(
+                top5, "fetch_company_evidence", return_value=incomplete) as verify:
             output = top5._build_index_top5("conservative")
-        self.assertEqual(verify.call_count, gate.MAX_CHECKS)
-        self.assertIn("Financial checks attempted: 18", output)
-        self.assertIn("0/5 qualified", output)
-        self.assertNotIn("1. TEST", output)
+        self.assertEqual(rate.call_count, 100)
+        self.assertEqual(verify.call_count, 25)
+        self.assertIn("Fundamental reviews: 25/100", output)
+        self.assertIn("5/5 ranked", output)
+        self.assertIn("WAIT — RESEARCH ONLY", output)
+        self.assertIn("Fundamental: N/A", output)
+        self.assertEqual(output.count("🎯 Trigger"), 5)
+        self.assertEqual(output.count("R:R 1:2"), 5)
 
-    def test_five_picks_require_proven_financial_fields(self):
-        financial = {"fund_score": 80, "roe": 18, "pe": 23, "de": .25,
-                     "pb": None, "fin": False, "profit_growth": 20,
-                     "sales_growth": 14, "quarter": "2026-06-30", "annual": "2026-03-31"}
+    def test_verified_quality_and_technical_are_both_rated(self):
+        financial = {
+            "fund_score": 80, "fund_status": "VALIDATED",
+            "roe": 18, "pe": 23, "de": .25, "pb": None,
+            "fin": False, "profit_growth": 20,
+            "sales_growth": 14, "quarter": "2026-06-30",
+        }
         with patch.object(top5, "get_index_universe", return_value=self.universe), patch(
                 "market_data.bulk_history", return_value=self.history), patch.object(
-                top5, "evaluate_conservative", side_effect=self._technical), patch.object(
-                top5, "fetch_and_assess", return_value=(financial, "qualified")) as verify:
+                top5, "technical_candidate", side_effect=self._technical), patch.object(
+                top5, "fetch_company_evidence", return_value=financial) as verify:
             output = top5._build_index_top5("conservative")
-        self.assertEqual(verify.call_count, gate.MAX_CHECKS)
-        self.assertIn("5/5 qualified technical + fundamental", output)
+        self.assertEqual(verify.call_count, 25)
+        self.assertIn("5/5 ranked", output)
+        self.assertIn("5 fully evidence-validated", output)
         self.assertEqual(output.count("📘 ROE"), 5)
+        self.assertEqual(output.count("Overall:"), 5)
         self.assertIn("Results 2026-06-30", output)
-        self.assertIn("not independently reconciled", output)
+        self.assertIn("not a full fundamental ranking", output.lower())
 
 
 if __name__ == "__main__":
