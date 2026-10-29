@@ -95,7 +95,50 @@ BENCH = "^NSEI"
 def _ret(c: pd.Series, k: int) -> Optional[float]:
     if len(c) <= k:
         return None
-    return round((float(c.iloc[-1]) / float(c.iloc[-1 - k]) - 1) * 100, 1)
+    last, old = float(c.iloc[-1]), float(c.iloc[-1-k])
+    if not np.isfinite(last) or not np.isfinite(old) or old <= 0:
+        return None
+    return round((last / old - 1) * 100, 1)
+
+
+def _last_completed_session(now=None):
+    """Exclude unfinished NSE daily bars; no guessed holiday calendar."""
+    now = now or datetime.now(IST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=IST)
+    now = now.astimezone(IST)
+    today = pd.Timestamp(now.date())
+    if now.weekday() < 5 and (now.hour, now.minute) >= (16, 0):
+        return today.date()
+    return (today - pd.offsets.BDay(1)).date()
+
+
+def _completed_bars(history, now=None):
+    """Return only completed candles; never let an intraday Yahoo bar skew PDF."""
+    cutoff = _last_completed_session(now)
+    out = {}
+    for ticker, frame in (history or {}).items():
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        try:
+            keep = [pd.Timestamp(i).date() <= cutoff for i in frame.index]
+            clean = frame.loc[keep].sort_index()
+            if not clean.empty and clean.index.is_unique:
+                out[ticker] = clean
+        except (ValueError, TypeError, KeyError):
+            logger.warning("Sector report: rejected invalid timestamps in %s", ticker)
+    return out
+
+
+def _sector_risk(index, breadth):
+    """Transparent market-trend risk, NOT estimated investment risk or probability."""
+    p50 = breadth.get("p50") if breadth else None
+    vol = index.get("vol20")
+    if index.get("trend") == "Strong down" or (p50 is not None and p50 < 20) or (vol is not None and vol >= 40):
+        return "HIGH"
+    if index.get("trend") == "Downtrend" or (p50 is not None and p50 < 40) or (vol is not None and vol >= 28):
+        return "ELEVATED"
+    return "MODERATE"
 
 
 def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
@@ -117,8 +160,11 @@ def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
     # 52-week HIGH means the highest traded High, not the highest daily close.
     highs = df["High"].dropna().iloc[-252:] if "High" in df.columns else pd.Series(dtype=float)
     hi = float(highs.max()) if not highs.empty else None
+    daily_returns = c.pct_change(fill_method=None).dropna()
+    vol20 = round(float(daily_returns.tail(20).std() * np.sqrt(252) * 100), 1) if len(daily_returns) >= 20 else None
     m = {"ltp": ltp, "chg": _ret(c, 1), "r1w": _ret(c, 5), "r1m": _ret(c, 21), "r3m": _ret(c, 63),
          "r6m": _ret(c, 126), "r1y": _ret(c, min(250, len(c) - 1)) if len(c) > 200 else None,
+         "vol20": vol20,
          "from_high": round((ltp / hi - 1) * 100, 1) if hi and hi > 0 else None,
          "rsi": calc_rsi(c) if len(c) > 30 else None,
          "trend": trend, "above50": ltp > e50, "above200": (ltp > e200) if e200 else None,
@@ -135,12 +181,22 @@ def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
         if len(j) > 70:
             rs = j["i"] / j["n"]
             ratio = 100 * rs / rs.rolling(50).mean()
-            m["rs_ratio"] = round(float(ratio.iloc[-1]), 2)
-            m["rs_mom"] = round(100 + float(ratio.iloc[-1] - ratio.iloc[-11]), 2)
-            m["quad"] = ("Leading" if m["rs_ratio"] >= 100 and m["rs_mom"] >= 100 else
-                         "Weakening" if m["rs_ratio"] >= 100 else
-                         "Improving" if m["rs_mom"] >= 100 else "Lagging")
-            m["rel3m"] = round((m["r3m"] or 0) - (_ret(nifty_c, 63) or 0), 1) if m["r3m"] is not None else None
+            current_ratio, prior_ratio = float(ratio.iloc[-1]), float(ratio.iloc[-11])
+            if not np.isfinite(current_ratio) or not np.isfinite(prior_ratio):
+                raise ValueError("invalid relative-rotation series")
+            m["rs_ratio"] = round(current_ratio, 2)
+            m["rs_mom"] = round(100 + current_ratio - prior_ratio, 2)
+            # Exact benchmark parity is NOT sector leadership.
+            if abs(m["rs_ratio"] - 100) <= 0.15 and abs(m["rs_mom"] - 100) <= 0.15:
+                m["quad"] = "Neutral"
+            else:
+                m["quad"] = ("Leading" if m["rs_ratio"] > 100 and m["rs_mom"] > 100 else
+                             "Weakening" if m["rs_ratio"] > 100 else
+                             "Improving" if m["rs_mom"] > 100 else "Lagging")
+            # Benchmark and sector MUST share both endpoints of the same 3M
+            # window; sparse holidays and provider gaps can shift raw offsets.
+            ir, nr = _ret(j["i"], 63), _ret(j["n"], 63)
+            m["rel3m"] = round(ir - nr, 1) if ir is not None and nr is not None else None
     except Exception as e:
         logger.debug(f"rs calc failed: {e}")
     m.setdefault("rel3m", None)
@@ -160,19 +216,33 @@ def stock_metrics(df: pd.DataFrame) -> Optional[dict]:
 
 
 def _pctile(vals: Dict[str, Optional[float]]) -> Dict[str, float]:
-    items = [(k, v) for k, v in vals.items() if v is not None]
-    items.sort(key=lambda kv: kv[1])
+    """Tied metrics MUST receive equal percentiles (average rank)."""
+    items = sorted(((k, float(v)) for k, v in vals.items()
+                    if v is not None and np.isfinite(float(v))), key=lambda kv: kv[1])
     n = len(items)
-    return {k: (i / (n - 1) * 100 if n > 1 else 50.0) for i, (k, _) in enumerate(items)}
+    if n <= 1:
+        return {k: 50.0 for k, _ in items}
+    ranked = {}
+    i = 0
+    while i < n:
+        j = i + 1
+        while j < n and items[j][1] == items[i][1]:
+            j += 1
+        score = (i + j - 1) / (2 * (n - 1)) * 100
+        for k, _ in items[i:j]:
+            ranked[k] = score
+        i = j
+    return ranked
 
 
-def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
+def analyze(hist: Dict[str, pd.DataFrame], now=None) -> dict:
+    prepared = now or datetime.now(IST)
+    hist = _completed_bars(hist, prepared)
     nifty = hist.get(BENCH)
     if nifty is None or len(nifty) < 70:
         raise ValueError("Nifty 50 history unavailable — cannot build the sector report.")
     nc = nifty["Close"]
     asof_date = pd.Timestamp(nifty.index[-1]).date()
-    prepared = datetime.now(IST)
     # NSE holidays are NOT inferred from the weekday calendar; a flagged lag
     # needs the exchange calendar checked rather than falsely claiming an outage.
     expected_weekday = (pd.Timestamp(prepared.date()) if prepared.weekday() < 5
@@ -204,6 +274,9 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
             logger.warning(f"index {name} failed: {e}")
     if len(idx) < 3:
         raise ValueError("Too few index series downloaded (Yahoo may be throttling). Try again shortly.")
+    sector_count = sum(1 for v in idx.values() if v["kind"] == "sector")
+    if sector_count < 5:
+        raise ValueError("Not enough sector index histories to compare rotation reliably; no sector ranking issued.")
 
     # ── constituent breadth ────────────────────────────────────────────
     breadth, all_stocks = {}, []
@@ -233,7 +306,10 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
             r1 = [r["r1m"] for r in rows if r["r1m"] is not None]
             r3 = [r["r3m"] for r in rows if r["r3m"] is not None]
             breadth[grp] = {
-                "n": len(rows), "p50": share("above50"), "p200": share("above200"),
+                "n": len(rows), "configured": len(set(syms)),
+                "coverage": round(100 * len(rows) / len(set(syms))) if syms else None,
+                "n200": sum(1 for r in rows if r["above200"] is not None),
+                "p50": share("above50"), "p200": share("above200"),
                 "near_high": share("near_high"),
                 "med1m": round(float(np.median(r1)), 1) if r1 else None,
                 "med3m": round(float(np.median(r3)), 1) if r3 else None,
@@ -254,6 +330,7 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
         wsum = sum(w for w, x in parts if x is not None)
         v["score"] = round(sum(w * x for w, x in parts if x is not None) / wsum) if wsum else None
         v["breadth"] = b
+        v["risk"] = _sector_risk(v, b)
         v["stance"] = ("OVERWEIGHT" if (v["score"] or 0) >= 65 else
                        "NEUTRAL" if (v["score"] or 0) >= 40 else "UNDERWEIGHT")
 
@@ -262,10 +339,15 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
         vals = [r[key] for r in all_stocks if r[key] is not None]
         return round(sum(vals) / len(vals) * 100) if vals else None
 
+    count200 = sum(1 for r in all_stocks if r["above200"] is not None)
     leaders = sorted([s for s in all_stocks if s["r1m"] is not None], key=lambda r: -r["r1m"])
+    configured_tickers = {s for items in SECTOR_STOCKS.values() for s in items}
+    covered_tickers = {r["sym"] for r in all_stocks}
     R = {
         "idx": idx, "sec": sec, "breadth": breadth, "n_stocks": len(all_stocks),
+        "n_unique": len(covered_tickers), "n_configured": len(configured_tickers),
         "p50_all": share_all("above50"), "p200_all": share_all("above200"),
+        "n200_stocks": count200,
         "gainers": leaders[:8], "losers": leaders[::-1][:8],
         "regime": stocks_buzz.market_regime(nifty),
         "nifty_df": nifty, "hist": hist,
@@ -306,10 +388,14 @@ def _takeaways(R: dict) -> Tuple[List[str], str]:
     if lag:
         out.append("<b>Sector laggards:</b> " + ", ".join(
             f"{v['name'].replace('Nifty ', '')} ({_s(v['r1m'])} 1M, {_s(v['r3m'])} 3M)" for v in lag) + ".")
+    if R.get("freshness_warning"):
+        out.append("<b>Data caution:</b> benchmark prices may not include the most recent completed market session.")
     if R["p50_all"] is not None:
         tone = "healthy" if R["p50_all"] >= 60 else "mixed" if R["p50_all"] >= 40 else "weak"
-        out.append(f"<b>Breadth is {tone}:</b> {R['p50_all']}% of {R['n_stocks']} tracked stocks trade above their 50-day EMA"
-                   + (f" and {R['p200_all']}% above the 200-day EMA." if R["p200_all"] is not None else "."))
+        out.append(f"<b>Breadth is {tone}:</b> {R['p50_all']}% of {R['n_stocks']} "
+                   "sampled sector observations above the 50-day EMA"
+                   + (f"; {R['p200_all']}% of {R.get('n200_stocks', R['n_stocks'])} "
+                      "with enough history above the 200-day EMA." if R["p200_all"] is not None else "."))
     imp = [v["name"].replace("Nifty ", "") for v in sec.values() if v["quad"] == "Improving"]
     wk = [v["name"].replace("Nifty ", "") for v in sec.values() if v["quad"] == "Weakening"]
     if imp:
@@ -389,7 +475,8 @@ def chart_rrg(R: dict) -> Optional[str]:
         ax.axhspan(100, 100 + py, xmin=0, xmax=0.5, color="#E3EEFB")
         ax.axhline(100, color=charts.GREY, lw=0.7)
         ax.axvline(100, color=charts.GREY, lw=0.7)
-        cmap = {"Leading": charts.GREEN, "Improving": charts.ACCENT, "Weakening": charts.AMBER, "Lagging": charts.RED}
+        cmap = {"Leading": charts.GREEN, "Improving": charts.ACCENT, "Weakening": charts.AMBER,
+                "Lagging": charts.RED, "Neutral": charts.GREY}
         for i, v in enumerate(pts):
             ax.scatter(v["rs_ratio"], v["rs_mom"], s=46, color=cmap[v["quad"]], zorder=3, edgecolor="white", linewidth=0.8)
             dy = 0.06 * py * (1 if i % 2 == 0 else -1.6)
@@ -476,7 +563,7 @@ def _stance_hex(s):
 
 
 def _quad_hex(q):
-    return {"Leading": rg.GREEN_H, "Improving": "#1E88E5", "Weakening": rg.AMBER_H, "Lagging": rg.RED_H}.get(q, rg.GREY_H)
+    return {"Leading": rg.GREEN_H, "Improving": "#1E88E5", "Weakening": rg.AMBER_H, "Lagging": rg.RED_H, "Neutral": rg.GREY_H}.get(q, rg.GREY_H)
 
 
 def _pct(v, nd=1):
@@ -501,8 +588,12 @@ def _cover(R, story):
         story.append(rg.P(rg.colored(rg.esc(R["freshness_warning"]), rg.RED_H), "small"))
         story.append(Spacer(1, 4))
     loaded, total = R.get("index_coverage", (0, len(INDICES)))
-    story += [rg.P(f"Index coverage: <b>{loaded}/{total}</b> sources matched the Nifty close date; "
-                   f"breadth covers <b>{R['n_stocks']}</b> sampled companies, NOT the full sector universe.", "small"),
+    tracked = R.get("n_unique", R["n_stocks"])
+    configured = R.get("n_configured") or tracked
+    pct = round(100 * tracked / configured) if configured else 0
+    story += [rg.P(f"<b>Data quality:</b> indices {loaded}/{total} matched the Nifty session; "
+                   f"stock breadth: {tracked}/{configured} configured unique stocks ({pct}%), "
+                   "not the complete NSE sector universe.", "small"),
               Spacer(1, 8), rg.P("Summary", "h1"),
               Table([[""]], colWidths=[W], rowHeights=[1], style=[("LINEABOVE", (0, 0), (-1, 0), 1.2, rg.NAVY)]),
               Spacer(1, 4)]
@@ -513,7 +604,7 @@ def _cover(R, story):
     story.append(rg.P("Sector rotation scorecard", "h2"))
     rows = sorted([v for v in R["sec"].values() if v["score"] is not None], key=lambda v: -v["score"])
     hdr = [Tp("Sector index", "h"), Tp("Stance", "hc"), Tp("Score", "hr"), Tp("1M", "hr"), Tp("3M", "hr"),
-           Tp("vs Nifty 3M", "hr"), Tp("Rotation", "hc"), Tp("%>50EMA", "hr"), Tp("Breakouts", "hr")]
+           Tp("vs Nifty 3M", "hr"), Tp("Rotation", "hc"), Tp("%>50EMA", "hr"), Tp("Risk", "hc")]
     data, extra = [hdr], []
     for i, v in enumerate(rows, start=1):
         b = v["breadth"]
@@ -522,13 +613,36 @@ def _cover(R, story):
                      Tp(str(v["score"]), "rb"), Tp(_pct(v["r1m"]), "r"), Tp(_pct(v["r3m"]), "r"),
                      Tp(_pct(v["rel3m"]), "r"), Tp(rg.colored(v["quad"], _quad_hex(v["quad"])), "ctr"),
                      Tp(f"{b['p50']}%" if b and b["p50"] is not None else "—", "r"),
-                     Tp(str(b["breakouts"]) if b else "—", "r")])
+                     Tp(rg.colored(v.get("risk", "N/A"), rg.RED_H if v.get("risk")=="HIGH" else
+                                   rg.AMBER_H if v.get("risk")=="ELEVATED" else rg.GREEN_H), "ctr")])
         extra += [("BACKGROUND", (3, i), (3, i), heat(v["r1m"], 6)), ("BACKGROUND", (4, i), (4, i), heat(v["r3m"], 12)),
                   ("BACKGROUND", (5, i), (5, i), heat(v["rel3m"], 8))]
     widths = [36 * mm, 25 * mm, 12 * mm, 16 * mm, 16 * mm, 19 * mm, 21 * mm, 17 * mm, 16 * mm]
     story.append(rg.table(data, widths, extra=extra + [("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3)]))
-    story.append(rg.P("Stance = rule-based rotation read (3M relative return 35%, RS momentum 25%, trend 25%, breadth 15%). "
-                      "Breakouts / breadth are counted only where the index maps to a constituent group. Not an analyst rating.", "tiny"))
+    story.append(rg.P("Stance = relative rotation ranking, NOT a portfolio weight or investment recommendation. "
+                      "Risk = trend, last-20-session annualised volatility and sampled 50EMA breadth "
+                      "(HIGH / ELEVATED / MODERATE, not a probability). "
+                      "Sector score weighs relative 3M return 35%, RS momentum 25%, trend 25% and available breadth 15%.", "tiny"))
+    # Plain-language decision snapshot uses data from the same exact session.
+    ranked = sorted(rows, key=lambda v: -v["score"])
+    leaders = [v for v in ranked if v["stance"] == "OVERWEIGHT"
+               and v["quad"] in ("Leading", "Improving")][:2]
+    weak = [v for v in ranked[::-1] if v["stance"] == "UNDERWEIGHT"][:2]
+    narrative = []
+    for v in leaders:
+        narrative.append(
+            f"<b>WATCH LEADER — {rg.esc(v['name'])}:</b> strength {v['score']}/100; "
+            f"market-risk flag {v['risk']}; 3M relative return {_pct(v['rel3m'])}. "
+            "Favourable rotation alone is not a buy signal.")
+    for v in weak:
+        narrative.append(
+            f"<b>CAUTION — {rg.esc(v['name'])}:</b> score {v['score']}/100, "
+            f"risk {v['risk']}, 3M relative return {_pct(v['rel3m'])}. "
+            "Avoid chasing a bounce without trend confirmation.")
+    if narrative:
+        story.append(Spacer(1, 9))
+        story.append(rg.P("Client decision snapshot", "h2"))
+        story += rg.bullets(narrative, rg.NAVY_H)
 
 
 def esc_d(s):
@@ -592,18 +706,20 @@ def _exhibit_breadth(R, story):
                        f"Measured on {R['n_stocks']} tracked constituents (not the whole market)", R["charts"].get("breadth")):
         story += rg.section("Exhibit 4 — Sector breadth & breakouts", f"Measured on {R['n_stocks']} tracked constituents")
     story.append(Spacer(1, 5))
-    hdr = [Tp("Constituent group", "h"), Tp("Stocks", "hr"), Tp("% > 50EMA", "hr"), Tp("% > 200EMA", "hr"), Tp("Near 52W high", "hr"),
+    hdr = [Tp("Constituent group", "h"), Tp("Valid/map", "hr"), Tp("% > 50EMA", "hr"), Tp("% > 200EMA", "hr"), Tp("Near 52W high", "hr"),
            Tp("Median 1M", "hr"), Tp("Median 3M", "hr"), Tp("Breakouts", "hr"), Tp("Watch", "hr")]
     data, extra = [hdr], []
     for i, (k, b) in enumerate(sorted(R["breadth"].items(), key=lambda kv: -(kv[1]["p50"] or 0)), start=1):
-        data.append([Tp(rg.strip_emoji(k), "cb"), Tp(str(b["n"]), "r"), Tp(f"{b['p50']}%" if b["p50"] is not None else "—", "rb"),
+        data.append([Tp(rg.strip_emoji(k), "cb"), Tp(f"{b['n']}/{b.get('configured', b['n'])}", "r"), Tp(f"{b['p50']}%" if b["p50"] is not None else "—", "rb"),
                      Tp(f"{b['p200']}%" if b["p200"] is not None else "—", "r"), Tp(f"{b['near_high']}%" if b["near_high"] is not None else "—", "r"),
                      Tp(_pct(b["med1m"]), "r"), Tp(_pct(b["med3m"]), "r"), Tp(str(b["breakouts"]), "rb"), Tp(str(b["watch"]), "r")])
         extra += [("BACKGROUND", (2, i), (2, i), heat((b["p50"] or 50) - 50, 40)),
                   ("BACKGROUND", (5, i), (5, i), heat(b["med1m"], 6)), ("BACKGROUND", (6, i), (6, i), heat(b["med3m"], 12))]
     widths = [44 * mm, 13 * mm, 17 * mm, 18 * mm, 20 * mm, 17 * mm, 17 * mm, 20 * mm, 12 * mm]
     story.append(rg.table(data, widths, zebra=False, extra=extra + [("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3)]))
-    story.append(rg.P("Breakouts / watch = Stocks Buzz criteria (close above prior 20/55-day or 52-week high on volume, or within 2% of it).", "tiny"))
+    story.append(rg.P("Valid/map = aligned, usable stock price histories / configured sample tickers, "
+                      "NOT a full NSE constituent list. 200EMA percent denominator excludes companies "
+                      "without 200 completed sessions. Breakouts/watch use Stocks Buzz criteria.", "tiny"))
 
 
 def _exhibit_movers(R, story):
@@ -694,7 +810,8 @@ def _outlook(R, story):
 
     def ev(v):
         b = v["breadth"]
-        bits = [f"{_pct(v['rel3m'])} vs Nifty (3M)", f"{v['quad'].lower()} on rotation map", v["trend"].lower()]
+        bits = [f"risk {v.get('risk','not rated').lower()}", f"{_pct(v['rel3m'])} vs Nifty (3M)",
+                f"{v['quad'].lower()} on rotation map", v["trend"].lower()]
         if b and b["p50"] is not None:
             bits.append(f"{b['p50']}% of constituents above 50EMA")
         return ", ".join(bits)
@@ -729,8 +846,12 @@ def _outlook(R, story):
         f"Index series: {len(R['idx'])}/{len(INDICES)} configured NSE index tickers matched the "
         "Nifty closing session. Missing or date-mismatched series are omitted: "
         + (", ".join(R.get("missing_indices") or []) or "none") + ".",
-        f"Constituents: {R['n_stocks']} stocks from the bot's sector map. Breadth, median returns and breakout counts describe this sample only.",
-        "Stance = weighted percentile of 3-month relative return, relative-strength momentum, trend structure and (where mapped) breadth. It ranks sectors against each other; it is not a forecast.",
+        f"Constituents: {R.get('n_unique', R['n_stocks'])}/{R.get('n_configured', 'unknown')} "
+        "configured unique stocks, grouped into {0} stock observations across sector samples; "
+        "breadth and breakouts describe this sample only, NOT full NSE sector membership.".format(R["n_stocks"]),
+        "Stance = weighted percentile of 3-month relative return, relative-strength momentum, trend and available sampled breadth. "
+        "Missing breadth is excluded and remaining weights renormalised; scores are not directly comparable to complete-coverage scores.",
+        "Risk flag = 20-session annualised volatility, trend and sampled 50EMA breadth. It is NOT a recommended position size, price target or forecast.",
         "The rotation quadrant reflects the last ~10 weeks against each sector's 50-day relative-strength average, so a sector can sit in "
         "“Leading” while its 3-month return still ranks low (or the reverse). The stance score blends both views.",
         "Sector indices and constituent groups do not always match one-for-one (e.g. Nifty Metal, PSE, Media and Financial Services have no mapped group), so breadth columns show “—” for them.",
