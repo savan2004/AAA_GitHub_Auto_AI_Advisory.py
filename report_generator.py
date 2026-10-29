@@ -417,10 +417,11 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         "quarters": render_quarterly_chart((inp.get("stm") or {}).get("quarters"), sym),
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
+    price_session = df.index[-1].strftime("%d-%b-%Y") if hasattr(df.index[-1], "strftime") else "undated"
     return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
-                news=inp.get("news") or [], fund=fund,
+                news=inp.get("news") or [], fund=fund, price_session=price_session,
                 generated=datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M IST"))
 
 
@@ -448,14 +449,17 @@ def _cover(R, story):
                                 ("TOPPADDING", (0, 0), (-1, 0), 13), ("BOTTOMPADDING", (0, 1), (-1, 1), 12),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 13), ("RIGHTPADDING", (0, 0), (-1, -1), 13)]))
     story += [banner, Spacer(1, 3),
-              P(f"Prepared by: <b>Senior Market Analyst Desk</b>, AutoAI Advisory (automated research engine)  ·  "
-                f"{R['generated']}  ·  Prices as of last available close", "small"), Spacer(1, 8)]
+              P(f"Prepared by: <b>MSK Bot Automated Research</b>  ·  "
+                f"{R['generated']}  ·  Price: EOD session {esc(R.get('price_session') or 'unverified')}", "small"), Spacer(1, 8)]
 
     sc_hex = _stance_color(sc["stance"])
     score_display = ("N/R" if sc.get("insufficient_evidence") else f"{sc['composite']}<font size=11 color='{GREY_H}'> / 100</font>")
+    core_keys = ("pe", "roe", "eps", "pb", "de", "mcap")
+    core_count = sum(R.get("fund", {}).get(k) is not None for k in core_keys)
     left = [P("COMPOSITE SCORE", "lab"), P(score_display, "big"),
-            P(f"Data coverage {sc['coverage']}%", "tiny")]
-    mid = [P("ANALYST STANCE", "lab"), P(colored(esc(sc["stance"]), sc_hex), "stance"), Spacer(1, 2), P(esc(sc["action"]))]
+            P(f"Model pillar weight covered: {sc['coverage']}%", "tiny"),
+            P(f"Core financial ratios available: {core_count}/6 (not audited)", "tiny")]
+    mid = [P("MODEL STANCE", "lab"), P(colored(esc(sc["stance"]), sc_hex), "stance"), Spacer(1, 2), P(esc(sc["action"]))]
     box = Table([[left, mid]], colWidths=[W * 0.24, W * 0.76])
     box.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.8, NAVY), ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F9FC")),
                              ("LINEAFTER", (0, 0), (0, 0), 0.5, BORDER), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -547,7 +551,7 @@ def _investment_view(R, story):
     gaps = reasoning.get("data_gaps") or []
     if gaps:
         story.append(P("<b>Unverified or missing:</b> " + esc("; ".join(gaps[:7])), "tiny"))
-    story.append(P(colored("AUTOMATED PUBLICATION NOT APPROVED: ", RED_H) +
+    story.append(P(colored("SOURCE REVIEW REQUIRED — EDUCATIONAL RESEARCH: ", RED_H) +
                    esc(reasoning.get("publication_reason", "source verification incomplete")), "tiny"))
     story.append(Spacer(1, 6))
     if R["sc"].get("insufficient_evidence"):
@@ -951,8 +955,8 @@ def build_pdf(R: dict, output_path: str) -> str:
 
     doc = SimpleDocTemplate(output_path, pagesize=A4, topMargin=19 * mm, bottomMargin=18 * mm,
                             leftMargin=16 * mm, rightMargin=16 * mm,
-                            title=f"{strip_emoji(R['name'])} — Equity Research Report", author="AutoAI Advisory")
-    meta = {"sym": R["sym"], "name": strip_emoji(R["name"]), "generated": R["generated"]}
+                            title=f"{strip_emoji(R['name'])} — Equity Research Report", author="MSK Bot Automated Research")
+    meta = {"brand": "MSK Bot", "sym": R["sym"], "name": strip_emoji(R["name"]), "generated": R["generated"]}
     doc.build(story, canvasmaker=make_canvas(meta))
     return output_path
 
