@@ -1599,13 +1599,18 @@ def _process_webhook(data_str):
         if update:
             # Record accepted Telegram interactions without storing message text.
             # Analytics failures/delays never alter the bot response or quota.
-            if usage_analytics.enabled() and _usage_slots.acquire(blocking=False):
-                try:
-                    job = usage_executor.submit(usage_analytics.record_event,
-                                                json.loads(data_str))
-                    job.add_done_callback(lambda _: _usage_slots.release())
-                except Exception:
-                    _usage_slots.release()
+            # Some offline regression harnesses extract this function alone.
+            # Telemetry is optional and must not prevent processing in those cases.
+            tracker = globals().get("usage_analytics")
+            slots = globals().get("_usage_slots")
+            queue = globals().get("usage_executor")
+            if tracker is not None and slots is not None and queue is not None:
+                if tracker.enabled() and slots.acquire(blocking=False):
+                    try:
+                        job = queue.submit(tracker.record_event, json.loads(data_str))
+                        job.add_done_callback(lambda _: slots.release())
+                    except Exception:
+                        slots.release()
             bot.process_new_updates([update])
     except Exception as e:
         logger.error(f"Webhook process err: {e}")
