@@ -56,10 +56,10 @@ def _json(value):
                       separators=(",", ":"), sort_keys=True)
 
 
-def _session(value=None):
+def _session(value=None, *, now=None):
     if value:
         return date.fromisoformat(str(value))
-    now = datetime.now(IST)
+    now = now or datetime.now(IST)
     if now.hour < 15 or (now.hour == 15 and now.minute < 30):
         # Morning build belongs to preceding trading *weekday*. Exchange
         # holidays require price-session validation; never invent a candle.
@@ -384,9 +384,11 @@ def load_prepared_report(profile, *, store=None, now=None):
     date_loaded=date.fromisoformat(record["day"])
     now=now or datetime.now(IST)
     age=(now.date()-date_loaded).days
-    if age<0 or age>4:
-        return (f"⚠️ Last report dated {date_loaded}; stale/out-of-window. "
-                "No fresh index rankings available.")
+    expected=_session(now=now)
+    if age<0 or age>4 or date_loaded!=expected:
+        return (f"⏳ Latest report is dated {date_loaded}; expected completed "
+                f"NSE session {expected}. Overnight report not ready. "
+                "Old rankings will not be presented as fresh.")
     if record["state"]!="READY":
         return record["text"]+"\n⏳ Awaiting next overnight retry."
     return record["text"]
