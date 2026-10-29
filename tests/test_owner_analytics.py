@@ -20,6 +20,26 @@ def private_message(text="/start", update_id=100, user_id=11, username="analyst"
 
 
 class AnalyticsTests(unittest.TestCase):
+    def test_setup_fingerprint_matches_loaded_strong_key_only(self):
+        import hashlib
+        sample_key = "a" * 32
+        with patch.dict(os.environ, {"MSK_OWNER_SETUP_KEY": sample_key}):
+            self.assertEqual(
+                ua.owner_key_fingerprint(),
+                hashlib.sha256(sample_key.encode("utf-8")).hexdigest()[:12])
+        with patch.dict(os.environ, {"MSK_OWNER_SETUP_KEY": "too-short"}):
+            self.assertIsNone(ua.owner_key_fingerprint())
+
+    def test_owner_rejection_reason_never_logs_candidate_code(self):
+        candidate = "wrong-" + "b" * 30
+        with patch.dict(os.environ, {ua.DB_ENV: "test_connection",
+                                     "MSK_OWNER_SETUP_KEY": "a" * 32}):
+            with patch.object(ua.LOG, "warning") as log_warning:
+                self.assertFalse(ua.claim_owner(11, candidate))
+        self.assertEqual(log_warning.call_args.args[0],
+                         "Owner setup rejected (key_mismatch)")
+        self.assertNotIn(candidate, str(log_warning.call_args))
+
     def test_neon_pooler_connection_omits_startup_options(self):
         import sys
         from unittest.mock import Mock

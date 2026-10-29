@@ -1,5 +1,6 @@
 """MSK Bot usage analytics. Isolated, opt-in PostgreSQL; never limits bot requests."""
 import html
+import hashlib
 import hmac
 import logging
 import os
@@ -191,12 +192,22 @@ def record_event(payload):
         return False
 
 
+def owner_key_fingerprint():
+    """A safe startup check for random setup keys; never log the key itself."""
+    key = os.getenv("MSK_OWNER_SETUP_KEY", "")
+    if len(key) < 24:
+        return None
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+
+
 def claim_owner(user_id, code):
     """One-time private-chat owner enrollment; no public registration."""
     key = os.getenv("MSK_OWNER_SETUP_KEY", "")
-    if not enabled() or len(key) < 24 or not isinstance(code, str):
+    if not enabled() or len(key) < 24:
+        LOG.warning("Owner setup rejected (configuration_missing)")
         return False
-    if not hmac.compare_digest(key, code):
+    if not isinstance(code, str) or not hmac.compare_digest(key, code):
+        LOG.warning("Owner setup rejected (key_mismatch)")
         return False
     try:
         with _connect() as conn:
@@ -207,9 +218,14 @@ def claim_owner(user_id, code):
                 """, (user_id,))
                 cur.execute("SELECT telegram_id FROM msk_bot_usage.owner WHERE slot=TRUE")
                 row = cur.fetchone()
-                return bool(row and row[0] == user_id)
+                if row and row[0] == user_id:
+                    LOG.info("Owner enrollment verified")
+                    return True
+                LOG.warning("Owner setup rejected (already_claimed)")
+                return False
     except Exception as exc:
-        LOG.warning("Owner enrollment unavailable (type=%s, category=%s)", type(exc).__name__, _db_error_kind(exc))
+        LOG.warning("Owner enrollment unavailable (type=%s, category=%s)",
+                    type(exc).__name__, _db_error_kind(exc))
         return False
 
 
@@ -399,6 +415,12 @@ def daily_digest_loop(send_message, stop_event):
     """Best-effort 8pm IST notice, while Render service is awake.
     Callers must not describe it as guaranteed on a sleeping free instance.
     """
+    # Verify the configured setup-key version without logging private material.
+    fingerprint = owner_key_fingerprint()
+    if fingerprint:
+        LOG.info("MSK owner setup key loaded (sha256/12=%s)", fingerprint)
+    else:
+        LOG.warning("MSK owner setup key unavailable")
     # The same background thread proves pooled Neon connectivity at startup.
     probe_database()
     while not stop_event.wait(60):
