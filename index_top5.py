@@ -39,7 +39,10 @@ def _select_top_five(rows, cap_per_sector=2):
     def rank(row):
         quality = {"VALIDATED": 2, "PRELIMINARY": 1, "UNVERIFIED": 0}.get(
             row.get("fund_status"), 0)
-        return (-quality, -row.get("overall_score", row.get("score", 0)),
+        overall = row.get("overall_score")
+        if overall is None:
+            overall = row.get("tech_score", row.get("score", 0))
+        return (-quality, -overall,
                 -row.get("tech_score", row.get("score", 0)), row["sym"])
     for row in sorted(rows, key=rank):
         industry = row.get("sector") or "Unknown"
