@@ -25,6 +25,18 @@ STATEMENTS = {"source": "Screener.in",
 
 
 class FundamentalRules(unittest.TestCase):
+    def test_invalid_boolean_evidence_never_passes_as_numbers(self):
+        for field in ("eps", "roe", "pe"):
+            bad = dict(FUND, **{field: True})
+            row, reason = gate.assess_fundamentals(
+                "aggressive", bad, STATEMENTS, "IT", TODAY)
+            self.assertIsNone(row, field)
+            self.assertNotEqual(reason, "qualified")
+        self.assertIsNone(gate._numeric(True))
+        self.assertIsNone(gate._numeric(False))
+        self.assertEqual(gate._numeric(0), 0.0)
+
+
     def test_strong_corporate_passes_large_mid_small(self):
         for profile in gate.POLICY:
             result, why = gate.assess_fundamentals(profile, FUND, STATEMENTS, "Engineering", TODAY)
