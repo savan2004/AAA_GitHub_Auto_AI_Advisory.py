@@ -68,25 +68,29 @@ class Top5ScoringTests(unittest.TestCase):
                     "name": "Nifty 100", "source": "Official NSE constituent CSV",
                     "asof": "29 Oct 2026", "industries": {}}
         out = top5._format_index_result("conservative", universe, [], 20)
-        self.assertIn("Insufficient index coverage", out)
+        self.assertIn("Insufficient price coverage", out)
         self.assertNotIn("1. S", out)
-        self.assertIn("No securities recommended", out)
+        self.assertIn("No stock suggestions", out)
 
     def test_format_five_never_six_and_carries_index_name(self):
         universe = {"symbols": tuple(f"S{i}" for i in range(100)), "cap": "Large Cap",
                     "name": "Nifty 100", "source": "Official NSE constituent CSV",
                     "asof": "29 Oct 2026", "industries": {}}
         rows = [dict(sym=f"SYM{i}", sector=f"Industry{i%4}", score=100-i,
-                     combined_score=90-i, fund_score=80-i, roe=16.5, pe=21.0,
+                     tech_score=90-i, overall_score=89-i, fund_score=80-i,
+                     fund_status="VALIDATED", signal="WAIT", risk_pct=6.67,
+                     risk_label="MEDIUM", roe=16.5, pe=21.0,
                      de=.25, pb=None, fin=False, profit_growth=17.0,
                      sales_growth=12.0, quarter="2026-06-30",
-                     ltp=150, chg=1.2, rsi=60, entry=150, sl=140, t1=170,
-                     t2=185, rr1=1.8, asof="2026-10-28") for i in range(12)]
+                     ltp=150, chg=1.2, rsi=60, adx=23.5, entry=150, sl=140, t1=170,
+                     t2=180, rr1=2.0, asof="2026-10-28") for i in range(12)]
         out = top5._format_index_result("conservative", universe, rows, 97)
         self.assertIn("Nifty 100", out)
-        self.assertIn("5/5 qualified", out)
+        self.assertIn("5/5 ranked", out)
         self.assertEqual(out.count("📘 ROE"), 5)
-        self.assertEqual(out.count("Entry ref ₹"), 5)
+        self.assertEqual(out.count("R:R 1:2"), 5)
+        self.assertEqual(out.count("1:3"), 5)
+        self.assertEqual(out.count("🎯 Trigger ₹"), 5)
         self.assertNotIn("SYM5", out)
 
     def test_full_index_data_not_fixed_20_stock_seed(self):
@@ -97,11 +101,11 @@ class Top5ScoringTests(unittest.TestCase):
                     "asof": "29 Oct 2026"}
         with patch.object(top5, "get_index_universe", return_value=universe), patch(
                 "market_data.bulk_history", return_value=histories) as bulk, patch.object(
-                top5, "evaluate_candidate", return_value=None) as ev:
+                top5, "technical_candidate", return_value=None) as ev:
             out = top5._build_index_top5("aggressive")
         self.assertEqual(len(bulk.call_args.args[0]), 250)
         self.assertEqual(bulk.call_args.kwargs["chunk_size"], 50)
-        self.assertIn("Insufficient index coverage", out)
+        self.assertIn("Insufficient price coverage", out)
         ev.assert_called_once()
 
     def test_legacy_and_new_menu_buttons_route_to_same_index_scans(self):
