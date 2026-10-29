@@ -1,0 +1,42 @@
+name: MSK Analysis and Investment Quality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'analysis_quality.py'
+      - 'investment_screener.py'
+      - 'main.py'
+      - 'tests/test_investment_quality.py'
+      - 'tests/test_scan_timeout.py'
+      - '.github/workflows/msk-analysis-investment-quality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'analysis_quality.py'
+      - 'investment_screener.py'
+      - 'main.py'
+      - 'tests/test_investment_quality.py'
+      - 'tests/test_scan_timeout.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install numerical test dependencies
+        run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3'
+      - name: Compile changed modules
+        run: python -m py_compile main.py analysis_quality.py investment_screener.py tests/test_investment_quality.py tests/test_scan_timeout.py
+      - name: Verify qualified bullish selection and symbol validation
+        run: python -m unittest discover -s tests -p 'test_investment_quality.py' -v
+      - name: Verify scanner timeout and formatting safeguards
+        run: python -m unittest discover -s tests -p 'test_scan_timeout.py' -v
