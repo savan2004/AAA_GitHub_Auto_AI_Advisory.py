@@ -8,6 +8,7 @@ import html
 import io
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 import unittest
 
 from reportlab.lib import colors
@@ -63,7 +64,7 @@ rg = SimpleNamespace(
     AMBER_H="#B8860B",
     BORDER=colors.HexColor("#D6DBE3"),
 )
-ns = dict(rg=rg, BRAND="MSK Bot", INDICES=[1]*15, colors=colors,
+ns = dict(Optional=Optional, rg=rg, BRAND="MSK Bot", INDICES=[1]*15, colors=colors,
           Table=Table, TableStyle=TableStyle, Spacer=Spacer, mm=mm,
           Tp=lambda t,style="c":para(t,"small"))
 tree=ast.parse(SOURCE)
