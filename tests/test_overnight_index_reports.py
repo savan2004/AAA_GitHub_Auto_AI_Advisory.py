@@ -146,7 +146,7 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertEqual(ready["stats"]["price_fresh"],0)
         self.assertIn("100/100",ready["text"])
         self.assertIn("WITHHELD",ready["text"])
-        self.assertIn("stale",n.load_prepared_report("conservative",store=self.store,
+        self.assertIn("not ready",n.load_prepared_report("conservative",store=self.store,
               now=datetime(2026,11,12,10,tzinfo=n.IST)).lower())
 
     def test_cleaning_nan_and_store_documented_no_connection(self):
@@ -166,6 +166,14 @@ class OvernightLedgerTests(unittest.TestCase):
             ready.assert_called_once_with("moderate")
             heavy.assert_not_called()
         self.assertEqual(live.request_index_top5("invalid",42,lambda *a:None),"❌ Unknown index profile.")
+
+    def test_button_does_not_show_yesterdays_old_quote_as_today(self):
+        self.store.save_report("2026-10-28","moderate","READY",
+          {"reviewed":150},"OLD SESSION: DO NOT SHOW AS LIVE")
+        text=n.load_prepared_report("moderate",store=self.store,
+            now=datetime(2026,10,30,8,5,tzinfo=n.IST))
+        self.assertIn("expected completed NSE session 2026-10-29",text)
+        self.assertNotIn("OLD SESSION: DO NOT SHOW AS LIVE",text)
 
     def test_target_session_previous_trading_weekday_without_invented_holiday(self):
         with patch.object(n,"datetime",wraps=datetime) as clock:
