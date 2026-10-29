@@ -1,0 +1,45 @@
+name: MSK Owner Usage Dashboard Regression
+on:
+  push:
+    branches:
+      - feature/msk-owner-usage-dashboard-20261029
+    paths:
+      - 'main.py'
+      - 'msk_usage.py'
+      - 'llm_wrapper.py'
+      - 'requirements.txt'
+      - 'tests/test_owner_analytics.py'
+      - '.github/workflows/msk-owner-analytics.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'msk_usage.py'
+      - 'llm_wrapper.py'
+      - 'requirements.txt'
+      - 'tests/test_owner_analytics.py'
+      - '.github/workflows/msk-owner-analytics.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile analytics, Telegram and quota-flag integration
+        run: python -m py_compile main.py msk_usage.py llm_wrapper.py tests/test_owner_analytics.py
+      - name: Offline analytics security and usage regressions
+        run: python -m unittest discover -s tests -p 'test_owner_analytics.py' -v
+      - name: Requirements declaration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          r = Path("requirements.txt").read_text()
+          assert "psycopg[binary]" in r
+          print("Optional database adapter declared.")
+          PY
