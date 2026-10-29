@@ -21,7 +21,7 @@ function build(){
  w.URL.revokeObjectURL=()=>{};
  // Deterministic offline-provider default; individual live-feed tests override.
  w.fetch=async()=>({ok:false,status:503});
- for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js"]){
+ for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js","report.js"]){
    w.eval(fs.readFileSync(path.join(root,f),"utf8"));
  }
  return w;
@@ -363,5 +363,36 @@ test("Portfolio tab is real, source-labelled and does not invent P&L",()=>{
  assert.match(d.getElementById("detailBody").textContent,/Not calculated|No aggregate P&L/);
  assert.match(d.querySelector(".heading-block h1").textContent,/Portfolio Health/);
  assert.equal(w.location.hash,"#portfolio");
+ w.close();
+});
+
+test("Research Report generates exactly eight source-aware pages without fabricated fundamentals",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ d.querySelector('[data-tab="pdf"]').click();
+ const pages=d.querySelectorAll("#mskReportDocument .msk-report-page");
+ assert.equal(pages.length,8);
+ for(let i=0;i<8;i++)assert.equal(pages[i].dataset.page,String(i+1));
+ assert.match(pages[0].textContent,/Company overview/);
+ assert.match(pages[2].textContent,/P\/E|ROE/);
+ assert.match(pages[4].textContent,/prior-session highs/);
+ assert.match(pages[5].textContent,/Sector and peer/);
+ assert.match(pages[7].textContent,/RESEARCH ONLY/);
+ assert.match(pages[1].textContent,/Unavailable/);
+ assert.doesNotMatch(pages[7].textContent,/Guaranteed return|BUY NOW/);
+ let printed=false;
+ w.print=()=>{printed=true;assert.ok(d.body.classList.contains("msk-report-printing"));};
+ d.querySelector(".msk-report-actions button").click();
+ assert.equal(printed,true);
+ w.close();
+});
+test("Research Report refuses to reuse stock financials when data provider is unavailable",()=>{
+ const w=build(),d=w.document;
+ w.MSKWeb.features.choose("BEL",false);
+ d.querySelector('[data-tab="pdf"]').click();
+ const report=d.getElementById("mskReportDocument");
+ assert.equal(report.querySelectorAll(".msk-report-page").length,8);
+ assert.match(report.textContent,/No historical market source|No dated financial source/);
+ assert.doesNotMatch(report.textContent,/SYNTHETIC TEST DATA/);
  w.close();
 });
