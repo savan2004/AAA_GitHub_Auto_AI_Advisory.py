@@ -1,0 +1,38 @@
+name: MSK Standalone Collector Offline Validation
+on:
+  push:
+    branches:
+      - feature/isolated-fundamental-collector-20261028
+    paths:
+      - 'standalone_collector/**'
+      - '.github/workflows/msk-standalone-collector-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'standalone_collector/**'
+      - '.github/workflows/msk-standalone-collector-tests.yml'
+permissions:
+  contents: read
+jobs:
+  standalone-collector:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install offline test dependencies
+        run: python -m pip install requests==2.32.3
+      - name: Syntax and offline collector regressions
+        run: |
+          python -m py_compile standalone_collector/collector.py standalone_collector/test_collector.py
+          python -m unittest discover -s standalone_collector -p 'test_*.py' -v
+      - name: Verify collector is not imported by production bot
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          main = Path("main.py").read_text(encoding="utf-8")
+          assert "standalone_collector" not in main, "collector must remain isolated from production"
+          print("Standalone collector remains unconnected to production bot.")
+          PY
