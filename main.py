@@ -51,6 +51,7 @@ from conservative_screener import (
     CONSERVATIVE_CANDIDATES, evaluate_conservative, pick_diversified,
 )
 from investment_screener import evaluate_candidate, format_shortlist
+from investment_scan_runner import run_investment_scan
 from analysis_quality import inspect_history, format_snapshot
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
@@ -534,6 +535,8 @@ def build_scan(profile):
     syms = SCREENER_STOCKS.get(profile, [])
     if not syms:
         return "❌ Unknown profile."
+    if profile in ("moderate", "aggressive"):
+        return run_investment_scan(profile, syms)
     if not _SCAN_GATE.acquire(blocking=False):
         return "⏳ A stock scan is still running. Please retry when the previous scan completes."
 
