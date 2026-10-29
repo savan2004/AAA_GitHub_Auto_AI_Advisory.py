@@ -123,7 +123,8 @@ class BulkInvestmentScanTests(unittest.TestCase):
         self.assertEqual(download.call_args.kwargs["retries"], 1)
         self.assertIn("data returned: 1/20", output)
         self.assertIn("Partial coverage:", output)
-        self.assertIn("NOT a full-market zero", output)
+        self.assertIn("No missing stock is assumed bearish", output)
+        self.assertNotIn("NO BUY SIGNAL", output)
 
     def test_full_coverage_can_report_no_qualified_stocks(self):
         bearish = make_bars(up=False)
