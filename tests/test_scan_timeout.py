@@ -81,6 +81,10 @@ def scanner_namespace(delays=None, timeout=0.05):
         "timezone": timezone,
         "timedelta": timedelta,
         "get_hist": fake_hist,
+        "run_investment_scan": lambda profile, symbols: (
+            f"{profile.upper()} verified bullish: "
+            + ", ".join(html.escape(sym, quote=False) for sym in symbols)
+            + " | Educational only"),
         "evaluate_candidate": lambda sym, df, profile, asof: {"sym": sym, "score": 75, "volx": 1.5},
         "format_shortlist": lambda profile, rows, done, total, unfinished: (
             f"{profile.upper()} verified bullish: " + ", ".join(html.escape(r["sym"], quote=False) for r in rows)
@@ -96,19 +100,15 @@ def scanner_namespace(delays=None, timeout=0.05):
 
 
 class BoundedScannerTests(unittest.TestCase):
-    def test_partial_results_before_slow_quotes_finish(self):
-        ns, pool, gate, seen = scanner_namespace(
-            {"TMPV": 0.40, "ETERNAL": 0.40}, timeout=0.10)
+    def test_aggressive_dispatches_without_throttled_single_stock_fetches(self):
+        ns, pool, gate, seen = scanner_namespace()
         try:
             began = time.monotonic()
             result = ns["build_scan"]("aggressive")
             elapsed = time.monotonic() - began
-            self.assertLess(elapsed, 0.32)
-            self.assertIn("Partial coverage:", result)
-            self.assertIn("stocks returned valid data", result)
-            self.assertNotIn("futures unfinished", result)
-            # A slow prior scan must not create unlimited new network jobs.
-            self.assertIn("still running", ns["build_scan"]("aggressive"))
+            self.assertLess(elapsed, 0.20)
+            self.assertIn("AGGRESSIVE verified bullish", result)
+            self.assertEqual(seen, [], "bulk route must not call per-stock get_hist")
         finally:
             pool.shutdown(wait=True, cancel_futures=True)
 
