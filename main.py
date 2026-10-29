@@ -20,7 +20,8 @@ import html
 import requests
 import pandas as pd
 import yfinance as yf
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
+import msk_usage as usage_analytics
 import telebot
 from telebot import types
 
@@ -85,6 +86,10 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="msk-heavy")
 # Reserve a separate pool for Telegram update intake.
 webhook_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="msk-webhook")
+# Separate, bounded and entirely best-effort analytics; never hold webhook responses.
+usage_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="msk-usage")
+_usage_slots = threading.BoundedSemaphore(64)
+_usage_stop = threading.Event()
 # This measures only the current Python process lifespan, NOT 24-hour service uptime.
 _PROCESS_START_MONOTONIC = time.monotonic()
 
@@ -1438,6 +1443,44 @@ def group_stock_review(m):
                       reply_to_message_id=m.message_id)
 
 
+
+# ── Owner-only usage analytics (no quota added) ─────────────────────────────
+@bot.message_handler(commands=["myid"])
+def cmd_myid(m):
+    if m.chat.type != "private":
+        return
+    safe_send(m.chat.id, f"Your Telegram user ID: <code>{m.from_user.id}</code>")
+
+
+@bot.message_handler(commands=["ownerclaim"])
+def cmd_ownerclaim(m):
+    if m.chat.type != "private":
+        return
+    parts = (m.text or "").split(maxsplit=1)
+    if len(parts) != 2 or not usage_analytics.claim_owner(m.from_user.id, parts[1].strip()):
+        safe_send(m.chat.id, "Owner setup unavailable or key incorrect. Contact the bot administrator.")
+        return
+    safe_send(m.chat.id, "✅ Owner dashboard enabled. Use /ownerstats and /ownerusers. "
+              "Delete your /ownerclaim message because it contains a setup key.")
+
+
+@bot.message_handler(commands=["ownerstats", "ownerusers"])
+def cmd_owner_stats(m):
+    if m.chat.type != "private" or not usage_analytics.is_owner(m.from_user.id):
+        if m.chat.type == "private":
+            safe_send(m.chat.id, "🔒 Owner access only.")
+        return
+    try:
+        stats = usage_analytics.get_summary()
+        command = (m.text or "").split()[0].split("@", 1)[0].lower()
+        text = (usage_analytics.users_text(stats) if command == "/ownerusers"
+                else usage_analytics.summary_text(stats))
+        safe_send(m.chat.id, text)
+    except Exception as exc:
+        logger.warning("Owner usage report unavailable (%s)", type(exc).__name__)
+        safe_send(m.chat.id, "⚠️ Analytics database temporarily unavailable.")
+
+
 # ── Catch-all Text Handler ───────────────────────────────────────────────────
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_text(m):
@@ -1494,6 +1537,35 @@ def api_status():
     return jsonify({"bot": "running", "ai": "available" if ai_available() else "no keys"})
 
 
+
+# The owner dashboard is never publicly accessible and never echoes credentials.
+@app.route("/owner/usage", methods=["GET"])
+def owner_usage_dashboard():
+    secret = os.getenv("MSK_OWNER_DASHBOARD_KEY", "")
+    auth = request.authorization
+    if (len(secret) < 24 or not auth
+            or not hmac.compare_digest(auth.username or "", "owner")
+            or not hmac.compare_digest(auth.password or "", secret)):
+        resp = Response("Owner authentication required", status=401,
+                        headers={"WWW-Authenticate": 'Basic realm="MSK Owner Analytics"'})
+    else:
+        try:
+            summary = usage_analytics.get_summary()
+            body = usage_analytics.dashboard_html(summary)
+            resp = Response(body, status=200 if summary is not None else 503,
+                            mimetype="text/html")
+        except Exception as exc:
+            logger.warning("Owner dashboard unavailable (%s)", type(exc).__name__)
+            resp = Response("Analytics temporarily unavailable", status=503)
+    resp.headers["Cache-Control"] = "no-store, private"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Content-Security-Policy"] = ("default-src 'none'; "
+        "style-src 'unsafe-inline'; frame-ancestors 'none'; form-action 'none'")
+    return resp
+
+
 # External uptime monitors should probe these independently of Telegram.
 # Liveness verifies HTTP process execution, NOT downstream provider availability.
 @app.route("/health/live", methods=["GET"])
@@ -1525,6 +1597,15 @@ def _process_webhook(data_str):
     try:
         update = telebot.types.Update.de_json(data_str)
         if update:
+            # Record accepted Telegram interactions without storing message text.
+            # Analytics failures/delays never alter the bot response or quota.
+            if usage_analytics.enabled() and _usage_slots.acquire(blocking=False):
+                try:
+                    job = usage_executor.submit(usage_analytics.record_event,
+                                                json.loads(data_str))
+                    job.add_done_callback(lambda _: _usage_slots.release())
+                except Exception:
+                    _usage_slots.release()
             bot.process_new_updates([update])
     except Exception as e:
         logger.error(f"Webhook process err: {e}")
@@ -1581,6 +1662,10 @@ if __name__ == "__main__":
         if TOKEN in WEBHOOK_URL:
             raise RuntimeError("WEBHOOK_URL must not contain TELEGRAM_TOKEN")
         bot.set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}", secret_token=WEBHOOK_SECRET)
+        if usage_analytics.enabled():
+            threading.Thread(target=usage_analytics.daily_digest_loop,
+                             args=(bot.send_message, _usage_stop),
+                             name="msk-owner-daily", daemon=True).start()
         logger.info("Webhook registered at %s%s", WEBHOOK_URL, WEBHOOK_PATH)
         from waitress import serve
         logger.info("Production HTTP server listening on port %s", os.getenv("PORT", "8000"))
