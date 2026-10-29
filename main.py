@@ -783,7 +783,9 @@ def cmd_start(m):
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
-              "Use menu buttons below.\\n"\n              "🔒 Usage count records Telegram ID, public name, feature and time; not message text.",
+              "Use menu buttons below.\n"
+              "🔒 Usage count records Telegram ID, public name, feature and time; not message text.",
+
               reply_markup=main_keyboard())
 
 
