@@ -225,6 +225,15 @@ def request_index_top5(profile, chat_id, send):
     """Enqueue and return a short acknowledgement; completion pushes once to chat."""
     if profile not in INDEXES:
         return "❌ Unknown index profile."
+    # Serve previous-close research from durable storage first; never rescan
+    # hundreds of stocks on a Telegram user request when a report exists.
+    try:
+        from overnight_index_research import ready_report
+        prepared = ready_report(profile)
+        if prepared:
+            return prepared
+    except Exception as exc:
+        LOG.warning("Overnight report read failed (%s)", type(exc).__name__)
     with _LOCK:
         cached = _RESULTS.get(profile)
         if cached and time.monotonic() - cached[0] < _RESULT_TTL:
