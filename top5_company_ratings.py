@@ -54,10 +54,26 @@ def rate_financial_evidence(profile, fundamentals, stm, industry, today):
     if _is_financial(industry):
         # Corporate D/E does not measure solvency of banks; omit misleading proxy.
         debt_equity=None
+    from top5_fundamental_gate import POLICY
+    limits=POLICY[profile]
+    latest_profit=_numeric(annual[-1][1].get("net_profit")) if annual else None
+    measured_failure = (
+        (roe is not None and (roe < limits["min_roe"] or roe > 150))
+        or (pe is not None and (pe <= 0 or pe > limits["max_pe"]))
+        or (eps is not None and eps <= 0)
+        or (latest_profit is not None and latest_profit <= 0)
+        or (profit_growth is not None and profit_growth < limits["min_profit_cagr"])
+        or (debt_equity is not None and debt_equity > limits["max_de"])
+        or (not _is_financial(industry) and sales_growth is not None
+            and sales_growth < limits["min_sales_cagr"])
+        or (_is_financial(industry) and pb is not None and (pb <= 0 or pb > 6))
+    )
     preliminary,known=_preliminary_score(roe,pe,debt_equity,profit_growth,sales_growth)
+    status=("REJECTED" if measured_failure else
+            "PRELIMINARY" if preliminary is not None else "UNVERIFIED")
     return {
-        "fund_score":preliminary,
-        "fund_status":"PRELIMINARY" if preliminary is not None else "UNVERIFIED",
+        "fund_score":preliminary if not measured_failure else None,
+        "fund_status":status,
         "fund_reason":why, "fund_known":known,
         "fund_source":st.get("source") or "Public financial data (incomplete)",
         "roe":_as_display(roe),"pe":_as_display(pe),"pb":_as_display(pb,2),
