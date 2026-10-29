@@ -50,6 +50,8 @@ from group_member_filter import is_member_message
 from conservative_screener import (
     CONSERVATIVE_CANDIDATES, evaluate_conservative, pick_diversified,
 )
+from investment_screener import evaluate_candidate, format_shortlist
+from analysis_quality import inspect_history, format_snapshot
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -521,9 +523,11 @@ def build_fundamental_text(sym, cname=None):
 # network threads. A 15s presentation deadline does NOT cancel running I/O.
 SCREENER_STOCKS = {
     "conservative": [sym for sym, _sector in CONSERVATIVE_CANDIDATES],
-    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M"],
+    "moderate": ["RELIANCE", "BHARTIARTL", "AXISBANK", "MARUTI", "LT", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "TITAN", "M&M",
+                 "HDFCBANK", "ICICIBANK", "SBIN", "INFY", "TCS", "HINDUNILVR", "ASIANPAINT", "ULTRACEMCO", "POWERGRID", "NTPC"],
     # Exchange-approved new symbols following the 2025 corporate actions.
-    "aggressive": ["TMPV", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ETERNAL", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS"],
+    "aggressive": ["TMPV", "ADANIENT", "JSWSTEEL", "TATAPOWER", "ETERNAL", "IRFC", "HAL", "BEL", "PFC", "ADANIPORTS",
+                   "TRENT", "DIXON", "BSE", "CDSL", "RVNL", "MAZDOCK", "COCHINSHIP", "SOLARINDS", "POLYCAB", "INDIGO"],
 }
 _SCAN_TIMEOUT_SECONDS = 15
 _SCAN_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="msk-scan")
