@@ -257,6 +257,9 @@ def analyze(hist: Dict[str, pd.DataFrame], now=None) -> dict:
             logger.warning(f"index {name} failed: {e}")
     if len(idx) < 3:
         raise ValueError("Too few index series downloaded (Yahoo may be throttling). Try again shortly.")
+    sector_count = sum(1 for v in idx.values() if v["kind"] == "sector")
+    if sector_count < 5:
+        raise ValueError("Not enough sector index histories to compare rotation reliably; no sector ranking issued.")
 
     # ── constituent breadth ────────────────────────────────────────────
     breadth, all_stocks = {}, []
@@ -319,6 +322,7 @@ def analyze(hist: Dict[str, pd.DataFrame], now=None) -> dict:
         vals = [r[key] for r in all_stocks if r[key] is not None]
         return round(sum(vals) / len(vals) * 100) if vals else None
 
+    count200 = sum(1 for r in all_stocks if r["above200"] is not None)
     leaders = sorted([s for s in all_stocks if s["r1m"] is not None], key=lambda r: -r["r1m"])
     configured_tickers = {s for items in SECTOR_STOCKS.values() for s in items}
     covered_tickers = {r["sym"] for r in all_stocks}
@@ -326,6 +330,7 @@ def analyze(hist: Dict[str, pd.DataFrame], now=None) -> dict:
         "idx": idx, "sec": sec, "breadth": breadth, "n_stocks": len(all_stocks),
         "n_unique": len(covered_tickers), "n_configured": len(configured_tickers),
         "p50_all": share_all("above50"), "p200_all": share_all("above200"),
+        "n200_stocks": count200,
         "gainers": leaders[:8], "losers": leaders[::-1][:8],
         "regime": stocks_buzz.market_regime(nifty),
         "nifty_df": nifty, "hist": hist,
@@ -370,8 +375,10 @@ def _takeaways(R: dict) -> Tuple[List[str], str]:
         out.append("<b>Data caution:</b> benchmark prices may not include the most recent completed market session.")
     if R["p50_all"] is not None:
         tone = "healthy" if R["p50_all"] >= 60 else "mixed" if R["p50_all"] >= 40 else "weak"
-        out.append(f"<b>Breadth is {tone}:</b> {R['p50_all']}% of {R['n_stocks']} sampled sector observations trade above their 50-day EMA"
-                   + (f" and {R['p200_all']}% above the 200-day EMA." if R["p200_all"] is not None else "."))
+        out.append(f"<b>Breadth is {tone}:</b> {R['p50_all']}% of {R['n_stocks']} "
+                   "sampled sector observations above the 50-day EMA"
+                   + (f"; {R['p200_all']}% of {R.get('n200_stocks', R['n_stocks'])} "
+                      "with enough history above the 200-day EMA." if R["p200_all"] is not None else "."))
     imp = [v["name"].replace("Nifty ", "") for v in sec.values() if v["quad"] == "Improving"]
     wk = [v["name"].replace("Nifty ", "") for v in sec.values() if v["quad"] == "Weakening"]
     if imp:
