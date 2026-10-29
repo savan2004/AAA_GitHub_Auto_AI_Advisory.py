@@ -871,33 +871,27 @@ def cmd_report(m):
 # then offer Technical / Fundamental / Chart / Full Report as buttons so the
 # user picks exactly what they want.
 def send_symbol_menu(chat_id, query):
+    """No stock analysis choice until recent completed NSE-listed OHLC is checked."""
     try:
-        ticker, cname = resolve_symbol(query)
-        if ticker:
-            sym = ticker.replace(".NS", "").replace(".BO", "")
-        elif 2 <= len(query.upper().replace(".NS", "").replace(".BO", "")) <= 15:
-            sym = query.upper().replace(".NS", "").replace(".BO", "")
-        else:
-            safe_send(chat_id, f"❌ Not found: <b>{query}</b>", reply_markup=main_keyboard())
+        ticker, company = resolve_symbol(query)
+        if not ticker or not ticker.endswith(".NS"):
+            safe_send(chat_id, "❌ NSE ticker not unambiguous. Enter its full NSE symbol (e.g. SBIN).",
+                      reply_markup=main_keyboard())
             return
-
-        ltp_line = ""
-        try:
-            p = get_live_price(sym)
-            if p:
-                ltp_line = f"\n💰 LTP: ₹{p:,.2f}"
-        except Exception:
-            pass
-
-        safe_send(
-            chat_id,
-            f"✅ Found <b>{cname or sym}</b> ({sym}){ltp_line}\n\nWhat would you like to see?",
-            reply_markup=analysis_choice_keyboard(sym),
-        )
-    except Exception as e:
-        logger.error(f"Symbol menu err: {e}", exc_info=True)
-        safe_send(chat_id, f"❌ Error: {e}")
-
+        sym = ticker[:-3]
+        snapshot = inspect_history(get_hist(sym, "1y"))
+        if snapshot is None:
+            safe_send(chat_id,
+                      f"⚠️ <b>{html.escape(sym, quote=False)}</b>: recent completed price history "
+                      "could not be verified. No recommendation issued. Check the symbol or retry later.",
+                      reply_markup=main_keyboard())
+            return
+        safe_send(chat_id, format_snapshot(sym, company, snapshot),
+                  reply_markup=analysis_choice_keyboard(sym))
+    except Exception as exc:
+        logger.warning("Analysis symbol validation unavailable (%s)", type(exc).__name__)
+        safe_send(chat_id, "⚠️ Stock data verification unavailable. No unverified stock issued.",
+                  reply_markup=main_keyboard())
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_analysis_callback(call):
