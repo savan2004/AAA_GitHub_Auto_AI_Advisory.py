@@ -371,7 +371,7 @@ test("CSV import button rejects unterminated quoted fields before enabling Impor
  d.getElementById("openImport").click();
  assert.equal(d.getElementById("importModal").hidden,false);
  assert.throws(
-  ()=>w.MSKImport.readPreview('symbol,timestamp,open,high,low,close,volume\\n"BEL,2026-01-01,10,12,9,11,100'),
+  ()=>w.MSKImport.readPreview('symbol,timestamp,open,high,low,close,volume\n"BEL,2026-01-01,10,12,9,11,100'),
   /unclosed quoted field/i
  );
  assert.equal(d.getElementById("confirmImport").disabled,true);
