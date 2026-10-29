@@ -7,6 +7,10 @@ on:
       - 'index_top5.py'
       - 'top5_technical_ratings.py'
       - 'top5_company_ratings.py'
+      - 'fundamentals.py'
+      - 'research_data.py'
+      - 'tests/test_fundamental_numeric_validation.py'
+      - 'tests/test_research_data_freshness.py'
       - 'tests/test_top5_risk_cards.py'
       - 'top5_fundamental_gate.py'
       - 'tests/test_top5_fundamental_gate.py'
@@ -21,6 +25,10 @@ on:
       - 'index_top5.py'
       - 'top5_technical_ratings.py'
       - 'top5_company_ratings.py'
+      - 'fundamentals.py'
+      - 'research_data.py'
+      - 'tests/test_fundamental_numeric_validation.py'
+      - 'tests/test_research_data_freshness.py'
       - 'tests/test_top5_risk_cards.py'
       - 'top5_fundamental_gate.py'
       - 'tests/test_top5_fundamental_gate.py'
@@ -42,12 +50,16 @@ jobs:
       - name: Install numerical test dependencies
         run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' requests
       - name: Compile new and existing modules
-        run: python -m py_compile main.py conservative_screener.py index_constituents.py index_top5.py top5_fundamental_gate.py tests/test_index_top5.py tests/test_top5_fundamental_gate.py top5_technical_ratings.py top5_company_ratings.py tests/test_top5_risk_cards.py
+        run: python -m py_compile main.py conservative_screener.py index_constituents.py index_top5.py top5_fundamental_gate.py fundamentals.py research_data.py tests/test_fundamental_numeric_validation.py tests/test_research_data_freshness.py tests/test_index_top5.py tests/test_top5_fundamental_gate.py top5_technical_ratings.py top5_company_ratings.py tests/test_top5_risk_cards.py
       - name: Verify NSE index list parsing, Top-5 selection and async Telegram delivery
         run: python -m unittest discover -s tests -p 'test_index_top5.py' -v
       - name: Verify live-report freshness, valuation, debt and earnings gates
         run: python -m unittest discover -s tests -p 'test_top5_fundamental_gate.py' -v
       - name: Verify Top-5 financial/technical ratings and actual SL/RR calculations
         run: python -m unittest discover -s tests -p 'test_top5_risk_cards.py' -v
+      - name: Verify Yahoo D/E unit conversion, finite values and statement-quarter freshness
+        run: |
+          python -m unittest discover -s tests -p 'test_fundamental_numeric_validation.py' -v
+          python -m unittest discover -s tests -p 'test_research_data_freshness.py' -v
       - name: Verify Conservative fail-closed rules stay intact
         run: python -m unittest discover -s tests -p 'test_conservative_shortlist.py' -v
