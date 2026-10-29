@@ -1,0 +1,33 @@
+name: MSK Sector Report Quality
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sector_report.py'
+      - 'report_generator.py'
+      - 'tests/test_sector_report_quality.py'
+      - '.github/workflows/msk-sector-report-quality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'sector_report.py'
+      - 'report_generator.py'
+      - 'tests/test_sector_report_quality.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sector-report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install computation-only test dependencies
+        run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3'
+      - name: Compile report source and tests
+        run: python -m py_compile sector_report.py report_generator.py tests/test_sector_report_quality.py
+      - name: Verify sector report date, leadership, levels and tables
+        run: python -m unittest discover -s tests -p 'test_sector_report_quality.py' -v

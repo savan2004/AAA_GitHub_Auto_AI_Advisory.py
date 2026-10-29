@@ -114,10 +114,13 @@ def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
         trend = "Downtrend"
     else:
         trend = "Sideways"
-    hi = float(c.iloc[-252:].max())
+    # 52-week HIGH means the highest traded High, not the highest daily close.
+    highs = df["High"].dropna().iloc[-252:] if "High" in df.columns else pd.Series(dtype=float)
+    hi = float(highs.max()) if not highs.empty else None
     m = {"ltp": ltp, "chg": _ret(c, 1), "r1w": _ret(c, 5), "r1m": _ret(c, 21), "r3m": _ret(c, 63),
          "r6m": _ret(c, 126), "r1y": _ret(c, min(250, len(c) - 1)) if len(c) > 200 else None,
-         "from_high": round((ltp / hi - 1) * 100, 1), "rsi": calc_rsi(c) if len(c) > 30 else None,
+         "from_high": round((ltp / hi - 1) * 100, 1) if hi and hi > 0 else None,
+         "rsi": calc_rsi(c) if len(c) > 30 else None,
          "trend": trend, "above50": ltp > e50, "above200": (ltp > e200) if e200 else None,
          "ema50": e50, "ema200": e200}
     pts = (40 if ltp > e50 else 0) + ((30 if e50 > e200 else 0) + (30 if ltp > e200 else 0) if e200 else 30)
@@ -168,11 +171,30 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
     if nifty is None or len(nifty) < 70:
         raise ValueError("Nifty 50 history unavailable — cannot build the sector report.")
     nc = nifty["Close"]
+    asof_date = pd.Timestamp(nifty.index[-1]).date()
+    prepared = datetime.now(IST)
+    # NSE holidays are NOT inferred from the weekday calendar; a flagged lag
+    # needs the exchange calendar checked rather than falsely claiming an outage.
+    expected_weekday = (pd.Timestamp(prepared.date()) if prepared.weekday() < 5
+                        and prepared.hour >= 16 else
+                        pd.Timestamp(prepared.date()) - pd.offsets.BDay(1)).date()
+    freshness_warning = (
+        f"DATA DATE WARNING: Nifty last recorded close {asof_date:%d-%b-%Y}; "
+        f"most recent expected weekday close {expected_weekday:%d-%b-%Y}. "
+        "May reflect a market holiday or delayed provider. Verify NSE calendar "
+        "and updated candles before relying on levels."
+        if asof_date < expected_weekday else None
+    )
 
     idx = {}
     for name, tkr, grp, kind in INDICES:
         df = hist.get(tkr)
         if df is None or len(df) < 70:
+            continue
+        # Inconsistent constituent/index dates distort relative 3M returns and
+        # sector rankings. Omit them rather than silently compare unlike days.
+        if pd.Timestamp(df.index[-1]).date() != asof_date:
+            logger.warning("Sector report: index %s date differs from Nifty %s", name, asof_date)
             continue
         try:
             m = index_metrics(df, nc)
@@ -191,6 +213,8 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
         for s in syms:
             df = hist.get(s)
             if df is None:
+                continue
+            if pd.Timestamp(df.index[-1]).date() != asof_date:
                 continue
             sm = stock_metrics(df)
             if not sm:
@@ -247,6 +271,10 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
         "nifty_df": nifty, "hist": hist,
         "generated": datetime.now(IST).strftime("%d-%b-%Y %H:%M IST"),
         "asof": nifty.index[-1].strftime("%d-%b-%Y") if hasattr(nifty.index[-1], "strftime") else "",
+        "freshness_warning": freshness_warning,
+        "expected_weekday": expected_weekday.isoformat(),
+        "index_coverage": (len(idx), len(INDICES)),
+        "missing_indices": [n for n, _, _, _ in INDICES if n not in idx],
     }
     R["tech"] = {}
     for name in ("Nifty 50", "Nifty Bank", "Nifty Midcap 100", "Nifty Smallcap 100"):
@@ -267,7 +295,11 @@ def _takeaways(R: dict) -> Tuple[List[str], str]:
     sec = R["sec"]
     ranked = sorted([v for v in sec.values() if v["score"] is not None], key=lambda v: -v["score"])
     out: List[str] = [R["regime"]["text"] + "."]
-    lead, lag = ranked[:3], ranked[-3:][::-1]
+    # Do not call a neutral/lagging industry a sector 'leader' merely because
+    # its score is third-best in a broadly negative market.
+    lead = [v for v in ranked if v["stance"] == "OVERWEIGHT"
+            and v["quad"] in ("Leading", "Improving")][:3]
+    lag = [v for v in ranked[::-1] if v["stance"] == "UNDERWEIGHT"][:3]
     if lead:
         out.append("<b>Sector leaders:</b> " + ", ".join(
             f"{v['name'].replace('Nifty ', '')} ({_s(v['r1m'])} 1M, {_s(v['r3m'])} 3M)" for v in lead) + ".")
@@ -289,11 +321,12 @@ def _takeaways(R: dict) -> Tuple[List[str], str]:
         total = sum(b["breakouts"] for _, b in bk)
         out.append(f"<b>Breakout concentration:</b> {total} confirmed breakouts across the tracked stocks, most in "
                    f"{rg.strip_emoji(bk[0][0])} ({bk[0][1]['breakouts']}).")
-    if lead and lag:
-        head = (f"{lead[0]['name'].replace('Nifty ', '')} and {lead[1]['name'].replace('Nifty ', '')} lead"
-                f"{' while ' + lag[0]['name'].replace('Nifty ', '') + ' lags' if lag else ''}")
+    if lead:
+        leaders = " and ".join(v["name"].replace("Nifty ", "") for v in lead[:2])
+        head = leaders + " lead" + (
+            " while " + lag[0]["name"].replace("Nifty ", "") + " lags" if lag else "")
     else:
-        head = "Market snapshot"
+        head = "Sector rotation — no clear leading group"
     return out, head
 
 
@@ -462,7 +495,14 @@ def _cover(R, story):
                                 ("TOPPADDING", (0, 0), (-1, 0), 13), ("BOTTOMPADDING", (0, 1), (-1, 1), 12),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 13), ("RIGHTPADDING", (0, 0), (-1, -1), 13)]))
     story += [banner, Spacer(1, 3),
-              rg.P(f"Prepared by: <b>Senior Market Analyst Desk</b>, {BRAND} (automated research engine)  ·  {R['generated']}", "small"),
+              rg.P(f"Prepared by: <b>{rg.esc(BRAND)} automated research engine</b> · {R['generated']}", "small"),
+              Spacer(1, 4)]
+    if R.get("freshness_warning"):
+        story.append(rg.P(rg.colored(rg.esc(R["freshness_warning"]), rg.RED_H), "small"))
+        story.append(Spacer(1, 4))
+    loaded, total = R.get("index_coverage", (0, len(INDICES)))
+    story += [rg.P(f"Index coverage: <b>{loaded}/{total}</b> sources matched the Nifty close date; "
+                   f"breadth covers <b>{R['n_stocks']}</b> sampled companies, NOT the full sector universe.", "small"),
               Spacer(1, 8), rg.P("Summary", "h1"),
               Table([[""]], colWidths=[W], rowHeights=[1], style=[("LINEABOVE", (0, 0), (-1, 0), 1.2, rg.NAVY)]),
               Spacer(1, 4)]
@@ -567,23 +607,34 @@ def _exhibit_breadth(R, story):
 
 
 def _exhibit_movers(R, story):
+    """Two readable full-width tables, no two mini-tables colliding in A4."""
     if not R["gainers"]:
         return
-    story += rg.section("Exhibit 5 — Leaders and laggards (1 month)", "Best and worst performers among tracked constituents")
-
-    def tbl(rows, title, good):
-        hdr = [Tp("Stock", "h"), Tp("Group", "h"), Tp("Price", "hr"), Tp("1M", "hr"), Tp("3M", "hr")]
+    story += rg.section("Exhibit 5 — Leaders and laggards (1 month)",
+                        "Best and worst performers among tracked constituents")
+    for title, rows, good in (
+        ("Top gainers", R["gainers"], True),
+        ("Top decliners", R["losers"], False),
+    ):
+        story.append(rg.P(title, "h2"))
+        hdr = [Tp("Stock", "h"), Tp("Constituent group", "h"), Tp("Close", "hr"),
+               Tp("1M", "hr"), Tp("3M", "hr")]
         data = [hdr]
-        for r in rows:
-            data.append([Tp(rg.esc(r["sym"]), "cb"), Tp(rg.esc(rg.strip_emoji(r["grp"])[:22]), "c"), Tp(f"₹{r['ltp']:,.1f}", "r"),
-                         Tp(rg.colored(_pct(r["r1m"]), rg.GREEN_H if good else rg.RED_H), "r"), Tp(_pct(r["r3m"]), "r")])
-        t = rg.table(data, [20 * mm, 32 * mm, 16 * mm, 12 * mm, 12 * mm],
-                     extra=[("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3)])
-        return [rg.P(title, "h2"), t]
-    both = Table([[tbl(R["gainers"], "Top gainers", True), tbl(R["losers"], "Top decliners", False)]],
-                 colWidths=[rg.W / 2, rg.W / 2])
-    both.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 4)]))
-    story.append(both)
+        for row in rows:
+            data.append([
+                Tp(rg.esc(row["sym"]), "cb"),
+                Tp(rg.esc(rg.strip_emoji(row["grp"])), "c"),
+                Tp(f"₹{row['ltp']:,.1f}", "r"),
+                Tp(rg.colored(_pct(row["r1m"]), rg.GREEN_H if good else rg.RED_H), "r"),
+                Tp(_pct(row["r3m"]), "r"),
+            ])
+        # 173 mm < 178 mm content width: does not overlap the adjacent column.
+        story.append(rg.table(
+            data, [22 * mm, 65 * mm, 28 * mm, 29 * mm, 29 * mm],
+            extra=[("LEFTPADDING", (0, 0), (-1, -1), 5),
+                   ("RIGHTPADDING", (0, 0), (-1, -1), 5)],
+        ))
+        story.append(Spacer(1, 7))
 
 
 def _nifty_technical(R, story):
@@ -675,7 +726,9 @@ def _outlook(R, story):
     story += [Spacer(1, 6)] + rg.bullets(notes)
 
     story += [Spacer(1, 8), rg.P("Methodology & data notes", "h2")] + rg.bullets([
-        f"Index series: {len(R['idx'])} NSE indices downloaded from Yahoo Finance; any index that failed to download is omitted.",
+        f"Index series: {len(R['idx'])}/{len(INDICES)} configured NSE index tickers matched the "
+        "Nifty closing session. Missing or date-mismatched series are omitted: "
+        + (", ".join(R.get("missing_indices") or []) or "none") + ".",
         f"Constituents: {R['n_stocks']} stocks from the bot's sector map. Breadth, median returns and breakout counts describe this sample only.",
         "Stance = weighted percentile of 3-month relative return, relative-strength momentum, trend structure and (where mapped) breadth. It ranks sectors against each other; it is not a forecast.",
         "The rotation quadrant reflects the last ~10 weeks against each sector's 50-day relative-strength average, so a sector can sit in "
@@ -701,7 +754,7 @@ def build_pdf(R: dict, path: str) -> str:
     _outlook(R, story)
     doc = SimpleDocTemplate(path, pagesize=rg.A4, topMargin=19 * mm, bottomMargin=18 * mm, leftMargin=16 * mm, rightMargin=16 * mm,
                             title="Index & Sectoral Update", author=BRAND)
-    meta = {"sym": "", "name": "", "generated": R["generated"], "kind": "Sector Report", "right": f"Index & Sectoral Update  ·  {R['asof']}"}
+    meta = {"brand": "MSK Bot", "sym": "", "name": "", "generated": R["generated"], "kind": "Sector Report", "right": f"Index & Sectoral Update  ·  {R['asof']}"}
     doc.build(story, canvasmaker=rg.make_canvas(meta))
     return path
 

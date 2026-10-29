@@ -267,7 +267,7 @@ def make_canvas(meta: dict):
             self.rect(0, h - 13, w, 13, fill=1, stroke=0)
             self.setFillColor(colors.white)
             self.setFont(BOLD, 7.6)
-            self.drawString(16 * mm, h - 9, f"AutoAI Advisory  |  {meta.get('kind', 'Equity Research')}")
+            self.drawString(16 * mm, h - 9, f"{meta.get('brand', 'AutoAI Advisory')}  |  {meta.get('kind', 'Equity Research')}")
             self.setFont(FONT, 7.6)
             self.drawRightString(w - 16 * mm, h - 9, meta.get("right") or f"{meta['name'][:40]}  ·  NSE: {meta['sym']}")
             self.setStrokeColor(BORDER)
