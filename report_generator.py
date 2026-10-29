@@ -29,6 +29,7 @@ import os
 import re
 import html as _html
 import logging
+import math
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -417,10 +418,11 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
         "quarters": render_quarterly_chart((inp.get("stm") or {}).get("quarters"), sym),
         "sh": charts.chart_shareholding(sh, sym) if sh else None,
     }
+    price_session = df.index[-1].strftime("%d-%b-%Y") if hasattr(df.index[-1], "strftime") else "undated"
     return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
-                news=inp.get("news") or [], fund=fund,
+                news=inp.get("news") or [], fund=fund, price_session=price_session,
                 generated=datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M IST"))
 
 
@@ -448,14 +450,17 @@ def _cover(R, story):
                                 ("TOPPADDING", (0, 0), (-1, 0), 13), ("BOTTOMPADDING", (0, 1), (-1, 1), 12),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 13), ("RIGHTPADDING", (0, 0), (-1, -1), 13)]))
     story += [banner, Spacer(1, 3),
-              P(f"Prepared by: <b>Senior Market Analyst Desk</b>, AutoAI Advisory (automated research engine)  ·  "
-                f"{R['generated']}  ·  Prices as of last available close", "small"), Spacer(1, 8)]
+              P(f"Prepared by: <b>MSK Bot Automated Research</b>  ·  "
+                f"{R['generated']}  ·  Price: EOD session {esc(R.get('price_session') or 'unverified')}", "small"), Spacer(1, 8)]
 
     sc_hex = _stance_color(sc["stance"])
     score_display = ("N/R" if sc.get("insufficient_evidence") else f"{sc['composite']}<font size=11 color='{GREY_H}'> / 100</font>")
+    core_keys = ("pe", "roe", "eps", "pb", "de", "mcap")
+    core_count = sum(R.get("fund", {}).get(k) is not None for k in core_keys)
     left = [P("COMPOSITE SCORE", "lab"), P(score_display, "big"),
-            P(f"Data coverage {sc['coverage']}%", "tiny")]
-    mid = [P("ANALYST STANCE", "lab"), P(colored(esc(sc["stance"]), sc_hex), "stance"), Spacer(1, 2), P(esc(sc["action"]))]
+            P(f"Model pillar weight covered: {sc['coverage']}%", "tiny"),
+            P(f"Core financial ratios available: {core_count}/6 (not audited)", "tiny")]
+    mid = [P("MODEL STANCE", "lab"), P(colored(esc(sc["stance"]), sc_hex), "stance"), Spacer(1, 2), P(esc(sc["action"]))]
     box = Table([[left, mid]], colWidths=[W * 0.24, W * 0.76])
     box.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.8, NAVY), ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F9FC")),
                              ("LINEAFTER", (0, 0), (0, 0), 0.5, BORDER), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -547,7 +552,7 @@ def _investment_view(R, story):
     gaps = reasoning.get("data_gaps") or []
     if gaps:
         story.append(P("<b>Unverified or missing:</b> " + esc("; ".join(gaps[:7])), "tiny"))
-    story.append(P(colored("AUTOMATED PUBLICATION NOT APPROVED: ", RED_H) +
+    story.append(P(colored("SOURCE REVIEW REQUIRED — EDUCATIONAL RESEARCH: ", RED_H) +
                    esc(reasoning.get("publication_reason", "source verification incomplete")), "tiny"))
     story.append(Spacer(1, 6))
     if R["sc"].get("insufficient_evidence"):
@@ -815,6 +820,34 @@ def _ownership_peers(R, story):
             story += [Spacer(1, 4), P(f"{esc(R['name'])} " + " and ".join(notes) + ".", "just")]
 
 
+def conditional_watch_levels(t, plan):
+    """Mechanical WAIT-only levels. Never market orders, forecasts or a buy signal.
+
+    Use the more demanding of the bullish pivot and 50EMA-reclaim threshold.
+    The stop uses 2 ATR below that *future* trigger, not below stale CMP.
+    """
+    try:
+        atr = float(t["atr"])
+        trigger = max(float(plan.get("bull_trigger") or 0),
+                      float(plan.get("reclaim") or 0))
+        if not all(math.isfinite(x) and x > 0 for x in (atr, trigger)):
+            return None
+        risk = round(2 * atr, 2)
+        entry = round(trigger, 2)
+        stop = round(entry - risk, 2)
+        if risk <= 0 or stop <= 0 or stop >= entry or risk / entry > 0.15:
+            return None
+        return {
+            "entry": entry, "sl": stop,
+            "t1": round(entry + 2 * risk, 2),
+            "t2": round(entry + 3 * risk, 2),
+            "risk_pct": round(risk / entry * 100, 1),
+            "rr1": 2, "rr2": 3,
+        }
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
 def _plan(R, story):
     t, plan = R["t"], R["plan"]
     if R["sc"].get("insufficient_evidence") or plan.get("mode") == "NO_TRADE":
@@ -858,6 +891,25 @@ def _plan(R, story):
         recl = plan.get("reclaim")
         story.append(P(f"<b>Re-entry condition:</b> a daily close above {inr(recl) if recl else 'the 50-day EMA'} "
                        f"with RSI back above 50 and above-average volume. <b>Further downside risk</b> opens below {inr(plan['bear_trigger'])}.", "just"))
+        levels = conditional_watch_levels(t, plan)
+        if levels:
+            story.append(Spacer(1, 5))
+            story.append(P("WAIT-ONLY mathematical scenario — NOT an active BUY trade", "h2"))
+            story.append(table([
+                [P("Conditional level", "th"), P("Price", "thr"),
+                 P("Risk/reward", "thr"), P("Meaning", "th")],
+                [P("Future entry trigger", "cellb"), P(inr(levels["entry"]), "cellrb"),
+                 P("—", "cellr"), P("Requires close above trigger, RSI > 50 and confirming volume")],
+                [P("Hypothetical stop-loss", "cellb"), P(inr(levels["sl"]), "cellrb"),
+                 P(f"{levels['risk_pct']:.1f}% risk", "cellr"), P("2 ATR below future entry; gap risk remains")],
+                [P("Target 1 (formula)", "cellb"), P(inr(levels["t1"]), "cellrb"),
+                 P("1:2", "cellr"), P("2 times entry-to-stop distance")],
+                [P("Target 2 (formula)", "cellb"), P(inr(levels["t2"]), "cellrb"),
+                 P("1:3", "cellr"), P("3 times entry-to-stop distance")],
+            ], [46*mm, 35*mm, 28*mm, 69*mm]))
+            story.append(P("These hypothetical levels are calculated from ATR, not price forecasts. "
+                           "Do not place a trade while the setup remains WAIT; a new close and fresh ATR "
+                           "must be checked before recalculating entry, stop and targets.", "tiny"))
 
     story += [Spacer(1, 7), P("Decision triggers", "h2")]
     res, sup = t["resistances"], t["supports"]
@@ -905,7 +957,8 @@ def _appendix(R, story):
     }
     rows = [[P(k, "cellb"), P(f"{int(w * 100)}%", "cellr"), P(desc[k])] for k, w in eng.WEIGHTS.items()]
     story.append(table([[P("Pillar", "th"), P("Weight", "thr"), P("What it measures", "th")]] + rows, [28 * mm, 20 * mm, 130 * mm]))
-    story.append(P("Pillars without data are excluded and the remaining weights re-normalised (see 'Data coverage' on page 1). "
+    story.append(P("Pillars without data are excluded and remaining weights re-normalised; "
+                   "model pillar coverage is NOT the percentage of financial facts independently verified. "
                    "Stance bands: 75+ high-conviction constructive · 62–74 constructive · 48–61 neutral/wait · 35–47 cautious · below 35 negative. "
                    "A technical veto caps the stance at neutral when the trend pillar is below 35. "
                    "The framework is a structured summary of the data, not a forecast and not a back-tested trading system.", "tiny"))
@@ -914,21 +967,25 @@ def _appendix(R, story):
     stm = R["stm"]
     n_core = sum(1 for k in ("pe", "roe", "eps", "pb", "de", "mcap") if R["fund"].get(k) is not None)
     items = [
-        f"Prices & volume: Yahoo Finance / NSE / Stooq daily candles ({R['t']['bars']} sessions); benchmark Nifty 50.",
+        f"Prices & volume: Yahoo Finance / NSE / Stooq daily candles ({R['t']['bars']} sessions); "
+        f"price as of {esc(R.get('price_session') or 'unverified')}; benchmark Nifty 50.",
         (f"Financial statements: {esc(stm['source'])} — {len(stm.get('years') or [])} annual periods, "
          f"{len(stm.get('quarters') or [])} quarters.") if stm else "Financial statements: not available.",
-        f"Ratios aggregated from Screener.in / Yahoo / Finnhub: {n_core}/6 core fields available.",
+        f"Ratios aggregated from Screener.in / Yahoo / Finnhub: {n_core}/6 core fields available "
+        "(availability is not independent accuracy verification).",
         f"Shareholding: Screener.in, {len(R['sh'])} quarters." if R["sh"] else "Shareholding: not available.",
         f"Peers: {len(R['peers'])} same-sector companies." if R["peers"] else "Peers: not available for this stock.",
         "Analyst commentary: " + ("AI-assisted, with every figure checked against the data above." if R["ai_note"] else "rule-generated (no AI text used)."),
     ]
+    items.append("Financial figures and ratios were not independently reconciled to stock-exchange filings; "
+                 "verify consolidated/standalone basis, period and any restatements before client use.")
     story += bullets(items)
-    story += [Spacer(1, 8), P("Glossary", "h2"),
+    story += [Spacer(1, 4), P("Glossary", "h2"),
               P("<b>ATR</b> average true range, a typical daily move · <b>ADX</b> trend strength (above 25 = trending) · <b>RSI</b> momentum oscillator (70/30 bands) · "
                 "<b>EMA</b> exponential moving average · <b>OPM</b> operating profit margin · <b>ROCE/ROE</b> return on capital/equity · "
                 "<b>PEG</b> P/E divided by profit growth · <b>R-multiple</b> reward as a multiple of the risk taken · <b>VaR</b> value-at-risk · "
                 "<b>σ</b> standard deviation of returns.", "small")]
-    story += [Spacer(1, 10), HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceAfter=5),
+    story += [Spacer(1, 5), HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceAfter=3),
               P("<b>Disclaimer.</b> This report is generated automatically from public market data and, where indicated, AI-assisted text. "
                 "It is for educational and informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell any security. "
                 "The author is not a SEBI-registered Research Analyst or Investment Adviser. Data may be delayed, incomplete or inaccurate. "
@@ -951,8 +1008,8 @@ def build_pdf(R: dict, output_path: str) -> str:
 
     doc = SimpleDocTemplate(output_path, pagesize=A4, topMargin=19 * mm, bottomMargin=18 * mm,
                             leftMargin=16 * mm, rightMargin=16 * mm,
-                            title=f"{strip_emoji(R['name'])} — Equity Research Report", author="AutoAI Advisory")
-    meta = {"sym": R["sym"], "name": strip_emoji(R["name"]), "generated": R["generated"]}
+                            title=f"{strip_emoji(R['name'])} — Equity Research Report", author="MSK Bot Automated Research")
+    meta = {"brand": "MSK Bot", "sym": R["sym"], "name": strip_emoji(R["name"]), "generated": R["generated"]}
     doc.build(story, canvasmaker=make_canvas(meta))
     return output_path
 
