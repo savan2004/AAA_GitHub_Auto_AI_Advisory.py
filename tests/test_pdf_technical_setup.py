@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 
 from fixtures import strong
+# Run client-quality checks in the existing protected PDF CI workflow.
+from test_equity_report_client_quality import EquityReportQuality
 import pdf_technical_setup as ch
 
 
