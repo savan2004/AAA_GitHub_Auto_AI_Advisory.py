@@ -20,6 +20,25 @@ def private_message(text="/start", update_id=100, user_id=11, username="analyst"
 
 
 class AnalyticsTests(unittest.TestCase):
+    def test_neon_pooler_connection_omits_startup_options(self):
+        import sys
+        from unittest.mock import Mock
+        driver = Mock()
+        with patch.dict(sys.modules, {"psycopg": driver}):
+            with patch.dict(os.environ, {ua.DB_ENV: "test_connection"}):
+                ua._connect()
+        args, kwargs = driver.connect.call_args
+        self.assertEqual(args[0], "test_connection")
+        self.assertNotIn("options", kwargs)
+        self.assertEqual(kwargs["sslmode"], "require")
+        self.assertEqual(kwargs["connect_timeout"], 15)
+        self.assertIsNone(kwargs["prepare_threshold"])
+
+    def test_safe_database_error_category(self):
+        self.assertEqual(ua._db_error_kind(Exception("unsupported startup parameter")),
+                         "pooler_startup_parameter")
+        self.assertEqual(ua._db_error_kind(Exception("connection timed out")), "timeout")
+
     def test_private_message_identifies_feature_without_saving_text(self):
         raw = private_message("INFY")
         result = ua.extract_event(raw)
