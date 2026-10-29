@@ -211,23 +211,37 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
                    trade_date=str(session),price_checked=True)
         if need_price:
             frame=prices.get(sym)
-            try:
-                if frame is None or frame.empty:
-                    raise ValueError("missing_ohlcv")
-                tech=technical_candidate(sym,frame,profile,
-                     datetime.combine(session,datetime.min.time(),tzinfo=IST)
-                     .replace(hour=16))
-                if not tech:
-                    raise ValueError("insufficient_or_rejected_history")
-                if tech.get("asof")!=str(session):
-                    row["technical"]=None
-                    row["price_reason"]="stale_candle_"+str(tech.get("asof"))
-                else:
-                    row["technical"]=_clean(tech)
-                    row["price_reason"]="ok"
-            except Exception as e:
+            candidate_now=datetime.combine(session,datetime.min.time(),tzinfo=IST).replace(hour=16)
+            tech=None
+            if frame is not None and not frame.empty:
+                try:
+                    tech=technical_candidate(sym,frame,profile,candidate_now)
+                except (TypeError,ValueError,KeyError,AttributeError):
+                    tech=None
+            source="Yahoo bulk NSE daily OHLCV"
+            # Retry keyless bhavcopy after the nightly publication window.
+            # No routine retries for already-fresh Yahoo prices.
+            if (not _fresh(tech,session) and
+                os.getenv("MSK_INDEX_TEJ_FALLBACK","0")=="1"):
+                from overnight_index_sources import fetch_tej_history
+                alternate=fetch_tej_history(sym,session)
+                if alternate is not None:
+                    try:
+                        recovered=technical_candidate(sym,alternate,profile,candidate_now)
+                        if _fresh(recovered,session):
+                            tech=recovered
+                            source="TejHQ / NSE bhavcopy (raw EOD)"
+                    except (TypeError,ValueError,KeyError,AttributeError):
+                        pass
+            if _fresh(tech,session):
+                row["technical"]=_clean(tech)
+                row["price_reason"]="ok"
+                row["price_source"]=source
+            else:
                 row["technical"]=None
-                row["price_reason"]=str(e)[:100]
+                row["price_reason"]=("stale_candle_"+str((tech or {}).get("asof"))
+                                     if tech else "missing_or_rejected_ohlcv")
+                row["price_source"]="unavailable"
         if need_fund:
             row["fund_attempted"]=True
             row["fund_attempts"]=int(row.get("fund_attempts",0))+1
