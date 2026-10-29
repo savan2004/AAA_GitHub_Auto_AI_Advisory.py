@@ -160,6 +160,15 @@ def publish(conn, profile, day):
               " | Validated fundamentals: " + str(validated) + "/" + str(len(symbols)) + "\n" +
               output.replace("Not a full fundamental ranking of every index company; only reviewed stocks are compared.",
                              "All index constituents audited; unavailable financial data remains unverified."))
+    # AI is optional. Only preapproved editorial sentences are allowed;
+    # figures, selections and recommendations remain deterministic.
+    try:
+        from groq_overnight_editor import groq_editorial
+        editorial = groq_editorial(profile, day, len(symbols), validated, len(rows))
+        if editorial:
+            output += "\\n" + editorial
+    except Exception as exc:
+        LOG.warning("Groq editorial unavailable: %s", type(exc).__name__)
     with conn.cursor() as cur:
         cur.execute("""INSERT INTO msk_index_reports(trade_date,profile,report,reviewed,universe_size)
                        VALUES (%s,%s,%s,%s,%s) ON CONFLICT (trade_date,profile)
