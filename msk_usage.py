@@ -37,9 +37,52 @@ def _connect():
     # Import lazily so missing analytics dependencies cannot stop Telegram startup.
     import psycopg
     url = os.environ[DB_ENV]
-    return psycopg.connect(url, connect_timeout=4, sslmode="require",
-                           options="-c statement_timeout=5000",
-                           application_name="msk_bot_usage")
+    # MSK Neon uses a -pooler PgBouncer URL. Do not pass the 'options'
+    # startup packet (including SET statement_timeout); Neon rejects it.
+    # Allow cold starts and disable client-side prepared statements.
+    return psycopg.connect(url, connect_timeout=15, sslmode="require",
+                           application_name="msk_bot_usage",
+                           prepare_threshold=None)
+
+
+def _db_error_kind(exc):
+    """Return a small safe diagnostic enum, never a URI, query or credentials."""
+    message = str(exc).lower()
+    if "unsupported startup parameter" in message:
+        return "pooler_startup_parameter"
+    if "password authentication failed" in message:
+        return "authentication"
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if "could not translate host" in message or "name or service not known" in message:
+        return "dns"
+    if "no route to host" in message or "network is unreachable" in message:
+        return "network"
+    if "connection refused" in message:
+        return "refused"
+    if "ssl" in message or "certificate" in message:
+        return "tls"
+    return "other"
+
+
+def probe_database():
+    """Nonblocking-at-startup diagnostic; no user data or credentials in logs."""
+    if not enabled():
+        return False
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                valid = cur.fetchone() == (1,)
+        if valid:
+            LOG.info("MSK owner analytics database probe passed")
+        else:
+            LOG.warning("MSK owner analytics database probe returned no result")
+        return valid
+    except Exception as exc:
+        LOG.warning("MSK owner analytics database probe failed (type=%s, category=%s)",
+                    type(exc).__name__, _db_error_kind(exc))
+        return False
 
 
 def _label(text, callback=False):
@@ -144,7 +187,7 @@ def record_event(payload):
                 """, (event["user_id"],))
         return True
     except Exception as exc:
-        LOG.warning("Analytics event not stored (%s); bot continues", type(exc).__name__)
+        LOG.warning("Analytics event not stored (type=%s, category=%s); bot continues", type(exc).__name__, _db_error_kind(exc))
         return False
 
 
@@ -166,7 +209,7 @@ def claim_owner(user_id, code):
                 row = cur.fetchone()
                 return bool(row and row[0] == user_id)
     except Exception as exc:
-        LOG.warning("Owner enrollment unavailable (%s)", type(exc).__name__)
+        LOG.warning("Owner enrollment unavailable (type=%s, category=%s)", type(exc).__name__, _db_error_kind(exc))
         return False
 
 
@@ -180,7 +223,7 @@ def get_owner_id():
                 row = cur.fetchone()
                 return row[0] if row else None
     except Exception as exc:
-        LOG.warning("Owner lookup unavailable (%s)", type(exc).__name__)
+        LOG.warning("Owner lookup unavailable (type=%s, category=%s)", type(exc).__name__, _db_error_kind(exc))
         return None
 
 
@@ -356,6 +399,8 @@ def daily_digest_loop(send_message, stop_event):
     """Best-effort 8pm IST notice, while Render service is awake.
     Callers must not describe it as guaranteed on a sleeping free instance.
     """
+    # The same background thread proves pooled Neon connectivity at startup.
+    probe_database()
     while not stop_event.wait(60):
         now = datetime.now(IST)
         if now.hour < 20:

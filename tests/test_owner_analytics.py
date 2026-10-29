@@ -20,6 +20,46 @@ def private_message(text="/start", update_id=100, user_id=11, username="analyst"
 
 
 class AnalyticsTests(unittest.TestCase):
+    def test_neon_pooler_connection_omits_startup_options(self):
+        import sys
+        from unittest.mock import Mock
+        driver = Mock()
+        with patch.dict(sys.modules, {"psycopg": driver}):
+            with patch.dict(os.environ, {ua.DB_ENV: "test_connection"}):
+                ua._connect()
+        args, kwargs = driver.connect.call_args
+        self.assertEqual(args[0], "test_connection")
+        self.assertNotIn("options", kwargs)
+        self.assertEqual(kwargs["sslmode"], "require")
+        self.assertEqual(kwargs["connect_timeout"], 15)
+        self.assertIsNone(kwargs["prepare_threshold"])
+
+    def test_safe_database_error_category(self):
+        self.assertEqual(ua._db_error_kind(Exception("unsupported startup parameter")),
+                         "pooler_startup_parameter")
+        self.assertEqual(ua._db_error_kind(Exception("connection timed out")), "timeout")
+
+    def test_neon_probe_fails_open_on_driver_error(self):
+        with patch.dict(os.environ, {ua.DB_ENV: "test_connection"}):
+            with patch.object(ua, "_connect", side_effect=OSError("connection timed out")):
+                self.assertFalse(ua.probe_database())
+
+    def test_neon_probe_reads_one_without_pii(self):
+        conn = Mock()
+        cursor = Mock()
+        cursor.fetchone.return_value = (1,)
+        cursor_ctx = Mock()
+        cursor_ctx.__enter__ = Mock(return_value=cursor)
+        cursor_ctx.__exit__ = Mock(return_value=False)
+        conn.cursor.return_value = cursor_ctx
+        db_ctx = Mock()
+        db_ctx.__enter__ = Mock(return_value=conn)
+        db_ctx.__exit__ = Mock(return_value=False)
+        with patch.dict(os.environ, {ua.DB_ENV: "test_connection"}):
+            with patch.object(ua, "_connect", return_value=db_ctx):
+                self.assertTrue(ua.probe_database())
+        cursor.execute.assert_called_once_with("SELECT 1")
+
     def test_private_message_identifies_feature_without_saving_text(self):
         raw = private_message("INFY")
         result = ua.extract_event(raw)
