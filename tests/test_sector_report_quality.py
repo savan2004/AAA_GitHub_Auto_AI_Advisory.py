@@ -179,7 +179,7 @@ class ReportCalculations(unittest.TestCase):
         self.assertNotIn('Table([[tbl(R["gainers"]', SOURCE)
         self.assertIn('22 * mm, 65 * mm, 28 * mm, 29 * mm, 29 * mm', SOURCE)
         self.assertIn('DATA DATE WARNING', SOURCE)
-        self.assertIn('Index coverage:', SOURCE)
+        self.assertIn('<b>Data quality:</b>', SOURCE)
 
 
 if __name__ == "__main__":
