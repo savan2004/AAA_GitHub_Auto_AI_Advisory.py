@@ -86,7 +86,10 @@ class FundamentalRules(unittest.TestCase):
                          "annual_history_missing")
 
     def test_free_source_exception_fails_closed_without_fake_numbers(self):
-        with patch("fundamentals.get_fundamentals", side_effect=RuntimeError("blocked")):
+        # Stub the provider module itself: importing real fundamentals needs a
+        # production Telegram credential, which must never be used in offline CI.
+        with patch.dict("sys.modules", {"fundamentals": Mock(
+                get_fundamentals=Mock(side_effect=RuntimeError("blocked")))}):
             row, why = gate.fetch_and_assess("TESTCO", "IT", "moderate", TODAY)
         self.assertIsNone(row)
         self.assertEqual(why, "provider_unavailable")
