@@ -83,7 +83,7 @@ def scanner_namespace(delays=None, timeout=0.05):
         "get_hist": fake_hist,
         "evaluate_candidate": lambda sym, df, profile, asof: {"sym": sym, "score": 75, "volx": 1.5},
         "format_shortlist": lambda profile, rows, done, total, unfinished: (
-            f"{profile.upper()} verified bullish: " + ", ".join(r["sym"] for r in rows)
+            f"{profile.upper()} verified bullish: " + ", ".join(html.escape(r["sym"], quote=False) for r in rows)
             + (f" | Partial coverage: {done}/{total} stocks returned valid data" if unfinished else "")
             + " | Educational only"),
         "calc_rsi": lambda close: 56,
