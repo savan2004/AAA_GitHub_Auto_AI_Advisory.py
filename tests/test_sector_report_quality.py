@@ -42,7 +42,7 @@ class ReportCalculations(unittest.TestCase):
         frame = bars()
         frame.iloc[-30, frame.columns.get_loc("High")] = 170
         ns = load_functions("_ret", "index_metrics", globals_={
-            "pd": pd, "logger": logging.getLogger(__name__),
+            "pd": pd, "np": np, "logger": logging.getLogger(__name__),
             "calc_rsi": lambda x: 55.0})
         row = ns["index_metrics"](frame, frame["Close"])
         expected = round((float(frame.Close.iloc[-1]) / 170-1)*100,1)
@@ -150,6 +150,23 @@ class ReportCalculations(unittest.TestCase):
         self.assertEqual(ns["_sector_risk"]({"trend":"Strong down","vol20":18},{"p50":72}),"HIGH")
         self.assertEqual(ns["_sector_risk"]({"trend":"Uptrend","vol20":23},{"p50":31}),"ELEVATED")
         self.assertEqual(ns["_sector_risk"]({"trend":"Uptrend","vol20":19},{"p50":71}),"MODERATE")
+
+    def test_tied_sector_metrics_have_identical_percentiles(self):
+        ns=load_functions("_pctile",globals_={"np":np})
+        result=ns["_pctile"]({"IT":4.2,"Auto":4.2,"FMCG":-2.5})
+        self.assertEqual(result["IT"],result["Auto"])
+        self.assertEqual(result["FMCG"],0.0)
+        self.assertEqual(ns["_pctile"]({"ONLY":3})["ONLY"],50.0)
+
+    def test_equal_benchmark_relative_strength_is_neutral_not_leading(self):
+        ns=load_functions("_ret","index_metrics",globals_={
+            "pd":pd,"np":np,"logger":logging.getLogger(__name__),
+            "calc_rsi":lambda *_:55.0})
+        frame=bars()
+        row=ns["index_metrics"](frame,frame["Close"])
+        self.assertEqual(row["quad"],"Neutral")
+        self.assertAlmostEqual(row["rs_ratio"],100,delta=.1)
+        self.assertAlmostEqual(row["rs_mom"],100,delta=.1)
 
     def test_200ema_coverage_denominator_and_min_sector_guard_present(self):
         self.assertIn('"n200_stocks": count200',SOURCE)
