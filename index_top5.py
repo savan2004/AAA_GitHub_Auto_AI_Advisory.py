@@ -45,6 +45,8 @@ def _select_top_five(rows, cap_per_sector=2):
         return (-quality, -overall,
                 -row.get("tech_score", row.get("score", 0)), row["sym"])
     for row in sorted(rows, key=rank):
+        if row.get("fund_status") == "REJECTED":
+            continue
         industry = row.get("sector") or "Unknown"
         if sectors[industry] >= cap_per_sector:
             continue
@@ -120,6 +122,7 @@ def _format_index_result(profile, universe, rows, received, fund_checked=0, fund
             f"🧭 {signal} | Risk: {risk} | Stop distance {loss:.1f}%",
             f"₹{r['ltp']:,.2f} ({r['chg']:+.2f}%) | RSI {_fmt(r.get('rsi'))} | ADX {_fmt(r.get('adx'))}",
             f"📘 ROE {_fmt(r.get('roe'),1,'%')} | P/E {_fmt(r.get('pe'))} | {ratio}",
+            f"⚠️ Fundamental caveat: {html.escape(str(r.get('fund_reason') or 'not supplied'))}" if status != "VALIDATED" else "✅ Financial evidence passed defined quality gates.",
             f"📈 Profit 3Y {_fmt(r.get('profit_growth'),1,'%')} | Sales 3Y {_fmt(r.get('sales_growth'),1,'%')}",
             f"🎯 Trigger ₹{r['entry']:,.2f} | SL ₹{r['sl']:,.2f}",
             f"T1 ₹{r['t1']:,.2f} (R:R 1:2) | T2 ₹{r['t2']:,.2f} (1:3)",
