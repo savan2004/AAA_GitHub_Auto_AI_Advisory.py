@@ -3,7 +3,8 @@ This test imports only the scanner function AST, never Telegram or yfinance.
 """
 import ast
 from concurrent.futures import ThreadPoolExecutor, wait
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
+from conservative_screener import CONSERVATIVE_CANDIDATES
 import html
 from pathlib import Path
 import threading
@@ -41,7 +42,10 @@ def scanner_namespace(delays=None, timeout=0.05):
     listed = next(x for x in tree.body if isinstance(x, ast.Assign)
                   and any(isinstance(t, ast.Name) and t.id == "SCREENER_STOCKS"
                           for t in x.targets))
-    symbols = ast.literal_eval(listed.value)
+    # Conservative candidates are now generated from an expanded sector map.
+    parsed = {"CONSERVATIVE_CANDIDATES": CONSERVATIVE_CANDIDATES}
+    exec(compile(ast.Module(body=[listed], type_ignores=[]), "<universe>", "exec"), parsed)
+    symbols = parsed["SCREENER_STOCKS"]
     pool = ThreadPoolExecutor(max_workers=8)
     gate = threading.BoundedSemaphore(1)
     seen = []
@@ -61,6 +65,9 @@ def scanner_namespace(delays=None, timeout=0.05):
         "wait": wait,
         "html": html,
         "date": date,
+        "datetime": datetime,
+        "timezone": timezone,
+        "timedelta": timedelta,
         "get_hist": fake_hist,
         "calc_rsi": lambda close: 56,
         "trend_label": lambda close: "UP",
