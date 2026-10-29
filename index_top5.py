@@ -15,7 +15,8 @@ from datetime import datetime
 from conservative_screener import evaluate_conservative
 from index_constituents import get_index_universe, INDEXES
 from investment_screener import IST, evaluate_candidate
-from top5_fundamental_gate import MAX_CHECKS, fetch_and_assess
+from top5_technical_ratings import technical_candidate
+from top5_company_ratings import fetch_company_evidence
 
 LOG = logging.getLogger(__name__)
 _POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="msk-index-top5")
@@ -24,6 +25,7 @@ _PENDING = {}
 _WAITERS = {}
 _RESULTS = {}
 _RESULT_TTL = 15 * 60
+_MAX_FINANCIAL_CHECKS = 28
 _MIN_COVERAGE = .65
 _CAPS = {"conservative": 20., "moderate": 15., "aggressive": 12.}
 _HORIZONS = {"conservative": "6–18 months (illustrative)",
@@ -34,9 +36,12 @@ _HORIZONS = {"conservative": "6–18 months (illustrative)",
 def _select_top_five(rows, cap_per_sector=2):
     """Strongest qualified setups, with maximum two stocks from one industry."""
     selected, sectors = [], Counter()
-    for row in sorted(rows, key=lambda r: (-r.get("combined_score", r["score"]),
-                                            -r.get("fund_score", 0),
-                                            -r.get("volx", 0), r["sym"])):
+    def rank(row):
+        quality = {"VALIDATED": 2, "PRELIMINARY": 1, "UNVERIFIED": 0}.get(
+            row.get("fund_status"), 0)
+        return (-quality, -row.get("overall_score", row.get("score", 0)),
+                -row.get("tech_score", row.get("score", 0)), row["sym"])
+    for row in sorted(rows, key=rank):
         industry = row.get("sector") or "Unknown"
         if sectors[industry] >= cap_per_sector:
             continue
@@ -59,55 +64,81 @@ def _conservative_levels(row):
                 rr1=1.8, volx=0.0)
 
 
-def _format_index_result(profile, universe, rows, received, fund_checked=0, fund_failed=0):
+def _fmt(value, decimals=1, suffix=""):
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.{decimals}f}{suffix}"
+    except (ValueError, TypeError):
+        return "N/A"
+
+
+def _format_index_result(profile, universe, rows, received, fund_checked=0, fund_failed=0,
+                         total_rated=0):
     total = len(universe["symbols"])
     coverage = received / total if total else 0
-    title = f"{universe['cap'].upper()} — TOP 5" 
+    title = f"{universe['cap'].upper()} — TOP 5 COMPANY WATCHLIST"
     lines = [f"📊 <b>{title} | {html.escape(universe['name'])}</b>",
-             f"🏛 Source: {universe['source']} | membership checked {universe['asof']}",
+             f"🏛 Index source: {html.escape(universe['source'])} | {html.escape(universe['asof'])}",
              f"🕒 Horizon: {_HORIZONS[profile]}",
-             f"📚 Valid price histories: {received}/{total} ({coverage:.0%})",
+             f"📚 Index price coverage: {received}/{total} ({coverage:.0%})",
+             f"🧾 Fundamental reviews: {fund_checked}/{total} | complete evidence: {fund_checked-fund_failed}",
              "━━━━━━━━━━━━━━━━━━━━"]
     if universe.get("stale"):
-        lines.append("⚠️ Verified index membership is a cached copy; check current NSE changes.")
+        lines.append("⚠️ Index membership is a recent cached copy; verify current NSE changes.")
     if coverage < _MIN_COVERAGE:
-        lines += ["⚠️ Insufficient index coverage to rank its best stocks.",
-                  "No securities recommended; incomplete data is not a bearish signal."]
+        lines.extend(["⚠️ Insufficient price coverage for meaningful index ranking.",
+                      "No stock suggestions; missing histories are not bearish signals."])
         return "\n".join(lines)
-    picks = _select_top_five([r for r in rows if isinstance(r.get("fund_score"), (int, float))])
-    lines.append(f"🧾 Financial checks attempted: {fund_checked}; rejected/missing: {fund_failed}")
-    lines.append(f"✅ <b>{len(picks)}/5 qualified technical + fundamental setups</b>")
-    lines.append("Ranking combines technical trend and reported financial strength (not predicted returns).")
+    picks = _select_top_five(rows)
+    verified = sum(r.get("fund_status") == "VALIDATED" for r in picks)
+    lines += [f"✅ <b>{len(picks)}/5 ranked candidates | {verified} fully evidence-validated</b>",
+              "Not a full fundamental ranking of every index company; only reviewed stocks are compared."]
     if not picks:
-        lines.append("⚪ No stock passed BOTH the bullish and validated-fundamentals checks; no forced selection.")
+        lines.append("⚪ No company had usable risk/price levels. No forced recommendation.")
     cap = _CAPS[profile]
-    for i, row in enumerate(picks, 1):
-        sector = html.escape(row.get("sector") or "Unclassified", quote=False)
-        sym = html.escape(row["sym"], quote=False)
-        leverage = (f"P/B {row['pb']:.1f} (financial sector)" if row.get("fin")
-                    else f"D/E {row['de']:.2f}")
-        lines.extend([
-            f"🟢 <b>{i}. {sym}</b> | {sector} | Combined {row['combined_score']}/100",
-            f"Close ₹{row['ltp']:,.2f} ({row['chg']:+.2f}%) | RSI {row['rsi']}",
-            f"📘 ROE {row['roe']:.1f}% | P/E {row['pe']:.1f} | {leverage}",
-            f"3Y profit CAGR {row['profit_growth']:+.1f}%"
-            + (f" | Sales {row['sales_growth']:+.1f}%" if row.get("sales_growth") is not None else ""),
-            f"Entry ref ₹{row['entry']:,.2f} | SL ₹{row['sl']:,.2f}",
-            f"T1 ₹{row['t1']:,.2f} | T2 ₹{row['t2']:,.2f} | R:R 1:{row['rr1']:.1f}",
-            f"Max illustrative allocation {cap:.0f}% | Price {row['asof']} | Results {row['quarter']}",
-            "···",
-        ])
-    invested = len(picks) * cap
-    lines.append(f"💼 Allocation cap total {invested:.0f}% | Reserve ≥{100-invested:.0f}% cash.")
+    for i, r in enumerate(picks, 1):
+        sym = html.escape(r["sym"], quote=False)
+        sector = html.escape(r.get("sector") or "Unknown", quote=False)
+        status = r.get("fund_status", "UNVERIFIED")
+        overall = _fmt(r.get("overall_score"),0,"/100")
+        fund_rating = _fmt(r.get("fund_score"),0,"/100")
+        tech = _fmt(r.get("tech_score", r.get("score")),0,"/100")
+        signal = r.get("signal","WAIT")
+        # Unverified financials cannot produce an investment BUY label.
+        if status != "VALIDATED":
+            signal = "WAIT — RESEARCH ONLY"
+        loss = r.get("risk_pct") or 0
+        risk = "HIGH (unverified financials)" if status!="VALIDATED" else r.get("risk_label","HIGH")
+        ratio = "P/B " + _fmt(r.get("pb"),2) if r.get("fin") else "D/E " + _fmt(r.get("de"),2)
+        lines += [
+            f"<b>{i}. {sym}</b> | {sector}",
+            f"⭐ Overall: {overall} | Fundamental: {fund_rating} ({status}) | Technical: {tech}",
+            f"🧭 {signal} | Risk: {risk} | Stop distance {loss:.1f}%",
+            f"₹{r['ltp']:,.2f} ({r['chg']:+.2f}%) | RSI {_fmt(r.get('rsi'))} | ADX {_fmt(r.get('adx'))}",
+            f"📘 ROE {_fmt(r.get('roe'),1,'%')} | P/E {_fmt(r.get('pe'))} | {ratio}",
+            f"📈 Profit 3Y {_fmt(r.get('profit_growth'),1,'%')} | Sales 3Y {_fmt(r.get('sales_growth'),1,'%')}",
+            f"🎯 Trigger ₹{r['entry']:,.2f} | SL ₹{r['sl']:,.2f}",
+            f"T1 ₹{r['t1']:,.2f} (R:R 1:2) | T2 ₹{r['t2']:,.2f} (1:3)",
+            f"📆 Price {r['asof']} | Results {html.escape(str(r.get('quarter') or 'unverified'))}",
+            "···"
+        ]
+    if picks:
+        lines.append(f"💼 Illustrative maximum per stock {cap:.0f}%; not a suitability-based allocation.")
     if received < total:
-        lines.append(f"⚠️ {total-received} index members lack valid recent data; ranking covers only the available universe.")
-    lines.append("⚠️ Fundamental data from public aggregators (Screener/Yahoo); not independently reconciled with NSE filings. "
-                 "Scores are heuristic, not success rates. Educational; not SEBI-registered advice.")
+        lines.append(f"⚠️ {total-received} index stocks lack usable recent prices.")
+    lines += [
+        "⚠️ This is a WATCHLIST, not five guaranteed best investments. "
+        f"Fundamentals assessed for {fund_checked}/{total}; incomplete sources remain N/A.",
+        "🛑 WAIT means no current buy; trigger/SL/targets are hypothetical "
+        "risk-plan levels, NOT return forecasts. R:R is geometric, not win probability.",
+        "Data: public aggregators, not issuer-filings audited. Educational only; not SEBI-registered advice."
+    ]
     return "\n".join(lines)
 
 
 def _build_index_top5(profile):
-    """Full-index scan, not a convenient 20-stock preselected sample."""
+    """Rank entire NSE index by technical and risk metrics; examine broad financial pool."""
     from market_data import bulk_history
 
     universe = get_index_universe(profile)
@@ -118,47 +149,51 @@ def _build_index_top5(profile):
     if not isinstance(data, dict):
         data = {}
     received, rows = 0, []
-    for symbol in symbols:
-        frame = data.get(symbol)
+    for sym in symbols:
+        frame = data.get(sym)
         if frame is None or frame.empty:
             continue
         received += 1
-        sector = universe["industries"].get(symbol) or "Unclassified"
-        if profile == "conservative":
-            row = evaluate_conservative(symbol, frame, now.date(), sector_override=sector)
-            if row:
-                row = _conservative_levels(row)
-        else:
-            row = evaluate_candidate(symbol, frame, profile, now)
-            if row:
-                row["sector"] = sector
+        row = technical_candidate(sym, frame, profile, now)
         if row is not None:
+            row["sector"] = universe["industries"].get(sym) or "Unclassified"
             rows.append(row)
-    # Stage two: validate statements only for the strongest TECHNICAL shortlist,
-    # never request several hundred fundamentals from the Telegram button.
-    # A stock without complete, recent evidence cannot enter the final five.
-    from collections import Counter
-    reasons = Counter()
-    validated = []
-    inspected = 0
-    if received >= int(len(symbols) * _MIN_COVERAGE):
-        candidates = sorted(rows, key=lambda r: (-r["score"], -r.get("volx", 0), r["sym"]))
-        for row in candidates[:MAX_CHECKS]:
-            inspected += 1
-            info, reason = fetch_and_assess(row["sym"], row.get("sector"), profile, now.date())
-            if not info:
-                reasons[reason] += 1
+
+    reviewed, rejected, enriched = 0, 0, []
+    if received / max(1, len(symbols)) >= _MIN_COVERAGE:
+        # The historical index universe is entirely scanned for chart/risk strength.
+        # Financial checks of all 247 are not feasible on a synchronous Telegram click.
+        # Review diverse, strong candidates without excluding sideways companies.
+        sectors = Counter()
+        pool = []
+        for row in sorted(rows,key=lambda x:(-x["tech_score"],x["sym"])):
+            sector = row["sector"]
+            if sectors[sector] >= 5:
                 continue
-            r = dict(row, **info)
-            r["combined_score"] = round(row["score"] * .45 + info["fund_score"] * .55, 1)
-            validated.append(r)
+            sectors[sector] += 1
+            pool.append(row)
+            if len(pool) >= _MAX_FINANCIAL_CHECKS:
+                break
+        for row in pool:
+            reviewed += 1
+            evidence = fetch_company_evidence(row["sym"], row["sector"], profile, now.date())
+            item = dict(row, **evidence)
+            fscore = item.get("fund_score")
+            if fscore is not None:
+                item["overall_score"] = round(.60*fscore + .40*row["tech_score"],1)
+            else:
+                item["overall_score"] = None
+            if item.get("fund_status") != "VALIDATED":
+                rejected += 1
+            enriched.append(item)
     else:
-        LOG.warning("MSK Top5 %s: price coverage too low for financial checks", profile)
-    LOG.info("MSK Top5 %s: index=%d price_valid=%d technical=%d financial_checked=%d "
-             "qualified=%d missing_or_rejected=%s",
-             profile, len(symbols), received, len(rows), inspected, len(validated), dict(reasons))
-    return _format_index_result(profile, universe, validated, received,
-                                fund_checked=inspected, fund_failed=sum(reasons.values()))
+        LOG.warning("MSK Top5 %s: too few valid price histories",profile)
+    LOG.info("MSK Top5 %s: index=%d valid_prices=%d technical_rated=%d "
+             "fund_reviewed=%d complete=%d provisional=%d",
+             profile,len(symbols),received,len(rows),reviewed,reviewed-rejected,
+             sum(1 for r in enriched if r.get("fund_status")=="PRELIMINARY"))
+    return _format_index_result(profile,universe,enriched,received,
+                                fund_checked=reviewed,fund_failed=rejected,total_rated=len(rows))
 
 
 def _finish(profile, future):
