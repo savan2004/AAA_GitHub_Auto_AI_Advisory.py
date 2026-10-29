@@ -145,6 +145,35 @@
    setTimeout(()=>URL.revokeObjectURL(url),1000);
  }
  function barList(parent,title,columns,rows){p(parent,title);if(rows.length)table(parent,columns,rows);else p(parent,"No matched companies.","warning");}
+ function technicalTab(panel){
+   const evidence=currentEvidence();
+   if(!evidence){
+     p(panel,"No validated price history for this symbol. Load dated NSE EOD candles or import at least 50 daily OHLCV rows; technical indicators are unavailable.","warning");
+     return;
+   }
+   const bars=library.get(evidence.symbol).bars;
+   const completed=bars.slice(0,-1),recent=completed.slice(-20);
+   const high=Math.max(...recent.map(x=>x.high));
+   const low=Math.min(...recent.map(x=>x.low));
+   const last=bars.at(-1);
+   p(panel,evidence.symbol+" • "+evidence.session+" • "+(evidence.kind==="tej_eod"?"TejHQ historical NSE EOD":evidence.kind==="synthetic"?"FICTIONAL DEMO":"User CSV, source unverified")+". No forward prediction or trade recommendation.","warning");
+   p(panel,"Historical support/resistance uses the preceding 20 completed candles and excludes the latest session. These are observed levels, not entry/exit targets.");
+   table(panel,["Technical observation","Value"],[
+     ["Historical support (20 prior lows)",fmt(low)],
+     ["Historical resistance (20 prior highs)",fmt(high)],
+     ["Latest historical close",fmt(last.close)],
+     ["EMA 20",fmt(evidence.ema20)],
+     ["EMA 50",fmt(evidence.ema50)],
+     ["EMA alignment",evidence.ema20>evidence.ema50?"20 above 50":evidence.ema20<evidence.ema50?"20 below 50":"Equal"],
+     ["ADX (14)",evidence.adx===null?"Unavailable":fmt(evidence.adx,1)+" — "+evidence.adxLabel],
+     ["Relative volume",evidence.multiple===null?"Unavailable":fmt(evidence.multiple,2)+"x (previous 20 sessions)"],
+     ["Trend",evidence.trend],
+     ["Pattern finder",evidence.pattern],
+     ["Close vs historical range",last.close>high?"Above 20-session high":last.close<low?"Below 20-session low":"Within prior 20-session range"],
+     ["Assessment","RESEARCH ONLY • not backtested"]
+   ]);
+   p(panel,"Pattern finder reports only patterns detected by the existing candle algorithm. 'No clean pattern' means none confirmed by that detector; it does not prove none exist.");
+ }
  function fundamentalTab(panel){
    const symbol=cleanSymbol(ui.ticker.value)||active;
    p(panel,"Upload optional financial-statement CSV. All figures are supplied by you, with a source and reporting date. Price-only history cannot produce P/E, ROE or revenue growth.","warning");
@@ -311,6 +340,7 @@
    panel.append(btn("Replace Portfolio CSV",()=>window.MSKImport?.open("portfolio"),"btn ghost"));
  }
  function renderPanel(tab,panel){
+   if(tab==="technical"){technicalTab(panel);return true;}
    if(tab==="portfolio"){portfolioTab(panel);return true;}
    if(tab==="fundamental"){fundamentalTab(panel);return true;}
    if(tab==="screener"){screenerTab(panel);return true;}
