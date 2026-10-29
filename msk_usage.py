@@ -65,6 +65,26 @@ def _db_error_kind(exc):
     return "other"
 
 
+def probe_database():
+    """Nonblocking-at-startup diagnostic; no user data or credentials in logs."""
+    if not enabled():
+        return False
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                valid = cur.fetchone() == (1,)
+        if valid:
+            LOG.info("MSK owner analytics database probe passed")
+        else:
+            LOG.warning("MSK owner analytics database probe returned no result")
+        return valid
+    except Exception as exc:
+        LOG.warning("MSK owner analytics database probe failed (type=%s, category=%s)",
+                    type(exc).__name__, _db_error_kind(exc))
+        return False
+
+
 def _label(text, callback=False):
     text = text if isinstance(text, str) else ""
     if callback:
@@ -379,6 +399,8 @@ def daily_digest_loop(send_message, stop_event):
     """Best-effort 8pm IST notice, while Render service is awake.
     Callers must not describe it as guaranteed on a sleeping free instance.
     """
+    # The same background thread proves pooled Neon connectivity at startup.
+    probe_database()
     while not stop_event.wait(60):
         now = datetime.now(IST)
         if now.hour < 20:
