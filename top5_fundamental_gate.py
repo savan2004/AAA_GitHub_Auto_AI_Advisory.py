@@ -30,6 +30,8 @@ _FIN_WORDS = ("bank", "finance", "financial", "nbfc", "lending",
 
 
 def _numeric(value):
+    if value is None or isinstance(value, bool):
+        return None
     try:
         n = float(value)
         return n if math.isfinite(n) else None
