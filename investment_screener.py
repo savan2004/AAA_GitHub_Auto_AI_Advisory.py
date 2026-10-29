@@ -157,7 +157,7 @@ def evaluate_candidate(sym, df, profile, asof=None):
         return None
 
 
-def format_shortlist(profile, candidates, completed, total, unfinished=0):
+def format_shortlist(profile, candidates, completed, total, unfinished=0, missing=0):
     """Use honest partial coverage and never fill the list with bearish stocks."""
     p = PROFILE[profile]
     sorted_rows = sorted(candidates, key=lambda x: (-x["score"], -x["volx"], x["sym"]))[:10]
@@ -166,11 +166,14 @@ def format_shortlist(profile, candidates, completed, total, unfinished=0):
     cash = max(0, round(100 - len(sorted_rows) * pct, 1))
     lines = [f"📊 <b>{p['title']} | VERIFIED BULLISH WATCHLIST</b>",
              f"🗓 Last completed candles only | {p['horizon']}",
-             f"✅ {len(sorted_rows)}/10 qualified | checks finished: {completed}/{total}",
+             f"✅ {len(sorted_rows)}/10 qualified | data returned: {completed}/{total}",
              "Scores = technical strength /100, NOT win probability.",
              "━━━━━━━━━━━━━━━━━━━━"]
     if not sorted_rows:
-        lines.append("⚪ No candidate met all trend, momentum, volume, liquidity and risk gates. NO BUY SIGNAL.")
+        if completed < total:
+            lines.append("⚠️ No bullish setup confirmed among the available stocks. Remaining symbols were NOT assessed; this is NOT a full-market zero.")
+        else:
+            lines.append("⚪ No candidate met all trend, momentum, volume, liquidity and risk gates. NO BUY SIGNAL.")
     for i, row in enumerate(sorted_rows, 1):
         sym = html.escape(row["sym"], quote=False)
         lines += [
@@ -185,8 +188,10 @@ def format_shortlist(profile, candidates, completed, total, unfinished=0):
     lines.append(f"💼 Illustrative maximum invested {100-cash:.1f}% | Unallocated cash ≥{cash:.1f}%.")
     if len(sorted_rows) < 10:
         lines.append("ℹ️ No forced recommendations. Bearish or incomplete stocks excluded.")
-    if unfinished or completed < total:
+    if unfinished:
         lines.append(f"⚠️ Partial coverage: {completed}/{total} data checks finished; {unfinished} timed out.")
+    elif missing or completed < total:
+        lines.append(f"⚠️ Partial coverage: {completed}/{total} stocks downloaded; {total-completed} had no valid price series. No missing stock is assumed bearish.")
     lines += ["⚠️ End-of-day rule-based screening, not intraday prices, suitability assessment or",
               "verified fundamentals. Validate financials/valuation and source freshness before investing.",
               "Educational only. Not SEBI-registered advice."]

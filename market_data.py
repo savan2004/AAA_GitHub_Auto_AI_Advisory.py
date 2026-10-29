@@ -149,6 +149,7 @@ def bulk_history(
     progress_cb: Optional[Callable[[int, int], None]] = None,
     cache_ttl: int = 0,
     adjusted: bool = False,
+    retries: int = 2,
 ) -> Dict[str, pd.DataFrame]:
     """
     Download daily OHLCV for many NSE symbols.
@@ -181,7 +182,7 @@ def bulk_history(
     for i in range(0, len(todo), chunk_size):
         part = todo[i:i + chunk_size]
         y_map = {to_yahoo(s): s for s in part}
-        got = _download_chunk(list(y_map.keys()), period, adjusted=adjusted)
+        got = _download_chunk(list(y_map.keys()), period, retries=max(0, min(retries, 2)), adjusted=adjusted)
         for yt, df in got.items():
             plain = y_map.get(yt) or from_yahoo(yt)
             result[plain] = df

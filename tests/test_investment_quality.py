@@ -7,7 +7,10 @@ from datetime import datetime, timedelta, timezone
 import logging
 from pathlib import Path
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import investment_scan_runner as runner
 import numpy as np
 import pandas as pd
 import analysis_quality as aq
@@ -102,6 +105,64 @@ class ShortlistTests(unittest.TestCase):
             self.assertIn("No forced recommendations", text)
         empty = inv.format_shortlist("moderate", [], 20, 20)
         self.assertIn("NO BUY SIGNAL", empty)
+
+
+class BulkInvestmentScanTests(unittest.TestCase):
+    def test_one_bulk_call_replaces_twenty_throttled_stock_calls(self):
+        symbols = tuple(f"STOCK{i}" for i in range(20))
+        history = {"STOCK0": make_bars()}
+        class FakeClock:
+            @staticmethod
+            def now(tz):
+                return NOW
+        with patch("market_data.bulk_history", return_value=history) as download:
+            with patch.object(runner, "datetime", FakeClock):
+                output = runner._bulk_evaluate("aggressive", symbols)
+        self.assertEqual(download.call_count, 1)
+        self.assertEqual(download.call_args.args[:2], (symbols, "6mo"))
+        self.assertEqual(download.call_args.kwargs["retries"], 1)
+        self.assertIn("data returned: 1/20", output)
+        self.assertIn("Partial coverage:", output)
+        self.assertIn("No missing stock is assumed bearish", output)
+        self.assertNotIn("NO BUY SIGNAL", output)
+
+    def test_full_coverage_can_report_no_qualified_stocks(self):
+        bearish = make_bars(up=False)
+        symbols = tuple(f"STOCK{i}" for i in range(20))
+        histories = {sym: bearish for sym in symbols}
+        class FakeClock:
+            @staticmethod
+            def now(tz):
+                return NOW
+        with patch("market_data.bulk_history", return_value=histories):
+            with patch.object(runner, "datetime", FakeClock):
+                output = runner._bulk_evaluate("moderate", symbols)
+        self.assertIn("data returned: 20/20", output)
+        self.assertIn("NO BUY SIGNAL", output)
+        self.assertNotIn("Partial coverage:", output)
+
+    def test_slow_download_reports_pending_not_zero_bullish(self):
+        gate = threading.Event()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            def slow_scan(profile, symbols):
+                gate.wait(2)
+                return "synthetic result"
+            with patch.object(runner, "_POOL", pool), patch.object(
+                    runner, "_ACTIVE", None), patch.object(
+                    runner, "_ACTIVE_PROFILE", None), patch.object(
+                    runner, "_bulk_evaluate", slow_scan):
+                output = runner.run_investment_scan("aggressive", ["TCS"], deadline=0.01)
+                self.assertIn("still downloading", output)
+                self.assertNotIn("0/10", output)
+                self.assertNotIn("NO BUY SIGNAL", output)
+                gate.set()
+                result = runner.run_investment_scan("aggressive", ["TCS"], deadline=2)
+                self.assertEqual(result, "synthetic result")
+
+    def test_unsupported_profile_rejected_without_download(self):
+        with patch.object(runner, "_POOL") as worker:
+            self.assertIn("Unsupported", runner.run_investment_scan("bogus", ["TCS"]))
+            worker.submit.assert_not_called()
 
 
 class HandlerIntegrationTests(unittest.TestCase):
