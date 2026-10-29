@@ -105,8 +105,16 @@ def assess_fundamentals(profile, fundamentals, statements, industry, today=None)
         return None, "roe_missing_or_weak"
     if pe is None or not 0 < pe <= p["max_pe"]:
         return None, "valuation_missing_or_expensive"
-    if eps is None or eps <= 0 or netprofit is None or netprofit <= 0:
-        return None, "earnings_missing_or_loss"
+    # A missing EPS feed is not evidence of a loss-making company.
+    # Keep the existing hard gate, but identify the precise missing fact.
+    if eps is None:
+        return None, "eps_unavailable"
+    if eps <= 0:
+        return None, "eps_nonpositive"
+    if netprofit is None:
+        return None, "annual_profit_unavailable"
+    if netprofit <= 0:
+        return None, "annual_loss"
 
     profit_growth = _cagr(old.get("net_profit"), netprofit, years)
     if profit_growth is None or profit_growth < p["min_profit_cagr"]:
