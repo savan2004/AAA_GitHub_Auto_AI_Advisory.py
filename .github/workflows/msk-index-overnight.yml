@@ -28,8 +28,8 @@ on:
   schedule:
     - cron: '43 10 * * 1-5'  # 16:13 IST weekdays
     - cron: '43 16 * * 1-5'  # 22:13 IST weekdays
-    - cron: '43 23 * * 0-4'  # 05:13 IST next weekday
-    - cron: '43 1 * * 1-5'   # 07:13 IST pre-market finalize
+    - cron: '43 23 * * 0-5'  # 05:13 IST Mon-Sat; includes Friday-close retry
+    - cron: '43 1 * * 1-6'   # 07:13 IST Mon-Sat; Friday report ready Saturday
 
 permissions:
   contents: read
@@ -55,7 +55,7 @@ jobs:
 
   collect:
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule != '43 1 * * 1-5') ||
+      (github.event_name == 'schedule' && github.event.schedule != '43 1 * * 1-6') ||
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'collect')
     runs-on: ubuntu-24.04
     timeout-minutes: 300
@@ -96,15 +96,20 @@ jobs:
           fi
       - name: Review ALL constituent fundamentals and fresh daily candles
         run: |
+          if [ "${{ github.event.schedule }}" = "43 23 * * 0-5" ]; then
+            BUDGET_HOURS=1.35   # 05:13 IST collector must finish before 07:13
+          else
+            BUDGET_HOURS=4.3
+          fi
           python -m overnight_index_reports run \
-            --profile '${{ matrix.profile }}' --pause 0.8 --budget-hours 4.3
+            --profile '${{ matrix.profile }}' --pause 0.8 --budget-hours "$BUDGET_HOURS"
       - name: Alarm if collection failed
         if: failure()
         run: echo "::error::Index ${{ matrix.cap }} collection failed; no Top5 forced."
 
   finalize:
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule == '43 1 * * 1-5') ||
+      (github.event_name == 'schedule' && github.event.schedule == '43 1 * * 1-6') ||
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'finalize')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
