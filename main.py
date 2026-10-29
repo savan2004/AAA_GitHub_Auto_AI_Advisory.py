@@ -1116,7 +1116,7 @@ def stat_btn(m):
     "🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive",
 ])
 def scan_btn(m):
-    """New labels + cached old keyboards all use current official index memberships."""
+    # New labels + cached old keyboards use current official NSE index membership.
     if not _allow_heavy(m):
         return
     profiles = {
