@@ -1,0 +1,128 @@
+name: MSK Overnight Full Index EOD Pipeline
+
+# GitHub schedules run ONLY after this file is merged to main.
+# IST: 16:13 collect, 22:13 retry, 05:13 retry, 07:13 finalize.
+# Schedules may be delayed. No 08:00 SLA without an external watchdog.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'overnight_index_reports.py'
+      - 'index_top5.py'
+      - 'index_constituents.py'
+      - 'tests/test_overnight_index_reports.py'
+      - '.github/workflows/msk-index-overnight.yml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        required: true
+        default: status
+        options: [status, collect, finalize]
+      profile:
+        type: choice
+        required: true
+        default: all
+        options: [all, conservative, moderate, aggressive]
+  schedule:
+    - cron: '43 10 * * 1-5'  # 16:13 IST weekdays
+    - cron: '43 16 * * 1-5'  # 22:13 IST weekdays
+    - cron: '43 23 * * 0-4'  # 05:13 IST next weekday
+    - cron: '43 1 * * 1-5'   # 07:13 IST pre-market finalize
+
+permissions:
+  contents: read
+
+jobs:
+  unit-test:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install offline numerical dependencies
+        run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'requests>=2.32,<3' 'yfinance>=0.2.60,<0.3'
+      - name: Compile pipeline
+        run: python -m py_compile overnight_index_reports.py index_top5.py index_constituents.py top5_company_ratings.py tests/test_overnight_index_reports.py
+      - name: Test index-wide 100, 150, 250, staleness, reports and resumability
+        run: python -m unittest discover -s tests -p 'test_overnight_index_reports.py' -v
+      - name: Check legacy index contracts in isolated compatibility mode
+        run: MSK_INDEX_PREPARED_ONLY=0 python -m unittest discover -s tests -p 'test_index_top5.py' -v
+
+  collect:
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule != '43 1 * * 1-5') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'collect')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - {profile: conservative, cap: large100}
+          - {profile: moderate, cap: mid150}
+          - {profile: aggressive, cap: small250}
+    concurrency:
+      group: msk-index-overnight-${{ matrix.profile }}
+      cancel-in-progress: false
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      PYTHONUNBUFFERED: '1'
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require Neon secret without printing it
+        run: |
+          test -n "$MSK_INDEX_DATABASE_URL" || {
+            echo "::error::MSK_INDEX_DATABASE_URL secret missing. Nothing collected.";
+            exit 1;
+          }
+      - name: Install free-source data collectors
+        run: pip install -r requirements.txt
+      - name: Review ALL constituent fundamentals and fresh daily candles
+        run: |
+          python -m overnight_index_reports run \
+            --profile '${{ matrix.profile }}' --pause 0.8 --budget-hours 4.3
+      - name: Alarm if collection failed
+        if: failure()
+        run: echo "::error::Index ${{ matrix.cap }} collection failed; no Top5 forced."
+
+  finalize:
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '43 1 * * 1-5') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'finalize')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        profile: [conservative, moderate, aggressive]
+    concurrency:
+      group: msk-index-overnight-${{ matrix.profile }}
+      cancel-in-progress: false
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require Neon secret
+        run: |
+          test -n "$MSK_INDEX_DATABASE_URL" || {
+            echo "::error::Missing overnight Neon secret. Cannot finalize.";
+            exit 1;
+          }
+      - name: Install database and constituent parsing libraries
+        run: pip install 'psycopg[binary]>=3.2,<3.4' requests
+      - name: Finalize strict full-index reports and missing-data ledger
+        run: python -m overnight_index_reports finalize --profile '${{ matrix.profile }}'
