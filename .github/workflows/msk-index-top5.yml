@@ -1,0 +1,39 @@
+name: MSK Index Top 5 Validation
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'index_constituents.py'
+      - 'index_top5.py'
+      - 'main.py'
+      - 'conservative_screener.py'
+      - 'tests/test_index_top5.py'
+      - '.github/workflows/msk-index-top5.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'index_constituents.py'
+      - 'index_top5.py'
+      - 'main.py'
+      - 'conservative_screener.py'
+      - 'tests/test_index_top5.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  index:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install numerical test dependencies
+        run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' requests
+      - name: Compile new and existing modules
+        run: python -m py_compile main.py conservative_screener.py index_constituents.py index_top5.py tests/test_index_top5.py
+      - name: Verify NSE index list parsing, Top-5 selection and async Telegram delivery
+        run: python -m unittest discover -s tests -p 'test_index_top5.py' -v
+      - name: Verify Conservative fail-closed rules stay intact
+        run: python -m unittest discover -s tests -p 'test_conservative_shortlist.py' -v

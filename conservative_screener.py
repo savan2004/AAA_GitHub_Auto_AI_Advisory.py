@@ -37,13 +37,13 @@ MAX_ATR_PERCENT = 3.5
 MAX_ANNUAL_VOL_PERCENT = 45.0
 
 
-def evaluate_conservative(sym, df, asof):
+def evaluate_conservative(sym, df, asof, sector_override=None):
     """Return a qualifying technical observation or None.
 
     asof is the IST calendar date; same-day candles are excluded because
     the bar may not be final. Price/volume can be adjusted/provider-delayed.
     """
-    if sym not in SECTOR_BY_SYMBOL or df is None or df.empty:
+    if (sym not in SECTOR_BY_SYMBOL and not sector_override) or df is None or df.empty:
         return None
     if not {"Close", "High", "Low", "Volume"}.issubset(df.columns):
         return None
@@ -119,7 +119,7 @@ def evaluate_conservative(sym, df, asof):
         score = (min(move20, 15) * 1.5 + min(move60, 35) * 0.5
                  - atr_pct * 4 - annual_vol * 0.15)
         return {
-            "sym": sym, "sector": SECTOR_BY_SYMBOL[sym],
+            "sym": sym, "sector": sector_override or SECTOR_BY_SYMBOL[sym],
             "ltp": round(latest, 2), "chg": round(day_change, 2),
             "rsi": round(rsi, 1), "atr_pct": round(atr_pct, 2),
             "volatility_pct": round(annual_vol, 1),
