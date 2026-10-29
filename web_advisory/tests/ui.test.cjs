@@ -365,3 +365,17 @@ test("Portfolio tab is real, source-labelled and does not invent P&L",()=>{
  assert.equal(w.location.hash,"#portfolio");
  w.close();
 });
+
+test("CSV import button rejects unterminated quoted fields before enabling Import",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("openImport").click();
+ assert.equal(d.getElementById("importModal").hidden,false);
+ assert.throws(
+  ()=>w.MSKImport.readPreview('symbol,timestamp,open,high,low,close,volume\n"BEL,2026-01-01,10,12,9,11,100'),
+  /unclosed quoted field/i
+ );
+ assert.equal(d.getElementById("confirmImport").disabled,true);
+ d.getElementById("closeImport").click();
+ assert.equal(d.getElementById("importModal").hidden,true);
+ w.close();
+});
