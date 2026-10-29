@@ -44,7 +44,7 @@ jobs:
       - name: Compile new and existing modules
         run: python -m py_compile main.py conservative_screener.py index_constituents.py index_top5.py top5_fundamental_gate.py tests/test_index_top5.py tests/test_top5_fundamental_gate.py top5_technical_ratings.py top5_company_ratings.py tests/test_top5_risk_cards.py
       - name: Verify NSE index list parsing, Top-5 selection and async Telegram delivery
-        run: python -m unittest discover -s tests -p 'test_index_top5.py' -v
+        run: MSK_INDEX_PREPARED_ONLY=0 python -m unittest discover -s tests -p 'test_index_top5.py' -v
       - name: Verify live-report freshness, valuation, debt and earnings gates
         run: python -m unittest discover -s tests -p 'test_top5_fundamental_gate.py' -v
       - name: Verify Top-5 financial/technical ratings and actual SL/RR calculations
