@@ -311,6 +311,7 @@
    panel.append(btn("Replace Portfolio CSV",()=>window.MSKImport?.open("portfolio"),"btn ghost"));
  }
  function renderPanel(tab,panel){
+   if(tab==="pdf"){window.MSKReport?.render(panel);return true;}
    if(tab==="portfolio"){portfolioTab(panel);return true;}
    if(tab==="fundamental"){fundamentalTab(panel);return true;}
    if(tab==="screener"){screenerTab(panel);return true;}
