@@ -52,6 +52,7 @@ from conservative_screener import (
 )
 from investment_screener import evaluate_candidate, format_shortlist
 from investment_scan_runner import run_investment_scan
+from index_top5 import request_index_top5
 from analysis_quality import inspect_history, format_snapshot
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
@@ -692,7 +693,7 @@ def build_portfolio_card(uid):
 def main_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     kb.add("🔍 Analysis", "📊 Breadth", "🔥 Stocks Buzz")
-    kb.add("🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive")
+    kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report", "📋 Status")
     kb.add("🏭 Sector Report")
@@ -755,7 +756,7 @@ def cmd_start(m):
     state.clear(m.chat.id)
     safe_send(m.chat.id,
               "👋 <b>MSK Bot</b>\n\nType any stock name or symbol for analysis.\n"
-              "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
+              "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"              "🏦 Large / ⚖️ Mid / 🚀 Small Cap Top 5: NSE index-based bullish shortlists.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
               "Use menu buttons below.\n"
@@ -1110,21 +1111,31 @@ def stat_btn(m):
     cmd_status(m)
 
 
-@bot.message_handler(func=lambda m: m.text in ["🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive"])
+@bot.message_handler(func=lambda m: m.text in [
+    "🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5",
+    "🏦 Conservative", "⚖️ Moderate", "🚀 Aggressive",
+])
 def scan_btn(m):
+    """New labels + cached old keyboards all use current official index memberships."""
     if not _allow_heavy(m):
         return
-    p = {"🏦 Conservative": "conservative", "⚖️ Moderate": "moderate", "🚀 Aggressive": "aggressive"}[m.text]
-    safe_send(m.chat.id, f"⏳ Scanning {m.text}…")
+    profiles = {
+        "🏦 Large Cap Top 5": "conservative",
+        "⚖️ Mid Cap Top 5": "moderate",
+        "🚀 Small Cap Top 5": "aggressive",
+        "🏦 Conservative": "conservative",
+        "⚖️ Moderate": "moderate",
+        "🚀 Aggressive": "aggressive",
+    }
+    profile = profiles[m.text]
+    try:
+        response = request_index_top5(profile, m.chat.id, safe_send)
+        safe_send(m.chat.id, response)
+    except Exception as exc:
+        logger.warning("MSK index Top5 submission unavailable (%s)", type(exc).__name__)
+        safe_send(m.chat.id, "⚠️ Index scan unavailable. Please retry later.")
 
-    def _run(chat_id=m.chat.id, prof=p):
-        try:
-            safe_send(chat_id, build_scan(prof))
-        except Exception as e:
-            logger.error(f"Screener err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Error: {e}")
 
-    executor.submit(_run)
 
 
 @bot.message_handler(func=lambda m: m.text == "📊 Breadth")
