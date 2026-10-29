@@ -181,8 +181,11 @@ def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
         if len(j) > 70:
             rs = j["i"] / j["n"]
             ratio = 100 * rs / rs.rolling(50).mean()
-            m["rs_ratio"] = round(float(ratio.iloc[-1]), 2)
-            m["rs_mom"] = round(100 + float(ratio.iloc[-1] - ratio.iloc[-11]), 2)
+            current_ratio, prior_ratio = float(ratio.iloc[-1]), float(ratio.iloc[-11])
+            if not np.isfinite(current_ratio) or not np.isfinite(prior_ratio):
+                raise ValueError("invalid relative-rotation series")
+            m["rs_ratio"] = round(current_ratio, 2)
+            m["rs_mom"] = round(100 + current_ratio - prior_ratio, 2)
             m["quad"] = ("Leading" if m["rs_ratio"] >= 100 and m["rs_mom"] >= 100 else
                          "Weakening" if m["rs_ratio"] >= 100 else
                          "Improving" if m["rs_mom"] >= 100 else "Lagging")
@@ -215,14 +218,14 @@ def _pctile(vals: Dict[str, Optional[float]]) -> Dict[str, float]:
     return {k: (i / (n - 1) * 100 if n > 1 else 50.0) for i, (k, _) in enumerate(items)}
 
 
-def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
-    hist = _completed_bars(hist)
+def analyze(hist: Dict[str, pd.DataFrame], now=None) -> dict:
+    prepared = now or datetime.now(IST)
+    hist = _completed_bars(hist, prepared)
     nifty = hist.get(BENCH)
     if nifty is None or len(nifty) < 70:
         raise ValueError("Nifty 50 history unavailable — cannot build the sector report.")
     nc = nifty["Close"]
     asof_date = pd.Timestamp(nifty.index[-1]).date()
-    prepared = datetime.now(IST)
     # NSE holidays are NOT inferred from the weekday calendar; a flagged lag
     # needs the exchange calendar checked rather than falsely claiming an outage.
     expected_weekday = (pd.Timestamp(prepared.date()) if prepared.weekday() < 5
@@ -363,6 +366,8 @@ def _takeaways(R: dict) -> Tuple[List[str], str]:
     if lag:
         out.append("<b>Sector laggards:</b> " + ", ".join(
             f"{v['name'].replace('Nifty ', '')} ({_s(v['r1m'])} 1M, {_s(v['r3m'])} 3M)" for v in lag) + ".")
+    if R.get("freshness_warning"):
+        out.append("<b>Data caution:</b> benchmark prices may not include the most recent completed market session.")
     if R["p50_all"] is not None:
         tone = "healthy" if R["p50_all"] >= 60 else "mixed" if R["p50_all"] >= 40 else "weak"
         out.append(f"<b>Breadth is {tone}:</b> {R['p50_all']}% of {R['n_stocks']} sampled sector observations trade above their 50-day EMA"
@@ -558,8 +563,12 @@ def _cover(R, story):
         story.append(rg.P(rg.colored(rg.esc(R["freshness_warning"]), rg.RED_H), "small"))
         story.append(Spacer(1, 4))
     loaded, total = R.get("index_coverage", (0, len(INDICES)))
-    story += [rg.P(f"Index coverage: <b>{loaded}/{total}</b> sources matched the Nifty close date; "
-                   f"breadth covers <b>{R['n_stocks']}</b> sampled companies, NOT the full sector universe.", "small"),
+    tracked = R.get("n_unique", R["n_stocks"])
+    configured = R.get("n_configured") or tracked
+    pct = round(100 * tracked / configured) if configured else 0
+    story += [rg.P(f"<b>Data quality:</b> indices {loaded}/{total} matched the Nifty session; "
+                   f"stock breadth: {tracked}/{configured} configured unique stocks ({pct}%), "
+                   "not the complete NSE sector universe.", "small"),
               Spacer(1, 8), rg.P("Summary", "h1"),
               Table([[""]], colWidths=[W], rowHeights=[1], style=[("LINEABOVE", (0, 0), (-1, 0), 1.2, rg.NAVY)]),
               Spacer(1, 4)]
@@ -570,7 +579,7 @@ def _cover(R, story):
     story.append(rg.P("Sector rotation scorecard", "h2"))
     rows = sorted([v for v in R["sec"].values() if v["score"] is not None], key=lambda v: -v["score"])
     hdr = [Tp("Sector index", "h"), Tp("Stance", "hc"), Tp("Score", "hr"), Tp("1M", "hr"), Tp("3M", "hr"),
-           Tp("vs Nifty 3M", "hr"), Tp("Rotation", "hc"), Tp("%>50EMA", "hr"), Tp("Breakouts", "hr")]
+           Tp("vs Nifty 3M", "hr"), Tp("Rotation", "hc"), Tp("%>50EMA", "hr"), Tp("Risk", "hc")]
     data, extra = [hdr], []
     for i, v in enumerate(rows, start=1):
         b = v["breadth"]
@@ -579,13 +588,16 @@ def _cover(R, story):
                      Tp(str(v["score"]), "rb"), Tp(_pct(v["r1m"]), "r"), Tp(_pct(v["r3m"]), "r"),
                      Tp(_pct(v["rel3m"]), "r"), Tp(rg.colored(v["quad"], _quad_hex(v["quad"])), "ctr"),
                      Tp(f"{b['p50']}%" if b and b["p50"] is not None else "—", "r"),
-                     Tp(str(b["breakouts"]) if b else "—", "r")])
+                     Tp(rg.colored(v.get("risk", "N/A"), rg.RED_H if v.get("risk")=="HIGH" else
+                                   rg.AMBER_H if v.get("risk")=="ELEVATED" else rg.GREEN_H), "ctr")])
         extra += [("BACKGROUND", (3, i), (3, i), heat(v["r1m"], 6)), ("BACKGROUND", (4, i), (4, i), heat(v["r3m"], 12)),
                   ("BACKGROUND", (5, i), (5, i), heat(v["rel3m"], 8))]
     widths = [36 * mm, 25 * mm, 12 * mm, 16 * mm, 16 * mm, 19 * mm, 21 * mm, 17 * mm, 16 * mm]
     story.append(rg.table(data, widths, extra=extra + [("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3)]))
-    story.append(rg.P("Stance = rule-based rotation read (3M relative return 35%, RS momentum 25%, trend 25%, breadth 15%). "
-                      "Breakouts / breadth are counted only where the index maps to a constituent group. Not an analyst rating.", "tiny"))
+    story.append(rg.P("Stance = relative rotation ranking, NOT a portfolio weight or investment recommendation. "
+                      "Risk = trend, last-20-session annualised volatility and sampled 50EMA breadth "
+                      "(HIGH / ELEVATED / MODERATE, not a probability). "
+                      "Sector score weighs relative 3M return 35%, RS momentum 25%, trend 25% and available breadth 15%.", "tiny"))
 
 
 def esc_d(s):
@@ -751,7 +763,8 @@ def _outlook(R, story):
 
     def ev(v):
         b = v["breadth"]
-        bits = [f"{_pct(v['rel3m'])} vs Nifty (3M)", f"{v['quad'].lower()} on rotation map", v["trend"].lower()]
+        bits = [f"risk {v.get('risk','not rated').lower()}", f"{_pct(v['rel3m'])} vs Nifty (3M)",
+                f"{v['quad'].lower()} on rotation map", v["trend"].lower()]
         if b and b["p50"] is not None:
             bits.append(f"{b['p50']}% of constituents above 50EMA")
         return ", ".join(bits)
@@ -786,8 +799,12 @@ def _outlook(R, story):
         f"Index series: {len(R['idx'])}/{len(INDICES)} configured NSE index tickers matched the "
         "Nifty closing session. Missing or date-mismatched series are omitted: "
         + (", ".join(R.get("missing_indices") or []) or "none") + ".",
-        f"Constituents: {R['n_stocks']} stocks from the bot's sector map. Breadth, median returns and breakout counts describe this sample only.",
-        "Stance = weighted percentile of 3-month relative return, relative-strength momentum, trend structure and (where mapped) breadth. It ranks sectors against each other; it is not a forecast.",
+        f"Constituents: {R.get('n_unique', R['n_stocks'])}/{R.get('n_configured', 'unknown')} "
+        "configured unique stocks, grouped into {0} stock observations across sector samples; "
+        "breadth and breakouts describe this sample only, NOT full NSE sector membership.".format(R["n_stocks"]),
+        "Stance = weighted percentile of 3-month relative return, relative-strength momentum, trend and available sampled breadth. "
+        "Missing breadth is excluded and remaining weights renormalised; scores are not directly comparable to complete-coverage scores.",
+        "Risk flag = 20-session annualised volatility, trend and sampled 50EMA breadth. It is NOT a recommended position size, price target or forecast.",
         "The rotation quadrant reflects the last ~10 weeks against each sector's 50-day relative-strength average, so a sector can sit in "
         "“Leading” while its 3-month return still ranks low (or the reverse). The stance score blends both views.",
         "Sector indices and constituent groups do not always match one-for-one (e.g. Nifty Metal, PSE, Media and Financial Services have no mapped group), so breadth columns show “—” for them.",
