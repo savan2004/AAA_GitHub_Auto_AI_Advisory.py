@@ -475,7 +475,8 @@ def chart_rrg(R: dict) -> Optional[str]:
         ax.axhspan(100, 100 + py, xmin=0, xmax=0.5, color="#E3EEFB")
         ax.axhline(100, color=charts.GREY, lw=0.7)
         ax.axvline(100, color=charts.GREY, lw=0.7)
-        cmap = {"Leading": charts.GREEN, "Improving": charts.ACCENT, "Weakening": charts.AMBER, "Lagging": charts.RED}
+        cmap = {"Leading": charts.GREEN, "Improving": charts.ACCENT, "Weakening": charts.AMBER,
+                "Lagging": charts.RED, "Neutral": charts.GREY}
         for i, v in enumerate(pts):
             ax.scatter(v["rs_ratio"], v["rs_mom"], s=46, color=cmap[v["quad"]], zorder=3, edgecolor="white", linewidth=0.8)
             dy = 0.06 * py * (1 if i % 2 == 0 else -1.6)
