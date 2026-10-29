@@ -95,7 +95,50 @@ BENCH = "^NSEI"
 def _ret(c: pd.Series, k: int) -> Optional[float]:
     if len(c) <= k:
         return None
-    return round((float(c.iloc[-1]) / float(c.iloc[-1 - k]) - 1) * 100, 1)
+    last, old = float(c.iloc[-1]), float(c.iloc[-1-k])
+    if not np.isfinite(last) or not np.isfinite(old) or old <= 0:
+        return None
+    return round((last / old - 1) * 100, 1)
+
+
+def _last_completed_session(now=None):
+    """Exclude unfinished NSE daily bars; no guessed holiday calendar."""
+    now = now or datetime.now(IST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=IST)
+    now = now.astimezone(IST)
+    today = pd.Timestamp(now.date())
+    if now.weekday() < 5 and (now.hour, now.minute) >= (16, 0):
+        return today.date()
+    return (today - pd.offsets.BDay(1)).date()
+
+
+def _completed_bars(history, now=None):
+    """Return only completed candles; never let an intraday Yahoo bar skew PDF."""
+    cutoff = _last_completed_session(now)
+    out = {}
+    for ticker, frame in (history or {}).items():
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        try:
+            keep = [pd.Timestamp(i).date() <= cutoff for i in frame.index]
+            clean = frame.loc[keep].sort_index()
+            if not clean.empty and clean.index.is_unique:
+                out[ticker] = clean
+        except (ValueError, TypeError, KeyError):
+            logger.warning("Sector report: rejected invalid timestamps in %s", ticker)
+    return out
+
+
+def _sector_risk(index, breadth):
+    """Transparent market-trend risk, NOT estimated investment risk or probability."""
+    p50 = breadth.get("p50") if breadth else None
+    vol = index.get("vol20")
+    if index.get("trend") == "Strong down" or (p50 is not None and p50 < 20) or (vol is not None and vol >= 40):
+        return "HIGH"
+    if index.get("trend") == "Downtrend" or (p50 is not None and p50 < 40) or (vol is not None and vol >= 28):
+        return "ELEVATED"
+    return "MODERATE"
 
 
 def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
@@ -117,8 +160,11 @@ def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
     # 52-week HIGH means the highest traded High, not the highest daily close.
     highs = df["High"].dropna().iloc[-252:] if "High" in df.columns else pd.Series(dtype=float)
     hi = float(highs.max()) if not highs.empty else None
+    daily_returns = c.pct_change(fill_method=None).dropna()
+    vol20 = round(float(daily_returns.tail(20).std() * np.sqrt(252) * 100), 1) if len(daily_returns) >= 20 else None
     m = {"ltp": ltp, "chg": _ret(c, 1), "r1w": _ret(c, 5), "r1m": _ret(c, 21), "r3m": _ret(c, 63),
          "r6m": _ret(c, 126), "r1y": _ret(c, min(250, len(c) - 1)) if len(c) > 200 else None,
+         "vol20": vol20,
          "from_high": round((ltp / hi - 1) * 100, 1) if hi and hi > 0 else None,
          "rsi": calc_rsi(c) if len(c) > 30 else None,
          "trend": trend, "above50": ltp > e50, "above200": (ltp > e200) if e200 else None,
@@ -140,7 +186,10 @@ def index_metrics(df: pd.DataFrame, nifty_c: pd.Series) -> dict:
             m["quad"] = ("Leading" if m["rs_ratio"] >= 100 and m["rs_mom"] >= 100 else
                          "Weakening" if m["rs_ratio"] >= 100 else
                          "Improving" if m["rs_mom"] >= 100 else "Lagging")
-            m["rel3m"] = round((m["r3m"] or 0) - (_ret(nifty_c, 63) or 0), 1) if m["r3m"] is not None else None
+            # Benchmark and sector MUST share both endpoints of the same 3M
+            # window; sparse holidays and provider gaps can shift raw offsets.
+            ir, nr = _ret(j["i"], 63), _ret(j["n"], 63)
+            m["rel3m"] = round(ir - nr, 1) if ir is not None and nr is not None else None
     except Exception as e:
         logger.debug(f"rs calc failed: {e}")
     m.setdefault("rel3m", None)
@@ -167,6 +216,7 @@ def _pctile(vals: Dict[str, Optional[float]]) -> Dict[str, float]:
 
 
 def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
+    hist = _completed_bars(hist)
     nifty = hist.get(BENCH)
     if nifty is None or len(nifty) < 70:
         raise ValueError("Nifty 50 history unavailable — cannot build the sector report.")
@@ -233,7 +283,10 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
             r1 = [r["r1m"] for r in rows if r["r1m"] is not None]
             r3 = [r["r3m"] for r in rows if r["r3m"] is not None]
             breadth[grp] = {
-                "n": len(rows), "p50": share("above50"), "p200": share("above200"),
+                "n": len(rows), "configured": len(set(syms)),
+                "coverage": round(100 * len(rows) / len(set(syms))) if syms else None,
+                "n200": sum(1 for r in rows if r["above200"] is not None),
+                "p50": share("above50"), "p200": share("above200"),
                 "near_high": share("near_high"),
                 "med1m": round(float(np.median(r1)), 1) if r1 else None,
                 "med3m": round(float(np.median(r3)), 1) if r3 else None,
@@ -254,6 +307,7 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
         wsum = sum(w for w, x in parts if x is not None)
         v["score"] = round(sum(w * x for w, x in parts if x is not None) / wsum) if wsum else None
         v["breadth"] = b
+        v["risk"] = _sector_risk(v, b)
         v["stance"] = ("OVERWEIGHT" if (v["score"] or 0) >= 65 else
                        "NEUTRAL" if (v["score"] or 0) >= 40 else "UNDERWEIGHT")
 
@@ -263,8 +317,11 @@ def analyze(hist: Dict[str, pd.DataFrame]) -> dict:
         return round(sum(vals) / len(vals) * 100) if vals else None
 
     leaders = sorted([s for s in all_stocks if s["r1m"] is not None], key=lambda r: -r["r1m"])
+    configured_tickers = {s for items in SECTOR_STOCKS.values() for s in items}
+    covered_tickers = {r["sym"] for r in all_stocks}
     R = {
         "idx": idx, "sec": sec, "breadth": breadth, "n_stocks": len(all_stocks),
+        "n_unique": len(covered_tickers), "n_configured": len(configured_tickers),
         "p50_all": share_all("above50"), "p200_all": share_all("above200"),
         "gainers": leaders[:8], "losers": leaders[::-1][:8],
         "regime": stocks_buzz.market_regime(nifty),
@@ -308,7 +365,7 @@ def _takeaways(R: dict) -> Tuple[List[str], str]:
             f"{v['name'].replace('Nifty ', '')} ({_s(v['r1m'])} 1M, {_s(v['r3m'])} 3M)" for v in lag) + ".")
     if R["p50_all"] is not None:
         tone = "healthy" if R["p50_all"] >= 60 else "mixed" if R["p50_all"] >= 40 else "weak"
-        out.append(f"<b>Breadth is {tone}:</b> {R['p50_all']}% of {R['n_stocks']} tracked stocks trade above their 50-day EMA"
+        out.append(f"<b>Breadth is {tone}:</b> {R['p50_all']}% of {R['n_stocks']} sampled sector observations trade above their 50-day EMA"
                    + (f" and {R['p200_all']}% above the 200-day EMA." if R["p200_all"] is not None else "."))
     imp = [v["name"].replace("Nifty ", "") for v in sec.values() if v["quad"] == "Improving"]
     wk = [v["name"].replace("Nifty ", "") for v in sec.values() if v["quad"] == "Weakening"]
