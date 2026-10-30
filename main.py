@@ -704,6 +704,7 @@ def analysis_choice_keyboard(sym):
     """Inline menu shown after a stock is found — lets the user pick exactly
     what they want instead of receiving one long combined message."""
     kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(types.InlineKeyboardButton("🔎 Complete Analysis V2", callback_data=f"analysis|{sym}"))
     kb.add(
         types.InlineKeyboardButton("📊 Technical", callback_data=f"tech|{sym}"),
         types.InlineKeyboardButton("💰 Fundamental", callback_data=f"fund|{sym}"),
@@ -898,7 +899,20 @@ def handle_analysis_callback(call):
     except Exception:
         pass
 
-    if action == "tech":
+    if action == "analysis":
+        def _run(cid=chat_id, s=sym):
+            try:
+                from stock_analysis_report_v2 import technical_snapshot, format_report
+                from fundamentals import get_fundamentals
+                fund = get_fundamentals(s) or {}
+                hist = get_hist(s, "6mo")
+                safe_send(cid, format_report(s, fund, technical_snapshot(hist)))
+            except Exception:
+                logger.exception("Stock analysis v2 failed")
+                safe_send(cid, "⚠️ Stock analysis temporarily unavailable. Please retry.")
+        executor.submit(_run)
+
+    elif action == "tech":
         def _run(cid=chat_id, s=sym):
             try:
                 ticker, cname = resolve_symbol(s)
