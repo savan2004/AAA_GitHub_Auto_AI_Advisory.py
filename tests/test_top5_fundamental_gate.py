@@ -25,6 +25,18 @@ STATEMENTS = {"source": "Screener.in",
 
 
 class FundamentalRules(unittest.TestCase):
+    def test_invalid_boolean_evidence_never_passes_as_numbers(self):
+        for field in ("eps", "roe", "pe"):
+            bad = dict(FUND, **{field: True})
+            row, reason = gate.assess_fundamentals(
+                "aggressive", bad, STATEMENTS, "IT", TODAY)
+            self.assertIsNone(row, field)
+            self.assertNotEqual(reason, "qualified")
+        self.assertIsNone(gate._numeric(True))
+        self.assertIsNone(gate._numeric(False))
+        self.assertEqual(gate._numeric(0), 0.0)
+
+
     def test_strong_corporate_passes_large_mid_small(self):
         for profile in gate.POLICY:
             result, why = gate.assess_fundamentals(profile, FUND, STATEMENTS, "Engineering", TODAY)
@@ -36,6 +48,35 @@ class FundamentalRules(unittest.TestCase):
             self.assertGreater(result["sales_growth"], 10)
             self.assertAlmostEqual(result["de"], 60 / 530, places=2)
             self.assertTrue(0 <= result["fund_score"] <= 100)
+
+    def test_positive_dated_annual_eps_works_when_trailing_quote_eps_missing(self):
+        import copy
+        st = copy.deepcopy(STATEMENTS)
+        st["years"][-1]["eps"] = 12.5
+        fv = dict(FUND, eps=None)
+        good, reason = gate.assess_fundamentals(
+            "aggressive", fv, st, "IT", TODAY)
+        self.assertEqual(reason, "qualified")
+        self.assertIsNotNone(good)
+        self.assertEqual(good["eps"], 12.5)
+        self.assertEqual(good["eps_basis"], "completed_annual_statement")
+        self.assertEqual(good["eps_annual_period"], "2026-03-31")
+        st["years"][-1]["eps"] = None
+        missing, reason = gate.assess_fundamentals(
+            "aggressive", fv, st, "IT", TODAY)
+        self.assertIsNone(missing)
+        self.assertEqual(reason, "eps_unavailable")
+        st["years"][-1]["eps"] = -3
+        negative, reason = gate.assess_fundamentals(
+            "aggressive", fv, st, "IT", TODAY)
+        self.assertIsNone(negative)
+        self.assertEqual(reason, "eps_nonpositive")
+        # More recent non-positive trailing EPS must NOT be overruled by old annual EPS.
+        st["years"][-1]["eps"] = 12.5
+        bad_quote, reason = gate.assess_fundamentals(
+            "aggressive", dict(FUND, eps=-0.1), st, "IT", TODAY)
+        self.assertIsNone(bad_quote)
+        self.assertEqual(reason, "eps_nonpositive")
 
     def test_missing_and_stale_quarters_rejected(self):
         s = deepcopy(STATEMENTS)

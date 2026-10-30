@@ -494,10 +494,20 @@ def freshness(quarters: List[dict], today: Optional[date] = None, max_age_days: 
             max_age_days = 135
     today = today or date.today()
     exp = expected_latest_quarter(today)
-    latest = period_end(quarters[-1]["label"]) if quarters else None
+    # Aggregators can append TTM/undated rows or return revised quarters out
+    # of order. Choose the newest *dated, already-ended* quarter instead of
+    # blindly trusting the final HTML table column.
+    dated = []
+    for row in quarters or []:
+        if not isinstance(row, dict):
+            continue
+        end = period_end(str(row.get("label") or ""))
+        if end is not None and end <= today:
+            dated.append((end, row))
+    latest, latest_row = max(dated, key=lambda p: p[0]) if dated else (None, None)
     if latest is None:
         return {"status": "MISSING", "latest": None, "expected": exp, "lag_quarters": None,
-                "age_days": None, "label": quarters[-1]["label"] if quarters else None}
+                "age_days": None, "label": quarters[-1].get("label") if quarters and isinstance(quarters[-1], dict) else None}
     lag_q = max(0, _months_between(latest, exp) // 3)
     age = (today - latest).days
     status = "FRESH" if lag_q == 0 else "LAGGING" if lag_q == 1 else "STALE"
@@ -506,13 +516,19 @@ def freshness(quarters: List[dict], today: Optional[date] = None, max_age_days: 
     if age > max_age_days and lag_q >= 1:
         status = "STALE" if lag_q >= 2 else status
     return {"status": status, "latest": latest, "expected": exp, "lag_quarters": lag_q,
-            "age_days": age, "label": quarters[-1]["label"]}
+            "age_days": age, "label": latest_row.get("label") if latest_row else None}
 
 
 def _fresher(a: List[dict], b: List[dict]) -> tuple:
     """Pick the list whose last period is most recent; tie → longer, then `a`. Returns (list, 'a'|'b')."""
-    ea = period_end(a[-1]["label"]) if a else None
-    eb = period_end(b[-1]["label"]) if b else None
+    # Do not mistake a trailing TTM cell for the most recent fiscal period.
+    def newest(rows):
+        periods = [
+            period_end(str(row.get("label") or ""))
+            for row in rows if isinstance(row, dict)
+        ]
+        return max((end for end in periods if end is not None), default=None)
+    ea, eb = newest(a), newest(b)
     if ea is None and eb is None:
         return (a, "a") if len(a) >= len(b) else (b, "b")
     if eb is None or (ea is not None and ea > eb):

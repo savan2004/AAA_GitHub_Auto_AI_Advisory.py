@@ -30,6 +30,8 @@ _FIN_WORDS = ("bank", "finance", "financial", "nbfc", "lending",
 
 
 def _numeric(value):
+    if value is None or isinstance(value, bool):
+        return None
     try:
         n = float(value)
         return n if math.isfinite(n) else None
@@ -99,14 +101,29 @@ def assess_fundamentals(profile, fundamentals, statements, industry, today=None)
     p = POLICY[profile]
     roe = _numeric(fv.get("roe"))
     pe = _numeric(fv.get("pe"))
-    eps = _numeric(fv.get("eps"))
+    quote_eps = _numeric(fv.get("eps"))
+    annual_eps = _numeric(new.get("eps"))
+    # Screener/Yahoo annual statement EPS is already collected and tied to a
+    # completed fiscal period. It can prove positive reported earnings when
+    # Yahoo's trailing EPS field is missing; it is NOT trailing EPS for P/E math.
+    eps = quote_eps if quote_eps is not None else annual_eps
+    eps_basis = "trailing_quote" if quote_eps is not None else (
+        "completed_annual_statement" if annual_eps is not None else None)
     netprofit = _numeric(new.get("net_profit"))
     if roe is None or roe < p["min_roe"] or roe > 150:
         return None, "roe_missing_or_weak"
     if pe is None or not 0 < pe <= p["max_pe"]:
         return None, "valuation_missing_or_expensive"
-    if eps is None or eps <= 0 or netprofit is None or netprofit <= 0:
-        return None, "earnings_missing_or_loss"
+    # A missing EPS feed is not evidence of a loss-making company.
+    # Keep the existing hard gate, but identify the precise missing fact.
+    if eps is None:
+        return None, "eps_unavailable"
+    if eps <= 0:
+        return None, "eps_nonpositive"
+    if netprofit is None:
+        return None, "annual_profit_unavailable"
+    if netprofit <= 0:
+        return None, "annual_loss"
 
     profit_growth = _cagr(old.get("net_profit"), netprofit, years)
     if profit_growth is None or profit_growth < p["min_profit_cagr"]:
@@ -139,6 +156,8 @@ def assess_fundamentals(profile, fundamentals, statements, industry, today=None)
         + (8 if (is_fin or (debt_equity is not None and debt_equity <= .4)) else 3))))
     return {
         "fund_score": score, "roe": round(roe, 1), "pe": round(pe, 1),
+        "eps": round(eps, 2), "eps_basis": eps_basis,
+        "eps_annual_period": new_end.isoformat() if eps_basis == "completed_annual_statement" else None,
         "pb": round(pb, 2) if is_fin else None,
         "de": round(debt_equity, 2) if debt_equity is not None else None,
         "profit_growth": round(profit_growth, 1),

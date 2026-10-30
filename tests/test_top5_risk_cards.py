@@ -76,8 +76,24 @@ class FinanceRatingTests(unittest.TestCase):
         self.assertNotEqual(row["fund_status"],"VALIDATED")
         self.assertIsNone(row.get("eps"))
         self.assertEqual(row["fund_status"],"PRELIMINARY")
-        self.assertEqual(row["fund_reason"],"earnings_missing_or_loss")
+        self.assertEqual(row["fund_reason"],"eps_unavailable")
         self.assertGreater(row["fund_known"],2)
+
+    def test_fundamental_source_errors_are_not_mislabeled_as_real_losses(self):
+        no_profit = deepcopy(STMT)
+        no_profit["years"][-1]["net_profit"] = None
+        self.assertEqual(finance.rate_financial_evidence(
+            "aggressive", FV, no_profit, "Industrials", D)["fund_reason"],
+            "annual_profit_unavailable")
+        loss = deepcopy(STMT)
+        loss["years"][-1]["net_profit"] = -10
+        self.assertEqual(finance.rate_financial_evidence(
+            "aggressive", FV, loss, "Industrials", D)["fund_reason"],
+            "annual_loss")
+        bad_eps = dict(FV, eps=-2)
+        self.assertEqual(finance.rate_financial_evidence(
+            "aggressive", bad_eps, STMT, "Industrials", D)["fund_reason"],
+            "eps_nonpositive")
 
     def test_completely_missing_returns_unverified_not_zero_score(self):
         row=finance.rate_financial_evidence("aggressive",{},None,"Industrials",D)
