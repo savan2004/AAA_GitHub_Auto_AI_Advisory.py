@@ -695,7 +695,7 @@ def main_keyboard():
     kb.add("🔍 Analysis", "📊 Breadth", "🔥 Stocks Buzz")
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
-    kb.add("📈 Chart", "📄 Report", "📋 Status")
+    kb.add("📈 Chart", "📄 Report")
     kb.add("🏭 Sector Report")
     return kb
 
@@ -950,6 +950,10 @@ def handle_analysis_callback(call):
 
 @bot.message_handler(commands=["status"])
 def cmd_status(m):
+    if m.chat.type != "private" or not usage_analytics.is_owner(m.from_user.id):
+        if m.chat.type == "private":
+            safe_send(m.chat.id, "🔒 Owner access only.")
+        return
     if not _allow_heavy(m):
         return
     cid = m.chat.id
@@ -1149,7 +1153,7 @@ def breadth_btn(m):
             safe_send(chat_id, build_breadth())
         except Exception as e:
             logger.error(f"Breadth err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Error: {e}")
+            safe_send(chat_id, "⚠️ Market breadth unavailable; verified coverage could not be confirmed. Retry later.")
 
     executor.submit(_run)
 
@@ -1186,7 +1190,7 @@ def swing_btn(m):
                     safe_send(chat_id, chunk)
         except Exception as e:
             logger.error(f"Swing err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Error: {e}")
+            safe_send(chat_id, "⚠️ Swing scan unavailable; no trade recommendation issued. Retry later.")
 
     executor.submit(_run)
 
