@@ -211,6 +211,8 @@ class PortfolioManager:
     def add(self, uid, sym, qty, price):
         with self._lock:
             p = self._data.setdefault(uid, {})
+            if sym not in p and len(p) >= 10:
+                return False
             if sym in p:
                 oq, oa = p[sym]["qty"], p[sym]["avg"]
                 nq = oq + qty
@@ -218,6 +220,7 @@ class PortfolioManager:
             else:
                 p[sym] = {"qty": qty, "avg": round(price, 2)}
         self._save()
+        return True
 
     def remove(self, uid, sym):
         with self._lock:
@@ -1061,7 +1064,9 @@ def cmd_buy(m):
         return
     ticker, _ = resolve_symbol(parts[1])
     sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else parts[1].upper().replace(".NS", "")
-    portfolio.add(m.chat.id, sym, qty, price)
+    if not portfolio.add(m.chat.id, sym, qty, price):
+        safe_send(m.chat.id, "⚠️ Portfolio limit: maximum 10 different stocks. Remove a holding before adding another.")
+        return
     safe_send(m.chat.id, f"✅ Added <b>{qty}×{sym}</b> @ ₹{price:.2f}")
 
 
