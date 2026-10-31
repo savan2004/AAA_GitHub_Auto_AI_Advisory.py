@@ -695,7 +695,7 @@ def main_keyboard():
     kb.add("🔍 Analysis", "📊 Breadth", "🔥 Stocks Buzz")
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
-    kb.add("📈 Chart", "📄 Report", "📋 Status")
+    kb.add("📈 Chart", "📄 Report")
     kb.add("🏭 Sector Report")
     return kb
 
@@ -948,35 +948,6 @@ def handle_analysis_callback(call):
         safe_send(chat_id, "⚠️ This button is no longer supported. Use /start to refresh the MSK Bot menu.")
 
 
-@bot.message_handler(commands=["status"])
-def cmd_status(m):
-    if not _allow_heavy(m):
-        return
-    cid = m.chat.id
-    safe_send(cid, "⏳ Checking status…")
-
-    def _run(chat_id=cid):
-        try:
-            res = test_ai_providers()
-            lines = [
-                f"🤖 <b>MSK Bot — STATUS</b>",
-                "─── ── ── ── ── ──",
-                f"Bot : ✅ Running",
-                f"AI  : {res.get('_status', '?')}",
-                f"Time: {datetime.now().strftime('%d-%b-%Y %H:%M')}"
-            ]
-            for p_name in ["GROQ", "Gemini", "OpenAI", "AskFuzz"]:
-                v = res.get(p_name, "SKIP")
-                ic = "✅" if str(v).startswith("OK") else ("⚪" if str(v) == "SKIP" else "❌")
-                lines.append(f"  {ic} {p_name}: {str(v)[:35]}")
-            safe_send(chat_id, "\n".join(lines), reply_markup=main_keyboard())
-        except Exception as e:
-            logger.error(f"Status err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Status check failed: {e}")
-
-    executor.submit(_run)
-
-
 @bot.message_handler(commands=["chart"])
 def cmd_chart(m):
     if not _allow_heavy(m):
@@ -1104,11 +1075,6 @@ def back_menu(m):
 @bot.message_handler(func=lambda m: m.text == "💼 Portfolio")
 def port_btn(m):
     cmd_portfolio(m)
-
-
-@bot.message_handler(func=lambda m: m.text == "📋 Status")
-def stat_btn(m):
-    cmd_status(m)
 
 
 @bot.message_handler(func=lambda m: m.text in [
