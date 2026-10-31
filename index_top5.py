@@ -125,7 +125,7 @@ def _format_index_result(profile, universe, rows, received, fund_checked=0, fund
             f"⚠️ Fundamental caveat: {html.escape(str(r.get('fund_reason') or 'not supplied'))}" if status != "VALIDATED" else "✅ Financial evidence passed defined quality gates.",
             f"📈 Profit 3Y {_fmt(r.get('profit_growth'),1,'%')} | Sales 3Y {_fmt(r.get('sales_growth'),1,'%')}",
             f"🎯 Trigger ₹{r['entry']:,.2f} | SL ₹{r['sl']:,.2f}",
-            f"T1 ₹{r['t1']:,.2f} (R:R 1:2) | T2 ₹{r['t2']:,.2f} (1:3)",
+            f"T1 ₹{r['t1']:,.2f} (R:R 1:{_fmt((r['t1']-r['entry'])/(r['entry']-r['sl']) if r['entry']>r['sl'] else None,1)}) | T2 ₹{r['t2']:,.2f} (R:R 1:{_fmt((r['t2']-r['entry'])/(r['entry']-r['sl']) if r['entry']>r['sl'] else None,1)})",
             f"📆 Price {r['asof']} | Results {html.escape(str(r.get('quarter') or 'unverified'))}",
             "···"
         ]
