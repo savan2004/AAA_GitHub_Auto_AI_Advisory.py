@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 SOURCE = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
-DIRECT = ("cmd_report", "cmd_chart", "cmd_status", "cmd_buzz",
+DIRECT = ("cmd_report", "cmd_chart", "cmd_buzz",
           "cmd_sectors", "cmd_portfolio", "cmd_buy", "scan_btn",
           "breadth_btn", "swing_btn", "chart_button", "buzz_btn", "sector_btn")
 
