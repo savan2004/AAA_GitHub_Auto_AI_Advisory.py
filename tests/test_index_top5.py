@@ -88,8 +88,8 @@ class Top5ScoringTests(unittest.TestCase):
         self.assertIn("Nifty 100", out)
         self.assertIn("5/5 ranked", out)
         self.assertEqual(out.count("📘 ROE"), 5)
-        self.assertEqual(out.count("R:R 1:2"), 5)
-        self.assertEqual(out.count("1:3"), 5)
+        self.assertEqual(out.count("R:R 1:2.0"), 5)
+        self.assertEqual(out.count("R:R 1:3.0"), 5)
         self.assertEqual(out.count("🎯 Trigger ₹"), 5)
         self.assertNotIn("SYM5", out)
 
