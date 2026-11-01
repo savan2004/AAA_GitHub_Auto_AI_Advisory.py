@@ -185,14 +185,23 @@ _webhook_slots = threading.BoundedSemaphore(value=16)
 # ── Thread-Safe Portfolio Manager ────────────────────────────────────────────
 class PortfolioManager:
     """Legacy JSON storage. Atomic on this filesystem, NOT durable on Render free."""
-    def __init__(self, file_path="portfolio_data.json"):
+    def __init__(self, file_path="portfolio_data.json", allow_empty_init=False):
         self._data = {}
         self._file = file_path
         self._lock = threading.Lock()
+        self._recovery_required = False
+        self._allow_empty_init = allow_empty_init
         self._load()
 
     def _load(self):
         if not os.path.exists(self._file):
+            # Missing holdings after a redeploy cannot be distinguished from a fresh install.
+            # Never implicitly allow writes or report an empty account as authoritative.
+            if self._allow_empty_init:
+                self._persist_locked({})  # Explicit operator-approved first-run bootstrap only.
+                return
+            self._recovery_required = True
+            logger.error("Portfolio storage missing at %s: restore required before reads or writes", self._file)
             return
         try:
             import math
@@ -247,12 +256,18 @@ class PortfolioManager:
                 except OSError:
                     logger.warning("Could not remove portfolio temporary file")
 
+    def _require_available(self):
+        if self._recovery_required:
+            raise RuntimeError("Portfolio storage missing; restore required before use")
+
     def _save(self):
         with self._lock:
+            self._require_available()
             self._persist_locked(self._data)
 
     def get(self, uid):
         with self._lock:
+            self._require_available()
             return {s: p.copy() for s, p in self._data.get(uid, {}).items()}
 
     def add(self, uid, sym, qty, price):
@@ -265,6 +280,7 @@ class PortfolioManager:
                 or not re.fullmatch(r"[A-Za-z0-9&._-]{1,30}", sym)):
             raise ValueError("Invalid portfolio holding")
         with self._lock:
+            self._require_available()
             proposed = {u: {k: v.copy() for k, v in items.items()}
                         for u, items in self._data.items()}
             positions = proposed.setdefault(uid, {})
@@ -284,6 +300,7 @@ class PortfolioManager:
 
     def remove(self, uid, sym):
         with self._lock:
+            self._require_available()
             if uid not in self._data or sym not in self._data[uid]:
                 return False
             proposed = {u: {k: v.copy() for k, v in items.items()}
