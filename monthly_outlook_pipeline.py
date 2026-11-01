@@ -45,8 +45,8 @@ def build_draft(analysis, month=None, now=None):
     if not 0 <= days_old <= 7:
         raise ValueError("Outlook index observations are stale or future-dated")
     found, total = analysis.get("n_unique"), analysis.get("n_configured")
-    if not isinstance(found, int) or not isinstance(total, int) or total < 1 or found / total < 0.60:
-        raise ValueError("Fewer than 60% of configured stocks have verified observations")
+    if not isinstance(found, int) or not isinstance(total, int) or total < 1 or found / total < 0.80:
+        raise ValueError("Fewer than 80% of configured stocks have verified observations")
     sectors = [(n, m) for n, m in (analysis.get("sec") or {}).items()
                if valid_number(m.get("score"))]
     if len(sectors) < 5:
