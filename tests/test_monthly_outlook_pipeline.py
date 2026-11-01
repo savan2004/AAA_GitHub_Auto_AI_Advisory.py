@@ -60,7 +60,7 @@ class MonthlyPipelineTests(unittest.TestCase):
 
     def test_insufficient_stock_coverage_fails_closed(self):
         sample = example()
-        sample["n_unique"] = 59
+        sample["n_unique"] = 79
         with self.assertRaises(ValueError):
             build_draft(sample, now=NOW)
 
