@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
-_groq = _gemini = _openai = None
+_groq = _openai = None
 
 # Chat history storage: {user_id: list of messages, max 10 turns for context safety}
 _chat_history: Dict[int, List[Dict]] = defaultdict(list)
@@ -144,19 +144,12 @@ def _call_ai(
     # ─────────────────────────────────────────────────────────────────────────
     gemini_key = _key("GEMINI_API_KEY", "GOOGLE_API_KEY")
     if gemini_key:
-        try:
-            if _gemini is None:
-                import google.generativeai as genai
-                genai.configure(api_key=gemini_key)
-                _gemini = genai.GenerativeModel("gemini-1.5-flash")
-            prompt = (system + "\n\n" if system else "") + messages[-1]["content"]
-            r = _gemini.generate_content(prompt)
-            text = (getattr(r, "text", "") or "").strip()
-            if text:
-                return text, ""
-        except Exception as exc:
-            errors.append(f"Gemini: {str(exc)[:80]}")
-            logger.warning("Gemini call failed: %s", exc)
+        from gemini_provider import call_gemini
+        text, error = call_gemini(gemini_key, messages, max_tokens, system)
+        if text:
+            return text, ""
+        errors.append(f"Gemini: {error}")
+        logger.warning("Gemini call failed: %s", error)
     
     # ─────────────────────────────────────────────────────────────────────────
     # Try OpenAI (Tertiary) — correctly indented as sibling, not child

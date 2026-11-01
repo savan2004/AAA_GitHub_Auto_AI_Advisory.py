@@ -6,7 +6,7 @@ yfinance==0.2.61
 curl_cffi==0.7.4
 pyTelegramBotAPI==4.21.0
 groq==0.8.0
-google-generativeai==0.7.2
+# Gemini uses the documented REST generateContent API via requests.
 openai==1.35.0
 finnhub-python==2.4.20
 matplotlib==3.9.0
