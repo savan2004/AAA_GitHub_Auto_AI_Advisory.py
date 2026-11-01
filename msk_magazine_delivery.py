@@ -74,6 +74,10 @@ def _read(root, month, source_chat, *, now=None):
         data = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, UnicodeError, OSError) as exc:
         raise MagazineManifestError("Unreadable magazine release manifest") from exc
+    if not isinstance(data, dict):
+        raise MagazineManifestError("Invalid magazine release manifest")
+    if data.get("approved") is False:
+        return None  # a draft never blocks access to an older approved edition
     return _check_manifest(data, month, source_chat, now=now)
 
 def find_magazine(month=None, *, env=None, root=None, now=None):
