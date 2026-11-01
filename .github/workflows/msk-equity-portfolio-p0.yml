@@ -30,6 +30,8 @@ jobs:
       - name: Compile portfolio and equity data modules
         run: python -m py_compile main.py market_data.py data_engine.py postgres_portfolio.py portfolio_migration.py tests/test_msk_equity_portfolio_p0.py
       - name: Test portfolio persistence and alternate equity data
+        env:
+          TELEGRAM_TOKEN: "synthetic-test-only-not-a-real-token"
         run: python -m unittest discover -s tests -p 'test_msk_equity_portfolio_p0.py' -v
       - name: Existing Telegram portfolio and webhook mock regression
         run: python -m unittest discover -s tests -p 'test_startup_portfolio_regression.py' -v
