@@ -4,7 +4,10 @@ on:
   pull_request:
     paths:
       - "msk_magazine_rotation.py"
+      - "msk_magazine_delivery.py"
+      - "main.py"
       - "tests/test_msk_magazine_rotation.py"
+      - "tests/test_msk_magazine_delivery.py"
       - ".github/workflows/msk-magazine-rotation.yml"
   workflow_dispatch:
 
@@ -22,5 +25,6 @@ jobs:
           python-version: "3.11"
       - name: Compile and run offline 100-month/duplicate tests
         run: |
-          python -m py_compile msk_magazine_rotation.py tests/test_msk_magazine_rotation.py
+          python -m py_compile main.py msk_magazine_rotation.py msk_magazine_delivery.py tests/test_msk_magazine_rotation.py tests/test_msk_magazine_delivery.py
           python -m unittest discover -s tests -p 'test_msk_magazine_rotation.py' -v
+          python -m unittest discover -s tests -p 'test_msk_magazine_delivery.py' -v
