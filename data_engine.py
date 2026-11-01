@@ -586,8 +586,10 @@ def get_info(symbol: str) -> dict:
     Keys: price, prev_close, high52, low52, pe, pb, roe,
           eps, dividend_yield, market_cap, name.
     """
-    sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
-    yahoo_sym = f"{sym_clean}.NS"
+    raw = str(symbol).strip().upper()
+    is_index = raw.startswith("^")
+    sym_clean = raw.removesuffix(".NS").removesuffix(".NSE")
+    yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
     cache_key = f"info_v2_{yahoo_sym}"
 
     cached = cached_get(cache_key, TTL_FUND)
@@ -596,6 +598,15 @@ def get_info(symbol: str) -> dict:
         return cached
 
     info: dict = {}
+
+    if is_index:
+        # Index data is quote-only; never request NSE equity fundamentals for indices.
+        quote = _yahoo_v8_quote(yahoo_sym)
+        if quote:
+            info.update({k: v for k, v in quote.items() if v is not None})
+        if info:
+            cached_set(cache_key, info, TTL_PRICE)
+        return info
 
     v10 = _yahoo_v10_fundamentals(yahoo_sym)
     if v10:
