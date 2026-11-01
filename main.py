@@ -709,6 +709,7 @@ def build_breadth():
 def build_portfolio_card(uid):
     """Never treat an unavailable quote as the purchase price or zero P&L."""
     import math
+    import html
     p = portfolio.get(uid)
     if not p:
         return "📂 <b>Portfolio Empty</b>\n\nAdd: <code>/buy RELIANCE 10 2500</code>"
@@ -1100,6 +1101,8 @@ def chart_button(m):
 
 @bot.message_handler(commands=["buy"])
 def cmd_buy(m):
+    import math
+    import html
     if not _allow_heavy(m):
         return
     parts = m.text.strip().split()
@@ -1128,6 +1131,7 @@ def cmd_buy(m):
 
 @bot.message_handler(commands=["sell"])
 def cmd_sell(m):
+    import html
     parts = m.text.strip().split()
     if len(parts) < 2:
         safe_send(m.chat.id, "Usage: <code>/sell SYM</code>")
