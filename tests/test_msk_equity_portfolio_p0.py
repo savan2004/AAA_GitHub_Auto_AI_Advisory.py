@@ -23,11 +23,26 @@ def load_legacy_manager():
 
 
 class PortfolioSafetyTests(unittest.TestCase):
-    def test_atomic_save_rolls_back_on_replace_failure(self):
+    def test_missing_holdings_fail_closed_and_never_overwrite(self):
         cls = load_legacy_manager()
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "portfolio_data.json"
             store = cls(str(path))
+            self.assertTrue(store._recovery_required)
+            with self.assertRaisesRegex(RuntimeError, "restore required"):
+                store.get(100)
+            with self.assertRaisesRegex(RuntimeError, "restore required"):
+                store.add(100, "SBIN", 1, 100)
+            self.assertFalse(path.exists())
+            initialized = cls(str(path), allow_empty_init=True)
+            self.assertEqual(initialized.get(100), {})
+            self.assertEqual(json.loads(path.read_text()), {})
+
+    def test_atomic_save_rolls_back_on_replace_failure(self):
+        cls = load_legacy_manager()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "portfolio_data.json"
+            store = cls(str(path), allow_empty_init=True)
             store.add(100, "SBIN", 2, 500)
             before = store.get(100)
             saved = path.read_bytes()
@@ -50,7 +65,7 @@ class PortfolioSafetyTests(unittest.TestCase):
     def test_deep_copy_and_invalid_numeric_input(self):
         cls = load_legacy_manager()
         with tempfile.TemporaryDirectory() as folder:
-            p = cls(str(Path(folder) / "holdings.json"))
+            p = cls(str(Path(folder) / "holdings.json"), allow_empty_init=True)
             p.add(100, "SBIN", 2, 500)
             ref = p.get(100)
             ref["SBIN"]["qty"] = 999
@@ -62,7 +77,7 @@ class PortfolioSafetyTests(unittest.TestCase):
     def test_remove_is_atomic(self):
         cls = load_legacy_manager()
         with tempfile.TemporaryDirectory() as folder:
-            p = cls(str(Path(folder) / "holdings.json"))
+            p = cls(str(Path(folder) / "holdings.json"), allow_empty_init=True)
             p.add(100, "SBIN", 2, 500)
             with patch("os.replace", side_effect=OSError("test failure")):
                 with self.assertRaises(RuntimeError):
@@ -138,6 +153,34 @@ class EquityPriceSafetyTests(unittest.TestCase):
             self.assertEqual(yahoo.call_args[0][0], "^NSEI")
             nse.assert_not_called()
 
+    def test_get_info_does_not_suffix_index_or_request_equity_fundamentals(self):
+        import data_engine as de
+        with patch.object(de, "cached_get", return_value=None), \
+             patch.object(de, "_yahoo_v8_quote", return_value={"price": 25000}) as quote, \
+             patch.object(de, "_yahoo_v10_fundamentals") as fundamentals, \
+             patch.object(de, "_nse_quote") as nse, \
+             patch.object(de, "cached_set"):
+            self.assertEqual(de.get_info("^NSEI")["price"], 25000)
+            quote.assert_called_once_with("^NSEI")
+            fundamentals.assert_not_called()
+            nse.assert_not_called()
+
+    def test_fallback_reaches_later_chunks_without_false_progress(self):
+        import pandas as pd
+        import market_data as md
+        df = pd.DataFrame({"Open": [10], "High": [12], "Low": [9],
+                           "Close": [11], "Volume": [100]},
+                          index=pd.date_range("2026-10-30", periods=1))
+        progress = []
+        with patch.object(md, "_download_chunk", return_value={}), \
+             patch.object(md, "_recover_missing_symbol", return_value=df) as recover:
+            result = md.bulk_history([f"SYM{i}" for i in range(30)],
+                                     chunk_size=10, retries=0,
+                                     progress_cb=lambda done, total: progress.append((done, total)))
+            self.assertEqual(len(result), 30)
+            self.assertEqual(recover.call_count, 30)
+            self.assertEqual(progress, [(10, 30), (20, 30), (30, 30)])
+
     def test_bounded_bulk_recovers_missing_stock(self):
         import pandas as pd
         import market_data as md
@@ -156,7 +199,7 @@ class EquityPriceSafetyTests(unittest.TestCase):
              patch.object(md, "_recover_missing_symbol", return_value=None) as recover:
             result = md.bulk_history([f"S{i}" for i in range(30)], chunk_size=10, retries=0)
             self.assertEqual(result, {})
-            self.assertEqual(recover.call_count, 12)
+            self.assertEqual(recover.call_count, 30)
 
 
 if __name__ == "__main__":
