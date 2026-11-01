@@ -32,3 +32,38 @@ Example **DRAFT ONLY — not market research**:
 * Immutable historical edition/version history and replacement/withdrawal audit trail.
 
 Do not publish the draft sample as an approved report.
+
+
+## Single-task generation pipeline (PR #93)
+
+The dedicated workflow .github/workflows/monthly-outlook.yml runs offline tests on PRs.
+After the workflow is merged into main it is scheduled for 07:00 IST on calendar days 1-5
+and runs the data collector on the first weekday only. Indian exchange holidays are not
+independently inferred. Use workflow_dispatch to retry after a holiday or collector outage.
+
+Pipeline: sector_report.collect -> sector_report.analyze -> validation of same-session Nifty,
+Bank Nifty, >=5 sector indices and >=60% constituent coverage -> deterministic scenarios ->
+UNAPPROVED monthly JSON and clearly labelled PDF -> GitHub Actions draft artifact.
+
+It refuses stale (older than 7 calendar days), future-dated, absent, and undercovered
+evidence. It makes no Telegram post, no approved archive change, no auto-merge and no
+automatic trading recommendation. Missing data aborts the draft rather than substituting
+invented prices. Publishing remains a manual, reviewed commit setting approved to true.
+
+**How to accept an edition**:
+1. Download the Actions artifact and compare every index/sector level with completed
+   market-session source records and independent evidence; assess macro dates and risks.
+2. Refuse the edition if relevant prices, timestamp, provider provenance, sector sample,
+   event calendar, or PDF content cannot be verified.
+3. Edit the approved content; change approved to true only when signed off and
+   published_at is the actual publication date; commit data/monthly_outlook/YYYY-MM.json.
+4. Run offline tests, obtain green CI, merge and deploy an authorized release.
+5. Check /outlook and /outlook YYYY-MM on the real Telegram bot; record message
+   acceptance and archive consistency. Confirm HTML escaping and missing-month behavior.
+
+**Known limitations**: The collector is dependent on MSK's existing free market-data
+providers and may fail. First-weekday scheduling is not exchange-holiday-aware; an owner
+must review or manually rerun it. Complete economic event calendar and fundamental
+forecast verification require independent editorial inputs; no AI accuracy guarantee.
+The first completed real-data collection, publication approval, Render deployment and
+Telegram live acceptance are not certified by PR CI alone.
