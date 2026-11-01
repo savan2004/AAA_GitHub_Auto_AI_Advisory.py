@@ -212,8 +212,10 @@ def bulk_history(
 
     total = len(syms)
     done = len(result)
-    fallback_budget = 12  # Strict per-request bound; avoid blocking 1000-stock scans.
+    # Cap each chunk and the entire scan: bound latency while allowing later chunks recovery.
+    remaining_fallbacks = min(len(todo), 120)
     for i in range(0, len(todo), chunk_size):
+        chunk_budget = min(12, remaining_fallbacks)
         part = todo[i:i + chunk_size]
         y_map = {to_yahoo(s): s for s in part}
         got = _download_chunk(list(y_map.keys()), period, retries=max(0, min(retries, 2)), adjusted=adjusted)
@@ -227,11 +229,12 @@ def bulk_history(
         # via independent NSE equity history or direct chart API. Never synthesize
         # missing candles, never retry the entire failed universe indefinitely.
         for missing in part:
-            if fallback_budget <= 0:
+            if chunk_budget <= 0:
                 break
             if missing in result:
                 continue
-            fallback_budget -= 1
+            chunk_budget -= 1
+            remaining_fallbacks -= 1
             recovered = _recover_missing_symbol(missing, period)
             if recovered is None:
                 continue
@@ -241,7 +244,8 @@ def bulk_history(
                     _cache[f"{missing}|{period}|{adjusted}"] = {
                         "df": recovered, "ts": time.time()
                     }
-        done += len(part)
+        # Progress represents validated/returned coverage, not symbols attempted.
+        done = len(result)
         if progress_cb:
             try:
                 progress_cb(min(done, total), total)
