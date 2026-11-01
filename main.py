@@ -760,7 +760,8 @@ def cmd_start(m):
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"              "🏦 Large / ⚖️ Mid / 🚀 Small Cap Top 5: NSE index-based bullish shortlists.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
-              "📅 <b>Monthly Outlook</b> shows the human-approved monthly edition.\n"\n              "Use menu buttons below.\n"
+              "📅 <b>Monthly Outlook</b> shows the human-approved monthly edition.\n"
+              "Use menu buttons below.\n"
               "🔒 Usage count records Telegram ID, public name, feature and time; not message text.",
 
               reply_markup=main_keyboard())
