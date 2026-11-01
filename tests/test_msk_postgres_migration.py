@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+MAIN_FILE = Path(__file__).resolve().parents[1] / "main.py"
+
 class _SQLitePostgresConnection:
     """Translate parameter markers for offline SQL-behavior checks only.
 
