@@ -28,7 +28,7 @@ class PortfolioRegressionTests(unittest.TestCase):
         cls = load_portfolio_manager()
         with tempfile.TemporaryDirectory() as folder:
             path = str(Path(folder) / "positions.json")
-            manager = cls(path)
+            manager = cls(path, allow_empty_init=True)
             manager.add(100, "SBIN", 2, 500)
             result = []
             worker = threading.Thread(target=lambda: result.append(manager.remove(100, "SBIN")), daemon=True)
@@ -41,7 +41,7 @@ class PortfolioRegressionTests(unittest.TestCase):
     def test_missing_position_returns_false(self):
         cls = load_portfolio_manager()
         with tempfile.TemporaryDirectory() as folder:
-            self.assertFalse(cls(str(Path(folder) / "positions.json")).remove(1, "MISSING"))
+            self.assertFalse(cls(str(Path(folder) / "positions.json"), allow_empty_init=True).remove(1, "MISSING"))
 
 
 class WebhookSecurityTests(unittest.TestCase):
@@ -171,7 +171,7 @@ class TelegramMockSessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             positions = str(Path(folder) / "fake_positions.json")
             namespace["state"] = namespace["StateManager"]()
-            namespace["portfolio"] = namespace["PortfolioManager"](positions)
+            namespace["portfolio"] = namespace["PortfolioManager"](positions, allow_empty_init=True)
             namespace["state"].set(mock_chat_id, "old_state")
 
             def fake_update(update_id, *, text=None, callback=None, token=secret):

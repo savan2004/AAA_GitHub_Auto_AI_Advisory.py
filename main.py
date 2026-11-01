@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 import threading
 import hmac
 import html
+import math
 
 import requests
 import pandas as pd
@@ -32,6 +33,7 @@ from technical_indicators import (
     calc_bollinger, trend_label, swing_signal, rsi_label,
 )
 from api_utils import API_RATE_LIMITER
+from postgres_portfolio import build_portfolio_backend
 from config import RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_CALLS
 from market_news import get_stock_news
 
@@ -182,55 +184,134 @@ _webhook_slots = threading.BoundedSemaphore(value=16)
 
 # ── Thread-Safe Portfolio Manager ────────────────────────────────────────────
 class PortfolioManager:
-    def __init__(self, file_path="portfolio_data.json"):
+    """Legacy JSON storage. Atomic on this filesystem, NOT durable on Render free."""
+    def __init__(self, file_path="portfolio_data.json", allow_empty_init=False):
         self._data = {}
         self._file = file_path
         self._lock = threading.Lock()
+        self._recovery_required = False
+        self._allow_empty_init = allow_empty_init
         self._load()
 
     def _load(self):
+        if not os.path.exists(self._file):
+            # Missing holdings after a redeploy cannot be distinguished from a fresh install.
+            # Never implicitly allow writes or report an empty account as authoritative.
+            if self._allow_empty_init:
+                self._persist_locked({})  # Explicit operator-approved first-run bootstrap only.
+                return
+            self._recovery_required = True
+            logger.error("Portfolio storage missing at %s: restore required before reads or writes", self._file)
+            return
         try:
-            if os.path.exists(self._file):
-                with open(self._file) as f:
-                    self._data = {int(k): v for k, v in json.load(f).items()}
-        except Exception as e:
-            logger.warning(f"Portfolio load error: {e}")
+            import math
+            with open(self._file, encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                raise ValueError("Portfolio root must be an object")
+            parsed = {}
+            for uid, positions in raw.items():
+                if not isinstance(positions, dict):
+                    raise ValueError("Invalid user portfolio")
+                account = {}
+                for symbol, pos in positions.items():
+                    if (not isinstance(symbol, str) or not isinstance(pos, dict)
+                            or set(pos) != {"qty", "avg"}):
+                        raise ValueError("Invalid holding structure")
+                    qty, avg = pos["qty"], pos["avg"]
+                    if (type(qty) not in (int, float)
+                            or type(avg) not in (int, float)
+                            or not math.isfinite(qty) or not math.isfinite(avg)
+                            or qty <= 0 or avg < 0):
+                        raise ValueError("Invalid holding value")
+                    account[symbol] = {"qty": qty, "avg": avg}
+                parsed[int(uid)] = account
+            self._data = parsed
+        except Exception as exc:
+            logger.exception("Portfolio loading failed: operator recovery required")
+            raise RuntimeError("Portfolio data is invalid; manual recovery required") from exc
+
+    def _persist_locked(self, snapshot):
+        """Caller holds the lock; commit new state only after atomic file replacement."""
+        import tempfile
+        directory = os.path.dirname(os.path.abspath(self._file))
+        temp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             prefix=".msk-holdings-", suffix=".tmp",
+                                             dir=directory, delete=False) as handle:
+                temp_name = handle.name
+                os.chmod(temp_name, 0o600)
+                json.dump(snapshot, handle, indent=2, allow_nan=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, self._file)
+        except Exception as exc:
+            logger.exception("Portfolio storage write failed")
+            raise RuntimeError("Portfolio changes could not be saved") from exc
+        finally:
+            if temp_name and os.path.exists(temp_name):
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    logger.warning("Could not remove portfolio temporary file")
+
+    def _require_available(self):
+        if self._recovery_required:
+            raise RuntimeError("Portfolio storage missing; restore required before use")
 
     def _save(self):
-        try:
-            with self._lock:
-                with open(self._file, "w") as f:
-                    json.dump(self._data, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Portfolio save error: {e}")
+        with self._lock:
+            self._require_available()
+            self._persist_locked(self._data)
 
     def get(self, uid):
         with self._lock:
-            return self._data.setdefault(uid, {}).copy()
+            self._require_available()
+            return {s: p.copy() for s, p in self._data.get(uid, {}).items()}
 
     def add(self, uid, sym, qty, price):
+        import math
+        import re
+        if (type(qty) is not int or not 0 < qty <= 10**9
+                or type(price) not in (int, float)
+                or not math.isfinite(price) or not 0 < price <= 10**12
+                or not isinstance(sym, str)
+                or not re.fullmatch(r"[A-Za-z0-9&._-]{1,30}", sym)):
+            raise ValueError("Invalid portfolio holding")
         with self._lock:
-            p = self._data.setdefault(uid, {})
-            if sym in p:
-                oq, oa = p[sym]["qty"], p[sym]["avg"]
-                nq = oq + qty
-                p[sym] = {"qty": nq, "avg": round((oq * oa + qty * price) / nq, 2)}
+            self._require_available()
+            proposed = {u: {k: v.copy() for k, v in items.items()}
+                        for u, items in self._data.items()}
+            positions = proposed.setdefault(uid, {})
+            if sym in positions:
+                prev = positions[sym]
+                newqty = prev["qty"] + qty
+                if newqty > 10**9:
+                    raise ValueError("Holding quantity exceeds limit")
+                positions[sym] = {
+                    "qty": newqty,
+                    "avg": round((prev["qty"] * prev["avg"] + qty * price) / newqty, 2),
+                }
             else:
-                p[sym] = {"qty": qty, "avg": round(price, 2)}
-        self._save()
+                positions[sym] = {"qty": qty, "avg": round(price, 2)}
+            self._persist_locked(proposed)
+            self._data = proposed
 
     def remove(self, uid, sym):
         with self._lock:
+            self._require_available()
             if uid not in self._data or sym not in self._data[uid]:
                 return False
-            del self._data[uid][sym]
-        # _save acquires the same lock; never call it while holding the lock.
-        self._save()
-        return True
+            proposed = {u: {k: v.copy() for k, v in items.items()}
+                        for u, items in self._data.items()}
+            del proposed[uid][sym]
+            self._persist_locked(proposed)
+            self._data = proposed
+            return True
 
 
-portfolio = PortfolioManager()
-
+portfolio = build_portfolio_backend(PortfolioManager)
 
 # ── Safe Formatting Helpers ──────────────────────────────────────────────────
 def safe_val(d, *keys, mul=1.0):
@@ -643,51 +724,73 @@ def build_breadth():
 
 # ── Build Portfolio Card ─────────────────────────────────────────────────────
 def build_portfolio_card(uid):
+    """Never treat an unavailable quote as the purchase price or zero P&L."""
+    import math
+    import html
     p = portfolio.get(uid)
     if not p:
         return "📂 <b>Portfolio Empty</b>\n\nAdd: <code>/buy RELIANCE 10 2500</code>"
 
-    t_inv = 0.0
-    t_cur = 0.0
-    rows = []
-    winners = []
-    losers = []
-
+    rows, t_inv, priced_basis, priced_value = [], 0.0, 0.0, 0.0
+    missing_quotes = []
     for sym, pos in p.items():
         qty, avg = pos["qty"], pos["avg"]
+        ltp = None
         try:
-            ltp_raw = get_live_price(sym)
-            ltp = round(float(ltp_raw), 2) if ltp_raw is not None else avg
+            raw = get_live_price(sym)
+            if raw is not None:
+                candidate = float(raw)
+                if math.isfinite(candidate) and candidate > 0:
+                    ltp = round(candidate, 2)
+        except (TypeError, ValueError, OverflowError):
+            pass
         except Exception:
-            ltp = avg
-
+            logger.warning("Portfolio market quote lookup failed for %s", sym)
         inv = qty * avg
-        cur = qty * ltp
-        pnl = round(cur - inv, 2)
-        pct = round((ltp - avg) / avg * 100, 2) if avg > 0 else 0.0
-        rows.append({"sym": sym, "qty": qty, "avg": avg, "ltp": ltp, "inv": inv, "cur": cur, "pnl": pnl, "pct": pct})
         t_inv += inv
-        t_cur += cur
-        (winners if pnl >= 0 else losers).append((sym, pnl, pct))
+        if ltp is None:
+            missing_quotes.append(sym)
+            rows.append((sym, qty, avg, inv, None, None, None))
+            continue
+        cur = qty * ltp
+        priced_basis += inv
+        priced_value += cur
+        rows.append((sym, qty, avg, inv, ltp, cur - inv,
+                     ((ltp - avg) / avg * 100) if avg > 0 else None))
 
-    t_pnl = round(t_cur - t_inv, 2)
-    t_pct = round((t_cur - t_inv) / t_inv * 100, 2) if t_inv > 0 else 0.0
-    icon = "🟢" if t_pnl >= 0 else "🔴"
-
-    lines = [f"<b>━━━ 💼 PORTFOLIO ━━━</b>", f"📅 {date.today().strftime('%d-%b-%Y')}  |  {len(rows)} holdings", "", "<b>── HOLDINGS ──</b>"]
-
-    for r in sorted(rows, key=lambda x: x["pnl"], reverse=True):
-        wt = round(r["inv"] / t_inv * 100, 1) if t_inv > 0 else 0
-        lines += [
-            f"{'🟢' if r['pnl'] >= 0 else '🔴'} <b>{r['sym']}</b>",
-            f"   Qty:{r['qty']} ({wt}%)  Avg:₹{r['avg']:,.2f} → LTP:₹{r['ltp']:,.2f}",
-            f"   P&L: ₹{r['pnl']:+,.2f} ({r['pct']:+.2f}%)",
-            "   ···"
-        ]
-
-    lines += ["", f"{icon} <b>Total P&L: ₹{t_pnl:+,.2f} ({t_pct:+.2f}%)</b>", "─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM", "⚠️ <i>Educational only.</i>"]
+    lines = ["<b>━━━ 💼 PORTFOLIO ━━━</b>",
+             f"📅 {date.today().strftime('%d-%b-%Y')}  |  {len(rows)} holdings",
+             "", "<b>── HOLDINGS ──</b>"]
+    for sym, qty, avg, inv, ltp, pnl, pct in sorted(
+        rows, key=lambda r: (r[5] is not None, r[5] or 0), reverse=True
+    ):
+        wt = inv / t_inv * 100 if t_inv > 0 else 0
+        safe_sym = html.escape(str(sym), quote=False)
+        if ltp is None:
+            lines.extend([f"⚪ <b>{safe_sym}</b>",
+                          f"   Qty:{qty} ({wt:.1f}%) Avg:₹{avg:,.2f} → LTP:Unavailable",
+                          "   P&L: Unavailable (excluded from totals)", "   ···"])
+        else:
+            lines.extend([
+                f"{'🟢' if pnl >= 0 else '🔴'} <b>{safe_sym}</b>",
+                f"   Qty:{qty} ({wt:.1f}%) Avg:₹{avg:,.2f} → LTP:₹{ltp:,.2f}",
+                f"   P&L: ₹{pnl:+,.2f} ({pct:+.2f}%)" if pct is not None else
+                f"   P&L: ₹{pnl:+,.2f} (percentage unavailable)", "   ···",
+            ])
+    if priced_basis > 0:
+        pnl = priced_value - priced_basis
+        pct = pnl / priced_basis * 100
+        label = "Partial P&L" if missing_quotes else "Total P&L"
+        lines.append(f"\n{'🟢' if pnl >= 0 else '🔴'} <b>{label}: ₹{pnl:+,.2f} ({pct:+.2f}%)</b>")
+    else:
+        lines.append("\n⚪ <b>P&L unavailable — no valid market quotes</b>")
+    lines.extend(["─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM",
+                  "⚠️ <i>Educational only.</i>"])
+    if missing_quotes:
+        lines.append("⚠️ Missing quotes: " + ", ".join(html.escape(sym) for sym in missing_quotes)
+                     + ". Excluded from P&L.")
+        lines.append(f"📌 Cost basis: ₹{t_inv:,.2f}; priced holdings: ₹{priced_basis:,.2f}.")
     return "\n".join(lines)
-
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
 def main_keyboard():
@@ -1017,6 +1120,8 @@ def chart_button(m):
 def cmd_buy(m):
     if not _allow_heavy(m):
         return
+    import math
+    import html
     parts = m.text.strip().split()
     if len(parts) != 4:
         safe_send(m.chat.id, "Usage: <code>/buy SYM QTY PRICE</code>")
@@ -1027,26 +1132,38 @@ def cmd_buy(m):
     except ValueError:
         safe_send(m.chat.id, "❌ Invalid format.")
         return
-    if qty <= 0 or price <= 0:
-        safe_send(m.chat.id, "❌ Must be positive.")
+    if qty <= 0 or qty > 10**9 or not math.isfinite(price) or not 0 < price <= 10**12:
+        safe_send(m.chat.id, "❌ Quantity and price must be finite and positive.")
         return
     ticker, _ = resolve_symbol(parts[1])
     sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else parts[1].upper().replace(".NS", "")
-    portfolio.add(m.chat.id, sym, qty, price)
-    safe_send(m.chat.id, f"✅ Added <b>{qty}×{sym}</b> @ ₹{price:.2f}")
+    try:
+        portfolio.add(m.chat.id, sym, qty, price)
+    except (ValueError, RuntimeError, OSError):
+        logger.exception("Portfolio buy was rejected or storage failed")
+        safe_send(m.chat.id, "⚠️ Holding NOT saved; please retry or contact support.")
+        return
+    safe_send(m.chat.id, f"✅ Added <b>{qty}×{html.escape(sym)}</b> @ ₹{price:.2f}")
 
 
 @bot.message_handler(commands=["sell"])
 def cmd_sell(m):
+    import html
     parts = m.text.strip().split()
     if len(parts) < 2:
         safe_send(m.chat.id, "Usage: <code>/sell SYM</code>")
         return
     sym = " ".join(parts[1:]).upper().replace(".NS", "").replace(".BO", "")
-    if portfolio.remove(m.chat.id, sym):
-        safe_send(m.chat.id, f"✅ Removed <b>{sym}</b>.")
+    try:
+        removed = portfolio.remove(m.chat.id, sym)
+    except (ValueError, RuntimeError, OSError):
+        logger.exception("Portfolio sell was rejected or storage failed")
+        safe_send(m.chat.id, "⚠️ Holding NOT removed; storage unavailable.")
+        return
+    if removed:
+        safe_send(m.chat.id, f"✅ Removed <b>{html.escape(sym)}</b>.")
     else:
-        safe_send(m.chat.id, f"❌ <b>{sym}</b> not found.")
+        safe_send(m.chat.id, f"❌ <b>{html.escape(sym)}</b> not found.")
 
 
 @bot.message_handler(commands=["portfolio"])
