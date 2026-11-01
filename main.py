@@ -1101,10 +1101,10 @@ def chart_button(m):
 
 @bot.message_handler(commands=["buy"])
 def cmd_buy(m):
-    import math
-    import html
     if not _allow_heavy(m):
         return
+    import math
+    import html
     parts = m.text.strip().split()
     if len(parts) != 4:
         safe_send(m.chat.id, "Usage: <code>/buy SYM QTY PRICE</code>")
