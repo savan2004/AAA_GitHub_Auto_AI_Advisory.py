@@ -1,0 +1,73 @@
+name: MSK Monthly Outlook Research
+
+on:
+  pull_request:
+    paths:
+      - "monthly_outlook.py"
+      - "monthly_outlook_pipeline.py"
+      - "tests/test_monthly_outlook*.py"
+      - ".github/workflows/monthly-outlook.yml"
+      - "docs/MSK_MONTHLY_OUTLOOK_RUNBOOK.md"
+      - "main.py"
+  workflow_dispatch:
+  schedule:
+    # 07:00 IST on days 1-5; job below selects only the first weekday.
+    # Exchange holidays cannot be inferred; draft still requires review.
+    - cron: "30 1 1-5 * *"
+
+permissions:
+  contents: read
+
+jobs:
+  research-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: PDF dependency for smoke tests
+        run: python -m pip install reportlab==4.2.5
+      - name: Monthly archive validation
+        run: python -m unittest discover -s tests -p 'test_monthly_outlook.py' -v
+      - name: Monthly research and PDF validation
+        run: python -m unittest discover -s tests -p 'test_monthly_outlook_pipeline.py' -v
+
+  generate-draft:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: research-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: First weekday gate
+        id: calendar
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+          today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+          first = today.replace(day=1)
+          while first.weekday() >= 5:
+              first += timedelta(days=1)
+          print("run=" + str(today == first).lower())
+          PY
+      - name: Install existing free market-data dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.calendar.outputs.run == 'true'
+        run: python -m pip install -r requirements.txt
+      - name: Generate UNAPPROVED draft JSON and PDF
+        if: github.event_name == 'workflow_dispatch' || steps.calendar.outputs.run == 'true'
+        run: python monthly_outlook_pipeline.py --output-dir output/monthly_outlook_drafts
+      - name: Upload draft only for independent review
+        if: github.event_name == 'workflow_dispatch' || steps.calendar.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-monthly-outlook-draft
+          path: output/monthly_outlook_drafts/
+          if-no-files-found: error
+          retention-days: 21
