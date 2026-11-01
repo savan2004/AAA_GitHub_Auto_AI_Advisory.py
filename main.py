@@ -45,6 +45,7 @@ from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
 import sector_report
+from monthly_outlook import MONTH_RE, current_month, load_outlook, format_outlook
 from group_stock_requests import extract_stock_request
 from group_member_filter import is_member_message
 from conservative_screener import (
@@ -696,7 +697,7 @@ def main_keyboard():
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report")
-    kb.add("🏭 Sector Report")
+    kb.add("🏭 Sector Report", "📅 Monthly Outlook")
     return kb
 
 
@@ -759,7 +760,7 @@ def cmd_start(m):
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"              "🏦 Large / ⚖️ Mid / 🚀 Small Cap Top 5: NSE index-based bullish shortlists.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
-              "Use menu buttons below.\n"
+              "📅 <b>Monthly Outlook</b> shows the human-approved monthly edition.\n"\n              "Use menu buttons below.\n"
               "🔒 Usage count records Telegram ID, public name, feature and time; not message text.",
 
               reply_markup=main_keyboard())
@@ -768,7 +769,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nMonthly Outlook: <code>/outlook</code> or <code>/outlook YYYY-MM</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>")
 
 
 def run_report(chat_id, query):
@@ -1315,6 +1316,29 @@ def run_sector_report(chat_id):
     finally:
         with _sector_lock:
             _sector_running = False
+
+
+@bot.message_handler(commands=["outlook"])
+def cmd_outlook(m):
+    """Serve a repeatable, reviewed archive; never synthesize market figures."""
+    if not _allow_heavy(m):
+        return
+    parts = (m.text or "").strip().split(maxsplit=1)
+    month = parts[1].strip() if len(parts) == 2 else current_month()
+    if not MONTH_RE.fullmatch(month):
+        safe_send(m.chat.id, "Usage: <code>/outlook</code> or <code>/outlook YYYY-MM</code>")
+        return
+    try:
+        edition = load_outlook(month)
+        safe_send(m.chat.id, format_outlook(edition, month))
+    except Exception:
+        logger.exception("Monthly Outlook archive error for month %s", month)
+        safe_send(m.chat.id, "⚠️ Monthly Outlook is temporarily unavailable. Please retry later.")
+
+
+@bot.message_handler(func=lambda m: m.text == "📅 Monthly Outlook")
+def outlook_btn(m):
+    cmd_outlook(m)
 
 
 @bot.message_handler(commands=["sectors", "sector"])
