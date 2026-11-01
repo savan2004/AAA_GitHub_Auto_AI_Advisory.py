@@ -142,6 +142,39 @@ def _download_chunk(tickers: List[str], period: str, retries: int = 2, adjusted:
     return result
 
 
+
+def _recover_missing_symbol(symbol: str, period: str) -> Optional[pd.DataFrame]:
+    """Bounded alternate-provider attempt for symbols missed by Yahoo bulk API.
+
+    NSE is used only for eligible NSE equities; index tickers never get
+    incorrectly suffixed or treated as individual equities. No synthetic bars.
+    """
+    from data_engine import _nse_hist, _stooq_hist, _yahoo_v8_hist
+
+    ticker = to_yahoo(symbol)
+    if ticker.startswith("^"):
+        providers = [("Yahoo v8 index", lambda: _yahoo_v8_hist(ticker, period=period))]
+    elif ticker.endswith(".NS"):
+        plain = from_yahoo(ticker)
+        providers = [
+            ("NSE equity", lambda: _nse_hist(plain)),
+            ("Yahoo v8", lambda: _yahoo_v8_hist(ticker, period=period)),
+            ("Stooq", lambda: _stooq_hist(ticker)),
+        ]
+    else:
+        providers = [("Yahoo v8", lambda: _yahoo_v8_hist(ticker, period=period))]
+    for provider, fetch in providers:
+        try:
+            frame = _clean_frame(fetch())
+            if frame is not None and not frame.empty:
+                logger.info("[market_data] %s recovered via %s", ticker, provider)
+                return frame
+        except Exception as exc:
+            logger.warning("[market_data] fallback %s failed for %s: %s",
+                           provider, ticker, type(exc).__name__)
+    return None
+
+
 def bulk_history(
     symbols: Iterable[str],
     period: str = "1y",
@@ -179,6 +212,7 @@ def bulk_history(
 
     total = len(syms)
     done = len(result)
+    fallback_budget = 12  # Strict per-request bound; avoid blocking 1000-stock scans.
     for i in range(0, len(todo), chunk_size):
         part = todo[i:i + chunk_size]
         y_map = {to_yahoo(s): s for s in part}
@@ -189,6 +223,24 @@ def bulk_history(
             if cache_ttl:
                 with _cache_lock:
                     _cache[f"{plain}|{period}|{adjusted}"] = {"df": df, "ts": time.time()}
+        # When Yahoo bulk returns HTTP 401/missing symbols, try a small number
+        # via independent NSE equity history or direct chart API. Never synthesize
+        # missing candles, never retry the entire failed universe indefinitely.
+        for missing in part:
+            if fallback_budget <= 0:
+                break
+            if missing in result:
+                continue
+            fallback_budget -= 1
+            recovered = _recover_missing_symbol(missing, period)
+            if recovered is None:
+                continue
+            result[missing] = recovered
+            if cache_ttl:
+                with _cache_lock:
+                    _cache[f"{missing}|{period}|{adjusted}"] = {
+                        "df": recovered, "ts": time.time()
+                    }
         done += len(part)
         if progress_cb:
             try:
