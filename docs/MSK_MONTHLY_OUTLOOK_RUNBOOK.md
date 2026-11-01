@@ -42,7 +42,7 @@ and runs the data collector on the first weekday only. Indian exchange holidays 
 independently inferred. Use workflow_dispatch to retry after a holiday or collector outage.
 
 Pipeline: sector_report.collect -> sector_report.analyze -> validation of same-session Nifty,
-Bank Nifty, >=5 sector indices and >=60% constituent coverage -> deterministic scenarios ->
+Bank Nifty, >=5 sector indices and >=80% constituent coverage -> deterministic scenarios ->
 UNAPPROVED monthly JSON and clearly labelled PDF -> GitHub Actions draft artifact.
 
 It refuses stale (older than 7 calendar days), future-dated, absent, and undercovered
