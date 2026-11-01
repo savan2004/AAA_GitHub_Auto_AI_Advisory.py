@@ -23,7 +23,7 @@ from config import TIMEOUT_YAHOO, TIMEOUT_NSE, CACHE_TTL_LIVE, CACHE_TTL_FUND, C
 import logging
 import threading
 from collections import deque
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, Dict, List
 from io import StringIO
 
@@ -405,7 +405,7 @@ def _nse_hist(symbol: str, series: str = "EQ") -> Optional[pd.DataFrame]:
     """Fetch ~1 year OHLCV history from NSE historical data API."""
     try:
         end   = date.today()
-        start = date(end.year - 1, end.month, end.day)
+        start = end - timedelta(days=380)  # safe for leap-day, enough for 1Y history
         sess  = _get_nse_session()
         url   = (
             "https://www.nseindia.com/api/historical/cm/equity"
@@ -532,8 +532,11 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     Fetch OHLCV history for `symbol` (NSE ticker without .NS suffix).
     Returns a DataFrame with columns [Open, High, Low, Close, Volume].
     """
-    sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
-    yahoo_sym = f"{sym_clean}.NS"
+    raw = str(symbol).strip().upper()
+    is_index = raw.startswith("^")
+    is_bse = raw.endswith(".BO")
+    sym_clean = raw.removesuffix(".NS").removesuffix(".NSE").removesuffix(".BO")
+    yahoo_sym = raw if is_index or is_bse else f"{sym_clean}.NS"
 
     ttl = TTL_HIST if period not in ("5d", "2d", "1d") else TTL_PRICE
     cache_key = f"hist_{yahoo_sym}_{period}"
@@ -551,12 +554,12 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     }.get(period, "1y")
     df = _yahoo_v8_hist(yahoo_sym, period=yf_period)
 
-    if df is None or df.empty:
-        logger.info(f"[DataEngine] Yahoo v8 failed for {sym_clean} — trying NSE")
+    if (df is None or df.empty) and not is_index and not is_bse:
+        logger.info("[DataEngine] Yahoo v8 unavailable for %s; trying NSE equity history", sym_clean)
         df = _nse_hist(sym_clean)
 
-    if df is None or df.empty:
-        logger.info(f"[DataEngine] NSE failed for {sym_clean} — trying Stooq")
+    if (df is None or df.empty) and not is_index:
+        logger.info("[DataEngine] earlier sources unavailable for %s; trying Stooq", sym_clean)
         days_map = {
             "1y": 365, "6mo": 180, "3mo": 90,
             "2mo": 60, "1mo": 30, "5d": 5, "2d": 2,
@@ -651,34 +654,37 @@ def get_info(symbol: str) -> dict:
 
 
 def get_live_price(symbol: str) -> Optional[float]:
-    """
-    Return only the current market price (₹).
-    Uses a 5-minute TTL — suitable for screener and swing scanner loops.
-    """
-    sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
-    yahoo_sym = f"{sym_clean}.NS"
-    cache_key = f"price_{yahoo_sym}"
+    """Return a strictly positive finite quote, never a fabricated cost basis."""
+    import math
 
-    cached = cached_get(cache_key, TTL_PRICE)
+    def normalized(value):
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            price = float(str(value).replace(",", "").strip())
+            return price if math.isfinite(price) and price > 0 else None
+        except (ValueError, TypeError, OverflowError):
+            return None
+
+    raw = str(symbol).strip().upper()
+    is_index = raw.startswith("^")
+    sym_clean = raw.removesuffix(".NS").removesuffix(".NSE")
+    yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
+    cache_key = f"price_{yahoo_sym}"
+    cached = normalized(cached_get(cache_key, TTL_PRICE))
     if cached is not None:
         return cached
 
     q = _yahoo_v8_quote(yahoo_sym)
-    price = q.get("price") if q else None
-
-    if price is None:
+    price = normalized(q.get("price") if q else None)
+    if price is None and not is_index and not raw.endswith(".BO"):
         nq = _nse_quote(sym_clean)
-        price = nq.get("price") if nq else None
-
-    if price is not None:
-        try:
-            price = float(price)
-            cached_set(cache_key, price, TTL_PRICE)
-        except (TypeError, ValueError):
-            price = None
-
+        price = normalized(nq.get("price") if nq else None)
+    if price is None:
+        logger.warning("[DataEngine] No verified quote for %s", yahoo_sym)
+        return None
+    cached_set(cache_key, price, TTL_PRICE)
     return price
-
 
 def batch_quotes(symbols: List[str]) -> Dict[str, Optional[dict]]:
     """
