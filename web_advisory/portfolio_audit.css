@@ -9,8 +9,9 @@
 .web-pro .msk-portfolio-table tr:nth-child(2n){background:#f8fbfd}
 #mskPortfolioPrint{display:none}
 @media(max-width:600px){.web-pro .msk-portfolio-actions{flex-direction:column;align-items:stretch}.web-pro .msk-portfolio-actions .btn{width:100%}}
+@page mskPortfolioAudit{size:A4 landscape;margin:10mm}
 @media print{
- @page{size:A4 landscape;margin:10mm}
+ body.msk-portfolio-printing #mskPortfolioPrint{page:mskPortfolioAudit}
  body.msk-portfolio-printing{background:white!important;color:#172338!important}
  body.msk-portfolio-printing>*:not(#mskPortfolioPrint){display:none!important}
  body.msk-portfolio-printing #mskPortfolioPrint{display:block!important;margin:0;padding:0;color:#172338!important;max-width:none;width:100%;font:11px/1.45 Arial,sans-serif}
