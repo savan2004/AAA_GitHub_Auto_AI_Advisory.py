@@ -47,6 +47,17 @@ class LayoutTests(unittest.TestCase):
             self.assertEqual(len(re.findall(rb"/Type\s*/Page\b", raw)), 16)
             self.assertIn(b"NOT APPROVED", raw)
 
+    def test_malformed_non_research_pages_fail_closed(self):
+        for index in (0, 1, 15):
+            with self.subTest(page=index + 1):
+                with tempfile.TemporaryDirectory() as root:
+                    data = mock_pack()
+                    data["pages"][index] = None
+                    target = Path(root) / "invalid.pdf"
+                    with self.assertRaisesRegex(MagazineValidationError, f"Page {index + 1}"):
+                        render_magazine(data, target)
+                    self.assertFalse(target.exists())
+
     def test_missing_evidence_blocks_pdf(self):
         with tempfile.TemporaryDirectory() as root:
             data = mock_pack()
