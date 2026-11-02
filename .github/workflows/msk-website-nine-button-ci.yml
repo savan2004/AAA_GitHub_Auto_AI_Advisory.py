@@ -56,3 +56,14 @@ jobs:
             sleep 1
           done
           CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/branch-browser.cjs
+
+      - name: Verify actual Chromium PDF page count
+        run: |
+          python -m pip install --quiet pypdf
+          python - <<'PY'
+          from pypdf import PdfReader
+          path = "/tmp/msk-report-branch.pdf"
+          pages = len(PdfReader(path).pages)
+          print("CHROMIUM_PDF_PAGE_COUNT", pages)
+          assert pages == 8, f"Expected exactly 8 A4 pages, got {pages}"
+          PY
