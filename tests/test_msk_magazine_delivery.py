@@ -106,6 +106,32 @@ class MagazineCopyTests(unittest.TestCase):
                     root=root, now=date(2026, 11, 3))
             self.assertEqual(bot.copies, [])
 
+    def test_symlinked_manifest_cannot_escape_approved_archive(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            outside_manifest = Path(outside) / "external.json"
+            outside_manifest.write_text(json.dumps(approved()), encoding="utf-8")
+            (Path(root) / "2026-11.json").symlink_to(outside_manifest)
+            with self.assertRaisesRegex(MagazineManifestError, "Symlinked"):
+                copy_approved_magazine(
+                    bot, 123, month="2026-11", env=ENV,
+                    root=root, now=date(2026, 11, 3))
+            self.assertEqual(bot.copies, [])
+
+    def test_symlinked_archive_root_is_rejected(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as parent:
+            actual = Path(parent) / "real"
+            actual.mkdir()
+            save(actual, "2026-11", approved())
+            alias = Path(parent) / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+            with self.assertRaisesRegex(MagazineManifestError, "Symlinked"):
+                copy_approved_magazine(
+                    bot, 123, month="2026-11", env=ENV,
+                    root=alias, now=date(2026, 11, 3))
+            self.assertEqual(bot.copies, [])
+
     def test_latest_skips_unapproved_draft(self):
         bot = FakeBot()
         with tempfile.TemporaryDirectory() as root:
