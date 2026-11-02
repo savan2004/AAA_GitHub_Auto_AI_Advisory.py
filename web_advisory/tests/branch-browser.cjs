@@ -60,6 +60,34 @@ const path = require("node:path");
       assert.equal(await page.locator('[data-import-kind="' + kind + '"]').getAttribute("aria-selected"), "true");
     }
     await page.locator("#closeImport").click();
+    await page.locator('[data-import-kind="price"]').click();
+    const rows = ["symbol,timestamp,open,high,low,close,volume"];
+    for (const symbol of ["AAA", "BBB"]) {
+      for (let i = 0; i < 60; i++) {
+        const iso = new Date(Date.UTC(2026, 7, 1 + i)).toISOString().slice(0, 10);
+        const close = (symbol === "AAA" ? 100 : 200) + i / 2;
+        rows.push([symbol, iso, close - 1, close + 2, close - 2, close, 1000 + i].join(","));
+      }
+    }
+    await page.locator("#importFile").setInputFiles({
+      name: "fixture-candles.csv", mimeType: "text/csv",
+      buffer: Buffer.from(rows.join("\\n").replace(/\\\\n/g,"\\n").replace(/\\n/g,"\n"))
+    });
+    await page.locator("#confirmImport").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#confirmImport").isEnabled(), true);
+    await page.locator("#confirmImport").click();
+    await page.locator('.nav[data-tab="screener"]').click();
+    assert.equal(await page.locator("#detailBody tbody tr").count(), 2);
+    console.log("REAL_CSV_2_SYMBOL_SCREEN_ACCEPTED");
+    await page.locator('.nav[data-tab="breadth"]').click();
+    assert.match(await page.locator("#detailBody").innerText(), /Coverage/);
+    console.log("REAL_CSV_BREADTH_ACCEPTED");
+    await page.locator('.nav[data-tab="pdf"]').click();
+    const pdf = await page.pdf({format:"A4", printBackground:true, preferCSSPageSize:true});
+    assert.ok(pdf.length > 5000, "PDF export produced unexpectedly small output");
+    fs.writeFileSync("/tmp/msk-report-branch.pdf",pdf);
+    console.log("REAL_CHROME_PDF_BYTES",pdf.length);
+
 
     // Check that the layout remains within viewport at mobile widths; source data stays offline.
     for (const width of [375, 768, 1024, 1440]) {
