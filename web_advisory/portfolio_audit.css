@@ -1,0 +1,24 @@
+/* Website-only Portfolio Health audit UI and print export. */
+.web-pro .msk-portfolio-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0 18px}
+.web-pro .msk-portfolio-actions .btn{min-height:44px;min-width:165px}
+.web-pro .msk-portfolio-status{padding:14px 16px;border-radius:9px;background:#eaf7f3;border:1px solid #b6dfd3;color:#154e45;font-size:13px;font-weight:700}
+.web-pro .msk-portfolio-table{max-width:100%;overflow-x:auto;overscroll-behavior:contain;margin:18px 0}
+.web-pro .msk-portfolio-table table{border-collapse:collapse;min-width:910px;width:100%;font-variant-numeric:tabular-nums}
+.web-pro .msk-portfolio-table th,.web-pro .msk-portfolio-table td{border:1px solid #dce6ef;padding:10px 9px;text-align:left;white-space:nowrap;font-size:12px}
+.web-pro .msk-portfolio-table th{background:#ecf3f8;color:#203e57;font-weight:800}
+.web-pro .msk-portfolio-table tr:nth-child(2n){background:#f8fbfd}
+#mskPortfolioPrint{display:none}
+@media(max-width:600px){.web-pro .msk-portfolio-actions{flex-direction:column;align-items:stretch}.web-pro .msk-portfolio-actions .btn{width:100%}}
+@media print{
+ @page{size:A4 landscape;margin:10mm}
+ body.msk-portfolio-printing{background:white!important;color:#172338!important}
+ body.msk-portfolio-printing>*:not(#mskPortfolioPrint){display:none!important}
+ body.msk-portfolio-printing #mskPortfolioPrint{display:block!important;margin:0;padding:0;color:#172338!important;max-width:none;width:100%;font:11px/1.45 Arial,sans-serif}
+ #mskPortfolioPrint h1{font-size:23px;margin:0 0 8px;color:#172338}
+ #mskPortfolioPrint h2{font-size:15px;margin:22px 0 8px}
+ #mskPortfolioPrint p{margin:6px 0;overflow-wrap:anywhere}
+ #mskPortfolioPrint table{width:100%;border-collapse:collapse;margin:15px 0}
+ #mskPortfolioPrint th,#mskPortfolioPrint td{font-size:9px;padding:6px 5px;border:1px solid #bdc9d5;text-align:left;overflow-wrap:anywhere}
+ #mskPortfolioPrint tr{break-inside:avoid}
+ #mskPortfolioPrint th{background:#e7eef5;color:#203e57}
+}
