@@ -71,7 +71,7 @@ const path = require("node:path");
     }
     await page.locator("#importFile").setInputFiles({
       name: "fixture-candles.csv", mimeType: "text/csv",
-      buffer: Buffer.from(rows.join("\\n").replace(/\\\\n/g,"\\n").replace(/\\n/g,"\n"))
+      buffer: Buffer.from(rows.join(String.fromCharCode(10)))
     });
     await page.locator("#confirmImport").waitFor({ state: "visible" });
     assert.equal(await page.locator("#confirmImport").isEnabled(), true);
