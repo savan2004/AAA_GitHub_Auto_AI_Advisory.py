@@ -74,6 +74,9 @@ def _validate(data, preview):
     pages = data.get("pages")
     if not isinstance(pages, list) or len(pages) != len(PAGE_TITLES):
         raise MagazineValidationError("Exactly 16 structured page records required")
+    for idx, page in enumerate(pages):
+        if not isinstance(page, dict):
+            raise MagazineValidationError(f"Page {idx + 1}: invalid structured page")
     for idx in RESEARCH_PAGES:
         page = pages[idx]
         if not isinstance(page, dict):
