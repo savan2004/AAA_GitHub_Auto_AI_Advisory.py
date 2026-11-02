@@ -208,6 +208,26 @@ class TejFallbackTests(unittest.TestCase):
         res.json.return_value["data"][-1]["close"]=999999
         self.assertIsNone(fetch_tej_history("BEL",date(2026,10,29),http=http))
 
+    def test_secondary_source_rejects_nan_and_infinite_prices(self):
+        from overnight_index_sources import fetch_tej_history
+        import math
+        points=[]
+        for i in range(99,-1,-1):
+            day=date(2026,10,29)-n.timedelta(days=i)
+            points.append(dict(date=day.isoformat(),open=100.,high=103.,
+                               low=99.,close=101.,volume=5000))
+        response=Mock(status_code=200)
+        response.json.return_value={
+            "meta":{"symbol":"BEL","exchange":"NSE"},"data":points}
+        client=Mock(get=Mock(return_value=response))
+        for field,nonfinite in (("close",float("nan")),
+                                ("high",float("inf")),
+                                ("volume",-float("inf"))):
+            with self.subTest(field=field):
+                points[-1][field]=nonfinite
+                self.assertIsNone(fetch_tej_history("BEL",date(2026,10,29),http=client))
+                points[-1][field]={"close":101.,"high":103.,"volume":5000}[field]
+
     def test_unavailable_primary_prices_get_secondary_EOD_without_provisional_topfive(self):
         universe=make_universe("conservative",100)
         with tempfile.TemporaryDirectory() as temp:
