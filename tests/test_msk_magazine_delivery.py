@@ -93,6 +93,19 @@ class MagazineCopyTests(unittest.TestCase):
                 find_magazine("2026-11", env=ENV, root=root,
                               now=date(2026,11,1))
 
+    def test_approved_manifest_publication_month_must_match_issue(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            record = approved("2026-11")
+            record["published_at"] = "2026-10-31"
+            record["as_of"] = "2026-10-30"
+            save(root, "2026-11", record)
+            with self.assertRaisesRegex(MagazineManifestError, "publication month"):
+                copy_approved_magazine(
+                    bot, 123, month="2026-11", env=ENV,
+                    root=root, now=date(2026, 11, 3))
+            self.assertEqual(bot.copies, [])
+
     def test_latest_skips_unapproved_draft(self):
         bot = FakeBot()
         with tempfile.TemporaryDirectory() as root:
