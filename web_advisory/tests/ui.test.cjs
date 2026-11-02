@@ -396,3 +396,101 @@ test("Research Report refuses to reuse stock financials when data provider is un
  assert.doesNotMatch(report.textContent,/SYNTHETIC TEST DATA/);
  w.close();
 });
+
+
+/* Nine independent acceptance cases. These exercise observable DOM outcomes;
+   a visible clickable button alone is NOT sufficient acceptance. */
+test("AC01 Dashboard: stock search and evidence status are visible",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ w.MSKDashboard.go("overview",{scroll:false});
+ assert.equal(w.MSKDashboard.activeTab(),"overview");
+ assert.ok(d.getElementById("ticker").value.startsWith("DEMO"));
+ assert.match(d.getElementById("dataLabel").textContent,/SYNTHETIC/);
+ w.close();
+});
+test("AC02 Technical: support/resistance and EMA/ADX appear from dated bars",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ w.MSKDashboard.go("technical",{scroll:false});
+ const content=d.getElementById("detailBody").textContent;
+ for(const term of ["Historical support","Historical resistance","EMA 20","EMA 50","ADX (14)","Pattern finder"])
+   assert.ok(content.includes(term),"Missing computed technical value: "+term);
+ assert.match(content,/FICTIONAL DEMO|RESEARCH ONLY/);
+ w.close();
+});
+test("AC03 Fundamentals: company-specific imported ratios, not placeholder-only view",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ const sym=d.getElementById("ticker").value;
+ w.MSKWeb.features.importFundamentals(
+  "symbol,asof,source,pe,roe_percent,revenue_growth_percent,market_cap_inr,debt_equity_ratio\n"+
+  sym+",2026-09-30,Demo annual filing,22,16,8,55000000000,0.33");
+ w.MSKDashboard.go("fundamental",{scroll:false});
+ const body=d.getElementById("detailBody").textContent;
+ assert.match(body,/Return on equity|P\/E/);
+ assert.match(body,/Demo annual filing/);
+ assert.match(body,/22/);
+ w.close();
+});
+test("AC04 Chart: canvas is drawn when OHLCV data are loaded",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ w.MSKDashboard.go("chart",{scroll:false});
+ assert.ok(d.getElementById("chartCanvas").width>0);
+ assert.equal(d.getElementById("chartCanvas").hidden,false);
+ assert.match(d.getElementById("chartTitle").textContent,/Historical daily candlesticks/);
+ w.close();
+});
+test("AC05 Screener: ten loaded symbols and filter controls are present",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ w.MSKDashboard.go("screener",{scroll:false});
+ const body=d.getElementById("detailBody");
+ assert.equal(body.querySelectorAll("tbody tr").length,10);
+ assert.ok(body.querySelector("#trendFilter"));
+ assert.ok(body.querySelector("#minADX"));
+ w.close();
+});
+test("AC06 Breadth: computed breadth explicitly declares limited coverage",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ w.MSKDashboard.go("breadth",{scroll:false});
+ const body=d.getElementById("detailBody").textContent;
+ assert.match(body,/Advances/);
+ assert.match(body,/Declines/);
+ assert.match(body,/Coverage/);
+ assert.match(body,/SYNTHETIC|DEMO|test|uploaded/i);
+ w.close();
+});
+test("AC07 Report: eight actual sections are created for the selected symbol",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ w.MSKDashboard.go("pdf",{scroll:false});
+ const pages=d.querySelectorAll("#mskReportDocument .msk-report-page");
+ assert.equal(pages.length,8);
+ assert.match(pages[0].textContent,/Company overview/);
+ assert.match(pages[7].textContent,/RESEARCH ONLY/);
+ w.close();
+});
+test("AC08 AI: answer remains local and does not pretend to be generative AI",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ w.MSKDashboard.go("ai",{scroll:false});
+ const box=d.getElementById("chatInput");
+ box.value="What is ADX?";
+ d.getElementById("chatForm").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
+ assert.match(d.getElementById("chatHistory").textContent,/ADX/);
+ assert.match(d.getElementById("chatHistory").textContent,/NOT GENERATIVE AI/);
+ w.close();
+});
+test("AC09 Portfolio: imported holdings produce table without invented P&L",()=>{
+ const w=build(),d=w.document;
+ w.MSKImport.holdings("symbol,quantity,buy_price\nBEL,2,100\nTCS,3,150");
+ w.MSKDashboard.go("portfolio",{scroll:false});
+ const body=d.getElementById("detailBody").textContent;
+ assert.match(body,/Holdings 2/);
+ assert.match(body,/No aggregate P&L/);
+ assert.equal(d.getElementById("detailBody").querySelectorAll("tbody tr").length,2);
+ w.close();
+});
