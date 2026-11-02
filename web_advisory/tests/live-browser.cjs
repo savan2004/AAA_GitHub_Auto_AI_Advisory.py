@@ -48,7 +48,7 @@ const assert=require("node:assert/strict");
    console.log("MSK_EOD_REAL_BROWSER_DESKTOP",JSON.stringify(state));
    assert.equal(state.symbol,"BEL");
    assert.equal(state.source,"TejHQ");
-   assert(state.asof>="2026-10-01"&&state.asof<="2026-10-27");
+   assert(/^\d{4}-\d{2}-\d{2}$/.test(state.asof)&&Date.parse(state.asof+"T00:00:00Z")<=Date.now()&&Date.now()-Date.parse(state.asof+"T00:00:00Z")<=14*86400000,"EOD must be a recent completed date, not a fixed October fixture");
    assert.match(state.sourceText,/NSE END-OF-DAY.*NOT INTRADAY\/LIVE/);
    assert.match(state.lastPrice,/₹/);
    assert(state.marketEOD);
@@ -83,7 +83,7 @@ const assert=require("node:assert/strict");
    assert(design.scrollWidth<=design.viewport+2,"Professional page should not scroll horizontally");
    assert.equal(design.js,"function");
 
-   const source=await fetch("https://api.tejhq.dev/v1/ohlcv/nse/BEL?from=2026-05-01&to=2026-10-27",{
+   const source=await fetch("https://api.tejhq.dev/v1/ohlcv/nse/BEL?from="+new Date(Date.now()-260*86400000).toISOString().slice(0,10)+"&to="+new Date().toISOString().slice(0,10),{
      signal:AbortSignal.timeout(16000)
    }).then(r=>r.json());
    const latest=source.data.at(-1);
