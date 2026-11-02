@@ -75,6 +75,7 @@ const path = require("node:path");
       buffer: Buffer.from(rows.join(String.fromCharCode(10)))
     });
     await page.locator("#confirmImport").waitFor({ state: "visible" });
+    await page.waitForFunction(()=>!document.getElementById("confirmImport").disabled,{timeout:5000});
     assert.equal(await page.locator("#confirmImport").isEnabled(), true);
     await page.locator("#confirmImport").click();
     await page.locator('.nav[data-tab="screener"]').click();
