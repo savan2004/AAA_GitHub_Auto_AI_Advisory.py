@@ -6,6 +6,7 @@ claims. Its public API is not a commercial market-data redistribution license.
 """
 from __future__ import annotations
 
+import math
 import re
 from datetime import date, timedelta
 
@@ -52,7 +53,8 @@ def fetch_tej_history(symbol:str, session:date, *, http=None):
             stamp=date.fromisoformat(str(entry["date"]))
             if stamp>session:return None
             values={k:float(entry[k.lower()]) for k in ("Open","High","Low","Close","Volume")}
-            if (min(values[x] for x in ("Open","High","Low","Close"))<=0 or
+            if (not all(math.isfinite(v) for v in values.values()) or
+                min(values[x] for x in ("Open","High","Low","Close"))<=0 or
                 values["Volume"]<0 or
                 values["High"]<max(values["Open"],values["Close"],values["Low"]) or
                 values["Low"]>min(values["Open"],values["Close"],values["High"])):
