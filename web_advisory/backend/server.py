@@ -50,6 +50,10 @@ class LocalCSVProvider:
         if self.directory is None:
             raise ProviderError("provider_not_configured", 503)
         filepath = self.directory / (symbol + ".csv")
+        # Reject links and any path that resolves outside the approved directory.
+        # An operator CSV may not be a symlink to a secret or another source.
+        if filepath.is_symlink() or not filepath.resolve().is_relative_to(self.directory):
+            raise ProviderError("source_path_rejected", 422)
         if not filepath.is_file():
             raise ProviderError("symbol_not_available", 404)
         if filepath.stat().st_size > MAX_BYTES:
