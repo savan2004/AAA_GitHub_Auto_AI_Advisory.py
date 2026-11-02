@@ -76,6 +76,24 @@ class LayoutTests(unittest.TestCase):
             with self.assertRaises(MagazineValidationError):
                 render_magazine(data, Path(root) / "nope.pdf")
 
+    def test_non_public_citation_hosts_fail_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            for url in (
+                "https://localhost/source",
+                "https://127.0.0.1/source",
+                "https://10.0.0.1/source",
+                "https://example.invalid/preview",
+                "https://internal.test/report",
+                "https://singlelabel/report",
+            ):
+                with self.subTest(url=url):
+                    data = mock_pack()
+                    data["pages"][2]["evidence"][0]["source_url"] = url
+                    target = Path(root) / "withheld.pdf"
+                    with self.assertRaises(MagazineValidationError):
+                        render_magazine(data, target)
+                    self.assertFalse(target.exists())
+
     def test_invalid_sources_block_output(self):
         with tempfile.TemporaryDirectory() as root:
             data = mock_pack()
