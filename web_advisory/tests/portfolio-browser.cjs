@@ -73,6 +73,7 @@ const path=require("node:path");
   await page.evaluate(()=>{window.print=()=>{document.body.dataset.portfolioPrinted="true"};});
   await page.getByRole("button",{name:/Save Audit PDF/}).click();
   assert.equal(await page.locator("body").getAttribute("data-portfolio-printed"),"true");
+  await page.emulateMedia({media:"print"});
   assert.ok(await page.locator("#mskPortfolioPrint").isVisible());
   const pdf=await page.pdf({format:"A4",printBackground:true,preferCSSPageSize:true});
   assert.ok(pdf.length>2000);
