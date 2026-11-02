@@ -387,3 +387,95 @@ body.web-pro{background:#f4f7fb;color:#17263e;color-scheme:light;font-family:Int
 
 /* The mobile menu scrim must occupy only the uncovered area. Playwright and finger taps should never target the sidebar beneath it. */
 @media(max-width:750px){.web-pro .menu-scrim{left:266px;right:0;top:0;bottom:0}}
+
+
+/* Phase 1 visual polish: website-only design tokens and accessibility.
+   Additive overrides preserve all existing HTML ids and JS button bindings. */
+.web-pro{
+ --msk-ink:#182b43;
+ --msk-muted:#586b80;
+ --msk-canvas:#f3f6fa;
+ --msk-surface:#ffffff;
+ --msk-border:#dce5ef;
+ --msk-accent:#087b6d;
+ --msk-focus:#087f72;
+ --msk-shadow:0 12px 32px rgba(22,43,67,.065);
+ background:var(--msk-canvas);
+ color:var(--msk-ink);
+ text-rendering:optimizeLegibility;
+}
+.web-pro .heading-block h1{font-size:clamp(1.65rem,2.3vw,2.35rem);line-height:1.15;letter-spacing:-.035em}
+.web-pro .heading-block p{color:var(--msk-muted);font-size:clamp(.85rem,.96vw,.97rem);max-width:66ch;line-height:1.6}
+.web-pro .sidebar-brand{border-bottom:1px solid rgba(214,226,242,.09)}
+.web-pro .nav{min-height:46px}
+.web-pro .nav:focus-visible,.web-pro .action-card:focus-visible,
+.web-pro .watch-stock:focus-visible,.web-pro .btn:focus-visible,
+.web-pro a:focus-visible,.web-pro .import-tabs button:focus-visible{
+ outline:3px solid var(--msk-focus);outline-offset:3px;
+}
+.web-pro .side .nav:focus-visible,.web-pro .side a:focus-visible,
+.web-pro .side .watch-stock:focus-visible{outline-color:#67ebd8}
+.web-pro .search-panel.research-search{
+ border:1px solid var(--msk-border);
+ border-radius:16px;box-shadow:var(--msk-shadow);
+}
+.web-pro .search-panel .source-alert{font-size:12px;line-height:1.6}
+.web-pro .metrics .metric,.web-pro .action-card,.web-pro .panel{
+ border-color:var(--msk-border);
+ box-shadow:var(--msk-shadow);
+}
+.web-pro .metrics .metric{min-width:0;overflow:hidden}
+.web-pro .metric strong{display:block;max-width:100%;font-variant-numeric:tabular-nums;font-size:clamp(1.3rem,1.8vw,1.75rem)}
+.web-pro .metric span:not(.metric-icon){font-size:11px;color:var(--msk-muted)}
+.web-pro .action-card{
+ min-height:84px;
+ border-radius:14px;
+ transition:border-color .16s ease,background-color .16s ease,box-shadow .16s ease;
+}
+.web-pro .action-card:hover,.web-pro .action-card.active{
+ background:#f7fdfb;border-color:#178a7d;
+ box-shadow:0 9px 24px rgba(8,123,109,.1);
+}
+.web-pro .detail-body{color:#40556d;font-size:13px;line-height:1.7}
+.web-pro .detail-body th,.web-pro .detail-body td{font-size:12px}
+.web-pro .detail-body th{position:sticky;top:0;z-index:1}
+.web-pro .detail-body table{min-width:520px}
+.web-pro .import-table-scroll{overscroll-behavior:contain}
+.web-pro .import-table-scroll th,.web-pro .import-table-scroll td{font-size:12px;padding:10px}
+.web-pro .search-panel input,.web-pro .chat-form input{min-width:0}
+.web-pro .btn,.web-pro .import-tabs button{min-height:42px}
+.web-pro .chat-form button{min-height:44px}
+.web-pro .status,.web-pro .source-alert{overflow-wrap:anywhere}
+@media(min-width:1400px){
+ .web-pro .main{max-width:1650px}
+ .web-pro .metrics.snapshot-grid{gap:18px}
+ .web-pro .quick-actions{gap:16px}
+}
+@media(max-width:1060px){
+ .web-pro .quick-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .web-pro .action-card{min-height:76px}
+}
+@media(max-width:750px){
+ .web-pro .heading-block h1{font-size:1.65rem}
+ .web-pro .search-panel.research-search{border-radius:12px}
+ .web-pro .metrics.snapshot-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .web-pro .quick-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .web-pro .action-card{min-height:70px}
+ .web-pro .action-card strong{overflow-wrap:anywhere}
+ .web-pro .detail-body table{min-width:470px}
+ .web-pro .search-panel .source-alert{font-size:11px}
+}
+@media(max-width:390px){
+ .web-pro .metrics.snapshot-grid{grid-template-columns:1fr}
+ .web-pro .action-card{padding:12px 10px}
+ .web-pro .metric strong{font-size:1.45rem}
+}
+@media(prefers-reduced-motion:reduce){
+ .web-pro,.web-pro *{scroll-behavior:auto!important;animation-duration:.01ms!important;
+   animation-iteration-count:1!important;transition-duration:.01ms!important}
+ .web-pro button:hover{transform:none}
+}
+@media print{
+ .web-pro .panel,.web-pro .metric,.web-pro .action-card{box-shadow:none!important}
+ .web-pro .detail-body th{position:static}
+}
