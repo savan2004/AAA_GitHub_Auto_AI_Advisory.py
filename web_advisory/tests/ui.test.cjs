@@ -21,7 +21,7 @@ function build(){
  w.URL.revokeObjectURL=()=>{};
  // Deterministic offline-provider default; individual live-feed tests override.
  w.fetch=async()=>({ok:false,status:503});
- for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js","report.js"]){
+ for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js","report.js","portfolio_audit.js"]){
    w.eval(fs.readFileSync(path.join(root,f),"utf8"));
  }
  return w;
