@@ -10,3 +10,28 @@
 }
 
 @media print{body.msk-report-printing .below-grid{display:block!important}body.msk-report-printing #analysisRegion{display:none!important}body.msk-report-printing #aiPanel{display:none!important}body.msk-report-printing .trust-footer{display:none!important}}
+
+/* Do not print the website's dashboard heading above the eight report pages.
+   Previous Chromium PDF produced a heading page and a blank page before
+   the remaining report sections. Keep print-specific content isolated. */
+@media print{
+ body.msk-report-printing .heading-block,
+ body.msk-report-printing .section-heading,
+ body.msk-report-printing .quick-actions,
+ body.msk-report-printing .research-disclosure,
+ body.msk-report-printing .trust-footer,
+ body.msk-report-printing .header,
+ body.msk-report-printing .breadcrumb,
+ body.msk-report-printing #analysisRegion,
+ body.msk-report-printing #aiPanel{display:none!important}
+ body.msk-report-printing,
+ body.msk-report-printing .app-shell,
+ body.msk-report-printing .workspace,
+ body.msk-report-printing .main,
+ body.msk-report-printing .below-grid{
+   min-height:0!important;height:auto!important;max-height:none!important;
+ }
+ body.msk-report-printing .msk-report-page{
+   height:255mm!important;max-height:255mm!important;
+ }
+}
