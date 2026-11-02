@@ -1,12 +1,13 @@
 """Offline, no-Telegram-network tests for approved MSK magazine copying."""
 import json
+import hashlib
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
 
 from msk_magazine_delivery import (
-    MagazineManifestError, copy_approved_magazine, find_magazine,
+    MagazineManifestError, copy_approved_magazine, find_magazine, verify_source_pdf_bytes,
 )
 
 ENV = {
@@ -34,6 +35,33 @@ def save(root, issue, data):
     (Path(root) / (issue + ".json")).write_text(json.dumps(data), encoding="utf-8")
 
 class MagazineCopyTests(unittest.TestCase):
+    def test_real_pdf_bytes_checksum_accepts_exact_content_only(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "edition.pdf"
+            content = b"%PDF-1.4\\n1 0 obj\\n<<>>\\nendobj\\n%%EOF"
+            path.write_bytes(content)
+            digest = hashlib.sha256(content).hexdigest()
+            self.assertTrue(verify_source_pdf_bytes(path, digest))
+            path.write_bytes(content + b"tampered")
+            with self.assertRaisesRegex(MagazineManifestError, "SHA256 mismatch"):
+                verify_source_pdf_bytes(path, digest)
+
+    def test_source_pdf_bytes_rejects_non_pdf_missing_and_symlink(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "edition.pdf"
+            path.write_bytes(b"not a PDF")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(MagazineManifestError, "not a PDF"):
+                verify_source_pdf_bytes(path, digest)
+            with self.assertRaises(MagazineManifestError):
+                verify_source_pdf_bytes(Path(root) / "missing.pdf", digest)
+            with self.assertRaises(MagazineManifestError):
+                verify_source_pdf_bytes(path, "not-a-digest")
+            alias = Path(root) / "alias.pdf"
+            alias.symlink_to(path)
+            with self.assertRaisesRegex(MagazineManifestError, "non-symlink"):
+                verify_source_pdf_bytes(alias, digest)
+
     def test_disabled_no_access_or_send(self):
         bot = FakeBot()
         with tempfile.TemporaryDirectory() as root:
