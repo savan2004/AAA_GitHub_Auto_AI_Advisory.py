@@ -69,7 +69,12 @@ def _check_manifest(data, month, source_chat, *, now=None):
 def _read(root, month, source_chat, *, now=None):
     if not isinstance(month, str) or not MONTH.fullmatch(month):
         raise MagazineManifestError("Issue must use YYYY-MM")
-    path = Path(root) / (month + ".json")
+    root_path = Path(root)
+    path = root_path / (month + ".json")
+    # Approved release manifests must be regular files inside the configured
+    # archive. Never follow a symlink into another directory or secret file.
+    if root_path.is_symlink() or path.is_symlink():
+        raise MagazineManifestError("Symlinked magazine archive or manifest rejected")
     if not path.is_file():
         return None
     try:
