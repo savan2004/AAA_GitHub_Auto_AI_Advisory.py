@@ -54,6 +54,14 @@ class ProviderTests(unittest.TestCase):
                 with self.subTest(symbol=symbol), self.assertRaises(ProviderError):
                     LocalCSVProvider(folder).history(symbol)
 
+    def test_rejects_symlink_escape(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as outside:
+            write_candles(outside, "BEL")
+            (Path(folder) / "BEL.csv").symlink_to(Path(outside) / "BEL.csv")
+            with self.assertRaises(ProviderError) as caught:
+                LocalCSVProvider(folder).history("BEL")
+            self.assertEqual(caught.exception.code, "source_path_rejected")
+
     def test_rejects_future_duplicate_and_nonfinite(self):
         cases = [
             lambda row, i: row.update(timestamp="2099-01-01") if i == 54 else None,
