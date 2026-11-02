@@ -63,7 +63,11 @@ jobs:
           python - <<'PY'
           from pypdf import PdfReader
           path = "/tmp/msk-report-branch.pdf"
-          pages = len(PdfReader(path).pages)
+          reader = PdfReader(path)
+          pages = len(reader.pages)
+          for i, page in enumerate(reader.pages, start=1):
+              content = " ".join((page.extract_text() or "").split())
+              print("PDF_PAGE_TEXT", i, content[:100])
           print("CHROMIUM_PDF_PAGE_COUNT", pages)
           assert pages == 8, f"Expected exactly 8 A4 pages, got {pages}"
           PY
