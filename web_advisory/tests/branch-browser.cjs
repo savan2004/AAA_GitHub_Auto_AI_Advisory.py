@@ -60,6 +60,7 @@ const path = require("node:path");
       assert.equal(await page.locator('[data-import-kind="' + kind + '"]').getAttribute("aria-selected"), "true");
     }
     await page.locator("#closeImport").click();
+    await page.locator("#openImport").click();
     await page.locator('[data-import-kind="price"]').click();
     const rows = ["symbol,timestamp,open,high,low,close,volume"];
     for (const symbol of ["AAA", "BBB"]) {
