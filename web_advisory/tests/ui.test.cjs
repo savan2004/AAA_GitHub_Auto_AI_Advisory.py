@@ -21,7 +21,7 @@ function build(){
  w.URL.revokeObjectURL=()=>{};
  // Deterministic offline-provider default; individual live-feed tests override.
  w.fetch=async()=>({ok:false,status:503});
- for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js","report.js"]){
+ for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js","report.js","portfolio_audit.js"]){
    w.eval(fs.readFileSync(path.join(root,f),"utf8"));
  }
  return w;
@@ -492,5 +492,59 @@ test("AC09 Portfolio: imported holdings produce table without invented P&L",()=>
  assert.match(body,/Holdings 2/);
  assert.match(body,/No aggregate P&L/);
  assert.equal(d.getElementById("detailBody").querySelectorAll("tbody tr").length,2);
+ w.close();
+});
+
+
+test("Portfolio audit buttons provide three imports plus explicit run and exports",async()=>{
+ const w=build(),d=w.document,F=w.MSKWeb.features;
+ w.MSKImport.holdings("symbol,quantity,buy_price\nAAA,2,100\nBBB,3,200");
+ const date=new Date(Date.now()-86400000).toISOString().slice(0,10);
+ for(const symbol of ["AAA","BBB"]){
+   const bars=Array.from({length:55},(_,i)=>({
+      date:new Date(Date.now()-(55-i)*86400000).toISOString().slice(0,10),
+      open:150+i,high:152+i,low:149+i,close:151+i,volume:5000+i
+   }));
+   bars[bars.length-1].date=date;
+   F.library.set(symbol,{bars,source:"tej_eod",file:"Test dated EOD",asof:date});
+ }
+ w.MSKDashboard.go("portfolio",{scroll:false});
+ let panel=d.getElementById("detailBody");
+ assert.match(panel.textContent,/Upload|Replace Holdings CSV/);
+ for(const v of ["Import Historical Prices CSV","Import Financial Ratios CSV","Run Portfolio Audit"])
+   assert.ok([...panel.querySelectorAll("button")].some(b=>b.textContent.includes(v)),v);
+ const run=[...panel.querySelectorAll("button")].find(b=>b.textContent==="Run Portfolio Audit");
+ run.click();
+ await new Promise(r=>setTimeout(r,120));
+ const result=w.MSKPortfolioAudit.getAudit();
+ assert.ok(result);
+ assert.equal(result.priced,2);
+ assert.equal(result.commonDate,date);
+ assert.equal(result.totalValue,2*205+3*205);
+ assert.equal(result.totalGain,result.totalValue-800);
+ panel=d.getElementById("detailBody");
+ assert.match(panel.textContent,/Historical unrealized gain/);
+ assert.ok([...panel.querySelectorAll("button")].some(b=>b.textContent==="Download Audit CSV"));
+ assert.ok([...panel.querySelectorAll("button")].some(b=>b.textContent.includes("Save Audit PDF")));
+ w.close();
+});
+test("Portfolio audit refuses aggregate P&L with missing or mixed EOD data",()=>{
+ const w=build();
+ const h=[{symbol:"AAA",quantity:2,buy_price:100},{symbol:"BBB",quantity:1,buy_price:150}];
+ const first=w.MSKPortfolioAudit.compute(h,new Map([
+  ["AAA",{price:120,date:"2026-10-30",source:"TejHQ"}],
+  ["BBB",{error:"not found"}]
+ ]));
+ assert.equal(first.totalValue,null);
+ assert.equal(first.totalGain,null);
+ assert.equal(first.priced,1);
+ assert.match(first.warnings.join(" "),/unavailable|missing/i);
+ const mixed=w.MSKPortfolioAudit.compute(h,new Map([
+  ["AAA",{price:120,date:"2026-10-30",source:"TejHQ"}],
+  ["BBB",{price:170,date:"2026-10-29",source:"TejHQ"}]
+ ]));
+ assert.equal(mixed.totalValue,null);
+ assert.equal(mixed.commonDate,null);
+ assert.match(mixed.warnings.join(" "),/Different EOD dates/);
  w.close();
 });

@@ -1,0 +1,67 @@
+name: MSK Portfolio Audit Website CI
+on:
+  push:
+    branches: [web/msk-portfolio-audit-and-export-20261102]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-portfolio-website-ci.yml'
+  pull_request:
+    branches: [web/msk-web-advisory-mvp-20261027]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-portfolio-website-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portfolio-website-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 17
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate JS syntax
+        run: |
+          for f in web_advisory/*.js web_advisory/tests/*.cjs; do node --check "$f"; done
+      - name: Website backend safety tests
+        run: python -m unittest discover -s web_advisory/backend/tests -v
+      - name: Install DOM and Chromium test libraries
+        run: npm install --no-save --no-audit --no-fund jsdom@26 playwright-core@1.56.1
+      - name: DOM regression and portfolio audit calculation tests
+        run: node --test web_advisory/tests/ui.test.cjs
+      - name: Real Chromium portfolio audit journey
+        run: |
+          python -m http.server 8766 --bind 127.0.0.1 --directory web_advisory > /tmp/msk-portfolio-ci-http.log 2>&1 &
+          for i in 1 2 3 4 5; do
+            if curl -fsS http://127.0.0.1:8766/ >/dev/null; then break; fi
+            sleep 1
+          done
+          CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/portfolio-browser.cjs
+      - name: Inspect genuine portfolio PDF export content
+        run: |
+          python -m pip install --quiet pypdf
+          python - <<'PY'
+          from pypdf import PdfReader
+          r=PdfReader('/tmp/msk-portfolio-audit-browser.pdf')
+          text=' '.join((p.extract_text() or '') for p in r.pages)
+          assert 1<=len(r.pages)<=5, f'Unexpected audit pages: {len(r.pages)}'
+          assert 'MSK Portfolio Audit' in text
+          assert 'AAA' in text and 'BBB' in text
+          assert 'Historical' in text or 'history' in text.lower()
+          print('PORTFOLIO_PDF_VALIDATED',len(r.pages))
+          PY
+      - name: Independent existing nine-button browser and eight-page report regression
+        run: CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/branch-browser.cjs
+      - name: Verify issuer report still exports exactly eight pages
+        run: |
+          python - <<'PY'
+          from pypdf import PdfReader
+          pages=len(PdfReader('/tmp/msk-report-branch.pdf').pages)
+          assert pages==8, f'Issuer report must remain eight A4 pages: {pages}'
+          print('ISSUER_REPORT_8_PAGES_PRESERVED')
+          PY
