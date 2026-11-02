@@ -84,7 +84,10 @@ const path = require("node:path");
     assert.match(await page.locator("#detailBody").innerText(), /Coverage/);
     console.log("REAL_CSV_BREADTH_ACCEPTED");
     await page.locator('.nav[data-tab="pdf"]').click();
+    // The real Print button applies this print-only layout class before calling window.print().
+    await page.evaluate(() => document.body.classList.add("msk-report-printing"));
     const pdf = await page.pdf({format:"A4", printBackground:true, preferCSSPageSize:true});
+    await page.evaluate(() => document.body.classList.remove("msk-report-printing"));
     assert.ok(pdf.length > 5000, "PDF export produced unexpectedly small output");
     fs.writeFileSync("/tmp/msk-report-branch.pdf",pdf);
     console.log("REAL_CHROME_PDF_BYTES",pdf.length);
