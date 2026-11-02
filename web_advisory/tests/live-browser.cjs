@@ -102,7 +102,7 @@ const assert=require("node:assert/strict");
    }
    console.log("MSK_EIGHT_REAL_ACTION_CARDS_PASS");
    await page.getByRole("button",{name:/technical analysis/i}).click();
-   assert((await page.locator("#detailBody").innerText()).includes("EMA20"));
+   assert(/EMA\s*20/.test(await page.locator("#detailBody").innerText()),"Technical analysis must display EMA 20");
    await page.locator('.nav[data-tab="chart"]').click();
    await page.setViewportSize({width:390,height:844});
    // Wait for sidebar responsive slide-out transition to complete before
