@@ -162,8 +162,12 @@
    note(parent,"Private portfolio research. Upload holdings CSV, run an audit to fetch available historical NSE closes, then download the audit. No file sent to MSK servers.","warning");
    const portfolio=window.MSKPortfolio;
    const actions=document.createElement("div");actions.className="msk-portfolio-actions";parent.append(actions);
-   actions.append(button(portfolio?.rows?.length?"Replace Holdings CSV":"Upload Holdings CSV",
+   actions.append(button(portfolio?.rows?.length?"Replace Holdings CSV":"1. Upload Holdings CSV",
      ()=>window.MSKImport?.open("portfolio")));
+   actions.append(button("2. Import Historical Prices CSV",
+     ()=>window.MSKImport?.open("price"),"btn ghost"));
+   actions.append(button("3. Import Financial Ratios CSV",
+     ()=>window.MSKImport?.open("fundamental"),"btn ghost"));
    if(!portfolio?.rows?.length){note(parent,"CSV format: symbol,quantity,buy_price. Upload via the Import Center and confirm import.");return true;}
    const status=note(parent,"Portfolio loaded: "+portfolio.rows.length+
      " holdings. Select Run Portfolio Audit to collect dated EOD quotes.","msk-portfolio-status");
