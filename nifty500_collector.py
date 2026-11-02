@@ -575,32 +575,3 @@ def collect_nifty500_fundamentals() -> bool:
     except Exception as e:
         logger.error(f"❌ Collection failed: {e}\n{traceback.format_exc()}")
         return False
-
-
-# ── Scheduler ──────────────────────────────────────────────────────────────────
-
-def start_scheduler_thread():
-    """
-    Background scheduler — runs collection at 09:30 and 15:30 IST.
-    FIX: 'schedule' library missing → graceful fallback using threading.Timer.
-    Also added to requirements.txt.
-    """
-    def _run_at_fixed_times():
-        """Simple timer loop — no external 'schedule' dependency needed."""
-        while True:
-            now = datetime.now()
-            h, m = now.hour, now.minute
-            # Trigger at ~09:30 and ~15:30 IST
-            if (h == 9 and m == 30) or (h == 15 and m == 30):
-                logger.info(f"[Scheduler] Triggered at {h:02d}:{m:02d}")
-                try:
-                    collect_nifty500_fundamentals()
-                except Exception as e:
-                    logger.error(f"[Scheduler] Collection error: {e}")
-                time.sleep(90)   # sleep past the minute to avoid double-trigger
-            else:
-                time.sleep(30)
-
-    t = threading.Thread(target=_run_at_fixed_times, daemon=True, name="n500-scheduler")
-    t.start()
-    logger.info("[Scheduler] Started — will collect at 09:30 & 15:30 IST")
