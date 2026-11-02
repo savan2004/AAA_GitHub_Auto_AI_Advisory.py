@@ -60,6 +60,8 @@ def _check_manifest(data, month, source_chat, *, now=None):
         raise MagazineManifestError("Magazine dates invalid") from exc
     if published > now or as_of > published:
         raise MagazineManifestError("Magazine has future or conflicting dates")
+    if published.strftime("%Y-%m") != month:
+        raise MagazineManifestError("Magazine publication month does not match issue")
     # Source content itself must be independently checked; a valid manifest
     # alone cannot prove the copied Telegram attachment is the expected PDF.
     return data
