@@ -173,7 +173,23 @@
      " holdings. Select Run Portfolio Audit to collect dated EOD quotes.","msk-portfolio-status");
    const runButton=button("Run Portfolio Audit",()=>run(status,runButton));actions.append(runButton);
    runButton.disabled=busy;
-   if(!audit)return true;
+   if(!audit){
+     note(parent,"Holdings "+portfolio.rows.length+" imported • Original invested cost ₹"+fmt(portfolio.invested)+".");
+     const wrap=document.createElement("div");wrap.className="msk-portfolio-table";
+     const table=document.createElement("table"),head=document.createElement("thead"),headrow=document.createElement("tr");
+     for(const label of ["Stock","Quantity","Buy Price ₹","Invested Cost ₹","Audit Result"]){
+       const th=document.createElement("th");th.textContent=label;headrow.append(th);
+     }head.append(headrow);table.append(head);
+     const tbody=document.createElement("tbody");
+     for(const row of portfolio.rows){
+       const tr=document.createElement("tr");
+       for(const value of [row.symbol,row.quantity,fmt(row.buy_price),fmt(row.quantity*row.buy_price),"Not calculated"]){
+         const td=document.createElement("td");td.textContent=value;tr.append(td);
+       }tbody.append(tr);
+     }table.append(tbody);wrap.append(table);parent.append(wrap);
+     note(parent,"No aggregate P&L is calculated until the audit validates every historical close on one common date.","warning");
+     return true;
+   }
    const title=document.createElement("h3");title.textContent="Portfolio audit results";parent.append(title);
    note(parent,"Holdings: "+audit.entries.length+" | Historical price coverage: "+audit.priced+
      "/"+audit.entries.length+" | Invested ₹"+fmt(audit.invested)+
