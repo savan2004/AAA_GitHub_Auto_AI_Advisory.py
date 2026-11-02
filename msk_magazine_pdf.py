@@ -95,7 +95,21 @@ def _validate(data, preview):
             parsed = urlsplit(link) if isinstance(link, str) else None
             if not parsed or parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
                 raise MagazineValidationError(f"Page {idx + 1}: missing public HTTPS citation")
-            source_hosts.add(parsed.hostname.lower().removeprefix("www."))
+            host = parsed.hostname.lower().rstrip(".")
+            # Editorial citations must resolve to named public publishers, not
+            # loopback, private network or reserved documentation endpoints.
+            # This is a structural check; it does NOT prove a page's claims.
+            from ipaddress import ip_address
+            try:
+                ip_address(host)
+            except ValueError:
+                pass
+            else:
+                raise MagazineValidationError(f"Page {idx + 1}: IP-literal citation forbidden")
+            if (host == "localhost" or "." not in host or
+                    host.endswith((".localhost", ".invalid", ".test", ".example"))):
+                raise MagazineValidationError(f"Page {idx + 1}: non-public citation host")
+            source_hosts.add(host.removeprefix("www."))
             claim_date = _checked_date(fact.get("observed_on"), "source observation")
             if claim_date > observed:
                 raise MagazineValidationError(f"Page {idx + 1}: source newer than as_of")
