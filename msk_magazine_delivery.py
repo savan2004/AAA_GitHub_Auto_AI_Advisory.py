@@ -5,6 +5,7 @@ Only copies a previously verified Telegram PDF identified in an approved
 MSK-side release manifest. Off by default, private-chat command only.
 """
 from datetime import date, datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -65,6 +66,35 @@ def _check_manifest(data, month, source_chat, *, now=None):
     # Source content itself must be independently checked; a valid manifest
     # alone cannot prove the copied Telegram attachment is the expected PDF.
     return data
+
+def verify_source_pdf_bytes(pdf_path, expected_sha256):
+    """Independently hash an actual local PDF before editorial approval.
+
+    A manifest checksum alone is not evidence of Telegram attachment bytes.
+    This helper does NOT authorize copying or publishing a Telegram message.
+    """
+    if not isinstance(expected_sha256, str) or not SHA256.fullmatch(expected_sha256):
+        raise MagazineManifestError("Invalid expected PDF SHA256")
+    path = Path(pdf_path)
+    if path.is_symlink() or not path.is_file():
+        raise MagazineManifestError("Source PDF must be a regular non-symlink file")
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as source:
+            header = source.read(5)
+            if header != b"%PDF-":
+                raise MagazineManifestError("Source file is not a PDF")
+            digest.update(header)
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    except OSError as exc:
+        raise MagazineManifestError("Cannot read source PDF") from exc
+    if digest.hexdigest() != expected_sha256:
+        raise MagazineManifestError("Source PDF SHA256 mismatch")
+    return True
 
 def _read(root, month, source_chat, *, now=None):
     if not isinstance(month, str) or not MONTH.fullmatch(month):
