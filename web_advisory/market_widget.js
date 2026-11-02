@@ -267,9 +267,10 @@
      return true;
    }
    if(tab==="pdf"){
-     paragraph(parent,"A complete MSK research PDF cannot be generated from an iframe alone. The original company reports, earnings dates and OHLCV are not available to MSK.","warning");
-     parent.append(link(symbol,"See source chart"));
-     return true;
+     // Keep the eight-page evidence-aware report available even when a
+     // quote provider is offline. Its sections explicitly mark unavailable
+     // history and filings; never manufacture prices or old stock data.
+     return originalPanel(tab,parent);
    }
    if(tab==="ai"){
      paragraph(parent,"Ask educational questions. Generative AI is NOT connected, and MSK has no source-dated NSE:"+symbol+" evidence for a personal investment recommendation.","warning");
