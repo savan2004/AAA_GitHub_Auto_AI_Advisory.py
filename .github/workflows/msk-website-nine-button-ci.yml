@@ -1,0 +1,58 @@
+name: MSK Website Nine-Button Integration
+on:
+  push:
+    branches:
+      - web/msk-nine-button-integration-20261102
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-website-nine-button-ci.yml'
+  pull_request:
+    branches:
+      - web/msk-web-advisory-mvp-20261027
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-website-nine-button-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  website-only-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Assert website-only changed files
+        env:
+          BASE_SHA: b909b31a865cdb8a65e3876f55692abd133fb0c3
+        run: |
+          git fetch origin "$BASE_SHA" --depth=1
+          python - <<'PY'
+          import os, subprocess
+          files=subprocess.check_output(["git","diff","--name-only",os.environ["BASE_SHA"],"HEAD"],text=True).splitlines()
+          assert files, "No website files changed"
+          assert all(p.startswith("web_advisory/") or p==".github/workflows/msk-website-nine-button-ci.yml" for p in files),files
+          print("WEBSITE_ONLY_CHANGE_SCOPE_VERIFIED",len(files))
+          PY
+      - name: JavaScript syntax
+        run: |
+          for f in web_advisory/*.js web_advisory/tests/*.cjs; do node --check "$f"; done
+      - name: Python backend safety regressions
+        run: python -m unittest discover -s web_advisory/backend/tests -v
+      - name: Install browser test tools
+        run: npm install --no-save --no-audit --no-fund jsdom@26 playwright-core@1.56.1
+      - name: DOM-level independent button tests
+        run: node --test web_advisory/tests/ui.test.cjs
+      - name: Offline Chromium acceptance for nine buttons
+        run: |
+          python -m http.server 8766 --bind 127.0.0.1 --directory web_advisory > /tmp/msk-website-ci-http.log 2>&1 &
+          for i in 1 2 3 4 5; do
+            if curl -fsS http://127.0.0.1:8766/ >/dev/null; then break; fi
+            sleep 1
+          done
+          CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/branch-browser.cjs
