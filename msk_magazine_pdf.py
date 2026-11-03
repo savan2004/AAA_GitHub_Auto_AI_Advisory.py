@@ -261,7 +261,13 @@ def _research(c, title, number, issue, as_of, page, preview):
         source = urlsplit(fact["source_url"]).hostname or "unverified"
         c.setFont("Helvetica", 8)
         c.setFillColor(HexColor(MUTED))
-        c.drawString(86, y - height + 24, f"Source: {source}  |  Observed: {fact['observed_on']}")
+        citation_y = y - height + 24
+        c.drawString(86, citation_y, f"Source: {source}  |  Observed: {fact['observed_on']}")
+        # The PDF must retain the exact reviewed citation, not just its host.
+        # Preview placeholders deliberately have no clickable source.
+        if not preview:
+            c.linkURL(fact["source_url"], (86, citation_y - 3, w - 65, citation_y + 10),
+                      relative=0, thickness=0)
         y -= height + 3
     if y < 95:
         raise MagazineValidationError("Page source notes exceed available space")
