@@ -21,7 +21,7 @@ def audit_release_pack(pack):
         return ["Magazine requires exactly 16 researched pages"]
     if pack.get("approved") is not True:
         failures.append("Human editorial approval not recorded")
-    if not isinstance(pack.get("approved_by"), str) or len(pack["approved_by"].strip()) < 3 if isinstance(pack.get("approved_by"), str) else True:
+    if not isinstance(pack.get("approved_by"), str) or len(pack["approved_by"].strip()) < 3:
         failures.append("Named editorial reviewer missing")
     summaries = []
     for idx in RESEARCH_PAGE_INDICES:
