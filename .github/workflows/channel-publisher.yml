@@ -1,0 +1,28 @@
+name: MSK channel publisher
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 3 * * 1-5'
+permissions:
+  contents: read
+concurrency:
+  group: msk-channel-publisher
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline regression tests
+        run: python -m unittest discover -s tests -p test_channel_publisher.py -v
+      - name: Publish only when explicitly configured
+        env:
+          CHANNEL_PUBLISH_ENABLED: ${{ vars.CHANNEL_PUBLISH_ENABLED }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          CHANNEL_REPORT_TEXT: ${{ vars.CHANNEL_REPORT_TEXT }}
+        run: python channel_publisher.py
