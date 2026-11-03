@@ -82,6 +82,23 @@ def safe_val(d: dict, *keys, mul: float = 1.0):
     return None
 
 
+def yahoo_debt_equity_to_ratio(raw):
+    """Yahoo financialData.debtToEquity is in percentage points (25 -> 0.25).
+
+    Screener and Finnhub D/E fields are already ratios: never apply this
+    conversion to those feeds. Reject non-finite and negative source data.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(value) or not 0 <= value <= 100000:
+        return None
+    return round(value / 100.0, 4)
+
+
 def fmt_cr(val) -> str:
     if val is None:
         return "N/A"
@@ -373,7 +390,11 @@ def get_fundamentals(sym: str) -> dict:
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
             # fmt_mcap() correctly converts to Crores by dividing by 1e7
             result["rev"]    = info.get("totalRevenue")
-            result["de"]     = safe_val(info, "debtToEquity")
+            # Yahoo exposes percent points in debtToEquity; data_engine also
+            # supplies the same quantity already scaled as a ratio.
+            result["de"]     = safe_val(info, "debt_equity_ratio")
+            if result["de"] is None:
+                result["de"] = yahoo_debt_equity_to_ratio(info.get("debtToEquity"))
             result["beta"]   = safe_val(info, "beta")
             result["w52h"]   = safe_val(info, "high52")
             result["w52l"]   = safe_val(info, "low52")
@@ -444,7 +465,7 @@ def get_fundamentals(sym: str) -> dict:
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
             if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
             if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
-            if result["de"]    is None: result["de"]   = safe_val(yf_info, "debtToEquity")
+            if result["de"]    is None: result["de"]   = yahoo_debt_equity_to_ratio(yf_info.get("debtToEquity"))
             if result["w52h"]  is None: result["w52h"] = safe_val(yf_info, "fiftyTwoWeekHigh")
             if result["w52l"]  is None: result["w52l"] = safe_val(yf_info, "fiftyTwoWeekLow")
             if result["beta"]  is None: result["beta"] = safe_val(yf_info, "beta")
