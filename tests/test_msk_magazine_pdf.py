@@ -72,6 +72,15 @@ class LayoutTests(unittest.TestCase):
                 render_magazine(data, target)
             self.assertFalse(target.exists())
 
+    def test_future_issue_label_blocks_draft(self):
+        with tempfile.TemporaryDirectory() as root:
+            data = mock_pack()
+            data["issue"] = "2099-12"
+            target = Path(root) / "future.pdf"
+            with self.assertRaisesRegex(MagazineValidationError, "Future magazine issue"):
+                render_magazine(data, target)
+            self.assertFalse(target.exists())
+
     def test_future_and_unapproved_policy(self):
         with tempfile.TemporaryDirectory() as root:
             target = Path(root) / "withheld.pdf"
