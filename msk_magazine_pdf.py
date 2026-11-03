@@ -69,7 +69,10 @@ def _validate(data, preview):
     observed = _checked_date(data.get("as_of"), "magazine as_of")
     if observed > date.today():
         raise MagazineValidationError("Source as_of is future-dated")
-    # Only a literal false (or omitted flag) is valid for a draft. Reject truthy\n    # integers/strings and malformed approval metadata rather than bypassing the gate.\n    if data.get("approved", False) is not False:\n        raise MagazineValidationError("This builder makes drafts only; approval is a separate gate")
+    # Only literal False (or an omitted flag) is valid for a draft.
+    # Reject truthy strings/integers and malformed approval metadata.
+    if data.get("approved", False) is not False:
+        raise MagazineValidationError("This builder makes drafts only; approval is a separate gate")
     pages = data.get("pages")
     if not isinstance(pages, list) or len(pages) != len(PAGE_TITLES):
         raise MagazineValidationError("Exactly 16 structured page records required")
