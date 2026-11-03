@@ -46,6 +46,11 @@ class LayoutTests(unittest.TestCase):
             raw = target.read_bytes()
             self.assertEqual(len(re.findall(rb"/Type\s*/Page\b", raw)), 16)
             self.assertIn(b"NOT APPROVED", raw)
+            # All three full source URLs per research page survive as PDF links.
+            self.assertEqual(raw.count(b"/URI"), 39)
+            self.assertIn(b"https://www.nseindia.com/example", raw)
+            self.assertIn(b"https://www.rbi.org.in/example", raw)
+            self.assertIn(b"https://www.sebi.gov.in/example", raw)
 
     def test_malformed_non_research_pages_fail_closed(self):
         for index in (0, 1, 15):
