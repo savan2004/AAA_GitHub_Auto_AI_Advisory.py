@@ -84,6 +84,17 @@ class LayoutTests(unittest.TestCase):
             with self.assertRaises(MagazineValidationError):
                 render_magazine(data, target)
 
+    def test_nonliteral_draft_approval_flags_fail_closed(self):
+        for approval in (1, "true", "false", 0, None, [], {}):
+            with self.subTest(approval=repr(approval)):
+                with tempfile.TemporaryDirectory() as root:
+                    data = mock_pack()
+                    data["approved"] = approval
+                    target = Path(root) / "blocked.pdf"
+                    with self.assertRaisesRegex(MagazineValidationError, "approval is a separate gate"):
+                        render_magazine(data, target)
+                    self.assertFalse(target.exists())
+
     def test_requires_distinct_source_hosts(self):
         with tempfile.TemporaryDirectory() as root:
             data = mock_pack()
