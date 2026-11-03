@@ -74,16 +74,13 @@
    if(e20.at(-1)<e50.at(-1)&&newL<prevL)trend="Downtrend";
    const adxLabel=a===null?"Unavailable":a<20?"Weak":a<=25?"Trend building":a<=35?"Strong":"Very strong";
    const volLabel=ratio===null?"Unavailable":ratio<1.5?"Normal":ratio<2?"Above normal":ratio<3?"High":"Explosive";
-   let pattern="No clean pattern",signal="WAIT",quality="Weak";
+   let pattern="No clean pattern",signal="RESEARCH ONLY",quality="Not backtested";
    // Strict final-candle channel breakout, volume + ADX confirmation. No forced label.
    const oldHigh=Math.max(...data.slice(-21,-1).map(x=>x.high)),oldLow=Math.min(...data.slice(-21,-1).map(x=>x.low));
    const bullish=last.close>oldHigh,bearish=last.close<oldLow;
    if(ratio!==null&&ratio>=2&&a!==null&&a>25&&(bullish||bearish)){
      pattern="Channel Breakout";
-     const crossUp=e20.at(-1)>e50.at(-1)&&e20.at(-2)<=e50.at(-2);
-     const crossDown=e20.at(-1)<e50.at(-1)&&e20.at(-2)>=e50.at(-2);
-     if(trend==="Uptrend"&&bullish&&crossUp){signal="BUY";quality="High";}
-     if(trend==="Downtrend"&&bearish&&crossDown){signal="SELL";quality="High";}
+     // A breakout pattern is descriptive, never an actionable instruction.
    }
    return {date:last.date,last:last.close,e20,e50,adx:a,adxLabel,ratio,volLabel,trend,pattern,signal,quality,reg:regression(closes.slice(-42))};
  }
