@@ -66,6 +66,9 @@ def _validate(data, preview):
     issue = data.get("issue")
     if not isinstance(issue, str) or not ISSUE_RE.fullmatch(issue):
         raise MagazineValidationError("Magazine issue must be YYYY-MM")
+    issue_year, issue_month = map(int, issue.split("-"))
+    if (issue_year, issue_month) > (date.today().year, date.today().month):
+        raise MagazineValidationError("Future magazine issue is not permitted")
     observed = _checked_date(data.get("as_of"), "magazine as_of")
     if observed > date.today():
         raise MagazineValidationError("Source as_of is future-dated")
