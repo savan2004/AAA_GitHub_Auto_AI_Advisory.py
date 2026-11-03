@@ -141,5 +141,86 @@ class BreadthTests(unittest.TestCase):
         md._cache.clear()
 
 
+
+class MarketPulseTests(unittest.TestCase):
+    """All examples are synthetic and require no network or Telegram."""
+
+    def test_index_uses_only_expected_completed_nifty_session(self):
+        from market_pulse import index_context
+        valid = index_context(frame(), now=NOW)
+        self.assertEqual(valid['session'], '2026-10-23')
+        self.assertGreater(valid['close'], 0)
+        self.assertIsNotNone(valid['atr'])
+        self.assertEqual(valid['volatility'], 'NORMAL')
+        stale = index_context(frame(), now=NOW + timedelta(days=17))
+        self.assertIsNone(stale)
+
+    def test_atr_elevated_uses_recent_baseline_not_price_change(self):
+        from market_pulse import index_context
+        wide = frame()
+        wide.iloc[-1, wide.columns.get_loc('High')] += 40
+        wide.iloc[-1, wide.columns.get_loc('Low')] -= 40
+        result = index_context(wide, now=NOW)
+        self.assertEqual(result['volatility'], 'ELEVATED')
+        self.assertGreater(result['atr_ratio'], 1.25)
+
+    def test_falls_back_without_fake_breadth_or_index(self):
+        from market_pulse import format_market_pulse
+        reply = format_market_pulse(None, None, None, 'unavailable: coverage', now=NOW)
+        self.assertIn('verified completed-session quote unavailable', reply)
+        self.assertIn('coverage', reply)
+        self.assertIn('no timely source-verified headline', reply)
+        self.assertNotIn('HIGHLY VOLATILE', reply)
+
+    def test_news_requires_parseable_fresh_publisher_date(self):
+        from market_pulse import verified_market_event
+        class Response:
+            content = (b'<rss><channel><item><title>'
+                       b'Jio Platforms lists at 21 percent premium'
+                       b'</title><pubDate>Wed, 28 Oct 2026 06:00:00 GMT</pubDate>'
+                       b'</item></channel></rss>')
+            def raise_for_status(self):
+                return None
+        fetch = lambda url, headers, timeout: Response()
+        now = datetime(2026, 10, 28, 17, tzinfo=IST)
+        event = verified_market_event(now=now, fetch=fetch)
+        self.assertIn('Jio Platforms', event['title'])
+        self.assertIn('28 Oct', event['published'])
+        later = datetime(2026, 10, 31, 17, tzinfo=IST)
+        self.assertIsNone(verified_market_event(now=later, fetch=fetch))
+
+    def test_undated_news_is_never_presented_as_current(self):
+        from market_pulse import verified_market_event
+        class Undated:
+            content = b'<rss><item><title>RBI cuts repo rate today</title></item></rss>'
+            def raise_for_status(self):
+                return None
+        self.assertIsNone(verified_market_event(now=NOW,
+                                                fetch=lambda *a, **k: Undated()))
+
+    def test_headline_html_escaped_and_output_short(self):
+        from market_pulse import format_market_pulse, index_context
+        snapshot = index_context(frame(), now=NOW)
+        news = {'title': 'Jio <bad> lists today', 'source': 'ET & Markets',
+                'published': '23 Oct 11:30 IST'}
+        message = format_market_pulse(snapshot, None, news, 'updating', now=NOW)
+        self.assertIn('Jio &lt;bad&gt; lists today', message)
+        self.assertIn('ET &amp; Markets', message)
+        self.assertNotIn('<bad>', message)
+        self.assertIn('ATR(14)', message)
+        self.assertLess(len(message), 1150)
+
+    def test_button_independent_of_500_stock_failure(self):
+        import market_pulse as pulse
+        import market_data
+        with patch.object(market_data, 'index_history', return_value=None), \
+             patch.object(pulse, '_breadth_result', return_value=(
+                 None, 'unavailable (low quote coverage)')), \
+             patch.object(pulse, 'verified_market_event', return_value=None):
+            reply = pulse.build_market_pulse()
+        self.assertIn('low quote coverage', reply)
+        self.assertIn('Nifty close/ATR', reply)
+
+
 if __name__ == '__main__':
     unittest.main()
