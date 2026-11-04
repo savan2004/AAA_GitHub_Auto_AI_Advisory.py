@@ -4,8 +4,10 @@ on:
     paths:
       - 'tools/msk_repair_control.py'
       - 'tools/msk_control_panel.py'
+      - 'tools/msk_safe_recovery.py'
       - 'tests/test_msk_repair_control.py'
       - 'tests/test_msk_control_panel.py'
+      - 'tests/test_msk_safe_recovery.py'
       - '.github/workflows/msk-lite-repair-control.yml'
   workflow_dispatch:
 permissions:
@@ -23,3 +25,4 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_msk_repair_control.py' -v
           python -m unittest discover -s tests -p 'test_msk_control_panel.py' -v
+          python -m unittest discover -s tests -p 'test_msk_safe_recovery.py' -v
