@@ -1,0 +1,25 @@
+name: MSK Control Monitor (read-only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Collect GitHub CI incidents
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python -m tools.msk_github_monitor
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msk-control-readonly
+          path: artifacts/msk-control/
+          retention-days: 7
