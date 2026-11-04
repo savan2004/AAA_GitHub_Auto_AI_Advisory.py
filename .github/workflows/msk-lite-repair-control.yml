@@ -3,7 +3,9 @@ on:
   pull_request:
     paths:
       - 'tools/msk_repair_control.py'
+      - 'tools/msk_control_panel.py'
       - 'tests/test_msk_repair_control.py'
+      - 'tests/test_msk_control_panel.py'
       - '.github/workflows/msk-lite-repair-control.yml'
   workflow_dispatch:
 permissions:
@@ -18,4 +20,6 @@ jobs:
         with:
           python-version: '3.11'
       - name: Run isolated tests
-        run: python -m unittest discover -s tests -p 'test_msk_repair_control.py' -v
+        run: |
+          python -m unittest discover -s tests -p 'test_msk_repair_control.py' -v
+          python -m unittest discover -s tests -p 'test_msk_control_panel.py' -v
