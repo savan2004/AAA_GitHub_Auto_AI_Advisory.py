@@ -80,6 +80,17 @@ class MagazineCopyTests(unittest.TestCase):
                                                env=ENV, root=root, now=date(2026, 11, 3))
             self.assertEqual(bot.copies, [])
 
+    def test_approval_cannot_predate_publication(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            record = approved()
+            record["approval_timestamp"] = "2026-11-01T10:00:00+05:30"
+            save(root, "2026-11", record)
+            with self.assertRaisesRegex(MagazineManifestError, "predates publication"):
+                copy_approved_magazine(bot, 123, month="2026-11", env=ENV,
+                                       root=root, now=date(2026, 11, 3))
+            self.assertEqual(bot.copies, [])
+
     def test_disabled_no_access_or_send(self):
         bot = FakeBot()
         with tempfile.TemporaryDirectory() as root:
@@ -98,6 +109,7 @@ class MagazineCopyTests(unittest.TestCase):
             self.assertEqual(len(bot.copies), 1)
             self.assertEqual(bot.copies[0][0], (123, "@AiAutoUpdater", 777))
             self.assertIn("2026-11", bot.copies[0][1]["caption"])
+            self.assertNotIn("Verified editorial approval", bot.copies[0][1]["caption"])
 
     def test_unapproved_never_sent(self):
         bot = FakeBot()
@@ -182,7 +194,8 @@ class MagazineCopyTests(unittest.TestCase):
         bot = FakeBot()
         with tempfile.TemporaryDirectory() as root:
             save(root, "2026-10", {**approved("2026-10"),
-                 "published_at": "2026-10-05", "as_of": "2026-10-02"})
+                 "published_at": "2026-10-05", "as_of": "2026-10-02",
+                 "approval_timestamp": "2026-10-05T10:00:00+05:30"})
             save(root, "2026-11", {**approved(), "approved": False})
             self.assertEqual(copy_approved_magazine(
                 bot, 123, env=ENV, root=root, now=date(2026,11,3)), "sent")
