@@ -51,6 +51,18 @@ def _check_manifest(data, month, source_chat, *, now=None):
     approver = data.get("approved_by")
     if not isinstance(approver, str) or not 3 <= len(approver.strip()) <= 100:
         raise MagazineManifestError("Approved issue lacks named reviewer")
+    # Approval must be dated, not inferred from an undated boolean/name.
+    approval_at = data.get("approval_timestamp")
+    if not isinstance(approval_at, str):
+        raise MagazineManifestError("Magazine approval timestamp missing")
+    try:
+        approved_at = datetime.fromisoformat(approval_at)
+    except ValueError as exc:
+        raise MagazineManifestError("Magazine approval timestamp invalid") from exc
+    if approved_at.tzinfo is None or approved_at.utcoffset() is None:
+        raise MagazineManifestError("Magazine approval timestamp must include timezone")
+    if approved_at.date() > now:
+        raise MagazineManifestError("Magazine approval timestamp is in the future")
     name = data.get("title")
     if not isinstance(name, str) or not 3 <= len(name.strip()) <= 120:
         raise MagazineManifestError("Magazine title invalid")
