@@ -73,6 +73,8 @@ def _check_manifest(data, month, source_chat, *, now=None):
         raise MagazineManifestError("Magazine dates invalid") from exc
     if published > now or as_of > published:
         raise MagazineManifestError("Magazine has future or conflicting dates")
+    if approved_at.date() < published:
+        raise MagazineManifestError("Magazine approval predates publication")
     if published.strftime("%Y-%m") != month:
         raise MagazineManifestError("Magazine publication month does not match issue")
     # Source content itself must be independently checked; a valid manifest
@@ -165,7 +167,7 @@ def copy_approved_magazine(bot, chat_id, *, month=None, env=None, root=None, now
     if info is None:
         return "unavailable"
     caption = ("📘 MSK Monthly Market Outlook — " + info["issue"] +
-               "\nVerified editorial approval recorded. Educational research only.")
+               "\nEditorial approval recorded; verify source evidence independently. Educational research only.")
     bot.copy_message(chat_id, info["source_chat"], info["source_message_id"],
                      caption=caption)
     return "sent"
