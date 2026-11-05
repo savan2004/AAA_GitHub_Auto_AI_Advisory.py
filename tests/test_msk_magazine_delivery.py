@@ -25,6 +25,7 @@ def approved(issue="2026-11"):
     return {
         "issue": issue, "source_project": "AiAutoUpdate",
         "approved": True, "approved_by": "MSK Research Editor",
+        "approval_timestamp": "2026-11-02T10:00:00+05:30",
         "title": "MSK Monthly Market Outlook",
         "published_at": "2026-11-02", "as_of": "2026-10-30",
         "source_chat": "@AiAutoUpdater", "source_message_id": 777,
@@ -61,6 +62,23 @@ class MagazineCopyTests(unittest.TestCase):
             alias.symlink_to(path)
             with self.assertRaisesRegex(MagazineManifestError, "non-symlink"):
                 verify_source_pdf_bytes(alias, digest)
+
+    def test_approval_receipt_requires_dated_timezone_aware_timestamp(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            for invalid in (None, "", "2026-11-02T10:00:00",
+                            "not-a-date", "2026-11-04T10:00:00+05:30", 1):
+                record = approved()
+                if invalid is None:
+                    record.pop("approval_timestamp")
+                else:
+                    record["approval_timestamp"] = invalid
+                save(root, "2026-11", record)
+                with self.subTest(invalid=invalid):
+                    with self.assertRaisesRegex(MagazineManifestError, "approval timestamp"):
+                        copy_approved_magazine(bot, 123, month="2026-11",
+                                               env=ENV, root=root, now=date(2026, 11, 3))
+            self.assertEqual(bot.copies, [])
 
     def test_disabled_no_access_or_send(self):
         bot = FakeBot()
