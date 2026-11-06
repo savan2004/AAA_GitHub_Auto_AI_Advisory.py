@@ -20,6 +20,7 @@ class FakeBot:
         self.copies = []
     def copy_message(self, *args, **kwargs):
         self.copies.append((args, kwargs))
+        return type("TelegramReceipt", (), {"message_id": 321})()
 
 def approved(issue="2026-11"):
     return {
@@ -110,6 +111,24 @@ class MagazineCopyTests(unittest.TestCase):
             self.assertEqual(bot.copies[0][0], (123, "@AiAutoUpdater", 777))
             self.assertIn("2026-11", bot.copies[0][1]["caption"])
             self.assertNotIn("Verified editorial approval", bot.copies[0][1]["caption"])
+
+    def test_telegram_copy_without_message_id_is_not_success(self):
+        with tempfile.TemporaryDirectory() as root:
+            save(root, "2026-11", approved())
+            for invalid in (None, 0, -1, "123", True):
+                class MissingReceiptBot(FakeBot):
+                    def copy_message(self, *args, **kwargs):
+                        super().copy_message(*args, **kwargs)
+                        if invalid is None:
+                            return None
+                        return type("Receipt", (), {"message_id": invalid})()
+                bot = MissingReceiptBot()
+                with self.subTest(invalid=invalid):
+                    with self.assertRaisesRegex(MagazineManifestError, "delivery message id"):
+                        copy_approved_magazine(
+                            bot, 123, month="2026-11", env=ENV,
+                            root=root, now=date(2026, 11, 3))
+                    self.assertEqual(len(bot.copies), 1)
 
     def test_unapproved_never_sent(self):
         bot = FakeBot()
