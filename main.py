@@ -182,6 +182,12 @@ _webhook_slots = threading.BoundedSemaphore(value=16)
 
 # ── Thread-Safe Portfolio Manager ────────────────────────────────────────────
 class PortfolioManager:
+    """Legacy file-backed portfolio with atomic writes and fail-closed mutations.
+
+    This is a safety patch, not a replacement for durable PostgreSQL storage.
+    """
+    MAX_HOLDINGS = 10
+
     def __init__(self, file_path="portfolio_data.json"):
         self._data = {}
         self._file = file_path
@@ -189,44 +195,69 @@ class PortfolioManager:
         self._load()
 
     def _load(self):
-        try:
-            if os.path.exists(self._file):
-                with open(self._file) as f:
-                    self._data = {int(k): v for k, v in json.load(f).items()}
-        except Exception as e:
-            logger.warning(f"Portfolio load error: {e}")
+        if not os.path.exists(self._file):
+            return
+        with open(self._file, encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            raise ValueError("Portfolio file must contain an object")
+        self._data = {int(k): v for k, v in loaded.items()}
 
-    def _save(self):
+    def _save_locked(self, data):
+        import tempfile
+        directory = os.path.dirname(os.path.abspath(self._file))
+        temp_path = None
         try:
-            with self._lock:
-                with open(self._file, "w") as f:
-                    json.dump(self._data, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Portfolio save error: {e}")
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             dir=directory, prefix=".msk-portfolio-",
+                                             suffix=".tmp", delete=False) as f:
+                temp_path = f.name
+                json.dump(data, f, indent=2, allow_nan=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self._file)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     def get(self, uid):
         with self._lock:
-            return self._data.setdefault(uid, {}).copy()
+            return {sym: pos.copy() for sym, pos in self._data.get(uid, {}).items()}
 
     def add(self, uid, sym, qty, price):
+        import math
+        if not isinstance(qty, int) or isinstance(qty, bool) or qty <= 0:
+            raise ValueError("Quantity must be a positive integer")
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Price must be positive and finite")
         with self._lock:
-            p = self._data.setdefault(uid, {})
-            if sym in p:
-                oq, oa = p[sym]["qty"], p[sym]["avg"]
-                nq = oq + qty
-                p[sym] = {"qty": nq, "avg": round((oq * oa + qty * price) / nq, 2)}
+            current = self._data.get(uid, {})
+            if sym not in current and len(current) >= self.MAX_HOLDINGS:
+                raise ValueError("Maximum 10 distinct holdings per portfolio")
+            updated = {k: v.copy() for k, v in self._data.items()}
+            positions = updated.setdefault(uid, {}).copy()
+            if sym in positions:
+                old_qty, old_avg = positions[sym]["qty"], positions[sym]["avg"]
+                new_qty = old_qty + qty
+                positions[sym] = {"qty": new_qty,
+                                  "avg": round((old_qty * old_avg + qty * price) / new_qty, 2)}
             else:
-                p[sym] = {"qty": qty, "avg": round(price, 2)}
-        self._save()
+                positions[sym] = {"qty": qty, "avg": round(price, 2)}
+            updated[uid] = positions
+            self._save_locked(updated)
+            self._data = updated
 
     def remove(self, uid, sym):
         with self._lock:
-            if uid not in self._data or sym not in self._data[uid]:
+            if sym not in self._data.get(uid, {}):
                 return False
-            del self._data[uid][sym]
-        # _save acquires the same lock; never call it while holding the lock.
-        self._save()
-        return True
+            updated = {k: v.copy() for k, v in self._data.items()}
+            positions = updated[uid].copy()
+            del positions[sym]
+            updated[uid] = positions
+            self._save_locked(updated)
+            self._data = updated
+            return True
 
 
 portfolio = PortfolioManager()
@@ -1032,7 +1063,15 @@ def cmd_buy(m):
         return
     ticker, _ = resolve_symbol(parts[1])
     sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else parts[1].upper().replace(".NS", "")
-    portfolio.add(m.chat.id, sym, qty, price)
+    try:
+        portfolio.add(m.chat.id, sym, qty, price)
+    except ValueError as exc:
+        safe_send(m.chat.id, f"❌ Portfolio rejected: {html.escape(str(exc))}")
+        return
+    except (OSError, TypeError) as exc:
+        logger.error("Portfolio buy persistence failed: %s", type(exc).__name__)
+        safe_send(m.chat.id, "❌ Portfolio save failed; no holding was added.")
+        return
     safe_send(m.chat.id, f"✅ Added <b>{qty}×{sym}</b> @ ₹{price:.2f}")
 
 
@@ -1043,7 +1082,13 @@ def cmd_sell(m):
         safe_send(m.chat.id, "Usage: <code>/sell SYM</code>")
         return
     sym = " ".join(parts[1:]).upper().replace(".NS", "").replace(".BO", "")
-    if portfolio.remove(m.chat.id, sym):
+    try:
+        removed = portfolio.remove(m.chat.id, sym)
+    except (OSError, TypeError) as exc:
+        logger.error("Portfolio sell persistence failed: %s", type(exc).__name__)
+        safe_send(m.chat.id, "❌ Portfolio save failed; holding was not removed.")
+        return
+    if removed:
         safe_send(m.chat.id, f"✅ Removed <b>{sym}</b>.")
     else:
         safe_send(m.chat.id, f"❌ <b>{sym}</b> not found.")
