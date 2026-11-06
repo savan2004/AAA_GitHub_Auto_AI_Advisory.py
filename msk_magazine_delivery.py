@@ -168,6 +168,10 @@ def copy_approved_magazine(bot, chat_id, *, month=None, env=None, root=None, now
         return "unavailable"
     caption = ("📘 MSK Monthly Market Outlook — " + info["issue"] +
                "\nEditorial approval recorded; verify source evidence independently. Educational research only.")
-    bot.copy_message(chat_id, info["source_chat"], info["source_message_id"],
-                     caption=caption)
+    receipt = bot.copy_message(chat_id, info["source_chat"], info["source_message_id"],
+                               caption=caption)
+    # A completed API call is not a delivery receipt without a Telegram message id.
+    message_id = getattr(receipt, "message_id", None)
+    if type(message_id) is not int or message_id <= 0:
+        raise MagazineManifestError("Telegram copy returned no valid delivery message id")
     return "sent"
