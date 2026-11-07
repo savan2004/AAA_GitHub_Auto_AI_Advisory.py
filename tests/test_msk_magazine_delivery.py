@@ -81,6 +81,23 @@ class MagazineCopyTests(unittest.TestCase):
                                                env=ENV, root=root, now=date(2026, 11, 3))
             self.assertEqual(bot.copies, [])
 
+    def test_approval_offset_cannot_bypass_ist_publication_dates(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            record = approved()
+            # Nov 2 in New York is Nov 3 in India: future as of Nov 2 IST.
+            record["approval_timestamp"] = "2026-11-02T23:30:00-05:00"
+            save(root, "2026-11", record)
+            with self.assertRaisesRegex(MagazineManifestError, "in the future"):
+                copy_approved_magazine(bot, 123, month="2026-11",
+                                       env=ENV, root=root, now=date(2026, 11, 2))
+            self.assertEqual(bot.copies, [])
+            # The same timestamp becomes valid once the IST calendar reaches Nov 3.
+            self.assertEqual(copy_approved_magazine(
+                bot, 123, month="2026-11", env=ENV, root=root,
+                now=date(2026, 11, 3)), "sent")
+            self.assertEqual(len(bot.copies), 1)
+
     def test_approval_cannot_predate_publication(self):
         bot = FakeBot()
         with tempfile.TemporaryDirectory() as root:
