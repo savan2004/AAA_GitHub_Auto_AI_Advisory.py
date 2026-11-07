@@ -166,6 +166,13 @@ def copy_approved_magazine(bot, chat_id, *, month=None, env=None, root=None, now
     info = find_magazine(month, env=env, root=root, now=now)
     if info is None:
         return "unavailable"
+    # A checksum string in JSON is not evidence of any real PDF bytes.
+    # Require a locally archived, independently retrieved PDF for this edition
+    # before allowing even a private Telegram copy attempt. This does not prove
+    # that the remote Telegram source message has the same attachment.
+    archive_root = DEFAULT_ROOT if root is None else Path(root)
+    verify_source_pdf_bytes(archive_root / (info["issue"] + ".pdf"),
+                            info["verified_pdf_sha256"])
     caption = ("📘 MSK Monthly Market Outlook — " + info["issue"] +
                "\nEditorial approval recorded; verify source evidence independently. Educational research only.")
     receipt = bot.copy_message(chat_id, info["source_chat"], info["source_message_id"],
