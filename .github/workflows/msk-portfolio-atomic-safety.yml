@@ -1,0 +1,19 @@
+name: MSK Portfolio Atomic Safety
+on:
+  pull_request:
+    paths:
+      - 'main.py'
+      - 'tests/test_portfolio_atomic_safety.py'
+      - '.github/workflows/msk-portfolio-atomic-safety.yml'
+  workflow_dispatch:
+jobs:
+  atomic-portfolio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test fail-closed portfolio storage without external services
+        run: python -m unittest discover -s tests -p 'test_portfolio_atomic_safety.py' -v
