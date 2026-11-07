@@ -22,6 +22,9 @@ class FakeBot:
         self.copies.append((args, kwargs))
         return type("TelegramReceipt", (), {"message_id": 321})()
 
+TEST_PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF"
+TEST_PDF_SHA256 = hashlib.sha256(TEST_PDF_BYTES).hexdigest()
+
 def approved(issue="2026-11"):
     return {
         "issue": issue, "source_project": "AiAutoUpdate",
@@ -30,11 +33,12 @@ def approved(issue="2026-11"):
         "title": "MSK Monthly Market Outlook",
         "published_at": "2026-11-02", "as_of": "2026-10-30",
         "source_chat": "@AiAutoUpdater", "source_message_id": 777,
-        "mime_type": "application/pdf", "verified_pdf_sha256": "a" * 64,
+        "mime_type": "application/pdf", "verified_pdf_sha256": TEST_PDF_SHA256,
     }
 
 def save(root, issue, data):
     (Path(root) / (issue + ".json")).write_text(json.dumps(data), encoding="utf-8")
+    (Path(root) / (issue + ".pdf")).write_bytes(TEST_PDF_BYTES)
 
 class MagazineCopyTests(unittest.TestCase):
     def test_real_pdf_bytes_checksum_accepts_exact_content_only(self):
@@ -111,6 +115,21 @@ class MagazineCopyTests(unittest.TestCase):
             self.assertEqual(bot.copies[0][0], (123, "@AiAutoUpdater", 777))
             self.assertIn("2026-11", bot.copies[0][1]["caption"])
             self.assertNotIn("Verified editorial approval", bot.copies[0][1]["caption"])
+
+    def test_copy_rejects_missing_or_tampered_archived_pdf_without_network(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            save(root, "2026-11", approved())
+            archived = Path(root) / "2026-11.pdf"
+            archived.unlink()
+            with self.assertRaisesRegex(MagazineManifestError, "regular non-symlink"):
+                copy_approved_magazine(bot, 123, month="2026-11",
+                                       env=ENV, root=root, now=date(2026, 11, 3))
+            archived.write_bytes(TEST_PDF_BYTES + b"tampered")
+            with self.assertRaisesRegex(MagazineManifestError, "SHA256 mismatch"):
+                copy_approved_magazine(bot, 123, month="2026-11",
+                                       env=ENV, root=root, now=date(2026, 11, 3))
+            self.assertEqual(bot.copies, [])
 
     def test_telegram_copy_without_message_id_is_not_success(self):
         with tempfile.TemporaryDirectory() as root:
