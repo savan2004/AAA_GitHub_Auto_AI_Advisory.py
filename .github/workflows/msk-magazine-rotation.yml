@@ -1,0 +1,35 @@
+name: MSK Monthly Editorial Rotation — offline regression
+
+on:
+  pull_request:
+    paths:
+      - "msk_magazine_rotation.py"
+      - "msk_magazine_delivery.py"
+      - "msk_magazine_pdf.py"
+      - "main.py"
+      - "tests/test_msk_magazine_rotation.py"
+      - "tests/test_msk_magazine_delivery.py"
+      - "tests/test_msk_magazine_pdf.py"
+      - ".github/workflows/msk-magazine-rotation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  monthly-rotation-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PDF layout dependency
+        run: python -m pip install reportlab==4.2.5
+      - name: Compile and run offline 100-month/duplicate tests
+        run: |
+          python -m py_compile main.py msk_magazine_rotation.py msk_magazine_delivery.py msk_magazine_pdf.py tests/test_msk_magazine_rotation.py tests/test_msk_magazine_delivery.py tests/test_msk_magazine_pdf.py
+          python -m unittest discover -s tests -p 'test_msk_magazine_rotation.py' -v
+          python -m unittest discover -s tests -p 'test_msk_magazine_delivery.py' -v
+          python -m unittest discover -s tests -p 'test_msk_magazine_pdf.py' -v
