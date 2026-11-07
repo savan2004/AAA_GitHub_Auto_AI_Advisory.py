@@ -188,7 +188,12 @@ class HandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(sent[-1][1]["reply_markup"], "MENU")
         self.assertNotIn("CALLBACKS", str(sent[-1]))
         self.assertNotIn("✅ Found", str(sent[-1]))
-        ns["get_hist"] = lambda s, p: make_bars()
+        # Align the positive fixture with the last completed IST business day.
+        # Retain the empty/stale-data fail-closed assertion above.
+        completed_day = pd.bdate_range(
+            end=(datetime.now(IST) - timedelta(days=1)).date(), periods=1
+        )[-1].strftime("%Y-%m-%d")
+        ns["get_hist"] = lambda s, p: make_bars(last=completed_day)
         ns["send_symbol_menu"](1, "FAKE")
         self.assertEqual(sent[-1][1]["reply_markup"], "CALLBACKS")
         self.assertIn("completed session", sent[-1][0][1])
