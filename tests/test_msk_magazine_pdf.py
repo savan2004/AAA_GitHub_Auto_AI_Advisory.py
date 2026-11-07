@@ -21,8 +21,8 @@ def mock_pack():
     return {
         "issue": "2026-11", "as_of": "2026-10-30", "approved": False,
         "pages": [
-            {"summary": "Synthetic fixture content for unit testing only; not financial evidence or approved market publication.",
-             "evidence": facts} for _ in PAGE_TITLES
+            {"summary": f"Synthetic fixture for distinct page {i + 1}; not financial evidence or approved market publication.",
+             "evidence": [dict(fact) for fact in facts]} for i, _ in enumerate(PAGE_TITLES)
         ],
     }
 
@@ -62,6 +62,15 @@ class LayoutTests(unittest.TestCase):
                     with self.assertRaisesRegex(MagazineValidationError, f"Page {index + 1}"):
                         render_magazine(data, target)
                     self.assertFalse(target.exists())
+
+    def test_duplicate_research_pages_block_pdf(self):
+        with tempfile.TemporaryDirectory() as root:
+            data = mock_pack()
+            data["pages"][4] = dict(data["pages"][3])
+            target = Path(root) / "duplicate.pdf"
+            with self.assertRaisesRegex(MagazineValidationError, "duplicated research content"):
+                render_magazine(data, target)
+            self.assertFalse(target.exists())
 
     def test_missing_evidence_blocks_pdf(self):
         with tempfile.TemporaryDirectory() as root:

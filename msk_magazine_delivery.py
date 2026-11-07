@@ -4,7 +4,7 @@ Does not contact AiAutoUpdate, fetch its DB, start jobs, or create content.
 Only copies a previously verified Telegram PDF identified in an approved
 MSK-side release manifest. Off by default, private-chat command only.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -14,6 +14,7 @@ import re
 DEFAULT_ROOT = Path(__file__).resolve().parent / "data" / "msk_magazines"
 MONTH = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+IST = timezone(timedelta(hours=5, minutes=30))
 CHAT = re.compile(r"^(?:-100\d{6,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$")
 
 class MagazineConfigurationError(RuntimeError):
@@ -33,7 +34,7 @@ def _source_chat(env):
     return source
 
 def _check_manifest(data, month, source_chat, *, now=None):
-    now = date.today() if now is None else now
+    now = datetime.now(IST).date() if now is None else now
     if not isinstance(data, dict) or data.get("approved") is not True:
         raise MagazineManifestError("Magazine is not approved")
     if data.get("issue") != month or data.get("source_project") != "AiAutoUpdate":
@@ -61,7 +62,9 @@ def _check_manifest(data, month, source_chat, *, now=None):
         raise MagazineManifestError("Magazine approval timestamp invalid") from exc
     if approved_at.tzinfo is None or approved_at.utcoffset() is None:
         raise MagazineManifestError("Magazine approval timestamp must include timezone")
-    if approved_at.date() > now:
+    # Compare civil dates in the edition's IST timezone, not the sender's offset.
+    approved_day_ist = approved_at.astimezone(IST).date()
+    if approved_day_ist > now:
         raise MagazineManifestError("Magazine approval timestamp is in the future")
     name = data.get("title")
     if not isinstance(name, str) or not 3 <= len(name.strip()) <= 120:
@@ -73,7 +76,7 @@ def _check_manifest(data, month, source_chat, *, now=None):
         raise MagazineManifestError("Magazine dates invalid") from exc
     if published > now or as_of > published:
         raise MagazineManifestError("Magazine has future or conflicting dates")
-    if approved_at.date() < published:
+    if approved_day_ist < published:
         raise MagazineManifestError("Magazine approval predates publication")
     if published.strftime("%Y-%m") != month:
         raise MagazineManifestError("Magazine publication month does not match issue")

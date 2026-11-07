@@ -82,6 +82,7 @@ def _validate(data, preview):
     for idx, page in enumerate(pages):
         if not isinstance(page, dict):
             raise MagazineValidationError(f"Page {idx + 1}: invalid structured page")
+    seen_research = set()
     for idx in RESEARCH_PAGES:
         page = pages[idx]
         if not isinstance(page, dict):
@@ -123,6 +124,13 @@ def _validate(data, preview):
                 raise MagazineValidationError(f"Page {idx + 1}: source newer than as_of")
         if len(source_hosts) < 2:
             raise MagazineValidationError(f"Page {idx + 1}: two distinct source hosts required")
+        # Repeating the same research across multiple pages is not an edition.
+        # This only catches exact normalized duplication, not factual plagiarism.
+        fingerprint = (summary.strip().casefold(), tuple(
+            fact["statement"].strip().casefold() for fact in evidence))
+        if fingerprint in seen_research:
+            raise MagazineValidationError(f"Page {idx + 1}: duplicated research content")
+        seen_research.add(fingerprint)
     return data
 
 
