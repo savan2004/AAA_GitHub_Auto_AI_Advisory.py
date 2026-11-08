@@ -113,6 +113,30 @@ def verify_source_pdf_bytes(pdf_path, expected_sha256):
         raise MagazineManifestError("Source PDF SHA256 mismatch")
     return True
 
+def verify_downloaded_source_attachment(document, pdf_bytes, manifest):
+    """Validate independently downloaded Telegram document bytes, without publishing.
+
+    Caller must obtain document metadata and bytes from the actual source message.
+    A manifest alone or Telegram copy_message receipt cannot prove this match.
+    """
+    if not isinstance(document, dict) or not isinstance(manifest, dict):
+        raise MagazineManifestError("Source attachment metadata missing")
+    if document.get("source_chat") != manifest.get("source_chat"):
+        raise MagazineManifestError("Source attachment channel mismatch")
+    mid = document.get("source_message_id")
+    if type(mid) is not int or mid <= 0 or mid != manifest.get("source_message_id"):
+        raise MagazineManifestError("Source attachment message id mismatch")
+    if document.get("mime_type") != "application/pdf":
+        raise MagazineManifestError("Source attachment is not a PDF")
+    if not isinstance(pdf_bytes, bytes) or not pdf_bytes.startswith(b"%PDF-"):
+        raise MagazineManifestError("Downloaded source attachment PDF bytes missing")
+    expected = manifest.get("verified_pdf_sha256")
+    if not isinstance(expected, str) or not SHA256.fullmatch(expected):
+        raise MagazineManifestError("Source attachment checksum missing")
+    if hashlib.sha256(pdf_bytes).hexdigest() != expected:
+        raise MagazineManifestError("Downloaded source attachment SHA256 mismatch")
+    return True
+
 def _read(root, month, source_chat, *, now=None):
     if not isinstance(month, str) or not MONTH.fullmatch(month):
         raise MagazineManifestError("Issue must use YYYY-MM")
