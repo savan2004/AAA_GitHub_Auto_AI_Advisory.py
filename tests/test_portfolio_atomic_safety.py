@@ -20,7 +20,8 @@ class PortfolioSafetyTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = str(Path(self.tmp.name) / "portfolio.json")
-        self.manager = PortfolioManager(self.path)
+        with patch.dict('os.environ', {'MSK_PORTFOLIO_INITIALIZE_EMPTY': '1'}):
+            self.manager = PortfolioManager(self.path)
 
     def test_limit_and_existing_position(self):
         for i in range(10):
@@ -46,6 +47,20 @@ class PortfolioSafetyTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.manager.remove(123, "SBIN")
         self.assertIn("SBIN", self.manager.get(123))
+
+    def test_missing_file_requires_explicit_initialization(self):
+        other = str(Path(self.tmp.name) / "lost.json")
+        with patch.dict("os.environ", {"MSK_PORTFOLIO_INITIALIZE_EMPTY": "0"}):
+            with self.assertRaisesRegex(RuntimeError, "storage missing"):
+                PortfolioManager(other)
+        self.assertFalse(Path(other).exists())
+
+    def test_explicit_first_run_creates_empty_storage(self):
+        other = str(Path(self.tmp.name) / "new.json")
+        with patch.dict("os.environ", {"MSK_PORTFOLIO_INITIALIZE_EMPTY": "1"}):
+            manager = PortfolioManager(other)
+        self.assertEqual(manager.get(123), {})
+        self.assertEqual(json.loads(Path(other).read_text()), {})
 
     def test_corrupt_file_fails_closed(self):
         Path(self.path).write_text("{broken", encoding="utf-8")
