@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from msk_magazine_delivery import (
-    MagazineManifestError, copy_approved_magazine, find_magazine, verify_source_pdf_bytes,
+    MagazineManifestError, copy_approved_magazine, find_magazine, verify_source_pdf_bytes, verify_downloaded_source_attachment,
 )
 
 ENV = {
@@ -37,6 +37,27 @@ def save(root, issue, data):
     (Path(root) / (issue + ".json")).write_text(json.dumps(data), encoding="utf-8")
 
 class MagazineCopyTests(unittest.TestCase):
+    def test_downloaded_source_attachment_must_match_message_and_bytes(self):
+        pdf = b"%PDF-1.4\\nsource document\\n%%EOF"
+        manifest = approved()
+        manifest["verified_pdf_sha256"] = hashlib.sha256(pdf).hexdigest()
+        document = {"source_chat": manifest["source_chat"],
+                    "source_message_id": manifest["source_message_id"],
+                    "mime_type": "application/pdf"}
+        self.assertTrue(verify_downloaded_source_attachment(document, pdf, manifest))
+        for changed, payload in (
+            ({**document, "source_chat": "@WrongSource"}, pdf),
+            ({**document, "source_message_id": 778}, pdf),
+            ({**document, "source_message_id": True}, pdf),
+            ({**document, "mime_type": "text/plain"}, pdf),
+            (document, pdf + b"tampered"),
+            (document, b"not a PDF"),
+            (document, None),
+        ):
+            with self.subTest(changed=changed, payload=payload):
+                with self.assertRaises(MagazineManifestError):
+                    verify_downloaded_source_attachment(changed, payload, manifest)
+
     def test_real_pdf_bytes_checksum_accepts_exact_content_only(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "edition.pdf"
