@@ -206,7 +206,26 @@ class PortfolioManager:
             loaded = json.load(f)
         if not isinstance(loaded, dict):
             raise ValueError("Portfolio file must contain an object")
-        self._data = {int(k): v for k, v in loaded.items()}
+        validated = {}
+        for raw_uid, positions in loaded.items():
+            uid = int(raw_uid)
+            if uid in validated or not isinstance(positions, dict):
+                raise ValueError("Invalid portfolio account structure")
+            if len(positions) > self.MAX_HOLDINGS:
+                raise ValueError("Portfolio exceeds maximum holdings")
+            clean = {}
+            for symbol, position in positions.items():
+                if not isinstance(symbol, str) or not symbol.strip() or not isinstance(position, dict):
+                    raise ValueError("Invalid portfolio position")
+                qty, avg = position.get("qty"), position.get("avg")
+                import math
+                if (not isinstance(qty, int) or isinstance(qty, bool) or qty <= 0
+                        or not isinstance(avg, (int, float)) or isinstance(avg, bool)
+                        or not math.isfinite(avg) or avg <= 0):
+                    raise ValueError("Invalid portfolio quantity or average")
+                clean[symbol] = {"qty": qty, "avg": avg}
+            validated[uid] = clean
+        self._data = validated
 
     def _save_locked(self, data):
         import tempfile
