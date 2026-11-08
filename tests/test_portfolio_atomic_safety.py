@@ -67,6 +67,29 @@ class PortfolioSafetyTests(unittest.TestCase):
         with self.assertRaises(json.JSONDecodeError):
             PortfolioManager(self.path)
 
+    def test_invalid_persisted_holdings_fail_closed(self):
+        bad_positions = [
+            {"qty": 0, "avg": 100.0},
+            {"qty": -1, "avg": 100.0},
+            {"qty": 1, "avg": float("nan")},
+            {"qty": 1, "avg": 0},
+            {"qty": "1", "avg": 100.0},
+            {"qty": 1},
+        ]
+        for position in bad_positions:
+            with self.subTest(position=position):
+                Path(self.path).write_text(
+                    json.dumps({"123": {"SBIN": position}}), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    PortfolioManager(self.path)
+
+    def test_persisted_holding_limit_rejected(self):
+        Path(self.path).write_text(
+            json.dumps({"123": {f"SYM{i}": {"qty": 1, "avg": 100.0}
+                                for i in range(11)}}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "maximum holdings"):
+            PortfolioManager(self.path)
+
     def test_invalid_price_rejected(self):
         for price in [float("nan"), float("inf"), -1.0, 0.0]:
             with self.assertRaises(ValueError):
