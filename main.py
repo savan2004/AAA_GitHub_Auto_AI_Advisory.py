@@ -196,6 +196,11 @@ class PortfolioManager:
 
     def _load(self):
         if not os.path.exists(self._file):
+            # Missing storage may mean lost ephemeral data. Never treat it as
+            # an empty existing account without explicit first-run approval.
+            if os.getenv("MSK_PORTFOLIO_INITIALIZE_EMPTY") != "1":
+                raise RuntimeError("Portfolio storage missing; restore backup or explicitly initialize first run")
+            self._save_locked({})
             return
         with open(self._file, encoding="utf-8") as f:
             loaded = json.load(f)
