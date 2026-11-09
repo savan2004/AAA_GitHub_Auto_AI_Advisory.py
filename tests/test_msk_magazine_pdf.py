@@ -90,6 +90,22 @@ class LayoutTests(unittest.TestCase):
             self.assertIn(b"Fixture B", raw)
             self.assertIn(b"25.00", raw)
 
+    def test_five_chart_rows_fit_and_render(self):
+        with tempfile.TemporaryDirectory() as root:
+            data = mock_pack()
+            data["pages"][2]["chart"] = {
+                "title": "Five source-linked test observations",
+                "source_url": data["pages"][2]["evidence"][0]["source_url"],
+                "points": [{"label": f"Fixture {i}", "value": i * 10}
+                           for i in range(1, 6)],
+            }
+            target = Path(root) / "five-bars.pdf"
+            render_magazine(data, target)
+            raw = target.read_bytes()
+            for i in range(1, 6):
+                self.assertIn(f"Fixture {i}".encode(), raw)
+            self.assertEqual(len(re.findall(rb"/Type\\s*/Page\\b", raw)), 16)
+
     def test_unlinked_or_invalid_chart_data_blocks_pdf(self):
         for chart in (
             {"title": "Chart test", "source_url": "https://other.example.com/x",
