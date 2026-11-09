@@ -1,0 +1,67 @@
+"""Offline, fail-closed validation of dated public-source market observations.
+
+A validated snapshot is not an AiAutoUpdate handoff, stock-universe coverage
+certificate, or authorization to publish an MSK magazine.
+"""
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
+from urllib.parse import urlsplit
+import json
+
+class EvidenceError(ValueError):
+    pass
+
+def validate_snapshot(snapshot, *, today=None):
+    today = date.today() if today is None else today
+    if not isinstance(snapshot, dict) or snapshot.get("status") != "PARTIAL_PUBLIC_SNAPSHOT":
+        raise EvidenceError("Only explicitly partial source snapshots are accepted")
+    if snapshot.get("release_approved") is not False:
+        raise EvidenceError("Snapshot must not claim release approval")
+    observations = snapshot.get("observations")
+    if not isinstance(observations, list) or not observations:
+        raise EvidenceError("Missing source observations")
+    seen = set()
+    for record in observations:
+        if not isinstance(record, dict):
+            raise EvidenceError("Invalid observation")
+        key = record.get("indicator")
+        if not isinstance(key, str) or not key.strip() or key in seen:
+            raise EvidenceError("Missing or duplicate indicator")
+        seen.add(key)
+        observed = record.get("observed_on")
+        try:
+            if not isinstance(observed, str) or date.fromisoformat(observed).isoformat() != observed:
+                raise ValueError()
+            if date.fromisoformat(observed) > today:
+                raise ValueError()
+        except ValueError as exc:
+            raise EvidenceError("Invalid or future observation date") from exc
+        checked = record.get("checked_at")
+        try:
+            timestamp = datetime.fromisoformat(checked)
+            if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                raise ValueError()
+            if timestamp.date() > today:
+                raise ValueError()
+        except (TypeError, ValueError) as exc:
+            raise EvidenceError("Missing timezone-aware retrieval timestamp") from exc
+        url = record.get("source_url")
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        if not parsed or parsed.scheme != "https" or parsed.hostname not in {"www.nseindia.com", "rbi.org.in", "www.rbi.org.in"}:
+            raise EvidenceError("Source must be an approved official publisher")
+        value = record.get("value")
+        try:
+            if type(value) not in (str, int, float) or not Decimal(str(value)).is_finite():
+                raise InvalidOperation()
+        except (InvalidOperation, ValueError) as exc:
+            raise EvidenceError("Observation must have finite numeric value") from exc
+        if not isinstance(record.get("unit"), str) or not record["unit"].strip():
+            raise EvidenceError("Observation unit missing")
+    coverage = snapshot.get("coverage")
+    if coverage != {"universe_verified": False, "constituents_checked": 0}:
+        raise EvidenceError("Partial public snapshot cannot assert index-wide coverage")
+    return True
+
+def load_snapshot(path):
+    with open(path, encoding="utf-8") as stream:
+        return validate_snapshot(json.load(stream))
