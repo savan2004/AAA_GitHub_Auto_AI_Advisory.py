@@ -12,7 +12,7 @@
       "value": "25030.35",
       "unit": "index_points",
       "observed_on": "2026-11-06",
-      "checked_at": "2026-11-09T08:24:00+05:30",
+      "checked_at": "2026-11-09T03:00:18.356Z",
       "source_url": "https://www.nseindia.com/?fromDate=%7B1%7D&indexType=%7B0%7D&toDate=%7B2%7D",
       "source_note": "NSE public page displays Updated: 06-Nov-2026 15:30 IST"
     },
@@ -21,7 +21,7 @@
       "value": "5.50",
       "unit": "percent",
       "observed_on": "2026-11-05",
-      "checked_at": "2026-11-09T08:24:00+05:30",
+      "checked_at": "2026-11-09T03:00:18.356Z",
       "source_url": "https://rbi.org.in/Home.aspx",
       "source_note": "RBI official page current rates; observation date used as conservative page data date, not rate effective date"
     },
@@ -30,7 +30,7 @@
       "value": "24536.60",
       "unit": "index_points",
       "observed_on": "2026-11-05",
-      "checked_at": "2026-11-09T08:24:00+05:30",
+      "checked_at": "2026-11-09T03:00:18.356Z",
       "source_url": "https://rbi.org.in/Home.aspx",
       "source_note": "RBI Capital Market section marks Nifty 50 as on November 05 2026"
     }
