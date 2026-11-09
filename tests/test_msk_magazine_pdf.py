@@ -72,6 +72,43 @@ class LayoutTests(unittest.TestCase):
                 render_magazine(data, target)
             self.assertFalse(target.exists())
 
+    def test_source_linked_chart_renders_real_input_values(self):
+        with tempfile.TemporaryDirectory() as root:
+            data = mock_pack()
+            data["pages"][2]["chart"] = {
+                "title": "Source-linked test observations",
+                "source_url": data["pages"][2]["evidence"][0]["source_url"],
+                "points": [{"label": "Fixture A", "value": 12.5},
+                           {"label": "Fixture B", "value": 25.0}],
+            }
+            target = Path(root) / "chart.pdf"
+            result = render_magazine(data, target)
+            self.assertEqual(result["status"], "UNAPPROVED_RESEARCH_DRAFT")
+            raw = target.read_bytes()
+            self.assertIn(b"Source-linked test observations", raw)
+            self.assertIn(b"Fixture A", raw)
+            self.assertIn(b"Fixture B", raw)
+            self.assertIn(b"25.00", raw)
+
+    def test_unlinked_or_invalid_chart_data_blocks_pdf(self):
+        for chart in (
+            {"title": "Chart test", "source_url": "https://other.example.com/x",
+             "points": [{"label": "A", "value": 1}, {"label": "B", "value": 2}]},
+            {"title": "Chart test", "source_url": "https://www.nseindia.com/example",
+             "points": [{"label": "A", "value": float("nan")},
+                        {"label": "B", "value": 2}]},
+            {"title": "Chart test", "source_url": "https://www.nseindia.com/example",
+             "points": [{"label": "A", "value": True}, {"label": "B", "value": 2}]},
+        ):
+            with self.subTest(chart=chart):
+                with tempfile.TemporaryDirectory() as root:
+                    data = mock_pack()
+                    data["pages"][2]["chart"] = chart
+                    target = Path(root) / "blocked.pdf"
+                    with self.assertRaisesRegex(MagazineValidationError, "chart"):
+                        render_magazine(data, target)
+                    self.assertFalse(target.exists())
+
     def test_missing_evidence_blocks_pdf(self):
         with tempfile.TemporaryDirectory() as root:
             data = mock_pack()
