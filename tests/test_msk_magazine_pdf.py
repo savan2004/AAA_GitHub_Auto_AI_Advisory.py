@@ -104,7 +104,7 @@ class LayoutTests(unittest.TestCase):
             raw = target.read_bytes()
             for i in range(1, 6):
                 self.assertIn(f"Fixture {i}".encode(), raw)
-            self.assertEqual(len(re.findall(rb"/Type\\s*/Page\\b", raw)), 16)
+            self.assertEqual(len(re.findall(rb"/Type\s*/Page\b", raw)), 16)
 
     def test_unlinked_or_invalid_chart_data_blocks_pdf(self):
         for chart in (
