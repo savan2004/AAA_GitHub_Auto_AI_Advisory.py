@@ -25,6 +25,8 @@ def validate_snapshot(snapshot, *, today=None):
     for record in observations:
         if not isinstance(record, dict):
             raise EvidenceError("Invalid observation")
+        if record.get("source_verified") is not False:
+            raise EvidenceError("Partial snapshot cannot assert independently verified source")
         key = record.get("indicator")
         if not isinstance(key, str) or not key.strip() or key in seen:
             raise EvidenceError("Missing or duplicate indicator")
