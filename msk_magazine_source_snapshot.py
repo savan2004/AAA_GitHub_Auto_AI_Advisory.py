@@ -4,6 +4,7 @@ A validated snapshot is not an AiAutoUpdate handoff, stock-universe coverage
 certificate, or authorization to publish an MSK magazine.
 """
 from datetime import date, datetime, timezone
+from urllib.parse import unquote
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 import json
@@ -41,7 +42,9 @@ def validate_snapshot(snapshot, *, today=None):
             timestamp = datetime.fromisoformat(checked)
             if timestamp.tzinfo is None or timestamp.utcoffset() is None:
                 raise ValueError()
-            if timestamp.date() > today:
+            if timestamp.astimezone(timezone.utc) > datetime.now(timezone.utc):
+                raise ValueError()
+            if date.fromisoformat(observed) > timestamp.date():
                 raise ValueError()
         except (TypeError, ValueError) as exc:
             raise EvidenceError("Missing timezone-aware retrieval timestamp") from exc
@@ -49,6 +52,10 @@ def validate_snapshot(snapshot, *, today=None):
         parsed = urlsplit(url) if isinstance(url, str) else None
         if not parsed or parsed.scheme != "https" or parsed.hostname not in {"www.nseindia.com", "rbi.org.in", "www.rbi.org.in"}:
             raise EvidenceError("Source must be an approved official publisher")
+        if any(marker in unquote(url).lower() for marker in ("{", "}", "<", ">")):
+            raise EvidenceError("Unresolved source URL template is not evidence")
+        if not isinstance(record.get("source_note"), str) or len(record["source_note"].strip()) < 15:
+            raise EvidenceError("Source observation requires provenance note")
         value = record.get("value")
         try:
             if type(value) not in (str, int, float) or not Decimal(str(value)).is_finite():
