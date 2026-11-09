@@ -13,8 +13,9 @@
       "unit": "index_points",
       "observed_on": "2026-11-06",
       "checked_at": "2026-11-09T03:00:18.356Z",
-      "source_url": "https://www.nseindia.com/?fromDate=%7B1%7D&indexType=%7B0%7D&toDate=%7B2%7D",
-      "source_note": "NSE public page displays Updated: 06-Nov-2026 15:30 IST"
+      "source_url": "https://www.nseindia.com/",
+      "source_note": "NSE publisher homepage only; historical 06-Nov close not independently reproducible from this URL. Editorial verification pending.",
+      "source_verified": false
     },
     {
       "indicator": "RBI_REPO_RATE_NOV_2026",
@@ -23,7 +24,8 @@
       "observed_on": "2026-11-05",
       "checked_at": "2026-11-09T03:00:18.356Z",
       "source_url": "https://rbi.org.in/Home.aspx",
-      "source_note": "RBI official page current rates; observation date used as conservative page data date, not rate effective date"
+      "source_note": "RBI official page current rates; observation date used as conservative page data date, not rate effective date; source page dynamic and historical effective date unverified",
+      "source_verified": false
     },
     {
       "indicator": "NIFTY_50_CLOSE_2026_11_05",
@@ -32,7 +34,8 @@
       "observed_on": "2026-11-05",
       "checked_at": "2026-11-09T03:00:18.356Z",
       "source_url": "https://rbi.org.in/Home.aspx",
-      "source_note": "RBI Capital Market section marks Nifty 50 as on November 05 2026"
+      "source_note": "RBI Capital Market section marks Nifty 50 as on November 05 2026; historical row not independently preserved",
+      "source_verified": false
     }
   ]
 }
