@@ -277,7 +277,8 @@ def _research(c, title, number, issue, as_of, page, preview):
         _p(c, chart["title"], 64, h - 304, size=9, leading=12, max_height=16)
         points = chart["points"]
         peak = max(point["value"] for point in points) or 1
-        bar_y = h - 324
+        # Five rows must remain inside the 95-point chart panel.
+        bar_y = h - 326
         for point in points:
             c.setFont("Helvetica", 7)
             c.setFillColor(HexColor(INK))
@@ -286,7 +287,7 @@ def _research(c, title, number, issue, as_of, page, preview):
             c.rect(190, bar_y - 1, 220 * point["value"] / peak, 7, fill=1, stroke=0)
             c.setFillColor(HexColor(INK))
             c.drawRightString(w - 65, bar_y, f'{point["value"]:,.2f}')
-            bar_y -= 12
+            bar_y -= 7
     else:
         _p(c, "No verified chart data supplied. Visualization withheld; "
               "a placeholder is not investment evidence.",
