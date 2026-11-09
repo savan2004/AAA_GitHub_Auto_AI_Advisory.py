@@ -122,6 +122,27 @@ def _validate(data, preview):
             claim_date = _checked_date(fact.get("observed_on"), "source observation")
             if claim_date > observed:
                 raise MagazineValidationError(f"Page {idx + 1}: source newer than as_of")
+        # Optional chart data must be explicitly source-linked and finite.
+        chart = page.get("chart")
+        if chart is not None:
+            import math
+            if not isinstance(chart, dict) or not isinstance(chart.get("title"), str) or not 5 <= len(chart["title"].strip()) <= 70:
+                raise MagazineValidationError(f"Page {idx + 1}: chart title invalid")
+            points = chart.get("points")
+            if not isinstance(points, list) or not 2 <= len(points) <= 5:
+                raise MagazineValidationError(f"Page {idx + 1}: chart requires 2-5 values")
+            if chart.get("source_url") not in {f["source_url"] for f in evidence}:
+                raise MagazineValidationError(f"Page {idx + 1}: chart source not in page evidence")
+            labels = set()
+            for point in points:
+                if not isinstance(point, dict) or not isinstance(point.get("label"), str) or not 1 <= len(point["label"].strip()) <= 24:
+                    raise MagazineValidationError(f"Page {idx + 1}: chart label invalid")
+                if point["label"] in labels:
+                    raise MagazineValidationError(f"Page {idx + 1}: duplicate chart label")
+                labels.add(point["label"])
+                value = point.get("value")
+                if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                    raise MagazineValidationError(f"Page {idx + 1}: chart value invalid")
         if len(source_hosts) < 2:
             raise MagazineValidationError(f"Page {idx + 1}: two distinct source hosts required")
         # Repeating the same research across multiple pages is not an edition.
@@ -251,9 +272,25 @@ def _research(c, title, number, issue, as_of, page, preview):
     c.setFillColor(HexColor(TEAL))
     c.setFont("Helvetica-Bold", 10)
     c.drawString(64, h - 286, "EVIDENCE-LED RESEARCH")
-    _p(c, "Chart/table slot: reserved for an independently verified, "
-          "source-dated visualization. A placeholder is not investment evidence.",
-       64, h - 308, size=9, leading=14, max_height=45, width=w - 128)
+    chart = None if preview else page.get("chart")
+    if chart:
+        _p(c, chart["title"], 64, h - 304, size=9, leading=12, max_height=16)
+        points = chart["points"]
+        peak = max(point["value"] for point in points) or 1
+        bar_y = h - 324
+        for point in points:
+            c.setFont("Helvetica", 7)
+            c.setFillColor(HexColor(INK))
+            c.drawString(64, bar_y, point["label"])
+            c.setFillColor(HexColor(TEAL))
+            c.rect(190, bar_y - 1, 220 * point["value"] / peak, 7, fill=1, stroke=0)
+            c.setFillColor(HexColor(INK))
+            c.drawRightString(w - 65, bar_y, f'{point["value"]:,.2f}')
+            bar_y -= 12
+    else:
+        _p(c, "No verified chart data supplied. Visualization withheld; "
+              "a placeholder is not investment evidence.",
+           64, h - 308, size=9, leading=14, max_height=45, width=w - 128)
     c.setFillColor(HexColor(INK))
     c.setFont("Helvetica-Bold", 10)
     c.drawString(49, h - 392, "SOURCE NOTES / RESEARCH ASSERTIONS")
