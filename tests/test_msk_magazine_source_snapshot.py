@@ -35,6 +35,25 @@ class SourceSnapshotTests(unittest.TestCase):
                 with self.assertRaises(EvidenceError):
                     validate_snapshot(data)
 
+    def test_source_claim_and_template_urls_fail_closed(self):
+        for field, value in (("source_verified", True),
+                             ("source_verified", None),
+                             ("source_url", "https://www.nseindia.com/?indexType=%7B0%7D"),
+                             ("source_note", "")):
+            with self.subTest(field=field):
+                data = copy.deepcopy(self.pack)
+                data["observations"][0][field] = value
+                with self.assertRaises(EvidenceError):
+                    validate_snapshot(data)
+
+    def test_future_same_day_retrieval_rejected(self):
+        from datetime import datetime, timedelta, timezone
+        data = copy.deepcopy(self.pack)
+        future = datetime.now(timezone.utc) + timedelta(minutes=30)
+        data["observations"][0]["checked_at"] = future.isoformat()
+        with self.assertRaises(EvidenceError):
+            validate_snapshot(data)
+
     def test_invalid_numeric_values_and_release_approval_rejected(self):
         for value in ("NaN", "Infinity", None, True):
             with self.subTest(value=value):
