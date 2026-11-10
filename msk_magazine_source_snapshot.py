@@ -52,10 +52,14 @@ def validate_snapshot(snapshot, *, today=None):
             raise EvidenceError("Missing timezone-aware retrieval timestamp") from exc
         url = record.get("source_url")
         parsed = urlsplit(url) if isinstance(url, str) else None
+        try:
+            port = parsed.port if parsed else None
+        except ValueError as exc:
+            raise EvidenceError("Invalid source URL port") from exc
         if (not parsed or parsed.scheme != "https" or
                 parsed.hostname not in {"www.nseindia.com", "rbi.org.in", "www.rbi.org.in"} or
                 parsed.username is not None or parsed.password is not None or
-                parsed.port not in (None, 443) or parsed.fragment):
+                port not in (None, 443) or parsed.fragment):
             raise EvidenceError("Source must be a clean official publisher URL")
         if any(marker in unquote(url).lower() for marker in ("{", "}", "<", ">")):
             raise EvidenceError("Unresolved source URL template is not evidence")
