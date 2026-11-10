@@ -52,8 +52,11 @@ def validate_snapshot(snapshot, *, today=None):
             raise EvidenceError("Missing timezone-aware retrieval timestamp") from exc
         url = record.get("source_url")
         parsed = urlsplit(url) if isinstance(url, str) else None
-        if not parsed or parsed.scheme != "https" or parsed.hostname not in {"www.nseindia.com", "rbi.org.in", "www.rbi.org.in"}:
-            raise EvidenceError("Source must be an approved official publisher")
+        if (not parsed or parsed.scheme != "https" or
+                parsed.hostname not in {"www.nseindia.com", "rbi.org.in", "www.rbi.org.in"} or
+                parsed.username is not None or parsed.password is not None or
+                parsed.port not in (None, 443) or parsed.fragment):
+            raise EvidenceError("Source must be a clean official publisher URL")
         if any(marker in unquote(url).lower() for marker in ("{", "}", "<", ">")):
             raise EvidenceError("Unresolved source URL template is not evidence")
         if not isinstance(record.get("source_note"), str) or len(record["source_note"].strip()) < 15:
