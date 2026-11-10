@@ -78,6 +78,18 @@ def validate_snapshot(snapshot, *, today=None):
         raise EvidenceError("Partial public snapshot cannot assert index-wide coverage")
     return True
 
+def publication_observations(snapshot):
+    """Return only independently evidenced observations; fail closed otherwise.
+
+    Public snapshot values are leads for human research, never magazine facts.
+    The current partial snapshot explicitly contains no verified observations.
+    """
+    validate_snapshot(snapshot)
+    raise EvidenceError(
+        "No independently verified financial observations: "
+        "partial public snapshot cannot populate magazine research"
+    )
+
 def load_snapshot(path):
     with open(path, encoding="utf-8") as stream:
         return validate_snapshot(json.load(stream))
