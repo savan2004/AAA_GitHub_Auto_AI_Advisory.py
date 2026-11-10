@@ -3,7 +3,7 @@ import copy
 import json
 import unittest
 from pathlib import Path
-from msk_magazine_source_snapshot import EvidenceError, validate_snapshot
+from msk_magazine_source_snapshot import EvidenceError, validate_snapshot, publication_observations
 
 PACK = Path(__file__).resolve().parents[1] / "data/msk_magazines/public_snapshot_2026-11.partial.json"
 
@@ -15,6 +15,17 @@ class SourceSnapshotTests(unittest.TestCase):
         self.assertTrue(validate_snapshot(self.pack))
         self.assertFalse(self.pack["release_approved"])
         self.assertFalse(self.pack["coverage"]["universe_verified"])
+
+    def test_partial_snapshot_cannot_feed_publication(self):
+        self.assertTrue(validate_snapshot(self.pack))
+        with self.assertRaisesRegex(EvidenceError, "No independently verified"):
+            publication_observations(self.pack)
+
+    def test_changing_verified_flag_cannot_bypass_publication_gate(self):
+        data = copy.deepcopy(self.pack)
+        data["observations"][0]["source_verified"] = True
+        with self.assertRaises(EvidenceError):
+            publication_observations(data)
 
     def test_missing_and_fabricated_coverage_rejected(self):
         for coverage in ({}, {"universe_verified": True, "constituents_checked": 400}):
