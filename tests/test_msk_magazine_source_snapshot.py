@@ -46,6 +46,20 @@ class SourceSnapshotTests(unittest.TestCase):
                 with self.assertRaises(EvidenceError):
                     validate_snapshot(data)
 
+    def test_official_host_with_unsafe_url_components_rejected(self):
+        for url in (
+            "https://user:password@www.nseindia.com/report",
+            "https://www.nseindia.com:8443/report",
+            "https://www.nseindia.com:invalid/report",
+            "https://www.nseindia.com/report#unreviewed",
+            "https://attacker.example@rbi.org.in/Home.aspx",
+        ):
+            with self.subTest(url=url):
+                data = copy.deepcopy(self.pack)
+                data["observations"][0]["source_url"] = url
+                with self.assertRaises(EvidenceError):
+                    validate_snapshot(data)
+
     def test_future_same_day_retrieval_rejected(self):
         from datetime import datetime, timedelta, timezone
         data = copy.deepcopy(self.pack)
