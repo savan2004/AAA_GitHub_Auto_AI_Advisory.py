@@ -13,7 +13,9 @@ class EvidenceError(ValueError):
     pass
 
 def validate_snapshot(snapshot, *, today=None):
-    today = date.today() if today is None else today
+    # Market-day cutoffs use IST, not the host/container timezone.
+    ist = timezone(timedelta(hours=5, minutes=30))
+    today = datetime.now(ist).date() if today is None else today
     if not isinstance(snapshot, dict) or snapshot.get("status") != "PARTIAL_PUBLIC_SNAPSHOT":
         raise EvidenceError("Only explicitly partial source snapshots are accepted")
     if snapshot.get("release_approved") is not False:
