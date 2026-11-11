@@ -79,6 +79,18 @@ class SourceSnapshotTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             validate_snapshot(data)
 
+    def test_retrieval_day_is_interpreted_in_ist_not_sender_offset(self):
+        # In +14:00 this is Nov 6, but in IST it is still Nov 5.
+        data = copy.deepcopy(self.pack)
+        data["observations"][0]["observed_on"] = "2026-11-06"
+        data["observations"][0]["checked_at"] = "2026-11-06T00:30:00+14:00"
+        with self.assertRaisesRegex(EvidenceError, "retrieval timestamp"):
+            validate_snapshot(data)
+
+        # In -07:00 this is Nov 5, but in IST it is Nov 6.
+        data["observations"][0]["checked_at"] = "2026-11-05T23:00:00-07:00"
+        self.assertTrue(validate_snapshot(data))
+
     def test_invalid_numeric_values_and_release_approval_rejected(self):
         for value in ("NaN", "Infinity", None, True):
             with self.subTest(value=value):
