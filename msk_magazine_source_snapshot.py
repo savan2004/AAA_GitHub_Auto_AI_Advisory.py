@@ -3,7 +3,7 @@
 A validated snapshot is not an AiAutoUpdate handoff, stock-universe coverage
 certificate, or authorization to publish an MSK magazine.
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import unquote
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
@@ -46,7 +46,11 @@ def validate_snapshot(snapshot, *, today=None):
                 raise ValueError()
             if timestamp.astimezone(timezone.utc) > datetime.now(timezone.utc):
                 raise ValueError()
-            if date.fromisoformat(observed) > timestamp.date():
+            # Compare source observation and retrieval in the market timezone.
+            # A UTC retrieval just after midnight can still be the prior market day
+            # in another offset; comparing the raw sender civil date is unsafe.
+            ist = timezone(timedelta(hours=5, minutes=30))
+            if date.fromisoformat(observed) > timestamp.astimezone(ist).date():
                 raise ValueError()
         except (TypeError, ValueError) as exc:
             raise EvidenceError("Missing timezone-aware retrieval timestamp") from exc
