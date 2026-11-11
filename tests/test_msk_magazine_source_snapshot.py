@@ -107,7 +107,9 @@ class SourceSnapshotTests(unittest.TestCase):
         data = copy.deepcopy(self.pack)
         data["observations"][0]["observed_on"] = "2026-11-06"
         data["observations"][0]["checked_at"] = "2026-11-05T20:00:00+00:00"
-        # The remaining records are dated earlier than the frozen date.
+        # Other snapshot retrievals must also precede the frozen clock.
+        for record in data["observations"][1:]:
+            record["checked_at"] = "2026-11-05T19:00:00+00:00"
         with patch.object(module, "datetime", FrozenDateTime):
             self.assertTrue(module.validate_snapshot(data))
 
