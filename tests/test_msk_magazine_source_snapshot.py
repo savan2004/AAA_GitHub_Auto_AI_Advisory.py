@@ -91,6 +91,26 @@ class SourceSnapshotTests(unittest.TestCase):
         data["observations"][0]["checked_at"] = "2026-11-05T23:00:00-07:00"
         self.assertTrue(validate_snapshot(data))
 
+    def test_default_market_day_uses_ist_not_utc_host_date(self):
+        # At 20:00 UTC on Nov 5, the IST calendar has advanced to Nov 6.
+        # Freeze the clock without relying on the CI runner's timezone.
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        import msk_magazine_source_snapshot as module
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                instant = datetime(2026, 11, 5, 20, 0, tzinfo=timezone.utc)
+                return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+
+        data = copy.deepcopy(self.pack)
+        data["observations"][0]["observed_on"] = "2026-11-06"
+        data["observations"][0]["checked_at"] = "2026-11-05T20:00:00+00:00"
+        # The remaining records are dated earlier than the frozen date.
+        with patch.object(module, "datetime", FrozenDateTime):
+            self.assertTrue(module.validate_snapshot(data))
+
     def test_invalid_numeric_values_and_release_approval_rejected(self):
         for value in ("NaN", "Infinity", None, True):
             with self.subTest(value=value):
