@@ -83,7 +83,9 @@ def financial_source_summary(fund):
         source = source if isinstance(source, dict) else {}
         provider = str(source.get("source") or "source unknown")[:30]
         period = str(source.get("period_end") or "period unknown")[:16]
-        scope = str(source.get("scope") or "scope unknown")[:14]
+        raw_scope = source.get("scope")
+        scope = str(raw_scope if raw_scope in ("standalone", "consolidated")
+                    else "scope unknown")[:15]
         details.append(f"{labels[key]}: {provider} ({period}, {scope})")
     if not details:
         return "⚠️ Fundamental periods/scope not verified against issuer filings."
