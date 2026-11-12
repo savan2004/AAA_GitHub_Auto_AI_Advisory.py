@@ -216,11 +216,11 @@ class FundamentalUnitSafetyTests(unittest.TestCase):
                      "main.py", "exec"), ns)
         with patch.object(fund, "get_fundamentals", return_value={}):
             output = ns["build_fundamental_text"]("SBIN")
-        self.assertIn("Debt/Equity: 1.25", output)
+        self.assertIn("Debt/Equity: 1.25x", output)
         self.assertNotIn("Debt/Equity: 125", output)
         with patch.object(fund, "get_fundamentals", return_value={"de": 0}):
             output = ns["build_fundamental_text"]("SBIN")
-        self.assertIn("Debt/Equity: 0", output)
+        self.assertIn("Debt/Equity: 0x", output)
         self.assertNotIn("Debt/Equity: 1.25", output)
 
 class EquityPriceSafetyTests(unittest.TestCase):
