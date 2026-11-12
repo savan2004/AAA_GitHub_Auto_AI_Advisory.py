@@ -147,6 +147,82 @@ class PortfolioSafetyTests(unittest.TestCase):
         self.assertEqual(calls, ["legacy"])
 
 
+class FundamentalUnitSafetyTests(unittest.TestCase):
+    """Financial-ratio units must agree in the provider and Telegram layers."""
+
+    def test_yahoo_percent_scaled_debt_equity_becomes_unitless_ratio(self):
+        from data_engine import normalized_debt_equity_ratio as norm
+        self.assertEqual(norm({"debtToEquity": 125}), 1.25)
+        self.assertEqual(norm({"debtToEquity": 0}), 0)
+        self.assertEqual(norm({"debt_equity_ratio": 1.25,
+                               "debtToEquity": 125}), 1.25)
+        self.assertEqual(norm({"debt_equity_ratio": 0,
+                               "debtToEquity": 125}), 0)
+        for val in (float("nan"), float("inf"), -1, True, "not numeric"):
+            with self.subTest(value=val):
+                self.assertIsNone(norm({"debtToEquity": val}))
+        self.assertIsNone(norm({}))
+
+    def test_aggregator_normalizes_primary_yahoo_debt_equity(self):
+        import fundamentals as fund
+        raw_info = {"pe": 18, "roe": 0.12, "eps": 30,
+                    "market_cap": 900_000_000_000,
+                    "totalRevenue": 300_000_000_000,
+                    "debtToEquity": 125, "debt_equity_ratio": 1.25}
+        with patch.object(fund, "_get_cached", return_value=None), \
+             patch.object(fund, "_set_cached"), \
+             patch("data_engine.get_info", return_value=raw_info), \
+             patch.object(fund, "_fetch_screener", return_value=None), \
+             patch.object(fund, "_fetch_finnhub", return_value=None), \
+             patch.object(fund, "_fetch_yfinance", return_value={}):
+            result = fund.get_fundamentals("SBIN")
+        self.assertEqual(result["de"], 1.25)
+        self.assertEqual(result["pe"], 18)
+
+    def test_aggregator_normalizes_yfinance_fallback_but_not_screener_ratio(self):
+        import fundamentals as fund
+        with patch.object(fund, "_get_cached", return_value=None), \
+             patch.object(fund, "_set_cached"), \
+             patch("data_engine.get_info", return_value={}), \
+             patch.object(fund, "_fetch_screener", return_value=None), \
+             patch.object(fund, "_fetch_finnhub", return_value=None), \
+             patch.object(fund, "_fetch_yfinance",
+                          return_value={"debtToEquity": 240}):
+            self.assertEqual(fund.get_fundamentals("SBIN")["de"], 2.4)
+        with patch.object(fund, "_get_cached", return_value=None), \
+             patch.object(fund, "_set_cached"), \
+             patch("data_engine.get_info", return_value={}), \
+             patch.object(fund, "_fetch_screener", return_value={"de": 1.7}), \
+             patch.object(fund, "_fetch_finnhub", return_value=None), \
+             patch.object(fund, "_fetch_yfinance", return_value={}):
+            self.assertEqual(fund.get_fundamentals("SBIN")["de"], 1.7)
+
+    def test_fundamental_button_shows_ratio_not_percent_and_preserves_zero(self):
+        import data_engine as engine
+        import fundamentals as fund
+        src = (ROOT / "main.py").read_text(encoding="utf-8")
+        node = next(n for n in ast.parse(src).body
+                    if isinstance(n, ast.FunctionDef)
+                    and n.name == "build_fundamental_text")
+        ns = {
+            "get_info": lambda sym: {"debtToEquity": 125},
+            "normalized_debt_equity_ratio": engine.normalized_debt_equity_ratio,
+            "safe_val": lambda d, k: d.get(k),
+            "frow": lambda label, val, suffix="": f"{label}: {val}{suffix}",
+            "fmt_mcap": lambda val: str(val),
+            "_fmt_revenue": lambda val, mcap: str(val),
+        }
+        exec(compile(ast.Module(body=[node], type_ignores=[]),
+                     "main.py", "exec"), ns)
+        with patch.object(fund, "get_fundamentals", return_value={}):
+            output = ns["build_fundamental_text"]("SBIN")
+        self.assertIn("Debt/Equity: 1.25", output)
+        self.assertNotIn("Debt/Equity: 125", output)
+        with patch.object(fund, "get_fundamentals", return_value={"de": 0}):
+            output = ns["build_fundamental_text"]("SBIN")
+        self.assertIn("Debt/Equity: 0", output)
+        self.assertNotIn("Debt/Equity: 1.25", output)
+
 class EquityPriceSafetyTests(unittest.TestCase):
     def test_fundamentals_cache_must_not_reuse_hour_old_price(self):
         import data_engine as de
