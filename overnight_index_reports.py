@@ -395,6 +395,20 @@ def load_prepared_report(profile, *, store=None, now=None):
                 "Old rankings will not be presented as fresh.")
     if record["state"]!="READY":
         return record["text"]+"\n⏳ Awaiting next overnight retry."
+    # Telegram must apply the same real-ledger gate as morning CI. A report
+    # labelled READY is not proof that its 100/150/250 company rows still exist.
+    try:
+        if store is not None:
+            check=readiness_check(store,expected,(profile,))
+        else:
+            with EvidenceStore() as owned:
+                check=readiness_check(owned,expected,(profile,))
+        if not check["ready"]:
+            return ("🛑 Overnight report withheld: saved READY summary does not "
+                    "match complete current-session company evidence.")
+    except Exception as exc:
+        LOG.warning("Telegram index readiness unavailable (%s)",type(exc).__name__)
+        return "⚠️ Overnight research validation unavailable. Top 5 withheld."
     return record["text"]
 
 
