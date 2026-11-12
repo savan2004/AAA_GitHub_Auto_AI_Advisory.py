@@ -33,6 +33,10 @@ MAX_REPORT_CHARS = 3900
 LIMITS = {"conservative": 8.0, "moderate": 11.0, "aggressive": 15.0}
 TBL_ROWS = "msk_index_evidence_v1"
 TBL_REPORTS = "msk_index_reports_v1"
+# NSE's 2026 HEG demerger includes a zero-priced, non-tradable dummy.
+# Keep its official membership record, but never request a market candle or
+# rate it as a tradeable company. No fabricated substitute symbol or price.
+NONTRADABLE_INDEX_PLACEHOLDERS = frozenset({"DUMMYHEG"})
 
 
 def _clean(value):
@@ -183,8 +187,10 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
     saved=store.rows(session,profile)
     # Data is downloaded for the whole index in bounded 50-stock chunks.
     # Fresh prices still require bar-session validation later.
-    pending_price=[s for s in symbols if not _fresh(saved.get(s,{}).get("technical"),session)
-                   or saved.get(s,{}).get("membership_hash")!=identity]
+    pending_price=[s for s in symbols
+                   if s not in NONTRADABLE_INDEX_PLACEHOLDERS and
+                   (not _fresh(saved.get(s,{}).get("technical"),session)
+                    or saved.get(s,{}).get("membership_hash")!=identity)]
     prices=bulk_history(pending_price,"6mo",chunk_size=batch_size,
                         cache_ttl=0,adjusted=False,retries=1) if pending_price else {}
     if not isinstance(prices,dict):
@@ -212,6 +218,17 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
         row.update(symbol=sym,industry=universe["industries"].get(sym,"Unclassified"),
                    membership_hash=identity,index_source=universe["source"],
                    trade_date=str(session),price_checked=True)
+        if sym in NONTRADABLE_INDEX_PLACEHOLDERS:
+            row.update(technical=None, price_source="unavailable",
+                       price_reason="official_nse_nonstradable_placeholder",
+                       fund_attempted=True, fund_status="REJECTED",
+                       fundamental={"fund_score":None,
+                                    "fund_reason":"nonstradable_index_placeholder",
+                                    "fund_source":"Official NSE membership"},
+                       collected_utc=datetime.utcnow().isoformat()+"Z")
+            store.write_row(session,profile,sym,row)
+            examined+=1
+            continue
         if need_price:
             frame=prices.get(sym)
             candidate_now=datetime.combine(session,datetime.min.time(),tzinfo=IST).replace(hour=16)
