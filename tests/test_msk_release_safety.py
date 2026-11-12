@@ -145,7 +145,10 @@ class PortfolioAccessTests(unittest.TestCase):
             with self.subTest(handler=handler):
                 fragment = nodes[handler]
                 guard = fragment.index("_require_private_portfolio(m)")
-                self.assertLess(guard, fragment.index("portfolio."))
+                first_sensitive = (fragment.index("portfolio.")
+                                   if "portfolio." in fragment
+                                   else fragment.index("build_portfolio_card("))
+                self.assertLess(guard, first_sensitive)
                 self.assertIn("_allow_heavy(m)", fragment)
 
     def test_legacy_json_rejects_11th_symbol_without_damaging_existing(self):
