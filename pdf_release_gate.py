@@ -54,7 +54,11 @@ def validate_research_pdf(path, *, expected_symbol=None, min_pages=8):
         symbol = str(expected_symbol).strip().upper()
         if not re.fullmatch(r"[A-Z0-9&._-]{1,30}", symbol):
             raise ResearchPDFRefused("Invalid report instrument")
-        if symbol not in text.upper():
+        # Reject substring matches (e.g. "SBIN" inside "XSBIN").
+        ticker_chars = r"A-Z0-9&._-"
+        if not re.search(
+                rf"(?<![{ticker_chars}]){re.escape(symbol)}(?![{ticker_chars}])",
+                text.upper()):
             raise ResearchPDFRefused("PDF instrument identity does not match request")
     return {"pages": len(text_by_page), "bytes": size,
             "status": "structure_and_disclosure_only",
