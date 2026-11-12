@@ -1118,7 +1118,8 @@ def handle_analysis_callback(call):
                 success, meta, path = gen.generate(f"{s}.NS", cname or s)
                 if success and path:
                     with open(path, "rb") as f:
-                        bot.send_photo(cid, f, caption=f"<b>📈 {cname or s}</b>\n\n{meta}", parse_mode="HTML")
+                        sent = bot.send_photo(cid, f, caption=f"<b>📈 {cname or s}</b>\n\n{meta}", parse_mode="HTML")
+                        _record_telegram_api_ack(cid, sent, "photo")
                 else:
                     safe_send(cid, "⚠️ Chart failed, sending text instead:")
                     safe_send(cid, build_technical_text(s, cname))
@@ -1168,7 +1169,8 @@ def cmd_chart(m):
             success, meta, path = gen.generate(*args)
             if success and path:
                 with open(path, "rb") as f:
-                    bot.send_photo(chat_id, f, caption=f"<b>📈 {cname}</b>\n\n{meta}", parse_mode="HTML")
+                    sent = bot.send_photo(chat_id, f, caption=f"<b>📈 {cname}</b>\n\n{meta}", parse_mode="HTML")
+                    _record_telegram_api_ack(chat_id, sent, "photo")
             else:
                 safe_send(chat_id, "⚠️ Chart failed, sending text:")
                 safe_send(chat_id, build_adv(sym))
@@ -1585,8 +1587,9 @@ def _group_stock_review(chat_id, message_id, query):
             success, meta, path = get_chart_generator().generate(ticker, cname)
             if success and path:
                 with open(path, "rb") as chart:
-                    bot.send_photo(chat_id, chart, caption=f"📈 {cname or sym} — Technical chart",
+                    sent = bot.send_photo(chat_id, chart, caption=f"📈 {cname or sym} — Technical chart",
                                    reply_to_message_id=message_id)
+                    _record_telegram_api_ack(chat_id, sent, "photo")
             else:
                 logger.warning("Group chart unavailable for %s: %s", sym, str(meta)[:120])
         except Exception:
