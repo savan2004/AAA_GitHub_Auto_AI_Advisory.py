@@ -134,6 +134,23 @@ def main():
         assert abs(sb["avg"] - expected_avg) <= 0.10, (sb, expected_avg)
         assert store.get(200)["RELIANCE"]["qty"] == 3.0
 
+        # 16 simultaneous new symbols for an empty synthetic user must
+        # persist EXACTLY 10 (never 11) despite concurrent transactions.
+        def competing_new_symbol(number):
+            try:
+                PostgresPortfolioStore(dsn).add(
+                    300, f"LIMIT{number}", 1, 10 + number
+                )
+                return True
+            except ValueError as exc:
+                assert "10 distinct" in str(exc)
+                return False
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            admitted = list(pool.map(competing_new_symbol, range(16)))
+        assert admitted.count(True) == 10, admitted
+        assert admitted.count(False) == 6, admitted
+        assert len(PostgresPortfolioStore(dsn).get(300)) == 10
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=work,
                                          delete=False) as bad:
             bad.write('{"100":{"SBIN":{"qty":-5,"avg":500}}}')
@@ -289,6 +306,7 @@ def main():
         "corrupt_input_rejected": "passed",
         "conflicting_import_rejected": "passed",
         "pg_dump_restore": "passed",
+        "concurrent_portfolio_capacity": "10_of_16_accepted",
         "concurrent_duplicate_claims": "1_of_8_accepted",
         "stale_subscriber_approval": "rejected",
         "durable_telegram_restart_duplicate": "rejected",
