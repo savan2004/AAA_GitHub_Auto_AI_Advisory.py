@@ -350,6 +350,42 @@ class OvernightLedgerTests(unittest.TestCase):
 
 
 
+class IndependentFundamentalProviderTests(unittest.TestCase):
+    def test_statement_failure_keeps_available_ratios_not_provider_unavailable(self):
+        from top5_company_ratings import fetch_company_evidence
+        ratios={"roe":18.5,"pe":22.1,"eps":12.3}
+        with patch("fundamentals.get_fundamentals",return_value=ratios), \
+             patch("research_data.get_statements",
+                   side_effect=TimeoutError("provider offline")):
+            result=fetch_company_evidence("SBIN","Financial Services",
+                                          "moderate",date(2026,10,29))
+        self.assertNotEqual(result["fund_reason"],"provider_unavailable")
+        self.assertEqual(result["roe"],18.5)
+        self.assertNotEqual(result["fund_status"],"VALIDATED")
+
+    def test_ratio_failure_preserves_statement_provider_reason(self):
+        from top5_company_ratings import fetch_company_evidence
+        with patch("fundamentals.get_fundamentals",
+                   side_effect=TimeoutError("ratios offline")), \
+             patch("research_data.get_statements",return_value={
+                 "source":"Screener.in","years":[],"quarters":[]}):
+            result=fetch_company_evidence("SBIN","Financial Services",
+                                          "moderate",date(2026,10,29))
+        self.assertNotEqual(result["fund_reason"],"provider_unavailable")
+        self.assertNotEqual(result["fund_status"],"VALIDATED")
+
+    def test_both_providers_offline_remains_unverified(self):
+        from top5_company_ratings import fetch_company_evidence
+        with patch("fundamentals.get_fundamentals",
+                   side_effect=TimeoutError("offline")), \
+             patch("research_data.get_statements",
+                   side_effect=TimeoutError("offline")):
+            result=fetch_company_evidence("SBIN","Financial Services",
+                                          "moderate",date(2026,10,29))
+        self.assertEqual(result["fund_reason"],"provider_unavailable")
+        self.assertEqual(result["fund_status"],"UNVERIFIED")
+
+
 class ResearchWorkerConfigTests(unittest.TestCase):
     def test_finance_only_worker_does_not_require_telegram_secret(self):
         import subprocess
