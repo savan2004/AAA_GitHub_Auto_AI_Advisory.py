@@ -48,6 +48,7 @@ jobs:
       - name: Verify real quote sources and Indian market timestamps
         env:
           PYTHONPATH: "."
+          TELEGRAM_TOKEN: "synthetic-test-token-not-an-actual-secret"
           MSK_ALLOW_EXTERNAL_MARKET_TEST: "YES"
           MSK_QUOTE_TEST_REPORT: "pr94-quote-provenance.json"
         run: timeout --signal=TERM 240s python tests/pr94_quote_provenance_integration.py
