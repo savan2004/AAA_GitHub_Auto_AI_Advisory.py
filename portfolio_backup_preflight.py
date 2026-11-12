@@ -13,7 +13,7 @@ import stat
 import sys
 from datetime import datetime, timezone
 
-from portfolio_migration import PortfolioMigrationError, load_legacy_holdings
+from portfolio_migration import PortfolioMigrationError, load_legacy_holdings, load_legacy_account_ids
 
 _MAX_BYTES = 64 * 1024 * 1024
 
@@ -54,15 +54,17 @@ def _read_regular(path):
 def _inspect(source, raw, *, allow_empty=False):
     try:
         positions = load_legacy_holdings(source, snapshot_bytes=raw)
+        users = load_legacy_account_ids(source, snapshot_bytes=raw)
     except (PortfolioMigrationError, ValueError) as exc:
         raise BackupPreflightError("Legacy holdings validation failed") from exc
     if not positions and not allow_empty:
         raise BackupPreflightError(
             "Empty portfolio cannot certify production; use explicit allow-empty"
         )
+    active_users = len({row[0] for row in positions})
     return {"sha256": hashlib.sha256(raw).hexdigest(),
-            "bytes": len(raw),
-            "users": len({row[0] for row in positions}),
+            "bytes": len(raw), "users": len(users),
+            "zero_holding_users": len(users) - active_users,
             "positions": len(positions)}
 
 
@@ -129,6 +131,7 @@ def create_local_snapshot(source, destination, *, allow_empty=False):
                 "backup_sha256": copy_info["sha256"],
                 "bytes": info["bytes"],
                 "users": info["users"],
+                "zero_holding_users": info["zero_holding_users"],
                 "positions": info["positions"],
                 "source_and_copy_equal": True,
                 "backup_mode": "0600",
@@ -172,6 +175,7 @@ def verify_source_against_backup(source, backup, *, allow_empty=False):
         "status": "source_and_candidate_match",
         "sha256": original_info["sha256"],
         "users": original_info["users"],
+                "zero_holding_users": original_info["zero_holding_users"],
         "positions": original_info["positions"],
         "bytes": original_info["bytes"],
         "off_host_verified": False,
