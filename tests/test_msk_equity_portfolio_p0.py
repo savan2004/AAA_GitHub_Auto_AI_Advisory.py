@@ -123,19 +123,22 @@ class EquityPriceSafetyTests(unittest.TestCase):
     def test_fundamentals_cache_must_not_reuse_hour_old_price(self):
         import data_engine as de
         old = {"price": 100.0, "pe": 17.5, "name": "SBIN"}
-        quote = {"price": 125.0, "quote_timestamp": datetime.now(timezone.utc).timestamp(),
-                 "quote_source": "Yahoo Finance v8", "provider_symbol": "SBIN.NS"}
+        cached_quote = {"price": 125.0,
+                        "quote_timestamp": datetime.now(timezone.utc).timestamp(),
+                        "quote_source": "Yahoo Finance v8",
+                        "provider_symbol": "SBIN.NS"}
         def cache(key, ttl):
-            return old if key.startswith("info_") else quote
+            return old if key.startswith("info_") else cached_quote
         with patch.object(de, "cached_get", side_effect=cache), \
              patch.object(de, "_yahoo_v10_fundamentals") as fund, \
-             patch.object(de, "_yahoo_v8_quote") as quote:
+             patch.object(de, "_yahoo_v8_quote") as yahoo:
             card = de.get_info("SBIN")
             self.assertEqual(card["price"], 125.0)
             self.assertEqual(card["pe"], 17.5)
             self.assertEqual(old["price"], 100.0)  # Cached object is untouched.
+            self.assertEqual(card["quote_source"], "Yahoo Finance v8")
             fund.assert_not_called()
-            quote.assert_not_called()
+            yahoo.assert_not_called()
 
     def test_no_current_quote_removes_stale_price_but_keeps_ratios(self):
         import data_engine as de
