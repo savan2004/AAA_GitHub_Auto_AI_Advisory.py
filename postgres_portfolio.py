@@ -149,6 +149,31 @@ class PostgresPortfolioStore:
             return result.rowcount > 0
 
 
+def _holdings_match_snapshot(conn, rows):
+    """Verify all imported positions; an identical SHA alone is not a restore proof.
+
+    Read only. The caller keeps this check inside the import transaction;
+    never repair existing holdings silently or mask legitimate later trades.
+    """
+    stored = conn.execute(
+        "SELECT uid, symbol, qty, avg FROM holdings"
+    ).fetchall()
+    if len(stored) != len(rows):
+        return False
+
+    def normalized(items):
+        return sorted(
+            (int(uid), symbol, _amount(qty, positive=True),
+             _amount(avg, positive=False))
+            for uid, symbol, qty, avg in items
+        )
+
+    try:
+        return normalized(stored) == normalized(rows)
+    except (TypeError, ValueError, InvalidOperation):
+        return False
+
+
 def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow_empty=False):
     """Import all holdings and commit a cutover marker atomically.
 
@@ -157,8 +182,12 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
     """
     dsn = _validate_dsn(dsn)
     source = Path(source)
-    rows = load_legacy_holdings(source)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    try:
+        frozen_bytes = source.read_bytes()
+    except OSError as exc:
+        raise PortfolioStorageError("Could not capture legacy portfolio snapshot") from exc
+    rows = load_legacy_holdings(source, snapshot_bytes=frozen_bytes)
+    digest = hashlib.sha256(frozen_bytes).hexdigest()
     if not apply:
         return {"status": "dry-run", "positions": len(rows)}
     if not rows and not allow_empty:
@@ -174,6 +203,11 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
         if marker:
             if marker[0] != digest:
                 raise PortfolioStorageError("Different legacy snapshot was already imported")
+            if not _holdings_match_snapshot(conn, rows):
+                raise PortfolioStorageError(
+                    "Stored holdings differ from frozen migration snapshot; "
+                    "refusing already-imported verification"
+                )
             return {"status": "already-imported", "positions": len(rows)}
         count = conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
         if count:
@@ -186,24 +220,9 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
                 (uid, symbol, _amount(qty, positive=True),
                  _amount(avg, positive=False)),
             )
-        # A matching row count alone does not prove that quantities or average
-        # costs survived import. Verify every position inside the same transaction
-        # BEFORE recording a cutover marker; any mismatch rolls the import back.
-        stored = conn.execute(
-            "SELECT uid, symbol, qty, avg FROM holdings ORDER BY uid, symbol"
-        ).fetchall()
-        expected = [
-            (uid, symbol, _amount(qty, positive=True),
-             _amount(avg, positive=False))
-            for uid, symbol, qty, avg in rows
-        ]
-        if len(stored) != len(expected) or any(
-            (db_uid != uid or db_symbol != symbol
-             or _amount(db_qty, positive=True) != qty
-             or _amount(db_avg, positive=False) != avg)
-            for (db_uid, db_symbol, db_qty, db_avg), (uid, symbol, qty, avg)
-            in zip(stored, expected)
-        ):
+        # A matching count or marker alone is insufficient; compare all rows
+        # while this transaction can still roll back on a failed readback.
+        if not _holdings_match_snapshot(conn, rows):
             raise PortfolioStorageError("Imported portfolio readback mismatch")
         conn.execute(
             "INSERT INTO portfolio_cutover(id, source_sha256, initial_position_count)"
