@@ -72,7 +72,7 @@ class TelegramMockSessionTests(unittest.TestCase):
             "StateManager", "PortfolioManager", "safe_send",
             "cmd_start", "cmd_help", "cmd_buy", "cmd_sell",
             "cmd_portfolio", "build_portfolio_card",
-            "handle_analysis_callback", "_process_webhook", "webhook", "_allow_heavy", "_require_private_portfolio",
+            "handle_analysis_callback", "_process_webhook", "webhook", "_allow_heavy", "_require_private_portfolio", "_record_telegram_api_ack",
         }
         nodes = []
         for node in tree.body:
