@@ -69,6 +69,34 @@ class OvernightLedgerTests(unittest.TestCase):
                 duplicated.assert_not_called()
                 repeat.assert_not_called()
 
+    def test_official_dummy_constituent_is_recorded_not_quoted_or_ranked(self):
+        universe=make_universe("aggressive",250)
+        members=list(universe["symbols"])
+        members[-1]="DUMMYHEG"
+        universe["symbols"]=tuple(members)
+        universe["industries"]["DUMMYHEG"]="Capital Goods"
+        with patch.object(n,"get_index_universe",return_value=universe), \
+             patch("market_data.bulk_history",return_value={
+                 sym:Mock(empty=False) for sym in members if sym!="DUMMYHEG"
+             }) as price, \
+             patch("top5_technical_ratings.technical_candidate",
+                   side_effect=lambda sym,*a:technical(sym)), \
+             patch("top5_company_ratings.fetch_company_evidence",
+                   return_value=evidence("aggressive")) as financial:
+            n.collect_profile("aggressive",self.store,self.day,delay_s=0)
+        self.assertNotIn("DUMMYHEG",price.call_args.args[0])
+        self.assertEqual(financial.call_count,249)
+        row=self.store.row(self.day,"aggressive","DUMMYHEG")
+        self.assertEqual(row["price_reason"],
+                         "official_nse_nonstradable_placeholder")
+        self.assertIsNone(row["technical"])
+        self.assertEqual(row["fund_status"],"REJECTED")
+        state,stats,body=n.render_snapshot(
+            "aggressive",universe,self.store.rows(self.day,"aggressive"),self.day)
+        self.assertEqual(stats["expected"],250)
+        self.assertEqual(stats["price_fresh"],249)
+        self.assertNotIn("DUMMYHEG</b>",body)
+
     def test_previously_unavailable_fundamentals_get_one_bounded_recovery(self):
         universe=make_universe("conservative",100)
         digest=n._member_hash(universe)
