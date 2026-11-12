@@ -43,13 +43,17 @@ class MagazineCopyTests(unittest.TestCase):
         manifest["verified_pdf_sha256"] = hashlib.sha256(pdf).hexdigest()
         document = {"source_chat": manifest["source_chat"],
                     "source_message_id": manifest["source_message_id"],
-                    "mime_type": "application/pdf"}
+                    "mime_type": "application/pdf", "file_size": len(pdf)}
         self.assertTrue(verify_downloaded_source_attachment(document, pdf, manifest))
         for changed, payload in (
             ({**document, "source_chat": "@WrongSource"}, pdf),
             ({**document, "source_message_id": 778}, pdf),
             ({**document, "source_message_id": True}, pdf),
             ({**document, "mime_type": "text/plain"}, pdf),
+            ({**document, "file_size": len(pdf) + 1}, pdf),
+            ({**document, "file_size": 0}, pdf),
+            ({**document, "file_size": True}, pdf),
+            ({key: value for key, value in document.items() if key != "file_size"}, pdf),
             (document, pdf + b"tampered"),
             (document, b"not a PDF"),
             (document, None),
