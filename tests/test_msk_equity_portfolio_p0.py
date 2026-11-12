@@ -211,6 +211,7 @@ class FundamentalUnitSafetyTests(unittest.TestCase):
             "frow": lambda label, val, suffix="": f"{label}: {val}{suffix}",
             "fmt_mcap": lambda val: str(val),
             "_fmt_revenue": lambda val, mcap: str(val),
+            "financial_source_summary": lambda fund: "NOT NSE filing-audited",
         }
         exec(compile(ast.Module(body=[node], type_ignores=[]),
                      "main.py", "exec"), ns)
