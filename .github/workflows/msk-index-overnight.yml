@@ -5,6 +5,7 @@ name: MSK Overnight Full Index EOD Pipeline
 # Schedules may be delayed. No 08:00 SLA without an external watchdog.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     branches: [main]
     paths:
       - 'overnight_index_reports.py'
@@ -53,6 +54,54 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_overnight_index_reports.py' -v
       - name: Check legacy index contracts in isolated compatibility mode
         run: MSK_INDEX_PREPARED_ONLY=0 python -m unittest discover -s tests -p 'test_index_top5.py' -v
+
+  pr-real-collection:
+    # Maintainer-labeled opt-in on own repo branch; no production service.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'msk-index-real-collect' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/msk-equity-and-portfolio-p0-20261101'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        profile: [conservative, moderate, aggressive]
+    concurrency:
+      group: msk-index-real-${{ matrix.profile }}
+      cancel-in-progress: false
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_INDEX_TEJ_FALLBACK: '1'
+      PYTHONUNBUFFERED: '1'
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require the existing protected research database secret
+        run: |
+          if [ -z "$MSK_INDEX_DATABASE_URL" ]; then
+            echo "::error::MSK_INDEX_DATABASE_URL secret missing. No data published."
+            exit 1
+          fi
+      - name: Install source collectors
+        run: pip install -r requirements.txt
+      - name: Collect current-session real company evidence
+        run: |
+          python -m overnight_index_reports run --profile "${{ matrix.profile }}" --pause 0.8 --budget-hours 4.3
+      - name: Finalize strict actual-data report
+        run: python -m overnight_index_reports finalize --profile "${{ matrix.profile }}"
+      - name: Check underlying full index ledger
+        run: python -m overnight_index_reports check-readiness --profile "${{ matrix.profile }}"
 
   morning-readiness:
     if: >-
