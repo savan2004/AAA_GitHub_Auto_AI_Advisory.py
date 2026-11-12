@@ -128,10 +128,24 @@ class PortfolioPreflightTests(unittest.TestCase):
     def test_rejects_mismatched_candidate_and_identical_path(self):
         self.backup.write_text('{"101":{"SBIN":{"qty":42,"avg":5}}}',
                                encoding="utf-8")
+        os.chmod(self.backup, 0o600)
         with self.assertRaisesRegex(preflight.BackupPreflightError, "differs"):
             preflight.verify_source_against_backup(self.source, self.backup)
         with self.assertRaisesRegex(preflight.BackupPreflightError, "differ"):
             preflight.verify_source_against_backup(self.source, self.source)
+
+    def test_publicly_readable_candidate_rejected_even_when_bytes_match(self):
+        self.backup.write_bytes(self.source.read_bytes())
+        os.chmod(self.backup, 0o644)
+        with self.assertRaisesRegex(
+                preflight.BackupPreflightError, "private 0600"):
+            preflight.verify_source_against_backup(self.source, self.backup)
+        os.chmod(self.backup, 0o600)
+        result = preflight.verify_source_against_backup(
+            self.source, self.backup
+        )
+        self.assertEqual(result["status"], "source_and_candidate_match")
+        self.assertFalse(result["off_host_verified"])
 
     def test_hardlinked_candidate_cannot_pass_as_independent_copy(self):
         # Even when bytes match, a hardlink is not a separate backup.
