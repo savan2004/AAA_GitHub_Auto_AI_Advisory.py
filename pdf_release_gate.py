@@ -38,6 +38,10 @@ def validate_research_pdf(path, *, expected_symbol=None, min_pages=8):
     text = " ".join(" ".join(page.split()) for page in text_by_page)
     if any(len(page) < 24 for page in text_by_page):
         raise ResearchPDFRefused("Empty or unreadable report page")
+    # ReportLab may silently push a final glossary/disclaimer onto an almost
+    # empty trailing page; a valid footer does not make that editorially okay.
+    if len(text_by_page[-1]) < 1100:
+        raise ResearchPDFRefused("Nearly blank trailing research PDF page")
     required = (
         "Technical Analysis",
         "ONE-PAGE DECISION SNAPSHOT",
