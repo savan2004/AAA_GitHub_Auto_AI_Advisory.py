@@ -468,9 +468,25 @@ def readiness_check(store, session=None, profiles=PROFILES):
                       len(matching)==expected and
                       ledger_reviews==reviewed and
                       ledger_prices==fresh)
+        # An earlier READY text is not a current report if financial records
+        # were subsequently repaired. Refuse to show stale validation counts
+        # or old rankings until the report has been regenerated.
+        ledger_validated=sum(v.get("fund_status")=="VALIDATED" for v in matching)
+        ledger_provisional=sum(v.get("fund_status")=="PRELIMINARY" for v in matching)
+        has_financial_counts=("validated" in stats and "provisional" in stats)
+        valid_financial=(not has_financial_counts or (
+            type(stats["validated"]) is int and
+            type(stats["provisional"]) is int and
+            stats["validated"]==ledger_validated and
+            stats["provisional"]==ledger_provisional))
+        valid_candidates=(
+            "candidate_count" not in stats or
+            (type(stats["candidate_count"]) is int and
+             0<=stats["candidate_count"]<=min(5,ledger_validated)))
         ready=bool(row and row.get("state")=="READY" and
                    row.get("day")==str(day) and valid_reviews and
-                   valid_prices and valid_hash and valid_ledger)
+                   valid_prices and valid_hash and valid_ledger and
+                   valid_financial and valid_candidates)
         items.append({"session":str(day), "profile":profile,
                       "state":(row or {}).get("state","MISSING"),
                       "expected":expected, "reviewed":reviewed,
