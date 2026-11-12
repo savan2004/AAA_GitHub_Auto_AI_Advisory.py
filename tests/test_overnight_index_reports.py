@@ -69,6 +69,27 @@ class OvernightLedgerTests(unittest.TestCase):
                 duplicated.assert_not_called()
                 repeat.assert_not_called()
 
+    def test_previously_unavailable_fundamentals_get_one_bounded_recovery(self):
+        universe=make_universe("conservative",100)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"conservative",sym,{
+                "symbol":sym,"membership_hash":digest,
+                "fund_attempted":True,"fund_attempts":2,
+                "fund_status":"UNVERIFIED",
+                "fundamental":{"fund_reason":"provider_unavailable"},
+                "technical":technical(sym)
+            })
+        with patch.object(n,"get_index_universe",return_value=universe), \
+             patch("market_data.bulk_history") as bulk, \
+             patch("top5_company_ratings.fetch_company_evidence",
+                   return_value=evidence("conservative")) as fetch:
+            n.collect_profile("conservative",self.store,self.day,delay_s=0)
+            self.assertEqual(fetch.call_count,100)
+            bulk.assert_not_called()
+            n.collect_profile("conservative",self.store,self.day,delay_s=0)
+            self.assertEqual(fetch.call_count,100)
+
     def test_no_ranked_top5_if_even_one_member_not_reviewed(self):
         universe=make_universe("moderate",150)
         digest=n._member_hash(universe)
