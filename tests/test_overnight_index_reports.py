@@ -301,6 +301,23 @@ class OvernightLedgerTests(unittest.TestCase):
 
 
 
+class OptionalFallbackSafetyTests(unittest.TestCase):
+    def test_no_telegram_secret_does_not_abort_bulk_price_download(self):
+        import sys
+        import market_data
+        # A disabled legacy data engine cannot prevent valid Yahoo bulk rows
+        # from being returned or a missing stock from being recorded.
+        valid=Mock(empty=False)
+        with patch.dict(sys.modules, {"data_engine": None}), \
+             patch.object(market_data, "_download_chunk",
+                          return_value={"RELIANCE.NS": valid}):
+            result=market_data.bulk_history(
+                ["RELIANCE", "DUMMYHEG"], "6mo", retries=0
+            )
+        self.assertIn("RELIANCE",result)
+        self.assertNotIn("DUMMYHEG",result)
+
+
 class TejFallbackTests(unittest.TestCase):
     def test_keyless_response_is_symbol_checked_and_session_checked(self):
         from overnight_index_sources import fetch_tej_history
