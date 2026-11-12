@@ -44,6 +44,19 @@ const pages={
    }
    console.log("RENDER_LIVE_DEDICATED_PAGE_PASS",file,JSON.stringify(state));
   }
+  await page.goto(base+"/index.html",{waitUntil:"domcontentloaded"});
+  await page.waitForFunction(()=>window.MSKDashboardEvidence&&
+    document.getElementById("dashboardEvidence")?.textContent.includes("Snapshot & data confidence"));
+  await page.locator("#loadSample").click();
+  assert.equal(await page.locator("#dashboardEvidence").getAttribute("data-source"),"synthetic");
+  assert.match(await page.locator("#dashboardEvidence").innerText(),/No independently verified company filings available/);
+  await page.locator("#ticker").fill("NOTLOADED");
+  assert.equal(await page.locator("body").getAttribute("data-symbol-pending"),"true");
+  assert.equal(await page.locator(".snapshot-grid").isVisible(),false);
+  await page.getByRole("button",{name:"Import source data"}).click();
+  assert.equal(await page.locator("#importModal").getAttribute("hidden"),null);
+  await page.locator("#closeImport").click();
+  console.log("RENDER_LIVE_DASHBOARD_EVIDENCE_AND_IMPORT_PASS");
   await page.goto(base+"/portfolio.html",{waitUntil:"domcontentloaded"});
   await page.waitForFunction(()=>window.MSKPortfolioAudit&&document.body.dataset.page==="portfolio");
   await page.locator('.nav[data-tab="portfolio"]').click();
