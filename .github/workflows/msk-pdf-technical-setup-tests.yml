@@ -8,6 +8,7 @@ on:
       - 'report_generator.py'
       - 'pdf_release_gate.py'
       - 'tests/test_pdf_release_gate.py'
+      - 'tests/emit_pdf_qa_fixture.py'
       - 'requirements.txt'
       - 'technical_indicators.py'
       - 'tests/test_pdf_technical_setup.py'
@@ -39,5 +40,16 @@ jobs:
       # in the daily fundamental research workstream (PR #39).
       - name: Require eight-page readable disclaimer-verified research PDF
         run: python -m unittest discover -s tests -p test_pdf_release_gate.py -v
+      - name: Render every sample research page and check visible ink
+        run: |
+          python -m pip install 'pypdfium2>=4,<6' 'Pillow>=10,<13'
+          MSK_SYNTHETIC_QA_DIR="$RUNNER_TEMP/msk-pdf-synthetic-qa" python tests/emit_pdf_qa_fixture.py
+      - name: Preserve synthetic report and contact sheet for visual review
+        uses: actions/upload-artifact@v4
+        with:
+          name: MSK-SYNTHETIC-PDF-NOT-FOR-DISTRIBUTION
+          path: ${{ runner.temp }}/msk-pdf-synthetic-qa/
+          retention-days: 7
+          if-no-files-found: error
       - name: Check Python syntax
         run: python -m py_compile pdf_technical_setup.py report_generator.py pdf_release_gate.py technical_indicators.py report_quarterly_charts.py
