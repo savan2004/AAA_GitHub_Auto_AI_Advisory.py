@@ -1675,11 +1675,19 @@ def health_ready():
     can_accept = (not getattr(executor, "_shutdown", True)
                   and not getattr(webhook_executor, "_shutdown", True))
     configured = not WEBHOOK_URL or bool(WEBHOOK_SECRET)
-    ready = bool(can_accept and configured)
+    ledger = globals().get("_durable_update_ledger")
+    ledger_status = "not_enabled"
+    if ledger is not None:
+        try:
+            ledger_status = "ready" if ledger.ping() else "unavailable"
+        except Exception:
+            ledger_status = "unavailable"
+    ready = bool(can_accept and configured and ledger_status != "unavailable")
     return jsonify({
         "status": "ready" if ready else "degraded",
         "scope": "local_webhook_intake_only",
         "telegram_delivery": "not_verified",
+        "durable_update_ledger": ledger_status,
     }), 200 if ready else 503
 
 
