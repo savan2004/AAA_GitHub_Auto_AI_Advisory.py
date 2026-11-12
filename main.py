@@ -27,7 +27,7 @@ import telebot
 from telebot import types
 
 # ── Local Module Imports ──────────────────────────────────────────────────────
-from data_engine import get_hist, get_info, get_live_price, get_verified_quote, batch_quotes
+from data_engine import get_hist, get_info, get_live_price, get_verified_quote, normalized_debt_equity_ratio, batch_quotes
 from technical_indicators import (
     calc_rsi, calc_ema, calc_macd, calc_atr, calc_asi,
     calc_bollinger, trend_label, swing_signal, rsi_label,
@@ -426,7 +426,11 @@ def build_adv(sym):
     eps = fund.get("eps") or safe_val(info, "eps")
     mcap = fund.get("mcap") or info.get("market_cap")
     rev = fund.get("rev") or info.get("totalRevenue")
-    de = fund.get("de") or safe_val(info, "debtToEquity")
+    # Yahoo debtToEquity is percent-scaled (125 means 1.25x), while
+    # Screener/Finnhub normalized aggregations are already unitless.
+    de = normalized_debt_equity_ratio({"debt_equity_ratio": fund.get("de")})
+    if de is None:
+        de = normalized_debt_equity_ratio(info)
     div_y = fund.get("div_y")
     w52h = fund.get("w52h") or safe_val(info, "high52")
     w52l = fund.get("w52l") or safe_val(info, "low52")
@@ -574,7 +578,11 @@ def build_fundamental_text(sym, cname=None):
     eps = fund.get("eps") or safe_val(info, "eps")
     mcap = fund.get("mcap") or info.get("market_cap")
     rev = fund.get("rev") or info.get("totalRevenue")
-    de = fund.get("de") or safe_val(info, "debtToEquity")
+    # Yahoo debtToEquity is percent-scaled (125 means 1.25x), while
+    # Screener/Finnhub normalized aggregations are already unitless.
+    de = normalized_debt_equity_ratio({"debt_equity_ratio": fund.get("de")})
+    if de is None:
+        de = normalized_debt_equity_ratio(info)
     div_y = fund.get("div_y")
     beta = fund.get("beta") or safe_val(info, "beta")
 
