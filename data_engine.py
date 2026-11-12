@@ -695,6 +695,32 @@ def _with_current_quote(info: dict, symbol: str) -> dict:
     return result
 
 
+def normalized_debt_equity_ratio(info: dict) -> Optional[float]:
+    """Express Yahoo debt/equity as a unitless x-ratio, not a percent.
+
+    Yahoo quoteSummary's `debtToEquity` is scaled by 100 (125 means
+    1.25x). Prefer the already-normalized `debt_equity_ratio` when present.
+    Unknown, negative or nonfinite ratios are withheld, not displayed.
+    This does not assign units to unrelated providers' debt ratios.
+    """
+    import math
+
+    if not isinstance(info, dict):
+        return None
+    for key, scale in (("debt_equity_ratio", 1.0),
+                       ("debtToEquity", 0.01)):
+        raw = info.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        try:
+            value = float(raw) * scale
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(value) and value >= 0:
+            return round(value, 4)
+    return None
+
+
 def get_info(symbol: str) -> dict:
     """Return fundamentals with separately timestamp-verified exchange price."""
     raw = str(symbol).strip().upper()
