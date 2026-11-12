@@ -299,6 +299,8 @@ class PortfolioManager:
                     "avg": round((prev["qty"] * prev["avg"] + qty * price) / newqty, 2),
                 }
             else:
+                if len(positions) >= 10:
+                    raise ValueError("Portfolio maximum is 10 distinct holdings")
                 positions[sym] = {"qty": qty, "avg": round(price, 2)}
             self._persist_locked(proposed)
             self._data = proposed
@@ -1147,9 +1149,26 @@ def chart_button(m):
     executor.submit(_run)
 
 
+def _require_private_portfolio(m):
+    """Never mutate or expose a group-owned portfolio through chat IDs."""
+    chat = getattr(m, "chat", None)
+    actor = getattr(m, "from_user", None)
+    chat_id = getattr(chat, "id", None)
+    actor_id = getattr(actor, "id", None)
+    if (getattr(chat, "type", None) == "private" and
+            type(chat_id) is int and chat_id > 0 and
+            type(actor_id) is int and actor_id == chat_id):
+        return True
+    if type(chat_id) is int:
+        safe_send(chat_id, "🔒 Portfolio changes and holdings are available only in your private bot chat.")
+    return False
+
+
 @bot.message_handler(commands=["buy"])
 def cmd_buy(m):
     if not _allow_heavy(m):
+        return
+    if not _require_private_portfolio(m):
         return
     import math
     import html
@@ -1179,6 +1198,10 @@ def cmd_buy(m):
 
 @bot.message_handler(commands=["sell"])
 def cmd_sell(m):
+    if not _allow_heavy(m):
+        return
+    if not _require_private_portfolio(m):
+        return
     import html
     parts = m.text.strip().split()
     if len(parts) < 2:
@@ -1200,6 +1223,8 @@ def cmd_sell(m):
 @bot.message_handler(commands=["portfolio"])
 def cmd_portfolio(m):
     if not _allow_heavy(m):
+        return
+    if not _require_private_portfolio(m):
         return
     safe_send(m.chat.id, "⏳ Loading…")
 
