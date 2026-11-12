@@ -264,6 +264,42 @@ class PostgresPortfolioOfflineTests(unittest.TestCase):
             count = conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
         self.assertEqual(count, 2)
 
+    def test_postgres_cutover_hashes_the_same_bytes_it_imports(self):
+        """A changing file cannot produce an unrelated cutover hash and DB state."""
+        import hashlib
+        from unittest.mock import patch
+        from postgres_portfolio import import_legacy_to_postgres
+
+        frozen = self.source.read_bytes()
+        digest = hashlib.sha256(frozen).hexdigest()
+        # Simulate a file changing between capture and a later disk read.
+        self.source.write_text(json.dumps({
+            "100": {"SBIN": {"qty": 99, "avg": 1}}
+        }), encoding="utf-8")
+        with patch.object(Path, "read_bytes", return_value=frozen):
+            self.assertEqual(import_legacy_to_postgres(
+                self.source, self.dsn, connector=self.connector, apply=True
+            )["status"], "imported")
+        with self.connector(self.dsn) as conn:
+            rows = sorted(conn.execute(
+                "SELECT uid, symbol, qty, avg FROM holdings"
+            ).fetchall())
+            marker = conn.execute(
+                "SELECT source_sha256 FROM portfolio_cutover WHERE id = 1"
+            ).fetchone()[0]
+        self.assertEqual(marker, digest)
+        self.assertEqual(rows, [
+            (100, "SBIN", 2, 100.25),
+            (200, "HDFCBANK", 3, 1500.5),
+        ])
+
+    def test_frozen_snapshot_requires_immutable_bytes(self):
+        from portfolio_migration import load_legacy_holdings, PortfolioMigrationError
+        with self.assertRaisesRegex(PortfolioMigrationError, "immutable bytes"):
+            load_legacy_holdings(self.source, snapshot_bytes=bytearray(
+                self.source.read_bytes()
+            ))
+
     def test_repeat_import_refuses_tampered_or_missing_positions(self):
         """Same source checksum must not conceal DB loss or altered cost basis."""
         from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
