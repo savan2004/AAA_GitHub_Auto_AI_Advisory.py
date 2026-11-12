@@ -52,6 +52,20 @@ class PortfolioPreflightTests(unittest.TestCase):
         self.assertEqual(verified["status"], "source_and_candidate_match")
         self.assertFalse(verified["production_cutover_approved"])
 
+    def test_snapshot_preserves_zero_holding_accounts(self):
+        self.fixture["303"] = {}  # Subscriber with no current positions.
+        self.source.write_text(json.dumps(self.fixture), encoding="utf-8")
+        report = preflight.create_local_snapshot(self.source, self.backup)
+        self.assertEqual(report["users"], 3)
+        self.assertEqual(report["positions"], 2)
+        self.assertEqual(report["zero_holding_users"], 1)
+        verified = preflight.verify_source_against_backup(
+            self.source, self.backup
+        )
+        self.assertEqual(verified["users"], 3)
+        self.assertEqual(verified["zero_holding_users"], 1)
+        self.assertFalse(verified["production_cutover_approved"])
+
     def test_snapshot_cannot_replace_existing_backup(self):
         self.backup.write_bytes(b"precious-original-backup")
         before = self.backup.read_bytes()
