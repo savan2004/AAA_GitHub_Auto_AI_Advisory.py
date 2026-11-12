@@ -181,8 +181,12 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
     """
     dsn = _validate_dsn(dsn)
     source = Path(source)
-    rows = load_legacy_holdings(source)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    try:
+        frozen_bytes = source.read_bytes()
+    except OSError as exc:
+        raise PortfolioStorageError("Could not capture legacy portfolio snapshot") from exc
+    rows = load_legacy_holdings(source, snapshot_bytes=frozen_bytes)
+    digest = hashlib.sha256(frozen_bytes).hexdigest()
     if not apply:
         return {"status": "dry-run", "positions": len(rows)}
     if not rows and not allow_empty:
