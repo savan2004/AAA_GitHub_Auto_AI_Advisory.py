@@ -149,7 +149,15 @@ def _recover_missing_symbol(symbol: str, period: str) -> Optional[pd.DataFrame]:
     NSE is used only for eligible NSE equities; index tickers never get
     incorrectly suffixed or treated as individual equities. No synthetic bars.
     """
-    from data_engine import _nse_hist, _stooq_hist, _yahoo_v8_hist
+    # The overnight EOD worker deliberately has no Telegram credential.
+    # Legacy data_engine imports bot configuration, so an unavailable
+    # optional recovery provider must not abort the entire index scan.
+    try:
+        from data_engine import _nse_hist, _stooq_hist, _yahoo_v8_hist
+    except (ImportError, ValueError) as exc:
+        logger.warning("[market_data] optional fallback disabled for %s (%s)",
+                       symbol, type(exc).__name__)
+        return None
 
     ticker = to_yahoo(symbol)
     if ticker.startswith("^"):
