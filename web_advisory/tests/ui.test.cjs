@@ -21,7 +21,7 @@ function build(){
  w.URL.revokeObjectURL=()=>{};
  // Deterministic offline-provider default; individual live-feed tests override.
  w.fetch=async()=>({ok:false,status:503});
- for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js","report.js","portfolio_audit.js"]){
+ for(const f of ["config.js","app.js","features.js","market_widget.js","dashboard.js","import_center.js","report.js","portfolio_audit.js","dashboard_evidence.js"]){
    w.eval(fs.readFileSync(path.join(root,f),"utf8"));
  }
  return w;
@@ -546,5 +546,59 @@ test("Portfolio audit refuses aggregate P&L with missing or mixed EOD data",()=>
  assert.equal(mixed.totalValue,null);
  assert.equal(mixed.commonDate,null);
  assert.match(mixed.warnings.join(" "),/Different EOD dates/);
+ w.close();
+});
+
+test("Dashboard evidence displays source-dated metrics without inventing fundamentals",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ const region=d.getElementById("dashboardEvidence");
+ assert.ok(region);
+ assert.match(region.textContent,/Snapshot & data confidence/);
+ assert.match(region.textContent,/DEMO01/);
+ assert.match(region.textContent,/SYNTHETIC|simulated/i);
+ assert.match(region.textContent,/No independently verified company filings available/);
+ assert.match(region.textContent,/EMA 20 \/ EMA 50/);
+ assert.match(region.textContent,/Historical range/);
+ assert.equal(region.dataset.source,"synthetic");
+ const action=[...region.querySelectorAll("button")].find(b=>b.textContent==="Review technicals");
+ assert.ok(action);
+ action.click();
+ assert.equal(w.MSKDashboard.activeTab(),"technical");
+ assert.equal(new URL(w.location.href).pathname,"/technical.html");
+ w.close();
+});
+test("Dashboard evidence denies mismatched symbol and opens real import dialog",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ const ticker=d.getElementById("ticker");
+ ticker.value="UNLOADED";
+ ticker.dispatchEvent(new w.Event("input",{bubbles:true}));
+ const section=d.getElementById("dashboardEvidence");
+ assert.match(section.textContent,/No matching source-dated research/);
+ assert.doesNotMatch(section.textContent,/EMA 20 \/ EMA 50/);
+ const button=[...section.querySelectorAll("button")].find(b=>b.textContent==="Import source data");
+ assert.ok(button);
+ button.click();
+ assert.equal(d.getElementById("importModal").hidden,false);
+ w.close();
+});
+test("Dashboard evidence shows verified historical session but not live quotes",async()=>{
+ const w=build(),d=w.document,F=w.MSKWeb.features;
+ const rows=Array.from({length:60},(_,i)=>{
+   const date=new Date(Date.now()-(60-i)*86400000).toISOString().slice(0,10);
+   const p=300+i*0.5;
+   return {date,open:p-1,high:p+2,low:p-2,close:p,volume:1000+i};
+ });
+ w.fetch=async()=>({ok:true,json:async()=>({meta:{symbol:"BEL",exchange:"NSE"},data:rows})});
+ F.choose("BEL",false);
+ await new Promise(resolve=>setTimeout(resolve,120));
+ const section=d.getElementById("dashboardEvidence");
+ assert.equal(section.dataset.source,"tej_eod");
+ assert.match(section.textContent,/NSE historical EOD via TejHQ/);
+ assert.match(section.textContent,/Historical end-of-day series, not a live quote/);
+ assert.match(section.textContent,/₹/);
+ assert.match(section.textContent,/Fundamental analysis is incomplete/);
+ assert.equal(section.dataset.asof,rows.at(-1).date);
  w.close();
 });

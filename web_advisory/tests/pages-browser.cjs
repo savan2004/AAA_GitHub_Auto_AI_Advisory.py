@@ -37,6 +37,19 @@ const paths={
     }
     console.log("DIRECT_ROUTE_PASS",route,heading);
   }
+  await page.goto("http://127.0.0.1:8766/index.html",{waitUntil:"domcontentloaded"});
+  await page.waitForFunction(()=>window.MSKDashboardEvidence&&document.getElementById("dashboardEvidence"));
+  await page.locator("#loadSample").click();
+  assert.match(await page.locator("#dashboardEvidence").innerText(),/Snapshot & data confidence/);
+  assert.match(await page.locator("#dashboardEvidence").innerText(),/SYNTHETIC|simulated/i);
+  assert.equal(await page.locator("#dashboardEvidence").getAttribute("data-source"),"synthetic");
+  await page.locator("#ticker").fill("NOTLOADED");
+  assert.equal(await page.locator("body").getAttribute("data-symbol-pending"),"true");
+  assert.equal(await page.locator(".snapshot-grid").isVisible(),false);
+  await page.getByRole("button",{name:"Import source data"}).click();
+  assert.equal(await page.locator("#importModal").getAttribute("hidden"),null);
+  await page.locator("#closeImport").click();
+  console.log("DASHBOARD_SOURCE_GATES_AND_IMPORT_ACTION_PASS");
   await page.goto("http://127.0.0.1:8766/portfolio.html",{waitUntil:"domcontentloaded"});
   await page.waitForFunction(()=>window.MSKPortfolioAudit&&document.body.dataset.page==="portfolio");
   await page.locator('.nav[data-tab="portfolio"]').click();
