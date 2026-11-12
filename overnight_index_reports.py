@@ -398,9 +398,43 @@ def load_prepared_report(profile, *, store=None, now=None):
     return record["text"]
 
 
+def readiness_check(store, session=None, profiles=PROFILES):
+    """Independent morning release gate based on durable report facts.
+
+    No network calls, Telegram posts or guesses about companies are made.
+    Raises on missing/partial/stale report; CI should mark this FAILED.
+    """
+    day=_session(session)
+    items=[]
+    for profile in profiles:
+        if profile not in INDEXES:
+            raise ValueError("Unrecognized profile")
+        row=store.get_report(profile, day=day)
+        stats=(row or {}).get("stats") or {}
+        expected=stats.get("expected")
+        reviewed=stats.get("reviewed")
+        fresh=stats.get("price_fresh")
+        valid_size=(type(expected) is int and
+                    abs(expected-INDEXES[profile]["count"])<=INDEXES[profile]["tolerance"])
+        valid_reviews=(valid_size and type(reviewed) is int and reviewed==expected)
+        valid_prices=(valid_size and type(fresh) is int and
+                      0 <= fresh <= expected and fresh/expected>=PRICE_REQUIRED)
+        valid_hash=(isinstance(stats.get("membership_hash"), str) and
+                    len(stats["membership_hash"])==16)
+        ready=bool(row and row.get("state")=="READY" and
+                   row.get("day")==str(day) and valid_reviews and
+                   valid_prices and valid_hash)
+        items.append({"session":str(day), "profile":profile,
+                      "state":(row or {}).get("state","MISSING"),
+                      "expected":expected, "reviewed":reviewed,
+                      "fresh":fresh, "ready":ready})
+    return {"ready":all(v["ready"] for v in items),
+            "session":str(day), "profiles":items}
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description="Full-universe overnight equity research")
-    parser.add_argument("action",choices=("run","finalize","status"))
+    parser.add_argument("action",choices=("run","finalize","status","check-readiness"))
     parser.add_argument("--profile",choices=("all",)+PROFILES,default="all")
     parser.add_argument("--session",help="Expected completed NSE session YYYY-MM-DD")
     parser.add_argument("--pause",type=float,default=.8)
@@ -408,6 +442,10 @@ def main(argv=None):
     opts=parser.parse_args(argv)
     profiles=PROFILES if opts.profile=="all" else (opts.profile,)
     with EvidenceStore() as store:
+        if opts.action=="check-readiness":
+            summary=readiness_check(store,opts.session,profiles)
+            print(_json(summary),flush=True)
+            return 0 if summary["ready"] else 2
         for profile in profiles:
             if opts.action=="run":
                 result=collect_profile(profile,store,opts.session,
@@ -421,4 +459,4 @@ def main(argv=None):
 
 
 if __name__=="__main__":
-    main()
+    raise SystemExit(main())
