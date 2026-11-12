@@ -16,6 +16,9 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 
 from msk_durable_state import DurableBotState, DurableStateError
+from portfolio_backup_preflight import (
+    create_local_snapshot, verify_source_against_backup
+)
 
 from postgres_portfolio import (
     PostgresPortfolioStore,
@@ -67,9 +70,21 @@ def main():
     with tempfile.TemporaryDirectory(prefix="msk-pr94-synthetic-") as work:
         source = Path(work) / "synthetic-holdings.json"
         source.write_text(json.dumps(fixture, sort_keys=True), encoding="utf-8")
-        dryrun = import_legacy_to_postgres(source, dsn)
+        # Preflight must be proven before even a SYNTHETIC DB import.
+        # This private local copy is intentionally NOT an off-host backup.
+        backup = Path(work) / "synthetic-snapshot.json"
+        preflight = create_local_snapshot(source, backup)
+        assert preflight["positions"] == 3
+        assert preflight["users"] == 2
+        assert preflight["source_and_copy_equal"]
+        assert preflight["backup_mode"] == "0600"
+        assert not preflight["off_host_verified"]
+        restored_file_report = verify_source_against_backup(source, backup)
+        assert restored_file_report["sha256"] == preflight["source_sha256"]
+        assert not restored_file_report["production_cutover_approved"]
+        dryrun = import_legacy_to_postgres(backup, dsn)
         assert dryrun == {"status": "dry-run", "positions": 3}, dryrun
-        assert import_legacy_to_postgres(source, dsn, apply=True)["status"] == "imported"
+        assert import_legacy_to_postgres(backup, dsn, apply=True)["status"] == "imported"
 
         expected_rows, marker = read_rows(dsn)
         assert len(expected_rows) == 3, expected_rows
@@ -263,6 +278,9 @@ def main():
 
     print(json.dumps({
         "test_kind": "real_local_postgresql16_with_synthetic_holdings",
+        "private_snapshot_readback": "passed",
+        "source_snapshot_sha256_matched": "passed",
+        "off_host_backup_tested": False,
         "source_position_count": 3,
         "concurrent_insert_count": 40,
         "restored_position_count": len(restored_rows),
