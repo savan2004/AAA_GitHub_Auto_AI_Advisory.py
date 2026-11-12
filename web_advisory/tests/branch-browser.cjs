@@ -53,6 +53,7 @@ const path = require("node:path");
     await page.locator("#chatForm button[type=submit]").click();
     assert.match(await page.locator("#chatHistory").innerText(), /ADX/i);
 
+    await page.locator('.nav[data-tab="overview"]').click();
     await page.locator("#openImport").click();
     assert.equal(await page.locator("#importModal").getAttribute("hidden"), null);
     for (const kind of ["price", "fundamental", "portfolio"]) {
