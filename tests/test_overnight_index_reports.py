@@ -106,6 +106,42 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertNotIn("1. TEST",msg)
         self.assertIn("TOP 5 WITHHELD",msg.upper())
 
+    def test_morning_readiness_checks_all_profiles_and_exact_session(self):
+        for profile,nmembers in (("conservative",100),("moderate",150),
+                                 ("aggressive",250)):
+            universe=make_universe(profile,nmembers)
+            stats={"expected":nmembers,"reviewed":nmembers,
+                   "price_fresh":nmembers,
+                   "membership_hash":n._member_hash(universe)}
+            self.store.save_report(self.day,profile,"READY",stats,"SYNTHETIC READY")
+        state=n.readiness_check(self.store,self.day)
+        self.assertTrue(state["ready"])
+        self.assertEqual([row["expected"] for row in state["profiles"]],
+                         [100,150,250])
+        # Without any real records on the following session, a healthy DB
+        # never promotes the previous reports to current readiness.
+        tomorrow=date(2026,10,30)
+        self.assertFalse(n.readiness_check(self.store,tomorrow)["ready"])
+
+    def test_readiness_rejects_partial_low_coverage_and_wrong_membership(self):
+        u=make_universe("moderate",150)
+        good={"expected":150,"reviewed":150,"price_fresh":140,
+              "membership_hash":n._member_hash(u)}
+        for status,stat in (
+            ("PARTIAL",good),
+            ("READY",{**good,"reviewed":149}),
+            ("READY",{**good,"price_fresh":120}),
+            ("READY",{**good,"expected":28,"reviewed":28}),
+            ("READY",{**good,"membership_hash":"MISSING"}),
+        ):
+            with self.subTest(status=status,stats=stat):
+                self.store.save_report(self.day,"moderate",status,stat,"QA")
+                outcome=n.readiness_check(self.store,self.day,("moderate",))
+                self.assertFalse(outcome["ready"])
+        self.store.save_report(self.day,"moderate","READY",good,"QA")
+        self.assertTrue(n.readiness_check(
+            self.store,self.day,("moderate",))["ready"])
+
     def test_missing_eps_is_unverified_and_never_ranked(self):
         universe=make_universe("conservative",100)
         digest=n._member_hash(universe)
