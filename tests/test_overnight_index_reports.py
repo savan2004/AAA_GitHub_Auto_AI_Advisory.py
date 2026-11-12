@@ -301,6 +301,33 @@ class OvernightLedgerTests(unittest.TestCase):
 
 
 
+class ResearchWorkerConfigTests(unittest.TestCase):
+    def test_finance_only_worker_does_not_require_telegram_secret(self):
+        import subprocess
+        import sys
+        env=dict(os.environ)
+        env.pop("TELEGRAM_TOKEN",None)
+        env["MSK_RESEARCH_ONLY"]="1"
+        outcome=subprocess.run(
+            [sys.executable,"-c","import config; assert config.TELEGRAM_TOKEN == ''"],
+            env=env,capture_output=True,text=True,timeout=15
+        )
+        self.assertEqual(outcome.returncode,0,outcome.stderr[:300])
+
+    def test_normal_bot_requires_actual_telegram_secret(self):
+        import subprocess
+        import sys
+        env=dict(os.environ)
+        env.pop("TELEGRAM_TOKEN",None)
+        env.pop("MSK_RESEARCH_ONLY",None)
+        outcome=subprocess.run(
+            [sys.executable,"-c","import config"],env=env,
+            capture_output=True,text=True,timeout=15
+        )
+        self.assertNotEqual(outcome.returncode,0)
+        self.assertIn("TELEGRAM_TOKEN",outcome.stderr)
+
+
 class OptionalFallbackSafetyTests(unittest.TestCase):
     def test_no_telegram_secret_does_not_abort_bulk_price_download(self):
         import sys
