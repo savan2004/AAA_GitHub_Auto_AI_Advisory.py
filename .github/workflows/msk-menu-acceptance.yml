@@ -1,0 +1,32 @@
+name: MSK All Telegram Buttons Offline Acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'tests/test_menu_end_to_end.py'
+      - '.github/workflows/msk-menu-acceptance.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'tests/test_menu_end_to_end.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  menu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax check
+        run: python -m py_compile main.py tests/test_menu_end_to_end.py
+      - name: Exercise all buttons with offline stubs
+        run: python -m unittest discover -s tests -p 'test_menu_end_to_end.py' -v
