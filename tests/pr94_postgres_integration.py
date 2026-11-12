@@ -188,6 +188,28 @@ def main():
         state.finish(801, dispatched=True)
         assert state.get_update_stage(801) == "dispatched"
 
+        # True Bot API acknowledgments are distinct from handler dispatch
+        # and must survive an independently restored PostgreSQL database.
+        assert state.record_delivery_ack(100, 90001, "text")
+        assert not state.record_delivery_ack(100, 90001, "text")
+        assert state.record_delivery_ack(100, 90002, "document")
+        assert state.record_delivery_ack(-200, 90003, "photo")
+        assert state.get_delivery_ack(100, 90001) == "text"
+        try:
+            state.record_delivery_ack(100, 90001, "photo")
+        except DurableStateError:
+            pass
+        else:
+            raise AssertionError("Conflicting Telegram API ACK accepted")
+        for args in ((0, 1, "text"), (100, 0, "photo"),
+                     (100, 1, "unknown")):
+            try:
+                state.record_delivery_ack(*args)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Malformed Telegram API ACK accepted")
+
         state2 = DurableBotState(dsn)  # independent DB connection/process-equivalent
         assert not state2.claim(801, user_id=100), "Duplicate after restart"
         assert state2.claim(802, user_id=200)
@@ -294,6 +316,10 @@ def main():
                 "SELECT uid FROM portfolio_accounts ORDER BY uid"
             ).fetchall() == [(100,), (200,), (300,)]
         restored_state = DurableBotState(restore_dsn)
+        assert restored_state.get_delivery_ack(100, 90001) == "text"
+        assert restored_state.get_delivery_ack(100, 90002) == "document"
+        assert restored_state.get_delivery_ack(-200, 90003) == "photo"
+
         assert restored_state.get_update_stage(801) == "dispatched"
         assert restored_state.get_update_stage(802) == "failed"
         assert restored_state.get_update_stage(803) == "claimed"
@@ -321,6 +347,7 @@ def main():
         "concurrent_portfolio_capacity": "10_of_16_accepted",
         "concurrent_duplicate_claims": "1_of_8_accepted",
         "stale_subscriber_approval": "rejected",
+        "telegram_api_receipt_restore": "three_distinct_synthetic_acks",
         "durable_telegram_restart_duplicate": "rejected",
         "durable_failed_dispatch_replay": "blocked",
         "durable_inflight_replay": "blocked",
