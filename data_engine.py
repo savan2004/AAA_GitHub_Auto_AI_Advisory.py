@@ -618,7 +618,11 @@ def _verified_quote_payload(payload, source, expected_symbol, *, now_epoch=None)
     if source not in _ALLOWED_QUOTE_SOURCES or not isinstance(payload, dict):
         return None
     reported_symbol = payload.get("provider_symbol")
-    if reported_symbol and str(reported_symbol).upper() != expected_symbol.upper():
+    # A price without provider-reported instrument identity cannot be
+    # matched independently to the requested NSE ticker. Fail closed.
+    if (not isinstance(reported_symbol, str) or
+            not reported_symbol.strip() or
+            reported_symbol.upper() != expected_symbol.upper()):
         return None
     raw = payload.get("price")
     if raw is None or isinstance(raw, bool):
