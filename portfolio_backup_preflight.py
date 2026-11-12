@@ -165,6 +165,13 @@ def verify_source_against_backup(source, backup, *, allow_empty=False):
     if (source_stat.st_dev, source_stat.st_ino) == (
             backup_stat.st_dev, backup_stat.st_ino):
         raise BackupPreflightError("Source and candidate are the same physical file")
+    # A correct byte-for-byte copy is not safe when its filesystem mode
+    # exposes customer positions to other local users.
+    candidate_mode = stat.S_IMODE(backup_stat.st_mode)
+    if candidate_mode != 0o600:
+        raise BackupPreflightError(
+            "Backup candidate must have private 0600 file permissions"
+        )
     original = _read_regular(source)
     candidate = _read_regular(backup)
     original_info = _inspect(source, original, allow_empty=allow_empty)
