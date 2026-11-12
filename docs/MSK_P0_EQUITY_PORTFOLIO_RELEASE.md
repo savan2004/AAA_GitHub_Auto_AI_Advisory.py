@@ -71,6 +71,36 @@ subscriptions, other products and AiAutoUpdate are excluded.
   with matching consolidated/standalone scope and fiscal period. If source
   units or periods cannot be established, withhold a verified valuation claim.
 
+## Migrated holdings replay and source-byte integrity — Issue #6
+
+- **Previously unsafe in this integration PR:** the PostgreSQL cutover importer
+  parsed `portfolio_data.json` and re-read the file later for its SHA-256
+  marker. An in-between file change could bind that marker to different rows.
+  It also returned `already-imported` when a checksum matched even if the
+  database subsequently lost or altered positions.
+- **Repair:** capture immutable source bytes exactly once; validate rows and
+  hash the same buffer. After first import AND on a repeat of the original
+  source, compare **every** stored (Telegram user, symbol, quantity, average
+  cost) with the frozen snapshot. A matching SHA or count alone is not proof.
+  A mismatch refuses verification with no silent repair or overwrite.
+- Regression tests cover missing, additional, changed-quantity and changed-cost
+  positions, source-file change between reads, mutable-byte refusal and invalid
+  Telegram UID. A separate **isolated synthetic PostgreSQL 16** test alters a
+  position after cutover and checks that replay is refused without changing it.
+  No actual customer holdings or production database are touched.
+- **Operational caution:** after legitimate post-cutover trades, the database
+  must naturally differ from the original JSON. Never rerun the original
+  migration importer to validate live positions after trading begins; use
+  independent backups, audited current ledger data, and restore testing.
+- **Unfinished real-data gate:** obtain the actual Render production
+  `portfolio_data.json` through a secure approved operator mechanism, record
+  digest and per-position baseline, retain an immutable encrypted off-host
+  backup, and reconcile the complete approved DB migration/restore before
+  deployment. CI synthetic tests are NOT customer migration acceptance.
+- PR #15 independently contains related safety work but is based on older bot
+  code; this PR consolidates the required migration integrity safeguards
+  without merging outdated `main.py` handlers.
+
 ## Mandatory cutover steps BEFORE deployment
 
 1. Freeze buy/sell, obtain the actual live portfolio_data.json through an approved
