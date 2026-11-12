@@ -977,8 +977,8 @@ def _appendix(R, story):
     # empty final page. Stacked source bullets previously produced an orphan.
     items = [
         (f"Prices &amp; volume: public Yahoo / NSE / Stooq daily candles "
-         f"({R['t']['bars']} sessions); price session "
-         f"{esc(R.get('price_session') or 'unverified')}; Nifty 50 benchmark."),
+         f"({R['t']['bars']} sessions); price as of {esc(R.get('price_session') or 'unverified')}; "
+         f"Nifty 50 benchmark."),
         (f"Statements: {esc(stm['source'])}, {len(stm.get('years') or [])} annual "
          f"periods, {len(stm.get('quarters') or [])} quarters."
          if stm else "Financial statements: unavailable."),
