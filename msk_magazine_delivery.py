@@ -128,6 +128,14 @@ def verify_downloaded_source_attachment(document, pdf_bytes, manifest):
         raise MagazineManifestError("Source attachment message id mismatch")
     if document.get("mime_type") != "application/pdf":
         raise MagazineManifestError("Source attachment is not a PDF")
+    # Telegram document metadata must report the actual downloaded byte count.
+    # A checksum match against manifest bytes alone cannot validate a claimed
+    # Telegram attachment if metadata is incomplete or inconsistent.
+    size = document.get("file_size")
+    if type(size) is not int or size <= 0:
+        raise MagazineManifestError("Source attachment file size missing or invalid")
+    if not isinstance(pdf_bytes, bytes) or size != len(pdf_bytes):
+        raise MagazineManifestError("Source attachment file size mismatch")
     if not isinstance(pdf_bytes, bytes) or not pdf_bytes.startswith(b"%PDF-"):
         raise MagazineManifestError("Downloaded source attachment PDF bytes missing")
     expected = manifest.get("verified_pdf_sha256")
