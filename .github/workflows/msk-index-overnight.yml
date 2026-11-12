@@ -19,7 +19,7 @@ on:
         type: choice
         required: true
         default: status
-        options: [status, collect, finalize]
+        options: [status, collect, finalize, check]
       profile:
         type: choice
         required: true
@@ -30,6 +30,7 @@ on:
     - cron: '43 16 * * 1-5'  # 22:13 IST weekdays
     - cron: '43 23 * * 0-5'  # 05:13 IST Mon-Sat; includes Friday-close retry
     - cron: '43 1 * * 1-6'   # 07:13 IST Mon-Sat; Friday report ready Saturday
+    - cron: '35 2 * * 1-6'   # 08:05 IST Mon-Sat; independent readiness alert
 
 permissions:
   contents: read
@@ -53,9 +54,38 @@ jobs:
       - name: Check legacy index contracts in isolated compatibility mode
         run: MSK_INDEX_PREPARED_ONLY=0 python -m unittest discover -s tests -p 'test_index_top5.py' -v
 
+  morning-readiness:
+    if: >-
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '35 2 * * 1-6') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'check')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Require separate MSK research ledger secret
+        run: |
+          if [ -z "$MSK_INDEX_DATABASE_URL" ]; then
+            echo "::error::MSK_INDEX_DATABASE_URL is absent; morning research NOT READY"
+            exit 1
+          fi
+      - name: Install PostgreSQL query driver
+        run: python -m pip install 'psycopg[binary]>=3.2,<3.4'
+      - name: Fail when any of the 100/150/250 reports is missing or incomplete
+        run: python -m overnight_index_reports check-readiness --profile all
+
   collect:
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule != '43 1 * * 1-6') ||
+      (github.event_name == 'schedule' && (
+       github.event.schedule == '43 10 * * 1-5' ||
+       github.event.schedule == '43 16 * * 1-5' ||
+       github.event.schedule == '43 23 * * 0-5')) ||
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'collect')
     runs-on: ubuntu-24.04
     timeout-minutes: 300
