@@ -982,9 +982,9 @@ def _appendix(R, story):
         (f"Statements: {esc(stm['source'])}, {len(stm.get('years') or [])} annual "
          f"periods, {len(stm.get('quarters') or [])} quarters."
          if stm else "Financial statements: unavailable."),
-        (f"Ratios: {n_core}/6 core fields available (availability is not "
-         f"independent accuracy verification). Shareholding: "
-         f"{len(R['sh']) if R['sh'] else 0} quarters; "
+        (f"Ratios: {n_core}/6 core fields available "
+         "(availability is not independent accuracy verification). "
+         f"Shareholding: {len(R['sh']) if R['sh'] else 0} quarters; "
          f"peers: {len(R['peers']) if R['peers'] else 0}."),
         ("Commentary: " +
          ("AI-assisted; financial facts require independent confirmation."
