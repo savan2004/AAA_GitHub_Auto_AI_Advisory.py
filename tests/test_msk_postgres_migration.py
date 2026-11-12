@@ -131,6 +131,38 @@ class PostgresPortfolioOfflineTests(unittest.TestCase):
             with self.subTest(qty=qty), self.assertRaises(ValueError):
                 store.add(100, "SBIN", qty, 200)
 
+    def test_zero_holding_user_survives_import_and_restart(self):
+        from postgres_portfolio import (
+            import_legacy_to_postgres, PostgresPortfolioStore,
+            PortfolioStorageError,
+        )
+        self.source.write_text(json.dumps({
+            "100": {"SBIN": {"qty": 2, "avg": 100.25}},
+            "200": {"HDFCBANK": {"qty": 3, "avg": 1500.5}},
+            "300": {},
+        }), encoding="utf-8")
+        self.assertEqual(import_legacy_to_postgres(
+            self.source, self.dsn, connector=self.connector,
+            apply=True)["status"], "imported")
+        with self.connector(self.dsn) as conn:
+            ids = conn.execute(
+                "SELECT uid FROM portfolio_accounts ORDER BY uid"
+            ).fetchall()
+        self.assertEqual(ids, [(100,), (200,), (300,)])
+        reopened = PostgresPortfolioStore(self.dsn, connector=self.connector)
+        self.assertEqual(reopened.get(300), {})
+        self.assertEqual(import_legacy_to_postgres(
+            self.source, self.dsn, connector=self.connector,
+            apply=True)["status"], "already-imported")
+        with self.connector(self.dsn) as conn:
+            conn.execute("DELETE FROM portfolio_accounts WHERE uid=300")
+        with self.assertRaisesRegex(PortfolioStorageError,
+                                    "account IDs differ"):
+            import_legacy_to_postgres(
+                self.source, self.dsn, connector=self.connector,
+                apply=True
+            )
+
     def test_import_detects_corrupted_cost_with_same_row_count_and_rolls_back(self):
         from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
 
