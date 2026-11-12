@@ -45,6 +45,19 @@ jobs:
           MSK_MARKET_TEST_REPORT: "pr94-market-coverage.json"
           MSK_MIN_COVERAGE_PERCENT: "70"
         run: timeout --signal=TERM 900s python tests/pr94_market_integration.py
+      - name: Verify real quote sources and Indian market timestamps
+        env:
+          PYTHONPATH: "."
+          MSK_ALLOW_EXTERNAL_MARKET_TEST: "YES"
+          MSK_QUOTE_TEST_REPORT: "pr94-quote-provenance.json"
+        run: timeout --signal=TERM 240s python tests/pr94_quote_provenance_integration.py
+      - name: Preserve quote provenance evidence on pass or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr94-quote-provenance
+          path: pr94-quote-provenance.json
+          if-no-files-found: warn
       - name: Upload evidence even when data sources fail
         if: always()
         uses: actions/upload-artifact@v4
