@@ -18,7 +18,15 @@ const pages={
   for(const [file,tab] of Object.entries(pages)){
    const response=await page.goto(base+"/"+file,{waitUntil:"domcontentloaded",timeout:30000});
    assert.equal(response?.status(),200,"Live route HTTP failed: "+file);
-   await page.waitForFunction(t=>window.MSKDashboard&&document.body.dataset.page===t,tab,{timeout:15000});
+   // Dynamic dedicated page loader registers report/portfolio modules AFTER
+   // dashboard.js. Do not assert before the full module has hydrated.
+   await page.waitForFunction(t=>{
+     if(!window.MSKDashboard||document.body.dataset.page!==t)return false;
+     if(t==="pdf")return document.querySelectorAll("#mskReportDocument .msk-report-page").length===8;
+     if(t==="portfolio")return !!window.MSKPortfolioAudit&&
+       document.querySelector("#detailBody")?.textContent?.includes("Upload Holdings CSV");
+     return true;
+   },tab,{timeout:20000});
    const state=await page.evaluate(()=>({title:document.title,page:document.body.dataset.page,
     heading:document.querySelector(".heading-block h1")?.textContent,
     nav:document.querySelectorAll(".nav[data-tab]").length,
