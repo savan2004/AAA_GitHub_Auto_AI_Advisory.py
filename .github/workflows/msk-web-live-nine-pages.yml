@@ -1,0 +1,25 @@
+name: MSK Website LIVE Nine-Page Smoke
+on:
+  push:
+    branches: [web/msk-web-advisory-mvp-20261027]
+    paths:
+      - 'web_advisory/tests/live-pages.cjs'
+      - '.github/workflows/msk-web-live-nine-pages.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-nine-pages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated Chromium test package
+        run: npm install --no-save --no-audit --no-fund playwright-core@1.56.1
+      - name: Verify nine direct URLs on published Render service
+        env:
+          MSK_WEB_URL: https://msk-web-advisory-preview.onrender.com
+        run: CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/live-pages.cjs
