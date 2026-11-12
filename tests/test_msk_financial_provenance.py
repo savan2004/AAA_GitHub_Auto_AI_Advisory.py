@@ -107,7 +107,7 @@ class FieldOriginTests(unittest.TestCase):
             "source": "Screener.in", "scope": "consolidated",
             "period_end": "2026-03-31"})
         self.assertIs(result["_issuer_filing_verified"], False)
-        self.assertTrue(cache.call_args.args[0].startswith("fund_provenance_v1_"))
+        self.assertTrue(cache.call_args.args[0].startswith("fund_provenance_v2_roe_unit_"))
 
     def test_roe_provider_unit_is_explicit_even_below_one_percent(self):
         import fundamentals as f
