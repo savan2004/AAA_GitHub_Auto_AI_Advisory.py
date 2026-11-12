@@ -993,7 +993,7 @@ def run_report(chat_id, query):
         if ok:
             try:
                 with open(result, "rb") as f:
-                    bot.send_document(
+                    sent = bot.send_document(
                         chat_id, f,
                         visible_file_name=f"{sym}_Research_Report.pdf",
                         caption=(f"📄 <b>{name or sym} — Equity Research Report</b>\n"
@@ -1002,6 +1002,7 @@ def run_report(chat_id, query):
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
                     )
+                    _record_telegram_api_ack(chat_id, sent, "document")
             finally:
                 try:
                     os.remove(result)
@@ -1488,7 +1489,7 @@ _sector_waiters = set()
 
 def _deliver_sector(chat_id, path, summary):
     with open(path, "rb") as f:
-        bot.send_document(
+        sent = bot.send_document(
             chat_id, f,
             visible_file_name=f"Index_Sectoral_Update_{datetime.now().strftime('%d%b%Y')}.pdf",
             caption=("🏭 <b>Index &amp; Sectoral Update</b>\n"
@@ -1496,6 +1497,7 @@ def _deliver_sector(chat_id, path, summary):
                      "⚠️ Educational only. Not SEBI-registered advice."),
             parse_mode="HTML",
         )
+        _record_telegram_api_ack(chat_id, sent, "document")
     if summary:
         import html as _h
         safe_send(chat_id, "🧭 <b>Key takeaways</b>\n" + "\n".join(f"• {_h.escape(x, quote=False)}" for x in summary[:6]))
