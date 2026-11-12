@@ -229,7 +229,7 @@ def _fetch_screener(sym: str) -> Optional[dict]:
         # explicitly identified. Match FY headers and cells; never silently
         # label an undated TTM number as the latest annual financial statement.
         pl_section = re.search(
-            r'(?:id="profit-loss"|Profit\\s*&amp;\\s*Loss)(.*?)(?:id="balance-sheet"|Balance\\s*Sheet)',
+            r'(?:id="profit-loss"|Profit\s*&amp;\s*Loss)(.*?)(?:id="balance-sheet"|Balance\s*Sheet)',
             html, re.DOTALL | re.IGNORECASE,
         )
         if pl_section:
