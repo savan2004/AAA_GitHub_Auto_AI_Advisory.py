@@ -43,6 +43,8 @@ jobs:
       - name: PostgreSQL snapshot migration, restart and rollback simulator
         run: python -m unittest discover -s tests -p 'test_msk_postgres_migration.py' -v
       - name: Financial fiscal-period, source and reporting-scope integrity
+        env:
+          TELEGRAM_TOKEN: "synthetic-test-token-not-an-actual-secret"
         run: python -m unittest discover -s tests -p 'test_msk_financial_provenance.py' -v
       - name: Durable webhook restart, subscriber and failure regressions
         run: python -m unittest discover -s tests -p 'test_msk_durable_state.py' -v
