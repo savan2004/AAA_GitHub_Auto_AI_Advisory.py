@@ -350,6 +350,7 @@ class OvernightLedgerTests(unittest.TestCase):
 
 
 
+@patch.dict(os.environ, {"MSK_RESEARCH_ONLY": "1"})
 class IndependentFundamentalProviderTests(unittest.TestCase):
     def test_statement_failure_keeps_available_ratios_not_provider_unavailable(self):
         from top5_company_ratings import fetch_company_evidence
