@@ -15,6 +15,26 @@ TAG = re.compile(r"<[^>]+>")
 PERIOD = re.compile(r"^(Mar)\s+(20\d{2})$", re.I)
 
 
+def normalize_roe_percent(value, unit):
+    """Convert a provider-tagged ROE without premature decimal rounding.
+
+    Yahoo uses a fraction; Finnhub and Screener supply percent units. An
+    untagged or nonfinite value is not safe to present as a percentage.
+    """
+    if unit not in ("fraction", "percent") or value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(number):
+        return None
+    pct = number * 100 if unit == "fraction" else number
+    if not math.isfinite(pct) or abs(pct) > 10000:
+        return None
+    return round(pct, 2)
+
+
 def annual_sales_from_table(profit_loss_html, *, today=None):
     """Return dated annual sales in rupees only when header/value align.
 
