@@ -72,7 +72,7 @@ class TelegramMockSessionTests(unittest.TestCase):
             "StateManager", "PortfolioManager", "safe_send",
             "cmd_start", "cmd_help", "cmd_buy", "cmd_sell",
             "cmd_portfolio", "build_portfolio_card",
-            "handle_analysis_callback", "_process_webhook", "webhook", "_allow_heavy",
+            "handle_analysis_callback", "_process_webhook", "webhook", "_allow_heavy", "_require_private_portfolio",
         }
         nodes = []
         for node in tree.body:
@@ -112,7 +112,8 @@ class TelegramMockSessionTests(unittest.TestCase):
                     if "message" in update:
                         body = update["message"]
                         message = SimpleNamespace(
-                            chat=SimpleNamespace(id=body["chat"]["id"]),
+                            chat=SimpleNamespace(id=body["chat"]["id"], type=body["chat"].get("type", "private")),
+                            from_user=SimpleNamespace(id=body.get("from", {}).get("id", body["chat"]["id"])),
                             text=body["text"],
                         )
                         handlers = {
@@ -177,7 +178,7 @@ class TelegramMockSessionTests(unittest.TestCase):
             def fake_update(update_id, *, text=None, callback=None, token=secret):
                 if text is not None:
                     body = {"update_id": update_id, "message": {
-                        "chat": {"id": mock_chat_id}, "text": text
+                        "chat": {"id": mock_chat_id, "type": "private"}, "from": {"id": mock_chat_id}, "text": text
                     }}
                 else:
                     body = {"update_id": update_id, "callback_query": {
