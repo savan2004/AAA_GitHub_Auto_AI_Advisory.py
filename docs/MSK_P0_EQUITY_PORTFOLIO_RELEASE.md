@@ -18,6 +18,36 @@ subscriptions, other products and AiAutoUpdate are excluded.
   operator-approved cutover. Default legacy JSON is NOT durable on Render ephemeral
   storage even with atomic writes.
 
+## Dated quote provenance gate (draft branch only)
+
+- Yahoo v8 chart `regularMarketTime` is interpreted as an absolute Unix UTC
+  timestamp; NSE `metadata.lastUpdateTime` is parsed as IST exchange-local time.
+  HTTP retrieval time and cache insertion time are **never** substituted for a
+  missing provider timestamp. A mismatched reported ticker is rejected.
+- A quote must have a positive finite price, accepted source, valid timestamp
+  and no more than two minutes future clock skew. During nominal Monday-Friday
+  **09:15–15:30 IST**, reject observations older than **30 minutes**; this
+  tolerates delayed feeds but **does not claim real-time execution pricing**.
+  Outside that window permit at most **four calendar days** of dated last-session
+  observations, explicitly labelled `last_observed_session`. This weekday
+  gate does not know NSE holidays: on holidays during nominal trading hours it
+  may refuse a valid previous close rather than inaccurately label it current.
+- Numeric-only legacy price caches are not trusted. Cached quotes are rechecked
+  against their original provider timestamps on every read. A one-hour
+  fundamentals cache is not permission to reuse a one-hour-old price.
+- The Telegram portfolio now shows each priced holding's source and as-of time,
+  distinguishing recent observations from last-session marks. Missing/undated
+  quotes are excluded from P&L; displayed P&L remains indicative.
+- `tests/pr94_quote_provenance_integration.py` adds a **read-only, explicit
+  opt-in** external provider gate for SBIN, RELIANCE, TCS, Nifty and Bank Nifty.
+  Requires 4/5 provenance-verified quotes including both indices, records an
+  as-of timestamp per symbol in CI, and does not publish prices or send messages.
+  It is not full-index coverage, an accuracy/backtest score, or customer-level
+  production acceptance. Real provider rejection is an honest failed test.
+- Future release gates: cross-check price and date against a second independent
+  trusted exchange/market source, visually inspect Telegram output, validate
+  any stale holiday handling, and confirm the exact deployed SHA and rollback.
+
 ## Mandatory cutover steps BEFORE deployment
 
 1. Freeze buy/sell, obtain the actual live portfolio_data.json through an approved
