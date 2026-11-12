@@ -1026,6 +1026,17 @@ def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
         R = assemble(inputs)
         out = os.path.join(OUTPUT_DIR, f"{sym}_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
         build_pdf(R, out)
+        # A successful ReportLab write is NOT enough for Telegram delivery:
+        # assert readable pages, instrument identity and financial caveats.
+        from pdf_release_gate import validate_research_pdf
+        try:
+            validate_research_pdf(out, expected_symbol=sym)
+        except Exception:
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
+            raise ValueError("Research report withheld: PDF release validation failed")
         return True, out, R["name"]
     except ValueError as e:
         return False, str(e), None
