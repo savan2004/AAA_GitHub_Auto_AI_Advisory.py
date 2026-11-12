@@ -115,6 +115,7 @@ class FieldOriginTests(unittest.TestCase):
             ("percent", 0.8, 0.8),
             ("percent", 12.5, 12.5),
             ("fraction", 0.8, 80.0),
+            ("fraction", 0.0008, 0.08),
             ("fraction", 1.5, 150.0),
             ("fraction", 0.0, 0.0),
             (None, 0.8, None),
@@ -130,6 +131,17 @@ class FieldOriginTests(unittest.TestCase):
                  patch.object(f, "_fetch_yfinance", return_value={}):
                 result = f.get_fundamentals("SBIN")
             self.assertEqual(result["roe"], expected)
+
+    def test_untrusted_roe_units_and_values_are_withheld(self):
+        from financial_quality import normalize_roe_percent
+        for value, unit in ((0.008, None), (float("nan"), "fraction"),
+                            (float("inf"), "percent"),
+                            (True, "percent"), ("nonsense", "fraction"),
+                            (100000, "percent")):
+            with self.subTest(value=value, unit=unit):
+                self.assertIsNone(normalize_roe_percent(value, unit))
+        self.assertEqual(normalize_roe_percent(-0.12, "fraction"), -12.0)
+        self.assertEqual(normalize_roe_percent(0.0, "fraction"), 0.0)
 
     def test_telegram_summary_never_claims_issuer_filing_certification(self):
         from financial_quality import financial_source_summary
