@@ -48,6 +48,29 @@ subscriptions, other products and AiAutoUpdate are excluded.
   trusted exchange/market source, visually inspect Telegram output, validate
   any stale holiday handling, and confirm the exact deployed SHA and rollback.
 
+## Fundamental debt/equity unit audit — 12 November 2026
+
+- **Root cause:** Yahoo `debtToEquity` is percentage-scaled: a raw value
+  `125` represents a **1.25x** debt/equity ratio, not `125x`.
+  The previous Fundamental-button and advisory fallbacks displayed that
+  unconverted number. The shared Yahoo adapter already provided an optional
+  `debt_equity_ratio` field normalized by a factor of 0.01, but downstream
+  consumers ignored it.
+- The canonical `normalized_debt_equity_ratio` reads the already-normalized
+  Yahoo field first, or divides Yahoo's raw `debtToEquity` by 100. Negative,
+  boolean, nonfinite, and absent values remain unavailable; **zero is valid**.
+  Primary Yahoo, yfinance fallback, the Fundamental button and the full
+  advisory card now share this conversion. Ratios already supplied by Screener
+  are not divided again.
+- Four synthetic regression tests cover conversion, invalid/zero values,
+  Yahoo primary and fallback paths, Screener values, and Telegram rendering.
+  These tests are **unit-consistency evidence only**, not proof of company
+  statement accuracy or independent reconciliation.
+- Release acceptance still requires a dated, authoritative financial statement
+  and a second-source comparison for the selected company's liabilities/equity,
+  with matching consolidated/standalone scope and fiscal period. If source
+  units or periods cannot be established, withhold a verified valuation claim.
+
 ## Mandatory cutover steps BEFORE deployment
 
 1. Freeze buy/sell, obtain the actual live portfolio_data.json through an approved
