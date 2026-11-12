@@ -95,7 +95,11 @@ class PortfolioSafetyTests(unittest.TestCase):
                 "SBIN": {"qty": 2, "avg": 500},
                 "TCS": {"qty": 3, "avg": 1200},
             }})(),
-            "get_live_price": lambda sym: 550 if sym == "SBIN" else None,
+            "get_verified_quote": lambda sym: ({
+                "price": 550, "quote_source": "NSE India",
+                "quote_asof_ist": "2026-11-12T10:00:00+05:30",
+                "quote_status": "recent_observation",
+            } if sym == "SBIN" else None),
         }
         exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), ctx)
         card = ctx["build_portfolio_card"](100)
@@ -103,8 +107,32 @@ class PortfolioSafetyTests(unittest.TestCase):
         self.assertIn("P&L: Unavailable", card)
         self.assertNotIn("Total P&L:", card)
         self.assertIn("priced holdings: ₹1,000.00", card)
-        ctx["get_live_price"] = lambda sym: None
+        self.assertIn("NSE India | 2026-11-12 10:00 IST", card)
+        self.assertIn("recent observation", card)
+        self.assertNotIn("LTP:₹", card)
+        ctx["get_verified_quote"] = lambda sym: None
         self.assertIn("P&L unavailable", ctx["build_portfolio_card"](100))
+
+    def test_portfolio_labels_last_session_and_rejects_undated_price(self):
+        src = (ROOT / "main.py").read_text(encoding="utf-8")
+        node = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)
+                    and n.name == "build_portfolio_card")
+        quote = {"price": 700, "quote_source": "Yahoo Finance v8",
+                 "quote_asof_ist": "2026-11-13T15:30:00+05:30",
+                 "quote_status": "last_observed_session"}
+        ns = {"date": date, "logger": logging.getLogger(__name__),
+              "portfolio": type("Store", (), {"get": lambda self, uid: {
+                  "SBIN": {"qty": 2, "avg": 650}}})(),
+              "get_verified_quote": lambda sym: quote}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), ns)
+        card = ns["build_portfolio_card"](100)
+        self.assertIn("last observed session", card)
+        self.assertIn("Yahoo Finance v8 | 2026-11-13 15:30 IST", card)
+        self.assertIn("P&L is indicative from dated quotes", card)
+        ns["get_verified_quote"] = lambda sym: {"price": 700}
+        unsafe = ns["build_portfolio_card"](100)
+        self.assertIn("P&L unavailable", unsafe)
+        self.assertNotIn("₹+100.00", unsafe)
 
     def test_opt_in_postgres_never_connects_without_cutover(self):
         from postgres_portfolio import build_portfolio_backend, PortfolioStorageError
