@@ -1,0 +1,76 @@
+name: MSK Nine Dedicated Website Pages
+on:
+  push:
+    branches: [web/msk-dedicated-nine-pages-20261112]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-web-dedicated-pages.yml'
+  pull_request:
+    branches: [web/msk-web-advisory-mvp-20261027]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-web-dedicated-pages.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  web-pages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Assert website-only scope
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          pages=('technical','fundamental','chart','screener','breadth','pdf','portfolio','ai')
+          assert all((Path('web_advisory')/f'{tab}.html').is_file() for tab in pages)
+          print('DEDICATED_PAGE_FILES_EXIST',len(pages)+1)
+          PY
+      - name: Validate JavaScript
+        run: |
+          for f in web_advisory/*.js web_advisory/tests/*.cjs; do node --check "$f"; done
+      - name: Backend safety
+        run: python -m unittest discover -s web_advisory/backend/tests -v
+      - name: Install isolated browser dependencies
+        run: npm install --no-save --no-audit --no-fund jsdom@26 playwright-core@1.56.1
+      - name: All existing website DOM regressions
+        run: node --test web_advisory/tests/ui.test.cjs
+      - name: Launch local website (no deployment)
+        run: |
+          python -m http.server 8766 --bind 127.0.0.1 --directory web_advisory >/tmp/msk-nine-pages-http.log 2>&1 &
+          for i in 1 2 3 4 5; do
+            if curl -fsS http://127.0.0.1:8766/ >/dev/null; then break; fi
+            sleep 1
+          done
+      - name: Nine dedicated direct URLs and responsive browser acceptance
+        run: CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/pages-browser.cjs
+      - name: Existing nine research tool browser checks
+        run: CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/branch-browser.cjs
+      - name: Portfolio audit and downloadable PDF regression
+        run: CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/portfolio-browser.cjs
+      - name: Check both PDF documents
+        run: |
+          python -m pip install --quiet pypdf
+          python - <<'PY'
+          from pypdf import PdfReader
+          eq=len(PdfReader('/tmp/msk-report-branch.pdf').pages)
+          pf=PdfReader('/tmp/msk-portfolio-audit-browser.pdf')
+          assert eq==8, f'Company PDF must have eight pages, got {eq}'
+          content=' '.join((p.extract_text() or '') for p in pf.pages)
+          assert 'MSK Portfolio Audit' in content and 'AAA' in content and 'BBB' in content
+          print('PDF_REPORTS_PASSED',eq,len(pf.pages))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: msk-nine-page-visual-review
+          path: /tmp/msk-pages-browser/*.png
+          if-no-files-found: ignore
+          retention-days: 7

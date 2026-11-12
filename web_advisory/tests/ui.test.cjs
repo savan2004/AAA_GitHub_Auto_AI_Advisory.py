@@ -203,7 +203,7 @@ test("BEL TejHQ EOD response creates real historical candles and never mixes dem
  const w=build(),f=w.MSKWeb.features;
  const bars=[];
  for(let i=119;i>=0;i--){
-   const date=new Date(Date.UTC(2026,9,26-i)).toISOString().slice(0,10);
+   const date=new Date(Date.now()-(i+1)*86400000).toISOString().slice(0,10);
    const v=350+(120-i)*.12;
    bars.push({date,open:v,high:v+2,low:v-2,close:v+.4,volume:700000+i*200});
  }
@@ -219,7 +219,7 @@ test("BEL TejHQ EOD response creates real historical candles and never mixes dem
  assert.equal(f.library.size,1,"Synthetic DEMO stocks must never mix with actual EOD");
  assert.equal(f.library.get("BEL").source,"tej_eod");
  assert.equal(w.document.getElementById("dataLabel").getAttribute("data-eod-provider"),"TejHQ");
- assert.equal(w.document.getElementById("dataLabel").getAttribute("data-market-asof"),"2026-10-26");
+ assert.equal(w.document.getElementById("dataLabel").getAttribute("data-market-asof"),bars.at(-1).date);
  assert.match(w.document.getElementById("dataLabel").textContent,/NSE END-OF-DAY.*NOT INTRADAY\/LIVE/);
  assert.equal(w.document.body.classList.contains("market-eod"),true);
  assert.equal(w.document.getElementById("chartCanvas").hidden,false);
@@ -293,7 +293,7 @@ test("EOD source badge updates and stock watchlist actually loads issuer-specifi
  const w=build(),d=w.document;
  const stock="TCS";
  const bars=[];for(let i=119;i>=0;i--){
-   const date=new Date(Date.UTC(2026,9,26-i)).toISOString().slice(0,10),p=3000+i/5;
+   const date=new Date(Date.now()-(i+1)*86400000).toISOString().slice(0,10),p=3000+i/5;
    bars.push({date,open:p,high:p+5,low:p-5,close:p+1,volume:10000+i*20});
  }
  w.fetch=async()=>({ok:true,json:async()=>({meta:{symbol:stock,exchange:"NSE"},data:bars})});
@@ -339,7 +339,7 @@ test("Private portfolio importer rejects wrong rows and does not invent prices",
 test("Ask Research 3-month question discloses non-forecastable target and correct TejHQ source",async()=>{
  const w=build(),F=w.MSKWeb.features,bars=[];
  for(let i=119;i>=0;i--){
-  const date=new Date(Date.UTC(2026,9,26-i)).toISOString().slice(0,10);
+  const date=new Date(Date.now()-(i+1)*86400000).toISOString().slice(0,10);
   const p=800+i*.4;
   bars.push({date,open:p,high:p+2,low:p-2,close:p+1,volume:10000+i});
  }
