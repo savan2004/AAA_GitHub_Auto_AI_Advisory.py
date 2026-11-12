@@ -6,7 +6,7 @@ import os
 import tempfile
 import threading
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -123,8 +123,10 @@ class EquityPriceSafetyTests(unittest.TestCase):
     def test_fundamentals_cache_must_not_reuse_hour_old_price(self):
         import data_engine as de
         old = {"price": 100.0, "pe": 17.5, "name": "SBIN"}
+        quote = {"price": 125.0, "quote_timestamp": datetime.now(timezone.utc).timestamp(),
+                 "quote_source": "Yahoo Finance v8", "provider_symbol": "SBIN.NS"}
         def cache(key, ttl):
-            return old if key.startswith("info_") else 125.0
+            return old if key.startswith("info_") else quote
         with patch.object(de, "cached_get", side_effect=cache), \
              patch.object(de, "_yahoo_v10_fundamentals") as fund, \
              patch.object(de, "_yahoo_v8_quote") as quote:
@@ -154,7 +156,9 @@ class EquityPriceSafetyTests(unittest.TestCase):
              patch.object(de, "_yahoo_v10_fundamentals",
                           return_value={"price": float("nan"), "pe": 12}), \
              patch.object(de, "_yahoo_v8_quote", return_value={"price": float("nan")}), \
-             patch.object(de, "_nse_quote", return_value={"price": "1,010.50"}), \
+             patch.object(de, "_nse_quote", return_value={
+                 "price": "1,010.50", "provider_symbol": "SBIN",
+                 "quote_timestamp": datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M:%S")}), \
              patch.object(de, "cached_set"):
             card = de.get_info("SBIN")
             self.assertEqual(card["price"], 1010.5)
@@ -162,20 +166,133 @@ class EquityPriceSafetyTests(unittest.TestCase):
 
     def test_index_info_cache_uses_five_minute_ttl(self):
         import data_engine as de
-        with patch.object(de, "cached_get", return_value={"price": 25000}) as cache, \
+        safe_index = {"price": 25000, "quote_source": "Yahoo Finance v8",
+                      "provider_symbol": "^NSEI",
+                      "quote_timestamp": datetime.now(timezone.utc).timestamp()}
+        with patch.object(de, "cached_get", return_value=safe_index) as cache, \
              patch.object(de, "_yahoo_v8_quote") as quote:
             self.assertEqual(de.get_info("^NSEI")["price"], 25000)
-            cache.assert_called_once_with("info_v2_^NSEI", de.TTL_PRICE)
+            cache.assert_any_call("info_v2_^NSEI", de.TTL_PRICE)
+            cache.assert_any_call("price_^NSEI", de.TTL_PRICE)
             quote.assert_not_called()
 
     def test_nan_or_zero_quote_uses_valid_nse_fallback(self):
         import data_engine as de
         with patch.object(de, "cached_get", return_value=None), \
              patch.object(de, "_yahoo_v8_quote", return_value={"price": float("nan")}), \
-             patch.object(de, "_nse_quote", return_value={"price": "1,234.50"}), \
+             patch.object(de, "_nse_quote", return_value={
+                 "price": "1,234.50", "provider_symbol": "SBIN",
+                 "quote_timestamp": datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M:%S")}), \
              patch.object(de, "cached_set") as save:
             self.assertEqual(de.get_live_price("SBIN"), 1234.5)
             self.assertTrue(save.called)
+
+    def test_intraday_quote_reports_provenance_and_exchange_timestamp(self):
+        import data_engine as de
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now = datetime(2026, 11, 12, 10, 0, tzinfo=ist)
+        raw = {"price": 600.25, "quote_timestamp": (now - timedelta(minutes=12)).timestamp(),
+               "provider_symbol": "SBIN.NS"}
+        with patch.object(de.time, "time", return_value=now.timestamp()), \
+             patch.object(de, "cached_get", return_value=None), \
+             patch.object(de, "_yahoo_v8_quote", return_value=raw), \
+             patch.object(de, "_nse_quote") as nse, \
+             patch.object(de, "cached_set") as cache:
+            verified = de.get_verified_quote("SBIN")
+            self.assertEqual(verified["price"], 600.25)
+            self.assertEqual(verified["quote_source"], "Yahoo Finance v8")
+            self.assertEqual(verified["quote_status"], "recent_observation")
+            self.assertEqual(verified["quote_asof_ist"], "2026-11-12T09:48:00+05:30")
+            self.assertEqual(cache.call_args.args[1]["quote_timestamp"],
+                             raw["quote_timestamp"])
+            nse.assert_not_called()
+
+    def test_in_market_stale_quote_and_old_numeric_cache_fail_closed(self):
+        import data_engine as de
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now = datetime(2026, 11, 12, 10, 0, tzinfo=ist)
+        stale = {"price": 600, "provider_symbol": "SBIN.NS",
+                 "quote_timestamp": (now - timedelta(hours=2)).timestamp()}
+        with patch.object(de.time, "time", return_value=now.timestamp()), \
+             patch.object(de, "cached_get", return_value=600), \
+             patch.object(de, "_yahoo_v8_quote", return_value=stale), \
+             patch.object(de, "_nse_quote", return_value=None), \
+             patch.object(de, "cached_set") as cache:
+            self.assertIsNone(de.get_live_price("SBIN"))
+            cache.assert_not_called()
+
+    def test_known_nse_ist_timestamp_fallback_with_provenance(self):
+        import data_engine as de
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now = datetime(2026, 11, 12, 10, 0, tzinfo=ist)
+        with patch.object(de.time, "time", return_value=now.timestamp()), \
+             patch.object(de, "cached_get", return_value=None), \
+             patch.object(de, "_yahoo_v8_quote", return_value={"price": 1234}), \
+             patch.object(de, "_nse_quote", return_value={
+                 "price": "1,250.50", "provider_symbol": "SBIN",
+                 "quote_timestamp": "12-Nov-2026 09:55:00"}), \
+             patch.object(de, "cached_set"):
+            quote = de.get_verified_quote("SBIN")
+            self.assertEqual(quote["price"], 1250.5)
+            self.assertEqual(quote["quote_source"], "NSE India")
+            self.assertEqual(quote["quote_asof_ist"], "2026-11-12T09:55:00+05:30")
+
+    def test_missing_future_wrong_ticker_invalid_time_and_boolean_fail(self):
+        import data_engine as de
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now = datetime(2026, 11, 12, 10, 0, tzinfo=ist).timestamp()
+        invalid = (
+            {"price": 500, "provider_symbol": "SBIN.NS"},
+            {"price": 500, "provider_symbol": "TCS.NS", "quote_timestamp": now},
+            {"price": 500, "quote_timestamp": now + 600},
+            {"price": True, "quote_timestamp": now},
+            {"price": 500, "quote_timestamp": float("nan")},
+            {"price": 500, "quote_timestamp": "not-a-timestamp"},
+        )
+        for data in invalid:
+            with self.subTest(data=data):
+                self.assertIsNone(de._verified_quote_payload(
+                    data, "Yahoo Finance v8", "SBIN.NS", now_epoch=now
+                ))
+
+    def test_closed_market_quote_is_last_observed_not_realtime(self):
+        import data_engine as de
+        ist = timezone(timedelta(hours=5, minutes=30))
+        friday = datetime(2026, 11, 13, 15, 30, tzinfo=ist)
+        sunday = datetime(2026, 11, 15, 10, 0, tzinfo=ist)
+        value = {"price": 700, "provider_symbol": "SBIN.NS",
+                 "quote_timestamp": friday.timestamp()}
+        result = de._verified_quote_payload(value, "Yahoo Finance v8",
+                                            "SBIN.NS", now_epoch=sunday.timestamp())
+        self.assertEqual(result["quote_status"], "last_observed_session")
+        following_week = sunday + timedelta(days=8)
+        self.assertIsNone(de._verified_quote_payload(
+            value, "Yahoo Finance v8", "SBIN.NS",
+            now_epoch=following_week.timestamp()
+        ))
+
+    def test_provider_parsers_preserve_source_update_fields(self):
+        import data_engine as de
+        yahoo = type("Response", (), {
+            "status_code": 200, "ok": True,
+            "json": lambda self: {"chart": {"result": [{
+                "meta": {"regularMarketPrice": 400, "regularMarketTime": 1234567890,
+                         "symbol": "SBIN.NS"}}]}}
+        })()
+        nse = type("Response", (), {
+            "ok": True,
+            "json": lambda self: {"priceInfo": {"lastPrice": 400},
+                                  "metadata": {"lastUpdateTime": "12-Nov-2026 10:00:00",
+                                               "symbol": "SBIN"}}
+        })()
+        with patch.object(de, "_wait_for_rate_slot"), \
+             patch.object(de.requests, "get", return_value=yahoo):
+            self.assertEqual(de._yahoo_v8_quote("SBIN.NS")["quote_timestamp"],
+                             1234567890)
+        session = type("Session", (), {"get": lambda self, *args, **kwargs: nse})()
+        with patch.object(de, "_get_nse_session", return_value=session):
+            self.assertEqual(de._nse_quote("SBIN")["quote_timestamp"],
+                             "12-Nov-2026 10:00:00")
 
     def test_no_provider_returns_no_price_not_zero(self):
         import data_engine as de
@@ -204,7 +321,9 @@ class EquityPriceSafetyTests(unittest.TestCase):
     def test_get_info_does_not_suffix_index_or_request_equity_fundamentals(self):
         import data_engine as de
         with patch.object(de, "cached_get", return_value=None), \
-             patch.object(de, "_yahoo_v8_quote", return_value={"price": 25000}) as quote, \
+             patch.object(de, "_yahoo_v8_quote", return_value={
+                 "price": 25000, "provider_symbol": "^NSEI",
+                 "quote_timestamp": datetime.now(timezone.utc).timestamp()}) as quote, \
              patch.object(de, "_yahoo_v10_fundamentals") as fundamentals, \
              patch.object(de, "_nse_quote") as nse, \
              patch.object(de, "cached_set"):
