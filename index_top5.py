@@ -6,6 +6,7 @@ data never becomes a fabricated investment recommendation.
 """
 import html
 import logging
+import os
 import threading
 import time
 from collections import Counter
@@ -222,9 +223,16 @@ def _finish(profile, future):
 
 
 def request_index_top5(profile, chat_id, send):
-    """Enqueue and return a short acknowledgement; completion pushes once to chat."""
+    """Read the completed full-index ledger, never substitute partial Top 5.
+
+    Legacy short on-demand review is developer opt-in ONLY; even if enabled
+    it is not certified for 100/150/250 issuer-wide financial coverage.
+    """
     if profile not in INDEXES:
         return "❌ Unknown index profile."
+    if os.getenv("MSK_INDEX_PREPARED_ONLY", "1") != "0":
+        from overnight_index_reports import load_prepared_report
+        return load_prepared_report(profile)
     with _LOCK:
         cached = _RESULTS.get(profile)
         if cached and time.monotonic() - cached[0] < _RESULT_TTL:
