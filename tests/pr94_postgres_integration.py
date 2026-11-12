@@ -175,7 +175,8 @@ def main():
         except PortfolioStorageError:
             pass
         live_rows, live_marker = read_rows(dsn)
-        assert len(live_rows) == 3 and live_marker == marker
+        # Initial 3 imported positions + 10 correctly admitted test positions.
+        assert len(live_rows) == 13 and live_marker == marker
 
         # MSK durable webhook ledger restart and subscriber governance:
         # only synthetic test user IDs and update IDs; no real Telegram calls.
