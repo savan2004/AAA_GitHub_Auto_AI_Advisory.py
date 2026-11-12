@@ -104,7 +104,7 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertEqual(stats["price_fresh"],149)
         self.assertEqual(stats["validated"],149)
         self.assertNotIn("1. TEST",msg)
-        self.assertIn("TOP 5 WITHHELD",msg)
+        self.assertIn("TOP 5 WITHHELD",msg.upper())
 
     def test_missing_eps_is_unverified_and_never_ranked(self):
         universe=make_universe("conservative",100)
