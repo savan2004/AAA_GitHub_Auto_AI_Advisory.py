@@ -122,12 +122,38 @@ class PostgresPortfolioStore:
                 for symbol, qty, avg in rows}
 
     def add(self, uid, sym, qty, price):
+        """Atomic 10-position maximum for real PostgreSQL concurrent writers.
+
+        The advisory transaction lock serializes all buys for a user before
+        checking capacity. Existing holdings update without consuming a slot.
+        Do not delete or truncate any preexisting migrated holdings.
+        """
         uid, sym = _uid(uid), _symbol(sym)
         quantity = _amount(qty, positive=True)
-        average = _amount(price, positive=False).quantize(
+        cost = _amount(price, positive=False)
+        if quantity != quantity.to_integral_value() or quantity > 10**9:
+            raise ValueError("Holding quantity must be a positive integer <= 1e9")
+        if cost <= 0 or cost > 10**12:
+            raise ValueError("Portfolio purchase price out of range")
+        average = cost.quantize(
             Decimal("0.01"), rounding=ROUND_HALF_EVEN
         )
         with self._connector(self._dsn) as conn:
+            # uid-based transaction-scoped lock prevents 2 workers from
+            # both observing 9 holdings and inserting the 10th/11th.
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (uid,))
+            current = conn.execute(
+                "SELECT qty FROM holdings WHERE uid=%s AND symbol=%s",
+                (uid, sym)
+            ).fetchone()
+            if current is None:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM holdings WHERE uid=%s", (uid,)
+                ).fetchone()[0]
+                if count >= 10:
+                    raise ValueError("Portfolio maximum is 10 distinct holdings")
+            elif _amount(current[0], positive=True) + quantity > 10**9:
+                raise ValueError("Holding quantity exceeds limit")
             conn.execute(
                 """INSERT INTO holdings(uid, symbol, qty, avg)
                    VALUES (%s, %s, %s, %s)
