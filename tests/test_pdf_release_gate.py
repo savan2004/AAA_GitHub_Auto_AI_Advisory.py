@@ -33,6 +33,10 @@ class PDFReleaseGateTests(unittest.TestCase):
                 self.assertFalse(review["telegram_delivered"])
                 with self.assertRaisesRegex(ResearchPDFRefused, "identity"):
                     validate_research_pdf(path, expected_symbol="WRONGCO")
+                with self.assertRaisesRegex(ResearchPDFRefused, "identity"):
+                    validate_research_pdf(path, expected_symbol="STRONG")
+                with self.assertRaisesRegex(ResearchPDFRefused, "identity"):
+                    validate_research_pdf(path, expected_symbol="STRONGCOX")
             finally:
                 for key in ("tech_price", "tech_momentum", "tech",
                             "quarterly"):
