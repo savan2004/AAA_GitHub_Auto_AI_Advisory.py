@@ -314,6 +314,30 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertNotIn("1. TEST",body)
         self.assertIn("Provisional 100",body)
 
+    def test_wait_watchlist_contains_reasons_but_never_buy_entries(self):
+        universe=make_universe("moderate",150)
+        digest=n._member_hash(universe)
+        for i,sym in enumerate(universe["symbols"]):
+            tech=technical(sym,signal="WAIT",risk=17.2)
+            tech["signal_reasons"]=["breakout_not_confirmed",
+                                    "stop_risk_above_profile_limit"]
+            tech["tech_score"]=85 if i<3 else 50
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "fund_status":"VALIDATED" if i<3 else "UNVERIFIED",
+                "fundamental":evidence(),
+                "technical":tech
+            })
+        state,stats,body=n.render_snapshot(
+            "moderate",universe,self.store.rows(self.day,"moderate"),self.day)
+        self.assertEqual(state,"READY")
+        self.assertEqual(stats["candidate_count"],0)
+        self.assertIn("RESEARCH WATCHLIST ONLY",body)
+        self.assertIn("breakout not confirmed",body)
+        self.assertIn("stop risk above profile limit",body)
+        self.assertIn("TEST000",body)
+        self.assertNotIn("Conditional entry",body)
+
     def test_no_picks_explains_wait_without_fabricating_buy(self):
         universe=make_universe("moderate",150)
         digest=n._member_hash(universe)
