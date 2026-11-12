@@ -1748,6 +1748,7 @@ def webhook():
     ledger = globals().get("_durable_update_ledger")
     reserved_in_memory = False
     claimed_in_db = False
+    submitted = False
     try:
         if ledger is not None:
             # Do not create a subscription from messages without a verified
@@ -1808,12 +1809,12 @@ def webhook():
             )
         else:
             future.add_done_callback(lambda _: _webhook_slots.release())
+        submitted = True
         return "ok", 200
     finally:
-        # For accepted jobs the completion callback owns this slot.
-        # A duplicate/failed claim or unscheduled job releases it here.
-        if (ledger is not None and not claimed_in_db) or (
-                reserved_in_memory is False and ledger is None):
+        # Accepted submissions release capacity from their done callback.
+        # All other exits (duplicate, DB failure, submit failure) release here.
+        if not submitted:
             _webhook_slots.release()
 
 
