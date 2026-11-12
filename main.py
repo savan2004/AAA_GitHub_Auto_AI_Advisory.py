@@ -27,7 +27,7 @@ import telebot
 from telebot import types
 
 # ── Local Module Imports ──────────────────────────────────────────────────────
-from data_engine import get_hist, get_info, get_live_price, batch_quotes
+from data_engine import get_hist, get_info, get_live_price, get_verified_quote, batch_quotes
 from technical_indicators import (
     calc_rsi, calc_ema, calc_macd, calc_atr, calc_asi,
     calc_bollinger, trend_label, swing_signal, rsi_label,
@@ -736,13 +736,24 @@ def build_portfolio_card(uid):
     for sym, pos in p.items():
         qty, avg = pos["qty"], pos["avg"]
         ltp = None
+        evidence = None
         try:
-            raw = get_live_price(sym)
-            if raw is not None:
-                candidate = float(raw)
-                if math.isfinite(candidate) and candidate > 0:
+            quote = get_verified_quote(sym)
+            if quote is not None:
+                candidate = float(quote["price"])
+                source = quote["quote_source"]
+                asof = quote["quote_asof_ist"]
+                status = quote["quote_status"]
+                if (math.isfinite(candidate) and candidate > 0
+                        and source in ("Yahoo Finance v8", "NSE India")
+                        and isinstance(asof, str) and len(asof) >= 16
+                        and status in ("recent_observation", "last_observed_session")):
                     ltp = round(candidate, 2)
-        except (TypeError, ValueError, OverflowError):
+                    session_label = ("recent observation" if status == "recent_observation"
+                                     else "last observed session")
+                    evidence = (f"{source} | {asof[:16].replace('T', ' ')} IST "
+                                f"| {session_label}")
+        except (TypeError, ValueError, KeyError, OverflowError):
             pass
         except Exception:
             logger.warning("Portfolio market quote lookup failed for %s", sym)
@@ -750,18 +761,18 @@ def build_portfolio_card(uid):
         t_inv += inv
         if ltp is None:
             missing_quotes.append(sym)
-            rows.append((sym, qty, avg, inv, None, None, None))
+            rows.append((sym, qty, avg, inv, None, None, None, None))
             continue
         cur = qty * ltp
         priced_basis += inv
         priced_value += cur
         rows.append((sym, qty, avg, inv, ltp, cur - inv,
-                     ((ltp - avg) / avg * 100) if avg > 0 else None))
+                     ((ltp - avg) / avg * 100) if avg > 0 else None, evidence))
 
     lines = ["<b>━━━ 💼 PORTFOLIO ━━━</b>",
              f"📅 {date.today().strftime('%d-%b-%Y')}  |  {len(rows)} holdings",
              "", "<b>── HOLDINGS ──</b>"]
-    for sym, qty, avg, inv, ltp, pnl, pct in sorted(
+    for sym, qty, avg, inv, ltp, pnl, pct, evidence in sorted(
         rows, key=lambda r: (r[5] is not None, r[5] or 0), reverse=True
     ):
         wt = inv / t_inv * 100 if t_inv > 0 else 0
@@ -773,7 +784,8 @@ def build_portfolio_card(uid):
         else:
             lines.extend([
                 f"{'🟢' if pnl >= 0 else '🔴'} <b>{safe_sym}</b>",
-                f"   Qty:{qty} ({wt:.1f}%) Avg:₹{avg:,.2f} → LTP:₹{ltp:,.2f}",
+                f"   Qty:{qty} ({wt:.1f}%) Avg:₹{avg:,.2f} → Observed:₹{ltp:,.2f}",
+                f"   Source: {evidence}",
                 f"   P&L: ₹{pnl:+,.2f} ({pct:+.2f}%)" if pct is not None else
                 f"   P&L: ₹{pnl:+,.2f} (percentage unavailable)", "   ···",
             ])
@@ -784,7 +796,9 @@ def build_portfolio_card(uid):
         lines.append(f"\n{'🟢' if pnl >= 0 else '🔴'} <b>{label}: ₹{pnl:+,.2f} ({pct:+.2f}%)</b>")
     else:
         lines.append("\n⚪ <b>P&L unavailable — no valid market quotes</b>")
-    lines.extend(["─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM",
+    lines.extend(["─" * 32,
+                  "⏱️ P&L is indicative from dated quotes, not guaranteed real-time.",
+                  "➕ /buy SYM QTY PRICE  ➖ /sell SYM",
                   "⚠️ <i>Educational only.</i>"])
     if missing_quotes:
         lines.append("⚠️ Missing quotes: " + ", ".join(html.escape(sym) for sym in missing_quotes)
