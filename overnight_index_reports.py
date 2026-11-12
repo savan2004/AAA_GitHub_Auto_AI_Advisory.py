@@ -421,9 +421,22 @@ def readiness_check(store, session=None, profiles=PROFILES):
                       0 <= fresh <= expected and fresh/expected>=PRICE_REQUIRED)
         valid_hash=(isinstance(stats.get("membership_hash"), str) and
                     len(stats["membership_hash"])==16)
+        # Verify the underlying same-session company ledger, not just summary
+        # numbers. A stale, manually inserted or orphaned READY summary must
+        # never make the morning launch gate pass.
+        evidence=store.rows(day,profile) if row else {}
+        matching=[v for v in evidence.values()
+                  if isinstance(v,dict) and
+                  v.get("membership_hash")==stats.get("membership_hash")]
+        ledger_reviews=sum(v.get("fund_attempted") is True for v in matching)
+        ledger_prices=sum(_fresh(v.get("technical"),day) for v in matching)
+        valid_ledger=(valid_size and len(evidence)==expected and
+                      len(matching)==expected and
+                      ledger_reviews==reviewed and
+                      ledger_prices==fresh)
         ready=bool(row and row.get("state")=="READY" and
                    row.get("day")==str(day) and valid_reviews and
-                   valid_prices and valid_hash)
+                   valid_prices and valid_hash and valid_ledger)
         items.append({"session":str(day), "profile":profile,
                       "state":(row or {}).get("state","MISSING"),
                       "expected":expected, "reviewed":reviewed,
