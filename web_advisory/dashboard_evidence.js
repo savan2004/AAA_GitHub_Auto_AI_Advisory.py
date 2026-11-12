@@ -34,6 +34,7 @@
  function render(){
    root.replaceChildren();
    root.setAttribute("aria-busy","false");
+   delete root.dataset.symbol;delete root.dataset.source;delete root.dataset.asof;
    const top=node("header",undefined,"dash-evidence-head");
    const title=node("div");
    title.append(node("div","STOCK RESEARCH / EVIDENCE BRIEF","eyebrow"),
@@ -52,6 +53,7 @@
    const bars=entry?.bars;
    const usable=evidence&&Array.isArray(bars)&&bars.length>=50&&
      bars.at(-1)?.date===evidence.session && entry.source===source;
+   document.body.dataset.symbolPending=usable?"false":"true";
    if(!usable){
      cell(insight,"Selected symbol",symbol||"None");
      cell(insight,"Historical close","Unavailable");
@@ -72,7 +74,7 @@
    const kind=source==="tej_eod"?"NSE historical EOD via TejHQ":source==="uploaded"?"User-uploaded CSV":source==="synthetic"?"Synthetic demo":"Unverified";
    label.textContent=source==="synthetic"?"SYNTHETIC":source==="tej_eod"?"HISTORICAL EOD":source==="uploaded"?"USER CSV":"UNVERIFIED";
    label.dataset.kind=source;
-   cell(insight,"Selected company",symbol,"Market: NSE symbol; company name not independently confirmed");
+   cell(insight,"Selected instrument",symbol,source==="synthetic"?"Fictional test symbol — not an NSE listing":"NSE symbol supplied; issuer identity not independently verified");
    cell(insight,"Historical close","₹"+fmt(close),
      change===null?"Daily change unavailable":"Daily close change "+(change>=0?"+":"")+fmt(change)+"%");
    cell(insight,"Trading session",evidence.session,kind+" • "+bars.length+" candles");
