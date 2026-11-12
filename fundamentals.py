@@ -359,7 +359,7 @@ def get_fundamentals(sym: str) -> dict:
 
     # ── Source 1: data_engine (Yahoo v8/v10 + NSE, rate-limited) ─────────────
     try:
-        from data_engine import get_info
+        from data_engine import get_info, normalized_debt_equity_ratio
         info = get_info(sym) or {}
         if info:
             result["name"]   = info.get("name") or sym
@@ -373,7 +373,7 @@ def get_fundamentals(sym: str) -> dict:
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
             # fmt_mcap() correctly converts to Crores by dividing by 1e7
             result["rev"]    = info.get("totalRevenue")
-            result["de"]     = safe_val(info, "debtToEquity")
+            result["de"]     = normalized_debt_equity_ratio(info)
             result["beta"]   = safe_val(info, "beta")
             result["w52h"]   = safe_val(info, "high52")
             result["w52l"]   = safe_val(info, "low52")
@@ -444,7 +444,9 @@ def get_fundamentals(sym: str) -> dict:
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
             if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
             if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
-            if result["de"]    is None: result["de"]   = safe_val(yf_info, "debtToEquity")
+            if result["de"]    is None:
+                from data_engine import normalized_debt_equity_ratio
+                result["de"] = normalized_debt_equity_ratio(yf_info)
             if result["w52h"]  is None: result["w52h"] = safe_val(yf_info, "fiftyTwoWeekHigh")
             if result["w52l"]  is None: result["w52l"] = safe_val(yf_info, "fiftyTwoWeekLow")
             if result["beta"]  is None: result["beta"] = safe_val(yf_info, "beta")
