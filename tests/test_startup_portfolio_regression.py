@@ -264,6 +264,48 @@ class PostgresPortfolioOfflineTests(unittest.TestCase):
             count = conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
         self.assertEqual(count, 2)
 
+    def test_repeat_import_refuses_tampered_or_missing_positions(self):
+        """Same source checksum must not conceal DB loss or altered cost basis."""
+        from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
+        for mutation in ("quantity", "average", "missing", "extra"):
+            with self.subTest(mutation=mutation):
+                if self.database.exists():
+                    self.database.unlink()
+                import_legacy_to_postgres(
+                    self.source, self.dsn, connector=self.connector, apply=True
+                )
+                with self.connector(self.dsn) as conn:
+                    if mutation == "quantity":
+                        conn.execute(
+                            "UPDATE holdings SET qty = 99 WHERE uid = 100"
+                        )
+                    elif mutation == "average":
+                        conn.execute(
+                            "UPDATE holdings SET avg = 999 WHERE uid = 100"
+                        )
+                    elif mutation == "missing":
+                        conn.execute("DELETE FROM holdings WHERE uid = 100")
+                    else:
+                        conn.execute(
+                            "INSERT INTO holdings(uid, symbol, qty, avg) "
+                            "VALUES (300, 'EXTRA', 1, 5)"
+                        )
+                with self.assertRaisesRegex(PortfolioStorageError, "Stored holdings differ"):
+                    import_legacy_to_postgres(
+                        self.source, self.dsn, connector=self.connector, apply=True
+                    )
+                # The refusal must not silently replace any customer positions.
+                with self.connector(self.dsn) as conn:
+                    if mutation == "quantity":
+                        self.assertEqual(
+                            conn.execute("SELECT qty FROM holdings WHERE uid = 100")
+                            .fetchone()[0], 99
+                        )
+                    elif mutation == "missing":
+                        self.assertEqual(
+                            conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0], 1
+                        )
+
     def test_conflicting_snapshot_is_refused_without_overwriting(self):
         from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
         import_legacy_to_postgres(self.source, self.dsn,
