@@ -318,9 +318,8 @@ class OvernightLedgerTests(unittest.TestCase):
         universe=make_universe("moderate",150)
         digest=n._member_hash(universe)
         for i,sym in enumerate(universe["symbols"]):
-            tech=technical(sym,signal="WAIT",risk=17.2)
-            tech["signal_reasons"]=["breakout_not_confirmed",
-                                    "stop_risk_above_profile_limit"]
+            tech=technical(sym,signal="WAIT",risk=9.2 if i<3 else 17.2)
+            tech["signal_reasons"]=["breakout_not_confirmed"]
             tech["tech_score"]=85 if i<3 else 50
             self.store.write_row(self.day,"moderate",sym,{
                 "symbol":sym,"membership_hash":digest,"fund_attempted":True,
@@ -334,8 +333,27 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertEqual(stats["candidate_count"],0)
         self.assertIn("RESEARCH WATCHLIST ONLY",body)
         self.assertIn("breakout not confirmed",body)
-        self.assertIn("stop risk above profile limit",body)
+        self.assertIn("planned stop risk 9.2%",body)
+        self.assertNotIn("planned stop risk 17.2%",body)
         self.assertIn("TEST000",body)
+        self.assertNotIn("Conditional entry",body)
+
+    def test_excess_risk_waits_never_enter_watchlist(self):
+        universe=make_universe("conservative",100)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            tech=technical(sym,signal="WAIT",risk=20.0)
+            self.store.write_row(self.day,"conservative",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "fund_status":"VALIDATED","fundamental":evidence(),
+                "technical":tech
+            })
+        state,stats,body=n.render_snapshot(
+            "conservative",universe,self.store.rows(self.day,"conservative"),self.day)
+        self.assertEqual(state,"READY")
+        self.assertEqual(stats["candidate_count"],0)
+        self.assertIn("No research watchlist passes",body)
+        self.assertNotIn("RESEARCH WATCHLIST ONLY",body)
         self.assertNotIn("Conditional entry",body)
 
     def test_no_picks_explains_wait_without_fabricating_buy(self):
