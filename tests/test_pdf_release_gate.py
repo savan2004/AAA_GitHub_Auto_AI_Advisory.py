@@ -34,7 +34,7 @@ class PDFReleaseGateTests(unittest.TestCase):
                 with self.assertRaisesRegex(ResearchPDFRefused, "identity"):
                     validate_research_pdf(path, expected_symbol="WRONGCO")
                 with self.assertRaisesRegex(ResearchPDFRefused, "identity"):
-                    validate_research_pdf(path, expected_symbol="STRONG")
+                    validate_research_pdf(path, expected_symbol="TRONGCO")
                 with self.assertRaisesRegex(ResearchPDFRefused, "identity"):
                     validate_research_pdf(path, expected_symbol="STRONGCOX")
             finally:
