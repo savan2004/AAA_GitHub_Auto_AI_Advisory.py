@@ -58,7 +58,9 @@
      cell(insight,"Session / data source","Not verified");
      cell(insight,"Fundamentals","Not verified");
      status(notes,"No matching source-dated research is loaded for the selected symbol. Search an NSE company or import a source-dated CSV. Synthetic examples are for interface testing only.",true);
-     action(actions,"Import market data","overview");
+     const importButton=node("button","Import source data","btn ghost dash-evidence-action");
+     importButton.type="button";importButton.addEventListener("click",()=>window.MSKImport?.open("price"));
+     actions.append(importButton);
      return;
    }
    const last=bars.at(-1),prev=bars.at(-2);
