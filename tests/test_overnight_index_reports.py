@@ -86,6 +86,26 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertNotIn("1. TEST",body)
         self.assertIn("Not reviewed: 1",body)
 
+    def test_changed_official_membership_revokes_stale_old_row_evidence(self):
+        universe=make_universe("moderate",150)
+        digest=n._member_hash(universe)
+        old_digest="previous-official-membership"
+        for i,sym in enumerate(universe["symbols"]):
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"trade_date":str(self.day),
+                "membership_hash":old_digest if i==0 else digest,
+                "fund_attempted":True,"fund_status":"VALIDATED",
+                "fundamental":evidence(),"technical":technical(sym)
+            })
+        state,stats,msg=n.render_snapshot("moderate",universe,
+                                          self.store.rows(self.day,"moderate"),self.day)
+        self.assertEqual(state,"PARTIAL")
+        self.assertEqual(stats["reviewed"],149)
+        self.assertEqual(stats["price_fresh"],149)
+        self.assertEqual(stats["validated"],149)
+        self.assertNotIn("1. TEST",msg)
+        self.assertIn("TOP 5 WITHHELD",msg)
+
     def test_missing_eps_is_unverified_and_never_ranked(self):
         universe=make_universe("conservative",100)
         digest=n._member_hash(universe)
