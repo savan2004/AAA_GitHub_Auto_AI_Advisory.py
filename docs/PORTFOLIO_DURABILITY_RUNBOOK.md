@@ -104,9 +104,16 @@ including its data-loss risks. Nothing here provisions a database or authorizes 
    ```
 
 6. Independently compare target rows, average prices and quantities against JSON.
-   Make a managed PostgreSQL backup and restore it to a separate staging database.
-   Existing CI verifies SQLite-based SQL emulation; it does NOT prove that a real
-   PostgreSQL connection, restore, or Render redeployment succeeds.
+   The importer now parses and hashes the same captured immutable source bytes; it
+   verifies each row (uid, symbol, quantity, average cost) before writing the
+   cutover marker. Replaying an identical source checksum is **not** proof of a
+   valid target: the command refuses `already-imported` if any position was
+   changed, removed or added. In particular, do not rerun this legacy import
+   after clients have legitimately traded in PostgreSQL; preserve the DB and
+   use normal backup/restore instead. Make a managed PostgreSQL backup and
+   restore it to a separate staging database. Existing CI verifies SQLite-based
+   SQL emulation; it does NOT prove a real PostgreSQL connection, restore, or
+   Render redeployment succeeds.
 7. For a later, approved production deployment only, configure these secure variables:
 
    ```text
