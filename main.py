@@ -1708,7 +1708,15 @@ def handle_text(m):
 # ── Flask Webhook Routes ─────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ok", "name": "MSK Bot", "version": "6.3"})
+    # Render's currently configured healthCheckPath is "/" (not /health/ready).
+    # Make that existing path reflect actual intake readiness without making
+    # a risky live Render configuration change before customer-data backup.
+    _body, ready_status = health_ready()
+    return jsonify({
+        "status": "ok" if ready_status == 200 else "degraded",
+        "name": "MSK Bot", "version": "6.3",
+        "scope": "local_webhook_intake_only",
+    }), ready_status
 
 
 @app.route("/api/status", methods=["GET"])
