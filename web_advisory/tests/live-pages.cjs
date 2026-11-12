@@ -26,6 +26,14 @@ const pages={
    assert.equal(state.page,tab);
    assert.equal(state.nav,9);
    assert.ok(state.detail>5,"Empty live research view: "+file);
+   if(tab==="pdf"){
+     const count=await page.locator("#mskReportDocument .msk-report-page").count();
+     assert.equal(count,8,"Live fresh Research Report page must render all eight sections");
+   }
+   if(tab==="portfolio"){
+     const tools=await page.locator("#detailBody").innerText();
+     assert.match(tools,/Upload Holdings CSV/,"Live Portfolio Health importer missing");
+   }
    console.log("RENDER_LIVE_DEDICATED_PAGE_PASS",file,JSON.stringify(state));
   }
   await page.goto(base+"/portfolio.html",{waitUntil:"domcontentloaded"});
