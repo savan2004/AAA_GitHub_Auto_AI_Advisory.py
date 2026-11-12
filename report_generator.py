@@ -354,7 +354,13 @@ def collect_inputs(sym: str) -> dict:
     df = get_hist(sym, "1y")
     if df is None or df.empty or len(df) < 60:
         raise ValueError(f"Not enough price history for {sym} (need at least 60 sessions).")
-    ltp = float(df["Close"].iloc[-1])
+    # A complete-looking but year-old chart must never publish current
+    # valuation/trade commentary. Refuse undated, future and stale OHLCV.
+    from technical_price_safety import technical_price_context
+    market = technical_price_context(df)
+    if market is None:
+        raise ValueError("Research report withheld: historical price session stale or unverified")
+    ltp = market["historical_close"]
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         f_nifty = pool.submit(_safe, index_history, "^NSEI", "1y")
