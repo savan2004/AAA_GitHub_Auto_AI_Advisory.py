@@ -2,6 +2,8 @@
 import json
 import tempfile
 import unittest
+import hashlib
+from unittest.mock import patch
 from pathlib import Path
 
 MAIN_FILE = Path(__file__).resolve().parents[1] / "main.py"
@@ -140,6 +142,86 @@ class PostgresPortfolioOfflineTests(unittest.TestCase):
         with self.connector(self.dsn) as conn:
             count = conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
         self.assertEqual(count, 2)
+
+    def test_repeat_import_rechecks_all_positions_even_with_same_digest(self):
+        """No 'already-imported' after lost or corrupted holdings."""
+        from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
+        for mutation in ("quantity", "average", "missing", "extra"):
+            with self.subTest(mutation=mutation):
+                if self.database.exists():
+                    self.database.unlink()
+                self.assertEqual(import_legacy_to_postgres(
+                    self.source, self.dsn, connector=self.connector, apply=True
+                )["status"], "imported")
+                with self.connector(self.dsn) as conn:
+                    if mutation == "quantity":
+                        conn.execute("UPDATE holdings SET qty=98 WHERE uid=100")
+                    elif mutation == "average":
+                        conn.execute("UPDATE holdings SET avg=998 WHERE uid=100")
+                    elif mutation == "missing":
+                        conn.execute("DELETE FROM holdings WHERE uid=100")
+                    else:
+                        conn.execute(
+                            "INSERT INTO holdings(uid,symbol,qty,avg) "
+                            "VALUES(300,'EXTRA',1,5)"
+                        )
+                with self.connector(self.dsn) as conn:
+                    corrupted = conn.execute(
+                        "SELECT uid,symbol,qty,avg FROM holdings "
+                        "ORDER BY uid,symbol"
+                    ).fetchall()
+                with self.assertRaisesRegex(PortfolioStorageError,
+                                            "Stored holdings differ"):
+                    import_legacy_to_postgres(
+                        self.source, self.dsn, connector=self.connector,
+                        apply=True
+                    )
+                with self.connector(self.dsn) as conn:
+                    persisted = conn.execute(
+                        "SELECT uid,symbol,qty,avg FROM holdings "
+                        "ORDER BY uid,symbol"
+                    ).fetchall()
+                self.assertEqual(persisted, corrupted)  # no silent overwrite
+
+    def test_postgres_source_bytes_are_same_for_hash_and_rows(self):
+        """File changed between reads cannot forge a different cutover marker."""
+        from postgres_portfolio import import_legacy_to_postgres
+        frozen = self.source.read_bytes()
+        digest = hashlib.sha256(frozen).hexdigest()
+        self.source.write_text(json.dumps({
+            "100": {"SBIN": {"qty": 99, "avg": 1}}
+        }), encoding="utf-8")
+        with patch.object(Path, "read_bytes", return_value=frozen):
+            outcome = import_legacy_to_postgres(
+                self.source, self.dsn, connector=self.connector, apply=True
+            )
+        self.assertEqual(outcome["positions"], 2)
+        with self.connector(self.dsn) as conn:
+            rows = conn.execute(
+                "SELECT uid,symbol,qty,avg FROM holdings ORDER BY uid,symbol"
+            ).fetchall()
+            marker = conn.execute(
+                "SELECT source_sha256 FROM portfolio_cutover WHERE id=1"
+            ).fetchone()[0]
+        self.assertEqual(rows, [
+            (100, "SBIN", 2, 100.25),
+            (200, "HDFCBANK", 3, 1500.5),
+        ])
+        self.assertEqual(marker, digest)
+
+    def test_snapshot_parser_rejects_mutable_buffers_and_invalid_user_ids(self):
+        from portfolio_migration import load_legacy_holdings, PortfolioMigrationError
+        with self.assertRaisesRegex(PortfolioMigrationError, "immutable bytes"):
+            load_legacy_holdings(
+                self.source, snapshot_bytes=bytearray(self.source.read_bytes())
+            )
+        self.source.write_text(
+            '{"0":{"SBIN":{"qty":1,"avg":100}}}', encoding="utf-8"
+        )
+        with self.assertRaisesRegex(PortfolioMigrationError,
+                                    "positive 64-bit"):
+            load_legacy_holdings(self.source)
+        self.assertFalse(self.database.exists())
 
     def test_conflicting_snapshot_is_refused_without_overwriting(self):
         from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
