@@ -119,6 +119,13 @@ class PortfolioPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(preflight.BackupPreflightError, "differ"):
             preflight.verify_source_against_backup(self.source, self.source)
 
+    def test_hardlinked_candidate_cannot_pass_as_independent_copy(self):
+        # Even when bytes match, a hardlink is not a separate backup.
+        os.link(self.source, self.backup)
+        with self.assertRaisesRegex(preflight.BackupPreflightError,
+                                     "same physical file"):
+            preflight.verify_source_against_backup(self.source, self.backup)
+
     def test_cli_reports_only_aggregate_and_cannot_approve_production(self):
         from contextlib import redirect_stdout
         from io import StringIO
