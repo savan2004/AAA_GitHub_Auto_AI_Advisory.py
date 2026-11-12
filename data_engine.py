@@ -580,6 +580,20 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _with_current_quote(info: dict, symbol: str) -> dict:
+    """Keep a 60-minute fundamentals cache from serving a stale stock price.
+
+    Only the shorter-lived, positive-finite quote path may populate price.
+    Do not mutate the cached dictionary or fall back to its historical price.
+    """
+    result = dict(info)
+    result.pop("price", None)
+    current = get_live_price(symbol)
+    if current is not None:
+        result["price"] = current
+    return result
+
+
 def get_info(symbol: str) -> dict:
     """
     Fetch live quote + fundamentals for `symbol` (NSE ticker without .NS suffix).
@@ -592,10 +606,10 @@ def get_info(symbol: str) -> dict:
     yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
     cache_key = f"info_v2_{yahoo_sym}"
 
-    cached = cached_get(cache_key, TTL_FUND)
+    cached = cached_get(cache_key, TTL_PRICE if is_index else TTL_FUND)
     if cached is not None:
         logger.debug(f"[Cache HIT] {cache_key}")
-        return cached
+        return cached if is_index else _with_current_quote(cached, raw)
 
     info: dict = {}
 
@@ -659,9 +673,10 @@ def get_info(symbol: str) -> dict:
                 logger.debug(f"[DataEngine] Finnhub {sym_clean}: {e}")
 
     if info:
+        # Cache fundamentals independently from the short-lived market quote.
         cached_set(cache_key, info, TTL_FUND)
 
-    return info
+    return _with_current_quote(info, raw)
 
 
 def get_live_price(symbol: str) -> Optional[float]:
