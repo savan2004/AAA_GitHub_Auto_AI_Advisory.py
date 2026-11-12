@@ -28,6 +28,7 @@ from telebot import types
 
 # ── Local Module Imports ──────────────────────────────────────────────────────
 from data_engine import get_hist, get_info, get_live_price, get_verified_quote, normalized_debt_equity_ratio, batch_quotes
+from financial_quality import financial_source_summary
 from technical_indicators import (
     calc_rsi, calc_ema, calc_macd, calc_atr, calc_asi,
     calc_bollinger, trend_label, swing_signal, rsi_label,
@@ -495,6 +496,8 @@ def build_adv(sym):
         frow("Debt/Equity", f"{de:g}" if de is not None else None, "x") + (f"  |  Beta: {beta}" if beta else ""),
         frow("Div Yield", div_y, "%"),
         "━━━━━━━━━━━━━━━━━━━━",
+        financial_source_summary(fund),
+        "━━━━━━━━━━━━━━━━━━━━",
         _get_tgt_line(trend, ltp, atr),
     ]
     if news_text:
@@ -603,6 +606,8 @@ def build_fundamental_text(sym, cname=None):
         frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
         frow("Debt/Equity", f"{de:g}" if de is not None else None, "x") + (f"  |  Beta: {beta}" if beta else ""),
         frow("Div Yield", div_y, "%"),
+        "━━━━━━━━━━━━━━━━━━━━",
+        financial_source_summary(fund),
         "━━━━━━━━━━━━━━━━━━━━",
         "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
     ]
