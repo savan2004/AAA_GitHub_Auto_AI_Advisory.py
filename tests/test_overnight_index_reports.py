@@ -177,6 +177,32 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertFalse(n.readiness_check(
             self.store,self.day,("conservative",))["ready"])
 
+    def test_telegram_withholds_orphan_ready_and_missing_company_evidence(self):
+        universe=make_universe("conservative",100)
+        digest=n._member_hash(universe)
+        stats={"expected":100,"reviewed":100,"price_fresh":100,
+               "membership_hash":digest}
+        self.store.save_report(self.day,"conservative","READY",stats,
+                               "FALSE TOP 5 SUMMARY")
+        now=datetime(2026,10,30,8,10,tzinfo=n.IST)
+        message=n.load_prepared_report("conservative",store=self.store,now=now)
+        self.assertIn("withheld",message.lower())
+        self.assertNotIn("FALSE TOP 5 SUMMARY",message)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"conservative",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "technical":technical(sym)
+            })
+        self.assertEqual(
+            n.load_prepared_report("conservative",store=self.store,now=now),
+            "FALSE TOP 5 SUMMARY")
+        self.store.write_row(self.day,"conservative",universe["symbols"][0],{
+            "symbol":universe["symbols"][0],"membership_hash":digest,
+            "fund_attempted":False,"technical":technical(universe["symbols"][0])
+        })
+        self.assertIn("withheld",n.load_prepared_report(
+            "conservative",store=self.store,now=now).lower())
+
     def test_missing_eps_is_unverified_and_never_ranked(self):
         universe=make_universe("conservative",100)
         digest=n._member_hash(universe)
