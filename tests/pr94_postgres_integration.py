@@ -66,6 +66,7 @@ def main():
             "HDFCBANK": {"qty": 4, "avg": 1500.50},
         },
         "200": {"RELIANCE": {"qty": 3, "avg": 2400.00}},
+        "300": {},  # User without positions must survive cutover & restore.
     }
     with tempfile.TemporaryDirectory(prefix="msk-pr94-synthetic-") as work:
         source = Path(work) / "synthetic-holdings.json"
@@ -75,7 +76,8 @@ def main():
         backup = Path(work) / "synthetic-snapshot.json"
         preflight = create_local_snapshot(source, backup)
         assert preflight["positions"] == 3
-        assert preflight["users"] == 2
+        assert preflight["users"] == 3
+        assert preflight["zero_holding_users"] == 1
         assert preflight["source_and_copy_equal"]
         assert preflight["backup_mode"] == "0600"
         assert not preflight["off_host_verified"]
@@ -86,6 +88,10 @@ def main():
         assert dryrun == {"status": "dry-run", "positions": 3}, dryrun
         assert import_legacy_to_postgres(backup, dsn, apply=True)["status"] == "imported"
 
+        with psycopg.connect(dsn) as conn:
+            assert conn.execute(
+                "SELECT uid FROM portfolio_accounts ORDER BY uid"
+            ).fetchall() == [(100,), (200,), (300,)]
         expected_rows, marker = read_rows(dsn)
         assert len(expected_rows) == 3, expected_rows
         assert marker and marker[1] == 3, marker
@@ -282,6 +288,10 @@ def main():
         assert restored_rows == live_rows, "Real database restore row/cost mismatch"
         assert restored_marker == live_marker, "Migration cutover marker missing after restore"
         assert PostgresPortfolioStore(restore_dsn).get(100)["SBIN"]["qty"] == 42.0
+        with psycopg.connect(restore_dsn) as conn:
+            assert conn.execute(
+                "SELECT uid FROM portfolio_accounts ORDER BY uid"
+            ).fetchall() == [(100,), (200,), (300,)]
         restored_state = DurableBotState(restore_dsn)
         assert restored_state.get_update_stage(801) == "dispatched"
         assert restored_state.get_update_stage(802) == "failed"
@@ -298,6 +308,7 @@ def main():
         "private_snapshot_readback": "passed",
         "source_snapshot_sha256_matched": "passed",
         "off_host_backup_tested": False,
+        "source_account_count_including_empty": 3,
         "source_position_count": 3,
         "concurrent_insert_count": 40,
         "restored_position_count": len(restored_rows),
