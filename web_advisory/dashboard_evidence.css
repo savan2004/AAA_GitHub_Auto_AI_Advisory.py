@@ -52,3 +52,6 @@
 }
 @media(max-width:360px){.web-pro .dash-evidence-grid{grid-template-columns:minmax(0,1fr)}}
 @media print{.web-pro #dashboardEvidence{display:none!important}}
+
+/* Do not show an old symbol’s price cards under a newly typed ticker. */
+.web-pro[data-page="overview"][data-symbol-pending="true"] .snapshot-grid{display:none!important}
