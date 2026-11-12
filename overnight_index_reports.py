@@ -200,8 +200,11 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
         need_price=not fresh_member or not _fresh(old.get("technical"),session)
         need_fund=not fresh_member or not old.get("fund_attempted")
         # Rerun unverified providers once more on an overnight retry, bounded.
+        # A previously missing Telegram-only configuration caused two
+        # provider-unavailable attempts before the finance-only worker fix.
+        # Allow one bounded recovery, never unlimited API retries.
         need_fund |= bool(old.get("fund_status")=="UNVERIFIED" and
-                          int(old.get("fund_attempts",0))<2)
+                          int(old.get("fund_attempts",0))<3)
         if not need_price and not need_fund:
             examined+=1
             continue
