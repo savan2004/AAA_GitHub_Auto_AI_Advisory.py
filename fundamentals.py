@@ -41,7 +41,7 @@ import logging
 import math
 import random
 from datetime import date
-from financial_quality import annual_sales_from_table
+from financial_quality import annual_sales_from_table, normalize_roe_percent
 from typing import Dict, Any, Optional
 
 import requests
@@ -374,14 +374,11 @@ def get_fundamentals(sym: str) -> dict:
             result["pe"]     = safe_val(info, "pe")
             result["fwd_pe"] = safe_val(info, "forwardPE")
             result["pb"]     = safe_val(info, "pb")
-            roe_raw = safe_val(info, "roe")
-            roe_unit = info.get("roe_unit")
-            # Never infer units from magnitude: Finnhub's 0.8 means 0.8%,
-            # while Yahoo's 0.8 represents 80%. Unknown basis is withheld.
-            if roe_raw is not None and roe_unit == "fraction":
-                result["roe"] = round(roe_raw * 100, 2)
-            elif roe_raw is not None and roe_unit == "percent":
-                result["roe"] = roe_raw
+            # Avoid safe_val() here: it rounds the FRACTION to two decimal
+            # places before multiplying, corrupting a valid 0.08% ROE.
+            result["roe"] = normalize_roe_percent(
+                info.get("roe"), info.get("roe_unit")
+            )
             result["eps"]    = safe_val(info, "eps")
             result["mcap"]   = info.get("market_cap")
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
@@ -462,10 +459,9 @@ def get_fundamentals(sym: str) -> dict:
             if result["fwd_pe"] is None: result["fwd_pe"] = safe_val(yf_info, "forwardPE")
             if result["pb"]    is None: result["pb"]    = safe_val(yf_info, "priceToBook")
             if result["roe"]   is None:
-                roe_raw = safe_val(yf_info, "returnOnEquity")
-                # Yahoo quoteSummary/yfinance returnOnEquity is a fraction
-                # even when the equity denominator produces >100% ROE.
-                result["roe"] = round(roe_raw * 100, 2) if roe_raw is not None else None
+                result["roe"] = normalize_roe_percent(
+                    yf_info.get("returnOnEquity"), "fraction"
+                )
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
             if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
             if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
