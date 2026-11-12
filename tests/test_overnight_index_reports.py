@@ -314,6 +314,25 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertNotIn("1. TEST",body)
         self.assertIn("Provisional 100",body)
 
+    def test_no_picks_explains_wait_without_fabricating_buy(self):
+        universe=make_universe("moderate",150)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            signal=technical(sym,signal="WAIT")
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "fund_status":"VALIDATED","fundamental":evidence(),
+                "technical":signal
+            })
+        state,stats,body=n.render_snapshot(
+            "moderate",universe,self.store.rows(self.day,"moderate"),self.day
+        )
+        self.assertEqual(state,"READY")
+        self.assertEqual(stats["candidate_count"],0)
+        self.assertIn("all 150 financially rule-qualified stocks currently show wait",body.lower())
+        self.assertIn("No Top 5 issued",body)
+        self.assertNotIn("Conditional entry",body)
+
     def test_current_complete_rule_gated_watchlist_and_risk_limit(self):
         universe=make_universe("aggressive",250)
         h=n._member_hash(universe)
