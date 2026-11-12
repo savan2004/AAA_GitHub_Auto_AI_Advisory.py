@@ -391,7 +391,7 @@ def get_fundamentals(sym: str) -> dict:
     except Exception as e:
         logger.warning(f"get_fundamentals data_engine {sym}: {e}")
 
-    mark_new_fields(before_source, "data_engine / Yahoo", scope="unknown")
+    mark_new_fields(before_source, "data_engine (mixed)", scope="unknown")
 
     # ── Source 2: Screener.in (NO key required — fills most gaps) ────────────
     missing = [k for k in ["pe", "roe", "de", "mcap", "rev", "w52h", "w52l", "eps", "div_y", "pb"]
