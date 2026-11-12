@@ -80,6 +80,9 @@ class DurableBotState:
         # If enabled but unavailable, fail startup; never silently turn off
         # durable deduplication or substitute the in-memory queue.
         with self._connector(self._dsn) as conn:
+            # Multiple webhook workers can boot simultaneously. Serialize
+            # CREATE SCHEMA/TABLE/INDEX to avoid PostgreSQL catalog races.
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (628705164101,))
             for sql in _SCHEMA:
                 conn.execute(sql)
 
