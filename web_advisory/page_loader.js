@@ -28,6 +28,17 @@
       document.body.append(script);
     });
   }
+  // dashboard.js initializes before report.js and portfolio_audit.js.
+  // Re-render only after *all* page modules are registered; otherwise a
+  // direct /pdf.html or /portfolio.html visit can display a blank/legacy panel.
+  const route=location.pathname.split("/").pop().toLowerCase();
+  const current={
+    "technical.html":"technical","fundamental.html":"fundamental",
+    "chart.html":"chart","screener.html":"screener","breadth.html":"breadth",
+    "pdf.html":"pdf","portfolio.html":"portfolio","ai.html":"ai"
+  }[route]||"overview";
+  if(!window.MSKDashboard?.go)throw Error("Research navigation failed to initialize");
+  window.MSKDashboard.go(current,{scroll:false,updateHistory:false});
   document.dispatchEvent(new CustomEvent("msk:route-loaded",{detail:{path:location.pathname}}));
  }catch(error){
   console.error("Dedicated research page failed to load",error);
