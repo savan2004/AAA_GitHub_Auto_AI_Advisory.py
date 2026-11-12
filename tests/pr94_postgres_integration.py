@@ -4,6 +4,7 @@ Designed exclusively for an isolated local CI PostgreSQL database; refuses any
 non-local host, unexpected database name or user. Never reads production holdings.
 """
 import concurrent.futures
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,8 @@ import tempfile
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
+
+from msk_durable_state import DurableBotState, DurableStateError
 
 from postgres_portfolio import (
     PostgresPortfolioStore,
@@ -136,6 +139,76 @@ def main():
         live_rows, live_marker = read_rows(dsn)
         assert len(live_rows) == 3 and live_marker == marker
 
+        # MSK durable webhook ledger restart and subscriber governance:
+        # only synthetic test user IDs and update IDs; no real Telegram calls.
+        state = DurableBotState(dsn)
+        assert state.claim(801, user_id=100)
+        assert not state.claim(801, user_id=100)
+        assert state.get_subscriber(100)["status"] == "inactive"
+        assert not state.is_entitled(100, "research_pdf")
+        state.finish(801, dispatched=True)
+        assert state.get_update_stage(801) == "dispatched"
+
+        state2 = DurableBotState(dsn)  # independent DB connection/process-equivalent
+        assert not state2.claim(801, user_id=100), "Duplicate after restart"
+        assert state2.claim(802, user_id=200)
+        state2.finish(802, dispatched=False)
+        assert not state.claim(802, user_id=200), "Failed dispatch must not replay"
+        assert state.claim(803, user_id=200)  # crash-before-finish simulation
+        assert not state2.claim(803, user_id=200), "In-flight duplicate replay"
+        assert state2.get_update_stage(803) == "claimed"
+        assert state.claim(804, user_id=200)
+        state.abandon_unscheduled(804)  # submit() rejected before any handler ran
+        assert state2.claim(804, user_id=200), "Safe retry after no submission"
+        state2.finish(804, dispatched=True)
+
+        expiry = datetime.now(timezone.utc) + timedelta(days=7)
+        assert state.apply_reviewed_membership(
+            100, "active", expiry, ("research_pdf",),
+            event_key="owner-review-event-000001",
+            reviewer_ref="owner-approved-001"
+        )
+        assert state.is_entitled(100, "research_pdf")
+        assert not state.is_entitled(100, "portfolio_premium")
+        assert not state.is_entitled(
+            100, "research_pdf", now=expiry + timedelta(days=1)
+        ), "Expired subscription still entitled"
+        assert not state2.apply_reviewed_membership(
+            100, "active", expiry, ("research_pdf",),
+            event_key="owner-review-event-000001",
+            reviewer_ref="owner-approved-001"
+        ), "Duplicate approval must not increment version"
+        try:
+            state2.apply_reviewed_membership(
+                100, "blocked", None, (),
+                event_key="owner-review-event-000001",
+                reviewer_ref="owner-approved-001"
+            )
+        except DurableStateError:
+            pass
+        else:
+            raise AssertionError("Conflicting review event was accepted")
+        assert state.get_subscriber(100)["version"] == 1
+        assert state2.apply_reviewed_membership(
+            100, "blocked", None, (),
+            event_key="owner-review-event-000002",
+            reviewer_ref="owner-approved-001"
+        )
+        assert state2.get_subscriber(100)["version"] == 2
+        assert not state.is_entitled(100, "research_pdf")
+        assert state.get_subscriber(200)["status"] == "inactive"
+        try:
+            state.apply_reviewed_membership(
+                200, "active", datetime(2026, 11, 12),
+                ("research_pdf",),
+                event_key="owner-review-event-000003",
+                reviewer_ref="owner-approved-001"
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Naive subscription expiry was accepted")
+
         # Real pg_dump/pg_restore to a NEW isolated database.
         for cmd in ("pg_dump", "pg_restore"):
             if not shutil.which(cmd):
@@ -155,6 +228,16 @@ def main():
         assert restored_rows == live_rows, "Real database restore row/cost mismatch"
         assert restored_marker == live_marker, "Migration cutover marker missing after restore"
         assert PostgresPortfolioStore(restore_dsn).get(100)["SBIN"]["qty"] == 42.0
+        restored_state = DurableBotState(restore_dsn)
+        assert restored_state.get_update_stage(801) == "dispatched"
+        assert restored_state.get_update_stage(802) == "failed"
+        assert restored_state.get_update_stage(803) == "claimed"
+        assert not restored_state.claim(801, user_id=100)
+        assert restored_state.get_subscriber(100)["status"] == "blocked"
+        assert restored_state.get_subscriber(100)["version"] == 2
+        assert not restored_state.is_entitled(100, "research_pdf")
+        assert restored_state.get_subscriber(200)["status"] == "inactive"
+
 
     print(json.dumps({
         "test_kind": "real_local_postgresql16_with_synthetic_holdings",
@@ -166,6 +249,13 @@ def main():
         "corrupt_input_rejected": "passed",
         "conflicting_import_rejected": "passed",
         "pg_dump_restore": "passed",
+        "durable_telegram_restart_duplicate": "rejected",
+        "durable_failed_dispatch_replay": "blocked",
+        "durable_inflight_replay": "blocked",
+        "safe_no_submit_retry": "passed",
+        "subscriber_review_idempotency": "passed",
+        "subscriber_expiry_and_revocation": "passed",
+        "subscriber_and_update_ledger_restored": "passed",
         "customer_data_accessed": False,
     }, indent=2))
 
