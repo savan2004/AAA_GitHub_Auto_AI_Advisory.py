@@ -375,7 +375,10 @@ def render_snapshot(profile, universe, records, session):
             (r for r in qualified if r["technical"].get("signal")=="WAIT"
              and isinstance(r["technical"].get("tech_score"),(int,float))
              and math.isfinite(r["technical"]["tech_score"])
-             and r["technical"].get("tech_score",0)>=70),
+             and r["technical"].get("tech_score",0)>=70
+             and isinstance(r["technical"].get("risk_pct"),(int,float))
+             and math.isfinite(r["technical"]["risk_pct"])
+             and 0<r["technical"]["risk_pct"]<=LIMITS[profile]),
             key=lambda r:(-r["technical"]["tech_score"],r["symbol"]))[:3]
         if watch:
             lines.append("👀 <b>RESEARCH WATCHLIST ONLY — NOT BUY SIGNALS</b>")
@@ -390,6 +393,9 @@ def render_snapshot(profile, universe, records, session):
                 lines.append(f"• {html.escape(r['symbol'])}: technical {t['tech_score']:.0f}/100, "
                              f"planned stop risk {risk_text}; {html.escape(reason)}")
             lines.append("⛔ Recheck completed market candles, volume and stop risk before any entry.")
+        elif qualified:
+            lines.append(f"⛔ No research watchlist passes the profile stop-risk cap "
+                         f"({LIMITS[profile]:.0f}%) and technical quality filter.")
     else:
         lines.append(f"✅ <b>Verified-rule watchlist: {len(selected)} / 5 qualifying</b>")
         for i,t in enumerate(selected,1):
