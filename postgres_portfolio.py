@@ -149,6 +149,30 @@ class PostgresPortfolioStore:
             return result.rowcount > 0
 
 
+def _holdings_match_snapshot(conn, rows):
+    """Compare every migrated position, not just the checksum marker or count.
+
+    Read-only verification; never repair/overwrite existing portfolios silently.
+    """
+    stored = conn.execute(
+        "SELECT uid, symbol, qty, avg FROM holdings"
+    ).fetchall()
+    if len(stored) != len(rows):
+        return False
+
+    def normalize(items):
+        return sorted(
+            (int(uid), symbol, _amount(qty, positive=True),
+             _amount(avg, positive=False))
+            for uid, symbol, qty, avg in items
+        )
+
+    try:
+        return normalize(stored) == normalize(rows)
+    except (TypeError, ValueError, InvalidOperation):
+        return False
+
+
 def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow_empty=False):
     """Import all holdings and commit a cutover marker atomically.
 
@@ -174,6 +198,11 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
         if marker:
             if marker[0] != digest:
                 raise PortfolioStorageError("Different legacy snapshot was already imported")
+            if not _holdings_match_snapshot(conn, rows):
+                raise PortfolioStorageError(
+                    "Stored holdings differ from frozen migration snapshot; "
+                    "refusing already-imported verification"
+                )
             return {"status": "already-imported", "positions": len(rows)}
         count = conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
         if count:
@@ -187,8 +216,8 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
                  _amount(avg, positive=False)),
             )
         inserted = conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
-        if inserted != len(rows):
-            raise PortfolioStorageError("Imported position count mismatch")
+        if inserted != len(rows) or not _holdings_match_snapshot(conn, rows):
+            raise PortfolioStorageError("Imported positions failed readback verification")
         conn.execute(
             "INSERT INTO portfolio_cutover(id, source_sha256, initial_position_count)"
             " VALUES (1, %s, %s)", (digest, len(rows))
