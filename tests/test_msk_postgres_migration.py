@@ -32,6 +32,10 @@ class _SQLitePostgresConnection:
 
     def execute(self, query, params=()):
         from decimal import Decimal
+        # No-op in the SQLite offline adapter: the separate real PostgreSQL
+        # integration checks advisory-lock concurrency across worker threads.
+        if query.startswith("SELECT pg_advisory_xact_lock("):
+            return self.conn.execute("SELECT 1")
         converted = tuple(str(p) if isinstance(p, Decimal) else p for p in params)
         return self.conn.execute(query.replace("%s", "?"), converted)
 
@@ -104,6 +108,28 @@ class PostgresPortfolioOfflineTests(unittest.TestCase):
         self.assertFalse(restarted.remove(100, "SBIN"))
         self.assertEqual(restarted.get(100), {})
         self.assertEqual(restarted.get(200)["HDFCBANK"]["qty"], 3.0)
+
+    def test_postgres_store_caps_new_holdings_and_quantity(self):
+        from postgres_portfolio import (
+            import_legacy_to_postgres, PostgresPortfolioStore
+        )
+        import_legacy_to_postgres(self.source, self.dsn,
+                                  connector=self.connector, apply=True)
+        store = PostgresPortfolioStore(self.dsn, connector=self.connector)
+        for i in range(9):
+            store.add(100, f"TEST{i}", 1, 100)
+        self.assertEqual(len(store.get(100)), 10)
+        before = store.get(100)
+        with self.assertRaisesRegex(ValueError, "10 distinct"):
+            store.add(100, "NEW", 1, 200)
+        self.assertEqual(store.get(100), before)
+        store.add(100, "SBIN", 1, 200)
+        self.assertEqual(store.get(100)["SBIN"]["qty"], 3)
+        with self.assertRaisesRegex(ValueError, "quantity exceeds limit"):
+            store.add(100, "SBIN", 1_000_000_000, 200)
+        for qty in (1.1, 1_000_000_001, True):
+            with self.subTest(qty=qty), self.assertRaises(ValueError):
+                store.add(100, "SBIN", qty, 200)
 
     def test_import_detects_corrupted_cost_with_same_row_count_and_rolls_back(self):
         from postgres_portfolio import import_legacy_to_postgres, PortfolioStorageError
