@@ -104,6 +104,49 @@ jobs:
       - name: Check underlying full index ledger
         run: python -m overnight_index_reports check-readiness --profile "${{ matrix.profile }}"
 
+  pr-refresh-reports:
+    # Maintainer-only rebuild of summaries from stored company rows.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'msk-index-refresh-reports' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/msk-equity-and-portfolio-p0-20261101'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [conservative, moderate, aggressive]
+    concurrency:
+      group: msk-index-overnight-${{ matrix.profile }}
+      cancel-in-progress: false
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_RESEARCH_ONLY: '1'
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require private research connection
+        run: |
+          test -n "$MSK_INDEX_DATABASE_URL" || {
+            echo "::error::Research connection absent. No reports refreshed."
+            exit 1
+          }
+      - name: Install database client
+        run: python -m pip install 'psycopg[binary]>=3.2,<3.4' requests
+      - name: Rebuild summary from actual company ledger
+        run: python -m overnight_index_reports finalize --profile "${{ matrix.profile }}"
+      - name: Require matching durable evidence
+        run: python -m overnight_index_reports check-readiness --profile "${{ matrix.profile }}"
+
   morning-readiness:
     if: >-
       (github.event_name == 'schedule' &&
