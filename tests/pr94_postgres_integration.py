@@ -73,6 +73,31 @@ def main():
         assert marker and marker[1] == 3, marker
         assert import_legacy_to_postgres(source, dsn, apply=True)["status"] == "already-imported"
 
+        # Genuine PostgreSQL readback integrity gate: identical source SHA is
+        # not proof if the DB was damaged after cutover.
+        with psycopg.connect(dsn) as conn:
+            conn.execute(
+                "UPDATE holdings SET qty=qty+1 WHERE uid=%s AND symbol=%s",
+                (100, "SBIN")
+            )
+        try:
+            import_legacy_to_postgres(source, dsn, apply=True)
+        except PortfolioStorageError as exc:
+            assert "Stored holdings differ" in str(exc), str(exc)
+        else:
+            raise AssertionError("Tampered holdings accepted as already-imported")
+        with psycopg.connect(dsn) as conn:
+            assert conn.execute(
+                "SELECT qty FROM holdings WHERE uid=%s AND symbol=%s",
+                (100, "SBIN")
+            ).fetchone()[0] == 3, "Verification refusal should not overwrite rows"
+            conn.execute(
+                "UPDATE holdings SET qty=%s WHERE uid=%s AND symbol=%s",
+                (2, 100, "SBIN")
+            )
+        assert read_rows(dsn)[0] == expected_rows
+        assert import_legacy_to_postgres(source, dsn, apply=True)["status"] == "already-imported"
+
         restarted = PostgresPortfolioStore(dsn)
         assert restarted.get(100)["SBIN"] == {"qty": 2.0, "avg": 500.25}
 
