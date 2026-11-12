@@ -29,6 +29,7 @@ from telebot import types
 # ── Local Module Imports ──────────────────────────────────────────────────────
 from data_engine import get_hist, get_info, get_live_price, get_verified_quote, normalized_debt_equity_ratio, batch_quotes
 from financial_quality import financial_source_summary
+from technical_price_safety import technical_price_context, guarded_target_line
 from technical_indicators import (
     calc_rsi, calc_ema, calc_macd, calc_atr, calc_asi,
     calc_bollinger, trend_label, swing_signal, rsi_label,
@@ -398,10 +399,19 @@ def build_adv(sym):
     if len(df) < 2:
         return f"❌ <b>{sym}</b> insufficient historical data."
 
+    # The last daily candle is NOT live LTP. Reject undated/stale history,
+    # and permit targets only with independently timestamp-verified quotes.
+    try:
+        observed = get_verified_quote(sym)
+    except Exception:
+        observed = None
+    market = technical_price_context(df, observed)
+    if market is None:
+        return f"⚠️ <b>{sym}</b>: historical candles undated, stale or invalid; analysis withheld."
     close = df["Close"]
-    ltp = round(float(close.iloc[-1]), 2)
-    prev = float(close.iloc[-2])
-    chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+    ltp = market["historical_close"]
+    prev = market["previous_close"]
+    chg = round((ltp - prev) / prev * 100, 2)
     rsi = calc_rsi(close)
     macd, _, _ = calc_macd(close)
     ema20 = calc_ema(close, 20)
@@ -467,20 +477,25 @@ def build_adv(sym):
         pass
 
     ai_text = ""
-    try:
-        ai_text = engine_ai_insights(
-            sym, ltp, rsi, macd, trend,
-            str(pe if pe is not None else "N/A"),
-            str(roe if roe is not None else "N/A")
-        ) or ""
-    except Exception:
-        ai_text = "AI insights unavailable."
+    if market["target_price"] is None:
+        ai_text = "AI price-target insight withheld: no verified current-session price."
+    else:
+        try:
+            ai_text = engine_ai_insights(
+                sym, market["target_price"], rsi, macd, trend,
+                str(pe if pe is not None else "N/A"),
+                str(roe if roe is not None else "N/A")
+            ) or ""
+        except Exception:
+            ai_text = "AI insights unavailable."
 
     chg_icon = "🟢" if chg >= 0 else "🔴"
 
     rows = [
         f"🏢 <b>{name}</b>  ({sym})",
-        f"{chg_icon} LTP: ₹{ltp:,.2f}  <b>({chg:+.2f}%)</b>",
+        market["historical_line"],
+        market["verified_quote_line"],
+        f"{chg_icon} Historical close change: <b>{chg:+.2f}%</b> vs prior candle",
         "━━━━━━━━━━━━━━━━━━━━",
         f"📐 EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}",
         f"📏 52W H: ₹{w52h or 'N/A'}  |  52W L: ₹{w52l or 'N/A'}" + (f"  ({dist52:+.1f}% from peak)" if dist52 is not None else ""),
@@ -500,7 +515,7 @@ def build_adv(sym):
         "━━━━━━━━━━━━━━━━━━━━",
         financial_source_summary(fund),
         "━━━━━━━━━━━━━━━━━━━━",
-        _get_tgt_line(trend, ltp, atr),
+        guarded_target_line(_get_tgt_line, trend, atr, market),
     ]
     if news_text:
         rows += ["━━━━━━━━━━━━━━━━━━━━", f"📰 <b>NEWS</b>\n{news_text}"]
@@ -527,10 +542,19 @@ def build_technical_text(sym, cname=None):
     if df is None or df.empty or len(df) < 2:
         return f"❌ <b>{sym}</b> not found or insufficient data."
 
+    # The last daily candle is NOT live LTP. Reject undated/stale history,
+    # and permit targets only with independently timestamp-verified quotes.
+    try:
+        observed = get_verified_quote(sym)
+    except Exception:
+        observed = None
+    market = technical_price_context(df, observed)
+    if market is None:
+        return f"⚠️ <b>{sym}</b>: historical candles undated, stale or invalid; analysis withheld."
     close = df["Close"]
-    ltp = round(float(close.iloc[-1]), 2)
-    prev = float(close.iloc[-2])
-    chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+    ltp = market["historical_close"]
+    prev = market["previous_close"]
+    chg = round((ltp - prev) / prev * 100, 2)
     rsi = calc_rsi(close)
     macd, _, _ = calc_macd(close)
     ema20 = calc_ema(close, 20)
@@ -549,7 +573,9 @@ def build_technical_text(sym, cname=None):
     chg_icon = "🟢" if chg >= 0 else "🔴"
     rows = [
         f"📊 <b>{name}</b>  ({sym}) — Technical Analysis",
-        f"{chg_icon} LTP: ₹{ltp:,.2f}  <b>({chg:+.2f}%)</b>",
+        market["historical_line"],
+        market["verified_quote_line"],
+        f"{chg_icon} Historical close change: <b>{chg:+.2f}%</b> vs prior candle",
         "━━━━━━━━━━━━━━━━━━━━",
         f"📐 EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}",
         f"📏 52W H: ₹{w52h}  |  52W L: ₹{w52l}" + (f"  ({dist52:+.1f}% from peak)" if dist52 is not None else ""),
@@ -558,7 +584,7 @@ def build_technical_text(sym, cname=None):
         f"📊 RSI: {rsi}  |  MACD: {'▲' if macd > 0 else '▼'} {macd}  |  ASI: {asi}",
         f"📉 ATR(14): ₹{atr if atr else 'N/A'}",
         "━━━━━━━━━━━━━━━━━━━━",
-        _get_tgt_line(trend, ltp, atr),
+        guarded_target_line(_get_tgt_line, trend, atr, market),
         "━━━━━━━━━━━━━━━━━━━━",
         "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
     ]
