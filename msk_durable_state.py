@@ -176,7 +176,8 @@ class DurableBotState:
         return row is not None
 
     def apply_reviewed_membership(self, user_id, status, expires_at, features,
-                                  *, event_key, reviewer_ref, now=None):
+                                  *, event_key, reviewer_ref, expected_version,
+                                  now=None):
         """Operator-only API, deliberately not exposed as any Telegram handler.
 
         Idempotent event-key journal, atomic membership+feature replacement.
@@ -187,9 +188,13 @@ class DurableBotState:
             raise ValueError("Invalid membership status")
         if not isinstance(features, (tuple, list, set)):
             raise ValueError("Features must be a collection")
+        if len(features) > 32 or any(
+                not isinstance(f, str) or not _FEATURE.fullmatch(f)
+                for f in features):
+            raise ValueError("Invalid entitlement name or feature count")
         cleaned = sorted(set(features))
-        if any(not isinstance(f, str) or not _FEATURE.fullmatch(f) for f in cleaned):
-            raise ValueError("Invalid entitlement name")
+        if type(expected_version) is not int or expected_version < 0:
+            raise ValueError("Expected subscriber version must be nonnegative")
         if status not in ("active", "trial") and cleaned:
             raise ValueError("Inactive status cannot grant entitlements")
         now = _utc_aware(now or datetime.now(timezone.utc))
@@ -202,7 +207,7 @@ class DurableBotState:
             raise ValueError("Invalid reviewer reference")
         content = json.dumps({
             "user_id": user_id, "status": status, "expiry": expiry.isoformat()
-            if expiry else None, "features": cleaned
+            if expiry else None, "features": cleaned, "reviewer_ref": reviewer_ref
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")
         digest = hashlib.sha256(content).hexdigest()
         with self._connector(self._dsn) as conn:
@@ -213,10 +218,12 @@ class DurableBotState:
             )
             # Serialize all changes for this subscriber, including distinct
             # event keys, so approval events are fully atomic.
-            conn.execute(
-                "SELECT user_id FROM msk_bot_state.subscribers "
+            locked = conn.execute(
+                "SELECT version FROM msk_bot_state.subscribers "
                 "WHERE user_id=%s FOR UPDATE", (user_id,)
-            )
+            ).fetchone()
+            if locked is None:
+                raise DurableStateError("Subscriber lock missing")
             claimed = conn.execute(
                 """INSERT INTO msk_bot_state.review_events
                    (event_key,user_id,payload_sha256,reviewer_ref)
@@ -226,13 +233,15 @@ class DurableBotState:
             ).fetchone()
             if claimed is None:
                 existing = conn.execute(
-                    """SELECT user_id,payload_sha256 FROM
+                    """SELECT user_id,payload_sha256,reviewer_ref FROM
                        msk_bot_state.review_events WHERE event_key=%s""",
                     (event_key,)
                 ).fetchone()
-                if existing != (user_id, digest):
+                if existing != (user_id, digest, reviewer_ref):
                     raise DurableStateError("Review event key reused with conflicting data")
                 return False
+            if locked[0] != expected_version:
+                raise DurableStateError("Stale subscriber version; reload before review")
             conn.execute(
                 """UPDATE msk_bot_state.subscribers
                    SET status=%s, expires_at=%s,
