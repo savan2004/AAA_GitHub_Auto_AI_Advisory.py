@@ -356,18 +356,40 @@ def render_snapshot(profile, universe, records, session):
         if missing:lines.append(f"⚠️ Not reviewed: {len(missing)} ({', '.join(missing[:7])})")
         if stale:lines.append(f"⚠️ Missing/stale EOD: {len(stale)} ({', '.join(stale[:7])})")
     elif not selected:
-        lines.append("🛑 No fully rule-validated conditional setups. No Top 5 issued.")
+        lines.append("🛑 No confirmed conditional BUY setups. No Top 5 BUY issued.")
         qualified=[r for r in rows if r and
                    r.get("membership_hash")==identity and
                    r.get("fund_status")=="VALIDATED" and
                    _fresh(r.get("technical"),session)]
         waits=sum(r["technical"].get("signal")=="WAIT" for r in qualified)
         if qualified and waits==len(qualified):
-            lines.append(f"🧭 All {len(qualified)} financially rule-qualified stocks currently show WAIT. No buy entry confirmed.")
+            lines.append(f"🧭 All {len(qualified)} financially rule-qualified stocks show WAIT. No entry confirmed.")
         elif qualified:
-            lines.append(f"🧭 {waits}/{len(qualified)} rule-qualified stocks show WAIT; remaining setups did not pass risk/entry filters.")
+            lines.append(f"🧭 {waits}/{len(qualified)} qualified stocks show WAIT.")
         elif not verified:
-            lines.append("⚠️ No companies have passed the full fundamental rules.")
+            lines.append("⚠️ No companies passed the full fundamental rules.")
+        # A separate research-only watchlist makes the product useful without
+        # silently weakening breakout, volume, position risk, or issuer gates.
+        # Live-bar entry still requires a fresh independent signal and risk check.
+        watch=sorted(
+            (r for r in qualified if r["technical"].get("signal")=="WAIT"
+             and isinstance(r["technical"].get("tech_score"),(int,float))
+             and math.isfinite(r["technical"]["tech_score"])
+             and r["technical"].get("tech_score",0)>=70),
+            key=lambda r:(-r["technical"]["tech_score"],r["symbol"]))[:3]
+        if watch:
+            lines.append("👀 <b>RESEARCH WATCHLIST ONLY — NOT BUY SIGNALS</b>")
+            for r in watch:
+                t=r["technical"]
+                risk=t.get("risk_pct")
+                risk_text=(f"{risk:.1f}%" if isinstance(risk,(int,float)) and
+                           math.isfinite(risk) else "unverified")
+                reasons=t.get("signal_reasons") or []
+                reason=(", ".join(str(x).replace("_"," ") for x in reasons[:2])
+                        if reasons else "breakout / risk confirmation pending")
+                lines.append(f"• {html.escape(r['symbol'])}: technical {t['tech_score']:.0f}/100, "
+                             f"planned stop risk {risk_text}; {html.escape(reason)}")
+            lines.append("⛔ Recheck completed market candles, volume and stop risk before any entry.")
     else:
         lines.append(f"✅ <b>Verified-rule watchlist: {len(selected)} / 5 qualifying</b>")
         for i,t in enumerate(selected,1):
