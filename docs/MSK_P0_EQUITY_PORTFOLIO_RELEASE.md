@@ -101,6 +101,59 @@ subscriptions, other products and AiAutoUpdate are excluded.
   code; this PR consolidates the required migration integrity safeguards
   without merging outdated `main.py` handlers.
 
+## Financial fiscal-period and consolidated/standalone disclosure gate — 12 November 2026
+
+**Root causes discovered:** `fundamentals._fetch_screener()` previously
+took the last numeric Sales row cell without mapping it to a P&L column
+header. The last number is commonly **TTM**, not the latest full fiscal year;
+it has no explicit fiscal-year end and cannot safely be labelled `FY`.
+Additionally `get_fundamentals()` combines data_engine, Screener, Finnhub and
+yfinance ratios without recording which source originally populated ROE,
+EPS, revenue or debt/equity. A 404 on Screener's consolidated page silently
+falls back to standalone results, causing scope mixing.
+
+**Corrected (current draft PR #94 only):**
+
+- `financial_quality.annual_sales_from_table()` pairs each P&L numeric
+  column with its **matching header**; only explicit `Mar YYYY` fiscal-year
+  revenue is used. TTM is never silently called FY. Misaligned headers,
+  invalid/future/old dates, negative/invalid revenue and malformed rows fail
+  closed (Revenue N/A from that source). Crores are converted to INR.
+- Screener notes whether it fetched consolidated or standalone data,
+  while each aggregate financial field records its actual **adapter**
+  origin, scope if known, and field-specific revenue FY end if known.
+  `data_engine (mixed)` is intentionally NOT attributed to Yahoo alone:
+  that adapter itself can include Yahoo, NSE and Finnhub inputs.
+- Both Fundamental and full Analysis Telegram cards clearly distinguish
+  **secondary indicative data** from independent NSE issuer filings. Each
+  available revenue, ROE, EPS and D/E field has a source/date/scope label.
+  Unknown basis is explicit. Do not call a mixed-source value audited,
+  independently verified or directly comparable.
+- Historical `fund_` cache entries lacked lineage; versioned cache
+  `fund_provenance_v1_` prevents old cached fields being mislabeled.
+- Tests in `tests/test_msk_financial_provenance.py` use synthetic P&L
+  tables, standalone fallback, TTM-last/old/future/non-numeric/misaligned
+  cases, source-specific origin, Telegram disclosure and issuer
+  verification refusal. These tests do NOT verify financial numbers for any
+  actual company or certify the completeness of all provider HTML variants.
+
+**Release gate still required for audited/verified metrics:** An authorized
+reviewer must retrieve each chosen company's official issuer financial results
+from NSE Integrated Filing — Financials (especially filings for periods ending
+March 2025 onward), record symbol, quarter/year end, issuer broadcast/revision
+time, *consolidated vs standalone* basis, audited/unaudited and exact statement
+units. ROE, EPS, revenue and debt/equity must be independently reconciled to
+those disclosures for the SAME scope and period, with a second-source check.
+If the issuer filing is missing or a source period/scope cannot be established,
+the bot must retain the **indicative/unverified** classification.
+
+NSE official reference:
+https://www.nseindia.com/companies-listing/corporate-integrated-filing
+
+No market quote timestamp proves the **financial-statement reporting period**.
+No real issuer filing was uploaded, signed, parsed or reconciled by this patch.
+No paid provider, production data, Telegram message or Render deployment touched.
+
 ## Mandatory cutover steps BEFORE deployment
 
 1. Freeze buy/sell, obtain the actual live portfolio_data.json through an approved
