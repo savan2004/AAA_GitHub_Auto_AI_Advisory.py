@@ -113,6 +113,7 @@ jobs:
     timeout-minutes: 12
     env:
       MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_RESEARCH_ONLY: '1'
       TZ: Asia/Kolkata
     steps:
       - uses: actions/checkout@v5
@@ -152,6 +153,7 @@ jobs:
       cancel-in-progress: false
     env:
       MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_RESEARCH_ONLY: '1'
       PYTHONUNBUFFERED: '1'
       TZ: Asia/Kolkata
     steps:
@@ -203,6 +205,7 @@ jobs:
       cancel-in-progress: false
     env:
       MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_RESEARCH_ONLY: '1'
       TZ: Asia/Kolkata
     steps:
       - uses: actions/checkout@v4
