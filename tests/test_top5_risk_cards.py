@@ -76,7 +76,7 @@ class FinanceRatingTests(unittest.TestCase):
         self.assertNotEqual(row["fund_status"],"VALIDATED")
         self.assertIsNone(row.get("eps"))
         self.assertEqual(row["fund_status"],"PRELIMINARY")
-        self.assertEqual(row["fund_reason"],"earnings_missing_or_loss")
+        self.assertEqual(row["fund_reason"],"eps_unavailable")
         self.assertGreater(row["fund_known"],2)
 
     def test_completely_missing_returns_unverified_not_zero_score(self):
