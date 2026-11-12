@@ -590,9 +590,9 @@ test("Dashboard evidence shows verified historical session but not live quotes",
    const p=300+i*0.5;
    return {date,open:p-1,high:p+2,low:p-2,close:p,volume:1000+i};
  });
- F.library.clear();
- F.library.set("BEL",{bars:rows,source:"tej_eod",file:"Date-stamped test EOD"});
+ w.fetch=async()=>({ok:true,json:async()=>({meta:{symbol:"BEL",exchange:"NSE"},data:rows})});
  F.choose("BEL",false);
+ await new Promise(resolve=>setTimeout(resolve,120));
  const section=d.getElementById("dashboardEvidence");
  assert.equal(section.dataset.source,"tej_eod");
  assert.match(section.textContent,/NSE historical EOD via TejHQ/);
