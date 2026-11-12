@@ -1,0 +1,101 @@
+/* MSK Website — dedicated research pages / shared professional design system.
+   Applies to the standalone HTML routes and in-session navigation, without
+   hiding source warnings or suggesting currently unavailable market services. */
+:root{
+ --msk-page-ink:#18324b;
+ --msk-page-muted:#657b8e;
+ --msk-page-accent:#098a80;
+ --msk-page-ring:#137f85;
+ --msk-page-border:#dce7ee;
+ --msk-page-soft:#f5f9fc;
+}
+.web-pro .research-breadcrumb[hidden]{display:none!important}
+.web-pro .research-breadcrumb{
+ display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+ font-size:12px;letter-spacing:.01em;color:var(--msk-page-muted);
+ margin:0 0 15px;padding:0;
+}
+.web-pro .research-breadcrumb a{color:#137b79;font-weight:750;text-underline-offset:3px}
+.web-pro .research-breadcrumb span[data-current-page]{font-weight:740;color:var(--msk-page-ink)}
+.web-pro[data-page]:not([data-page="overview"]) .heading-block{
+ border:1px solid var(--msk-page-border);
+ border-left:5px solid var(--msk-page-accent);
+ background:linear-gradient(108deg,#fff 0%,#f1f8fa 100%);
+ border-radius:14px;padding:22px 24px;
+ box-shadow:0 5px 18px rgba(16,41,65,.045);
+}
+.web-pro[data-page]:not([data-page="overview"]) .heading-block h1{
+ color:#102d48;font-weight:850;letter-spacing:-.035em;
+}
+.web-pro[data-page]:not([data-page="overview"]) .heading-block p{
+ color:#516c81;max-width:70ch;line-height:1.65;
+}
+.web-pro .primary-nav .nav[aria-current="page"]{
+ border-left:3px solid #23cfb9;
+ background:rgba(24,168,157,.17);
+ color:#fff;
+ font-weight:800;
+}
+.web-pro .primary-nav .nav:focus-visible,
+.web-pro .research-breadcrumb a:focus-visible,
+.web-pro .action-card:focus-visible,
+.web-pro .msk-portfolio-actions button:focus-visible{
+ outline:3px solid var(--msk-page-ring);outline-offset:3px;
+}
+.web-pro[data-page="portfolio"] .research-search,
+.web-pro[data-page="portfolio"] .research-disclosure,
+.web-pro[data-page="portfolio"] .snapshot-grid,
+.web-pro[data-page="portfolio"] .chart-grid,
+.web-pro[data-page="ai"] .chart-grid{
+ display:none!important;
+}
+.web-pro[data-page="portfolio"] .below-grid,
+.web-pro[data-page="pdf"] .below-grid{grid-template-columns:minmax(0,1fr)!important}
+.web-pro[data-page="portfolio"] #researchDetail,
+.web-pro[data-page="pdf"] #researchDetail{
+ width:100%!important;max-width:none!important;
+}
+.web-pro[data-page="portfolio"] #detailBody,
+.web-pro[data-page="pdf"] #detailBody{
+ padding:20px 22px;
+}
+.web-pro[data-page="portfolio"] .msk-portfolio-actions{
+ padding:14px;border:1px solid var(--msk-page-border);border-radius:12px;
+ background:var(--msk-page-soft);margin:16px 0;
+}
+.web-pro[data-page="portfolio"] .msk-portfolio-status{
+ margin:12px 0;color:#175149;
+}
+.web-pro[data-page="fundamental"] #researchDetail,
+.web-pro[data-page="screener"] #researchDetail,
+.web-pro[data-page="breadth"] #researchDetail{
+ max-width:none;width:100%;min-width:0;
+}
+.web-pro[data-page="pdf"] #analysisRegion{display:none!important}
+.web-pro[data-page="pdf"] .snapshot-grid{display:none!important}
+.web-pro[data-page="ai"] #researchDetail{display:none!important}
+.web-pro[data-page="ai"] .snapshot-grid{display:none!important}
+.web-pro[data-page="ai"] .search-panel{display:none!important}
+.web-pro .route-loading,.route-loading{
+ min-height:100vh;display:flex;flex-direction:column;align-items:center;
+ justify-content:center;gap:12px;padding:30px;
+ font:15px/1.6 system-ui,sans-serif;color:#203e57;
+ text-align:center;background:#f3f7fa;
+}
+.route-loading h1{font-size:26px;margin:0}
+.route-loading p{margin:0}
+.route-error{min-height:80vh;display:grid;place-content:center;gap:14px;
+ padding:32px;font:16px/1.6 system-ui,sans-serif;text-align:center;color:#19364d}
+.route-error a{color:#087f74;font-weight:bold}
+@media(max-width:750px){
+ .web-pro[data-page]:not([data-page="overview"]) .heading-block{
+  padding:16px 15px;border-radius:11px;
+ }
+ .web-pro .research-breadcrumb{font-size:11px}
+ .web-pro[data-page="portfolio"] #detailBody,
+ .web-pro[data-page="pdf"] #detailBody{padding:14px 12px}
+}
+@media print{
+ body.msk-report-printing .research-breadcrumb,
+ body.msk-portfolio-printing .research-breadcrumb{display:none!important}
+}
