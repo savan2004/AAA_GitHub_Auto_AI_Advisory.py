@@ -81,7 +81,8 @@ class AnnualRevenueBasisTests(unittest.TestCase):
 class FieldOriginTests(unittest.TestCase):
     def test_fundamentals_keep_provider_scope_and_period_per_field(self):
         import fundamentals as f
-        info = {"roe": 0.12, "eps": None, "totalRevenue": None}
+        info = {"roe": 0.12, "roe_unit": "fraction",
+                "eps": None, "totalRevenue": None}
         screener = {
             "rev": 1_300_000_000,
             "_screener_scope": "consolidated",
@@ -107,6 +108,28 @@ class FieldOriginTests(unittest.TestCase):
             "period_end": "2026-03-31"})
         self.assertIs(result["_issuer_filing_verified"], False)
         self.assertTrue(cache.call_args.args[0].startswith("fund_provenance_v1_"))
+
+    def test_roe_provider_unit_is_explicit_even_below_one_percent(self):
+        import fundamentals as f
+        for unit, raw, expected in (
+            ("percent", 0.8, 0.8),
+            ("percent", 12.5, 12.5),
+            ("fraction", 0.8, 80.0),
+            ("fraction", 1.5, 150.0),
+            ("fraction", 0.0, 0.0),
+            (None, 0.8, None),
+        ):
+            with self.subTest(unit=unit, raw=raw), \
+                 patch.object(f, "_get_cached", return_value=None), \
+                 patch.object(f, "_set_cached"), \
+                 patch("data_engine.get_info", return_value={
+                     "roe": raw, "roe_unit": unit
+                 }), \
+                 patch.object(f, "_fetch_screener", return_value=None), \
+                 patch.object(f, "_fetch_finnhub", return_value=None), \
+                 patch.object(f, "_fetch_yfinance", return_value={}):
+                result = f.get_fundamentals("SBIN")
+            self.assertEqual(result["roe"], expected)
 
     def test_telegram_summary_never_claims_issuer_filing_certification(self):
         from financial_quality import financial_source_summary
