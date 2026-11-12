@@ -81,6 +81,29 @@ def load_legacy_holdings(source, *, snapshot_bytes=None):
     return sorted(rows)
 
 
+def load_legacy_account_ids(source, *, snapshot_bytes=None):
+    """Preserve users with zero holdings during real migration and restore.
+
+    Validates every holding and Telegram ID first. The caller should pass the
+    same frozen buffer used for the portfolio SHA and positions.
+    """
+    source = Path(source)
+    if snapshot_bytes is None:
+        try:
+            snapshot_bytes = source.read_bytes()
+        except OSError as exc:
+            raise PortfolioMigrationError("Could not read portfolio accounts") from exc
+    if type(snapshot_bytes) is not bytes:
+        raise PortfolioMigrationError("Snapshot must be immutable bytes")
+    load_legacy_holdings(source, snapshot_bytes=snapshot_bytes)
+    try:
+        root = json.loads(snapshot_bytes.decode("utf-8"),
+                          object_pairs_hook=_unique_object)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise PortfolioMigrationError("Invalid portfolio account snapshot") from exc
+    return sorted(int(uid) for uid in root)
+
+
 def migrate_legacy_holdings(source, sqlite_path, *, apply=False):
     """Dry-run by default; --apply imports atomically without overwriting holdings.
 
