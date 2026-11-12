@@ -339,7 +339,7 @@ def _fetch_yfinance(sym: str) -> dict:
 def get_fundamentals(sym: str) -> dict:
     sym       = sym.upper().replace(".NS", "")
     # Version bump excludes old cache entries with no field-by-field origin.
-    cache_key = f"fund_provenance_v1_{sym}"
+    cache_key = f"fund_provenance_v2_roe_unit_{sym}"
     cached    = _get_cached(cache_key, CACHE_TTL_FUND)
     if cached:
         return cached
@@ -375,7 +375,13 @@ def get_fundamentals(sym: str) -> dict:
             result["fwd_pe"] = safe_val(info, "forwardPE")
             result["pb"]     = safe_val(info, "pb")
             roe_raw = safe_val(info, "roe")
-            result["roe"]    = round(roe_raw * 100, 1) if roe_raw is not None and abs(roe_raw) <= 1 else roe_raw
+            roe_unit = info.get("roe_unit")
+            # Never infer units from magnitude: Finnhub's 0.8 means 0.8%,
+            # while Yahoo's 0.8 represents 80%. Unknown basis is withheld.
+            if roe_raw is not None and roe_unit == "fraction":
+                result["roe"] = round(roe_raw * 100, 2)
+            elif roe_raw is not None and roe_unit == "percent":
+                result["roe"] = roe_raw
             result["eps"]    = safe_val(info, "eps")
             result["mcap"]   = info.get("market_cap")
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
@@ -457,7 +463,9 @@ def get_fundamentals(sym: str) -> dict:
             if result["pb"]    is None: result["pb"]    = safe_val(yf_info, "priceToBook")
             if result["roe"]   is None:
                 roe_raw = safe_val(yf_info, "returnOnEquity")
-                result["roe"] = round(roe_raw * 100, 1) if roe_raw and abs(roe_raw) <= 1 else roe_raw
+                # Yahoo quoteSummary/yfinance returnOnEquity is a fraction
+                # even when the equity denominator produces >100% ROE.
+                result["roe"] = round(roe_raw * 100, 2) if roe_raw is not None else None
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
             if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
             if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
