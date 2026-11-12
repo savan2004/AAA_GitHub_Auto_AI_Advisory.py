@@ -113,6 +113,11 @@ class OvernightLedgerTests(unittest.TestCase):
             stats={"expected":nmembers,"reviewed":nmembers,
                    "price_fresh":nmembers,
                    "membership_hash":n._member_hash(universe)}
+            for sym in universe["symbols"]:
+                self.store.write_row(self.day,profile,sym,{
+                    "symbol":sym,"membership_hash":stats["membership_hash"],
+                    "fund_attempted":True,"technical":technical(sym)
+                })
             self.store.save_report(self.day,profile,"READY",stats,"SYNTHETIC READY")
         state=n.readiness_check(self.store,self.day)
         self.assertTrue(state["ready"])
@@ -127,6 +132,12 @@ class OvernightLedgerTests(unittest.TestCase):
         u=make_universe("moderate",150)
         good={"expected":150,"reviewed":150,"price_fresh":140,
               "membership_hash":n._member_hash(u)}
+        for sym in u["symbols"]:
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"membership_hash":good["membership_hash"],
+                "fund_attempted":True,
+                "technical":technical(sym) if int(sym[-3:])<140 else None
+            })
         for status,stat in (
             ("PARTIAL",good),
             ("READY",{**good,"reviewed":149}),
@@ -141,6 +152,30 @@ class OvernightLedgerTests(unittest.TestCase):
         self.store.save_report(self.day,"moderate","READY",good,"QA")
         self.assertTrue(n.readiness_check(
             self.store,self.day,("moderate",))["ready"])
+
+    def test_readiness_rejects_orphan_summary_and_ledger_mismatch(self):
+        universe=make_universe("conservative",100)
+        digest=n._member_hash(universe)
+        stats={"expected":100,"reviewed":100,"price_fresh":100,
+               "membership_hash":digest}
+        self.store.save_report(self.day,"conservative","READY",stats,"QA")
+        self.assertFalse(n.readiness_check(
+            self.store,self.day,("conservative",))["ready"],
+            "READY summary without company records must fail closed")
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"conservative",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "technical":technical(sym)
+            })
+        self.assertTrue(n.readiness_check(
+            self.store,self.day,("conservative",))["ready"])
+        bad=universe["symbols"][0]
+        self.store.write_row(self.day,"conservative",bad,{
+            "symbol":bad,"membership_hash":digest,"fund_attempted":False,
+            "technical":technical(bad)
+        })
+        self.assertFalse(n.readiness_check(
+            self.store,self.day,("conservative",))["ready"])
 
     def test_missing_eps_is_unverified_and_never_ranked(self):
         universe=make_universe("conservative",100)
