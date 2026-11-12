@@ -97,7 +97,6 @@ def create_local_snapshot(source, destination, *, allow_empty=False):
     # following a malicious destination symlink in the private directory.
     folder_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
                         | getattr(os, "O_NOFOLLOW", 0))
-    created = False
     try:
         try:
             out = os.open(name,
@@ -106,7 +105,6 @@ def create_local_snapshot(source, destination, *, allow_empty=False):
                           0o600, dir_fd=folder_fd)
         except OSError as exc:
             raise BackupPreflightError("Backup destination already exists or unsafe") from exc
-        created = True
         try:
             with os.fdopen(out, "wb") as handle:
                 handle.write(raw)
@@ -154,6 +152,16 @@ def verify_source_against_backup(source, backup, *, allow_empty=False):
     source, backup = Path(source), Path(backup)
     if source.absolute() == backup.absolute():
         raise BackupPreflightError("Source and candidate must differ")
+    # Reject symlink/../ aliases and hard links: comparing a file to itself
+    # must never be accepted as evidence of a second independently held copy.
+    try:
+        source_stat = os.stat(source, follow_symlinks=False)
+        backup_stat = os.stat(backup, follow_symlinks=False)
+    except OSError as exc:
+        raise BackupPreflightError("Source or backup candidate unavailable") from exc
+    if (source_stat.st_dev, source_stat.st_ino) == (
+            backup_stat.st_dev, backup_stat.st_ino):
+        raise BackupPreflightError("Source and candidate are the same physical file")
     original = _read_regular(source)
     candidate = _read_regular(backup)
     original_info = _inspect(source, original, allow_empty=allow_empty)
