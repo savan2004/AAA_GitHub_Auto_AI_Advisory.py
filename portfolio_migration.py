@@ -33,17 +33,24 @@ def _unique_object(pairs):
     return output
 
 
-def load_legacy_holdings(source):
-    """Validate the complete input before opening or creating a database.
+def load_legacy_holdings(source, *, snapshot_bytes=None):
+    """Validate the original source or independently captured immutable bytes.
 
-    Returns rows of (uid, symbol, qty, average_cost), preserving original values.
+    The PostgreSQL importer must parse and hash exactly the same bytes.
+    Returns rows of (uid, symbol, qty, average_cost).
     """
     source = Path(source)
     if not source.is_file():
         raise PortfolioMigrationError("Source JSON file does not exist")
+    if snapshot_bytes is not None and type(snapshot_bytes) is not bytes:
+        raise PortfolioMigrationError("Frozen snapshot must be immutable bytes")
     try:
-        with source.open("r", encoding="utf-8") as handle:
-            data = json.load(handle, object_pairs_hook=_unique_object)
+        if snapshot_bytes is None:
+            with source.open("r", encoding="utf-8") as handle:
+                data = json.load(handle, object_pairs_hook=_unique_object)
+        else:
+            data = json.loads(snapshot_bytes.decode("utf-8"),
+                              object_pairs_hook=_unique_object)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PortfolioMigrationError("Could not read valid legacy JSON") from exc
     if not isinstance(data, dict):
