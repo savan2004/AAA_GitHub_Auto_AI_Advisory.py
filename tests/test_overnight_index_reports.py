@@ -226,6 +226,50 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertFalse(n.readiness_check(
             self.store,self.day,("conservative",))["ready"])
 
+    def test_repaired_financials_invalidate_outdated_ready_report(self):
+        universe=make_universe("moderate",150)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "fund_status":"UNVERIFIED","technical":technical(sym)
+            })
+        with patch.object(n,"get_index_universe",return_value=universe):
+            initial=n.finalize_profile("moderate",self.store,self.day)
+        self.assertTrue(n.readiness_check(
+            self.store,self.day,("moderate",))["ready"])
+        symbol=universe["symbols"][0]
+        fixed=self.store.row(self.day,"moderate",symbol)
+        fixed["fund_status"]="VALIDATED"
+        fixed["fundamental"]=evidence()
+        self.store.write_row(self.day,"moderate",symbol,fixed)
+        self.assertFalse(n.readiness_check(
+            self.store,self.day,("moderate",))["ready"])
+        hidden=n.load_prepared_report("moderate",store=self.store,
+                         now=datetime(2026,10,30,8,10,tzinfo=n.IST))
+        self.assertIn("withheld",hidden.lower())
+        with patch.object(n,"get_index_universe",return_value=universe):
+            updated=n.finalize_profile("moderate",self.store,self.day)
+        self.assertEqual(updated["stats"]["validated"],1)
+        self.assertTrue(n.readiness_check(
+            self.store,self.day,("moderate",))["ready"])
+
+    def test_impossible_candidate_count_cannot_be_released(self):
+        universe=make_universe("conservative",100)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"conservative",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "fund_status":"UNVERIFIED","technical":technical(sym)
+            })
+        stats={"expected":100,"reviewed":100,"price_fresh":100,
+               "membership_hash":digest,"validated":0,"provisional":0,
+               "candidate_count":5}
+        self.store.save_report(self.day,"conservative","READY",stats,
+                               "FALSE FIVE PICKS")
+        self.assertFalse(n.readiness_check(
+            self.store,self.day,("conservative",))["ready"])
+
     def test_telegram_withholds_orphan_ready_and_missing_company_evidence(self):
         universe=make_universe("conservative",100)
         digest=n._member_hash(universe)
