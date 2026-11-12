@@ -51,6 +51,18 @@ class PDFReleaseGateTests(unittest.TestCase):
             with self.assertRaisesRegex(ResearchPDFRefused, "missing"):
                 validate_research_pdf(Path(td) / "absent.pdf")
 
+    def test_stale_price_series_cannot_start_live_research(self):
+        from datetime import date
+        import pandas as pd
+        frame = pd.DataFrame({
+            "Open": [100.] * 80, "High": [101.] * 80,
+            "Low": [99.] * 80, "Close": [100.] * 80,
+            "Volume": [1000] * 80,
+        }, index=pd.bdate_range(end=date(2025, 7, 15), periods=80))
+        with patch("data_engine.get_hist", return_value=frame):
+            with self.assertRaisesRegex(ValueError, "stale or unverified"):
+                rg.collect_inputs("SBIN")
+
     def test_invalid_generated_report_is_deleted_before_sender_receives_success(self):
         with tempfile.TemporaryDirectory() as td, \
              patch.object(rg, "collect_inputs", return_value={}), \
