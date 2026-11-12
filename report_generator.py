@@ -953,21 +953,33 @@ def _risks_catalysts(R, story):
 def _appendix(R, story):
     story += section("Appendix — Methodology, Data & Disclaimer")
     story.append(P("Scoring framework", "h2"))
+    # Two-column three-row methodology keeps every model pillar readable
+    # without wasting six full-width rows and orphaning the legal disclaimer.
     desc = {
-        "Trend": "Price vs EMA 20/50/200, EMA alignment, weekly trend, ADX strength and direction",
-        "Momentum": "RSI zone, MACD, 3-month relative strength vs Nifty, 1-month return",
-        "Quality": "ROE, ROCE, leverage, cash conversion, margin trend, earnings consistency",
-        "Valuation": "P/E vs peers and absolute, PEG, P/B for financials",
-        "Growth": "3-year sales & profit CAGR, latest-quarter YoY growth",
-        "Risk": "Volatility, max drawdown, beta, liquidity (higher score = safer)",
+        "Trend": "EMA 20/50/200, price structure and ADX",
+        "Momentum": "RSI, MACD and relative strength",
+        "Quality": "ROE/ROCE, cash conversion and leverage",
+        "Valuation": "P/E, P/B and peer-relative value",
+        "Growth": "3Y sales/profit and recent quarter",
+        "Risk": "Volatility, beta and drawdown",
     }
-    rows = [[P(k, "cellb"), P(f"{int(w * 100)}%", "cellr"), P(desc[k])] for k, w in eng.WEIGHTS.items()]
-    story.append(table([[P("Pillar", "th"), P("Weight", "thr"), P("What it measures", "th")]] + rows, [28 * mm, 20 * mm, 130 * mm]))
-    story.append(P("Pillars without data are excluded and remaining weights re-normalised; "
-                   "model pillar coverage is NOT the percentage of financial facts independently verified. "
-                   "Stance bands: 75+ high-conviction constructive · 62–74 constructive · 48–61 neutral/wait · 35–47 cautious · below 35 negative. "
-                   "A technical veto caps the stance at neutral when the trend pillar is below 35. "
-                   "The framework is a structured summary of the data, not a forecast and not a back-tested trading system.", "tiny"))
+    pillars = list(eng.WEIGHTS.items())
+    method_rows = []
+    for i in range(0, len(pillars), 2):
+        pair = []
+        for key, weight in pillars[i:i+2]:
+            pair.append(P(f"<b>{esc(key)}: {int(weight*100)}%</b> — "
+                          f"{esc(desc.get(key, key))}", "small"))
+        if len(pair) == 1:
+            pair.append(P("", "small"))
+        method_rows.append(pair)
+    story.append(table(method_rows, [89 * mm, 89 * mm], header=False))
+    story.append(P("Missing pillars are omitted and remaining weights re-normalised; "
+                   "coverage does not mean issuer facts independently verified. "
+                   "Stance bands: 75+ strongly constructive, 62–74 constructive, "
+                   "48–61 neutral/wait, 35–47 cautious, under 35 negative. "
+                   "Trend below 35 vetoes a constructive stance. "
+                   "This rule model is not a forecast or backtested win rate.", "tiny"))
 
     story += [Spacer(1, 8), P("Data sources & completeness", "h2")]
     stm = R["stm"]
