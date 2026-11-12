@@ -34,6 +34,7 @@ from technical_indicators import (
 )
 from api_utils import API_RATE_LIMITER
 from postgres_portfolio import build_portfolio_backend
+from msk_durable_state import build_durable_bot_state
 from config import RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_CALLS
 from market_news import get_stock_news
 
@@ -180,6 +181,9 @@ _processed_updates = deque(maxlen=1000)
 _processed_updates_set = set()
 _webhook_lock = threading.Lock()
 _webhook_slots = threading.BoundedSemaphore(value=16)
+# Enabled only by an explicit DB-backed release flag; fails startup if it
+# cannot provide durable deduplication. Existing production defaults unchanged.
+_durable_update_ledger = build_durable_bot_state()
 
 
 # ── Thread-Safe Portfolio Manager ────────────────────────────────────────────
@@ -1681,13 +1685,12 @@ def health_ready():
 
 
 def _process_webhook(data_str):
+    """Return dispatch success; it does NOT prove downstream Telegram delivery."""
     try:
         update = telebot.types.Update.de_json(data_str)
         if update:
-            # Record accepted Telegram interactions without storing message text.
-            # Analytics failures/delays never alter the bot response or quota.
-            # Some offline regression harnesses extract this function alone.
-            # Telemetry is optional and must not prevent processing in those cases.
+            # Optional usage analytics remains best effort and is NOT a
+            # subscriber entitlement or update-deduplication database.
             tracker = globals().get("usage_analytics")
             slots = globals().get("_usage_slots")
             queue = globals().get("usage_executor")
@@ -1699,8 +1702,26 @@ def _process_webhook(data_str):
                     except Exception:
                         slots.release()
             bot.process_new_updates([update])
-    except Exception as e:
-        logger.error(f"Webhook process err: {e}")
+        return True
+    except Exception as exc:
+        logger.error("Webhook dispatch failed (%s)", type(exc).__name__)
+        return False
+
+
+def _complete_durable_webhook(future, ledger, update_id):
+    """Always release capacity, and leave an auditable FAILED/CLAIMED row."""
+    try:
+        try:
+            dispatched = bool(future.result())
+        except Exception:
+            dispatched = False
+        ledger.finish(update_id, dispatched=dispatched)
+    except Exception as exc:
+        # Never delete a claim that may already have caused a /buy or /sell.
+        # A DB outage here needs a manual reconciliation, not replay.
+        logger.error("Durable webhook completion unverified (%s)", type(exc).__name__)
+    finally:
+        _webhook_slots.release()
 
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
@@ -1712,7 +1733,9 @@ def webhook():
     if request.content_length is not None and request.content_length > 256_000:
         return "payload too large", 413
     payload = request.get_json(silent=True)
-    if not isinstance(payload, dict) or not isinstance(payload.get("update_id"), int):
+    if (not isinstance(payload, dict) or
+            type(payload.get("update_id")) is not int or
+            not 0 <= payload["update_id"] <= 9223372036854775807):
         return "invalid Telegram update", 400
     # Log only message type and visibility; never user text, IDs or secrets.
     msg = payload.get("message")
@@ -1722,28 +1745,76 @@ def webhook():
     uid = payload["update_id"]
     if not _webhook_slots.acquire(blocking=False):
         return "server busy", 503  # Telegram retries non-2xx.
+    ledger = globals().get("_durable_update_ledger")
+    reserved_in_memory = False
+    claimed_in_db = False
     try:
-        with _webhook_lock:
-            if uid in _processed_updates_set:
-                _webhook_slots.release()
-                return "ok", 200
-            if len(_processed_updates) == _processed_updates.maxlen:
-                _processed_updates_set.discard(_processed_updates[0])
-            _processed_updates.append(uid)
-            _processed_updates_set.add(uid)
-        future = webhook_executor.submit(_process_webhook, json.dumps(payload))
-        future.add_done_callback(lambda _: _webhook_slots.release())
-    except Exception:
-        with _webhook_lock:
-            _processed_updates_set.discard(uid)
+        if ledger is not None:
+            # Do not create a subscription from messages without a verified
+            # sender. New identities are always inactive / unentitled.
+            sender_id = None
+            for kind in ("message", "edited_message", "callback_query",
+                         "inline_query", "my_chat_member", "chat_member"):
+                event = payload.get(kind)
+                if not isinstance(event, dict):
+                    continue
+                sender = event.get("from")
+                candidate = sender.get("id") if isinstance(sender, dict) else None
+                if type(candidate) is int and 0 < candidate <= 9223372036854775807:
+                    sender_id = candidate
+                    break
             try:
-                _processed_updates.remove(uid)
-            except ValueError:
-                pass
-        _webhook_slots.release()
-        logger.exception("Unable to schedule webhook update")
-        return "busy", 503
-    return "ok", 200
+                claimed_in_db = ledger.claim(uid, user_id=sender_id)
+            except Exception as exc:
+                # No handlers run when durable storage is unavailable.
+                logger.error("Durable webhook claim unavailable (%s)", type(exc).__name__)
+                return "durable queue unavailable", 503
+            if not claimed_in_db:
+                return "ok", 200  # Already claimed, dispatched or failed.
+        else:
+            # Pre-release/legacy mode: this is NOT restart-safe. Never treat
+            # the 1000-entry cache as durable release evidence.
+            with _webhook_lock:
+                if uid in _processed_updates_set:
+                    return "ok", 200
+                if len(_processed_updates) == _processed_updates.maxlen:
+                    _processed_updates_set.discard(_processed_updates[0])
+                _processed_updates.append(uid)
+                _processed_updates_set.add(uid)
+                reserved_in_memory = True
+
+        try:
+            future = webhook_executor.submit(_process_webhook, json.dumps(payload))
+        except Exception:
+            if ledger is not None and claimed_in_db:
+                # submit() raising guarantees no handler was scheduled.
+                try:
+                    ledger.abandon_unscheduled(uid)
+                except Exception as exc:
+                    logger.error("Durable unscheduled claim retained (%s)",
+                                 type(exc).__name__)
+            if reserved_in_memory:
+                with _webhook_lock:
+                    _processed_updates_set.discard(uid)
+                    try:
+                        _processed_updates.remove(uid)
+                    except ValueError:
+                        pass
+            logger.exception("Unable to schedule webhook update")
+            return "busy", 503
+        if ledger is not None:
+            future.add_done_callback(
+                lambda finished: _complete_durable_webhook(finished, ledger, uid)
+            )
+        else:
+            future.add_done_callback(lambda _: _webhook_slots.release())
+        return "ok", 200
+    finally:
+        # For accepted jobs the completion callback owns this slot.
+        # A duplicate/failed claim or unscheduled job releases it here.
+        if (ledger is not None and not claimed_in_db) or (
+                reserved_in_memory is False and ledger is None):
+            _webhook_slots.release()
 
 
 # ── Runner ───────────────────────────────────────────────────────────────────
