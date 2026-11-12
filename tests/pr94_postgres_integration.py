@@ -157,6 +157,16 @@ def main():
         assert state.claim(803, user_id=200)  # crash-before-finish simulation
         assert not state2.claim(803, user_id=200), "In-flight duplicate replay"
         assert state2.get_update_stage(803) == "claimed"
+        # Eight independent concurrent claim attempts must dispatch once.
+        def competing_claim(_):
+            return DurableBotState(dsn).claim(805, user_id=200)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            wins = list(pool.map(competing_claim, range(8)))
+        assert wins.count(True) == 1, "Multiple workers claimed same update"
+        assert wins.count(False) == 7
+        state.finish(805, dispatched=True)
+        assert not state2.claim(805, user_id=200)
+
         assert state.claim(804, user_id=200)
         state.abandon_unscheduled(804)  # submit() rejected before any handler ran
         assert state2.claim(804, user_id=200), "Safe retry after no submission"
@@ -166,7 +176,7 @@ def main():
         assert state.apply_reviewed_membership(
             100, "active", expiry, ("research_pdf",),
             event_key="owner-review-event-000001",
-            reviewer_ref="owner-approved-001"
+            reviewer_ref="owner-approved-001", expected_version=0
         )
         assert state.is_entitled(100, "research_pdf")
         assert not state.is_entitled(100, "portfolio_premium")
@@ -176,13 +186,13 @@ def main():
         assert not state2.apply_reviewed_membership(
             100, "active", expiry, ("research_pdf",),
             event_key="owner-review-event-000001",
-            reviewer_ref="owner-approved-001"
+            reviewer_ref="owner-approved-001", expected_version=0
         ), "Duplicate approval must not increment version"
         try:
             state2.apply_reviewed_membership(
                 100, "blocked", None, (),
                 event_key="owner-review-event-000001",
-                reviewer_ref="owner-approved-001"
+                reviewer_ref="owner-approved-001", expected_version=1
             )
         except DurableStateError:
             pass
@@ -192,8 +202,20 @@ def main():
         assert state2.apply_reviewed_membership(
             100, "blocked", None, (),
             event_key="owner-review-event-000002",
-            reviewer_ref="owner-approved-001"
+            reviewer_ref="owner-approved-001", expected_version=1
         )
+        assert state2.get_subscriber(100)["version"] == 2
+        # A stale reviewed approval with a NEW event ID must not re-enable.
+        try:
+            state.apply_reviewed_membership(
+                100, "active", expiry, ("research_pdf",),
+                event_key="owner-review-event-000004",
+                reviewer_ref="owner-approved-001", expected_version=1
+            )
+        except DurableStateError as exc:
+            assert "Stale subscriber version" in str(exc)
+        else:
+            raise AssertionError("Stale approval reactivated blocked subscriber")
         assert state2.get_subscriber(100)["version"] == 2
         assert not state.is_entitled(100, "research_pdf")
         assert state.get_subscriber(200)["status"] == "inactive"
@@ -202,7 +224,7 @@ def main():
                 200, "active", datetime(2026, 11, 12),
                 ("research_pdf",),
                 event_key="owner-review-event-000003",
-                reviewer_ref="owner-approved-001"
+                reviewer_ref="owner-approved-001", expected_version=0
             )
         except ValueError:
             pass
@@ -249,6 +271,8 @@ def main():
         "corrupt_input_rejected": "passed",
         "conflicting_import_rejected": "passed",
         "pg_dump_restore": "passed",
+        "concurrent_duplicate_claims": "1_of_8_accepted",
+        "stale_subscriber_approval": "rejected",
         "durable_telegram_restart_duplicate": "rejected",
         "durable_failed_dispatch_replay": "blocked",
         "durable_inflight_replay": "blocked",
