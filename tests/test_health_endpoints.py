@@ -13,7 +13,7 @@ MAIN = Path(__file__).resolve().parents[1] / "main.py"
 
 def load_health_endpoints(*, shutdown=False, webhook_shutdown=False, url="https://bot.example", secret="mock-secret", ledger=None):
     tree = ast.parse(MAIN.read_text(encoding="utf-8"))
-    names = {"health_live", "health_ready"}
+    names = {"index", "health_live", "health_ready"}
     funcs = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in names:
@@ -68,6 +68,17 @@ class HealthEndpointTests(unittest.TestCase):
         disabled, code = load_health_endpoints()["health_ready"]()
         self.assertEqual(code, 200)
         self.assertEqual(disabled["durable_update_ledger"], "not_enabled")
+
+    def test_render_configured_root_health_mirrors_intake_readiness(self):
+        running = load_health_endpoints()
+        body, status = running["index"]()
+        self.assertEqual(status, 200)
+        self.assertEqual(body["status"], "ok")
+        offline = types.SimpleNamespace(ping=lambda: False)
+        body, status = load_health_endpoints(ledger=offline)["index"]()
+        self.assertEqual(status, 503)
+        self.assertEqual(body["status"], "degraded")
+        self.assertEqual(body["scope"], "local_webhook_intake_only")
 
     def test_shutdown_executor_fails_closed(self):
         payload, status = load_health_endpoints(shutdown=True)["health_ready"]()
