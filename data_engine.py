@@ -333,6 +333,7 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                     return v if math.isfinite(v) else None
                 except (TypeError, ValueError):
                     return None
+            out["roe_unit"] = "fraction" if out.get("roe") is not None else None
             out["roe_pct"] = scaled(raw(fd, "returnOnEquity"), 100)
             out["revenue_growth_pct"] = scaled(raw(fd, "revenueGrowth"), 100)
             out["debt_equity_ratio"] = scaled(raw(fd, "debtToEquity"), 0.01)
@@ -731,7 +732,7 @@ def get_info(symbol: str) -> dict:
     is_index = raw.startswith("^")
     sym_clean = raw.removesuffix(".NS").removesuffix(".NSE")
     yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
-    cache_key = f"info_v2_{yahoo_sym}"
+    cache_key = f"info_v3_roe_unit_{yahoo_sym}"
 
     cached = cached_get(cache_key, TTL_PRICE if is_index else TTL_FUND)
     if cached is not None:
@@ -781,8 +782,9 @@ def get_info(symbol: str) -> dict:
                         info["pe"] = m.get("peNormalizedAnnual") or m.get("peTTM")
                     if not info.get("pb"):
                         info["pb"] = m.get("pbQuarterly") or m.get("pbAnnual")
-                    if not info.get("roe"):
+                    if info.get("roe") is None and m.get("roeTTM") is not None:
                         info["roe"] = m.get("roeTTM")
+                        info["roe_unit"] = "percent"  # Finnhub roeTTM metric
                     if not info.get("eps"):
                         info["eps"] = m.get("epsTTM")
                     if not info.get("high52"):
