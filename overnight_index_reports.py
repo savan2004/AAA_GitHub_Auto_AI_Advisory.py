@@ -276,23 +276,27 @@ def render_snapshot(profile, universe, records, session):
     rows=[records.get(s) for s in symbols]
     reviewed=sum(bool(r and r.get("fund_attempted") and
                     r.get("membership_hash")==identity) for r in rows)
-    complete=sum(bool(r and r.get("technical") and _fresh(r.get("technical"),session))
+    complete=sum(bool(r and r.get("membership_hash")==identity and
+                      r.get("technical") and _fresh(r.get("technical"),session))
                  for r in rows)
-    verified=sum(bool(r and r.get("fund_status")=="VALIDATED") for r in rows)
-    provisional=sum(bool(r and r.get("fund_status")=="PRELIMINARY") for r in rows)
+    verified=sum(bool(r and r.get("membership_hash")==identity and
+                      r.get("fund_status")=="VALIDATED") for r in rows)
+    provisional=sum(bool(r and r.get("membership_hash")==identity and
+                         r.get("fund_status")=="PRELIMINARY") for r in rows)
     missing=[s for s,r in zip(symbols,rows)
              if not r or not r.get("fund_attempted")]
     stale=[s for s,r in zip(symbols,rows)
            if not r or not _fresh(r.get("technical"),session)]
     counts=Counter((r or {}).get("fund_status","NOT_ATTEMPTED") for r in rows)
-    full_review=reviewed==total
+    full_review=bool(total and reviewed==total)
     quote_coverage=complete/total if total else 0.0
     publishable=bool(full_review and quote_coverage>=PRICE_REQUIRED and
                      not universe.get("stale"))
     evaluated=[]
     if publishable:
         for r in rows:
-            if (not r or r.get("fund_status")!="VALIDATED" or
+            if (not r or r.get("membership_hash")!=identity or
+                r.get("fund_status")!="VALIDATED" or
                 not _fresh(r.get("technical"),session)):
                 continue
             t=r["technical"]
