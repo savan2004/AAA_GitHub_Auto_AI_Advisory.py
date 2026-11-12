@@ -280,7 +280,7 @@ class EquityPriceSafetyTests(unittest.TestCase):
         with patch.object(de, "cached_get", return_value=safe_index) as cache, \
              patch.object(de, "_yahoo_v8_quote") as quote:
             self.assertEqual(de.get_info("^NSEI")["price"], 25000)
-            cache.assert_any_call("info_v2_^NSEI", de.TTL_PRICE)
+            cache.assert_any_call("info_v3_roe_unit_^NSEI", de.TTL_PRICE)
             cache.assert_any_call("price_^NSEI", de.TTL_PRICE)
             quote.assert_not_called()
 
