@@ -99,7 +99,7 @@ class FieldOriginTests(unittest.TestCase):
         self.assertEqual(result["eps"], 12.5)
         origins = result["_field_provenance"]
         self.assertEqual(origins["roe"], {
-            "source": "data_engine / Yahoo",
+            "source": "data_engine (mixed)",
             "scope": "unknown", "period_end": None})
         self.assertEqual(origins["eps"]["source"], "Finnhub")
         self.assertEqual(origins["rev"], {
