@@ -51,6 +51,13 @@ _SCHEMA = (
         claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         resolved_at TIMESTAMPTZ
     )""",
+    """CREATE TABLE IF NOT EXISTS msk_bot_state.telegram_api_receipts (
+        chat_id BIGINT NOT NULL,
+        message_id BIGINT NOT NULL CHECK(message_id > 0),
+        kind TEXT NOT NULL CHECK(kind IN ('text', 'document', 'photo')),
+        acknowledged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY(chat_id, message_id)
+    )""",
     """CREATE INDEX IF NOT EXISTS msk_updates_unresolved
        ON msk_bot_state.telegram_updates(claimed_at)
        WHERE stage IN ('claimed','failed')""",
@@ -139,6 +146,50 @@ class DurableBotState:
             ).fetchone()
             if row is None:
                 raise DurableStateError("Cannot abandon update already resolved")
+
+    def record_delivery_ack(self, chat_id, message_id, kind):
+        """Persist a Telegram Bot API send acknowledgment, not a user-read receipt.
+
+        This is intentionally separate from webhook stage='dispatched'.
+        No message text, PDFs, credentials or user names are retained.
+        """
+        if (type(chat_id) is not int or chat_id == 0 or
+                not -_USER_LIMIT <= chat_id <= _USER_LIMIT):
+            raise ValueError("Invalid Telegram chat ID")
+        message_id = _id(message_id)
+        if kind not in ("text", "document", "photo"):
+            raise ValueError("Invalid Telegram acknowledgment kind")
+        with self._connector(self._dsn) as conn:
+            row = conn.execute(
+                """INSERT INTO msk_bot_state.telegram_api_receipts
+                   (chat_id,message_id,kind) VALUES (%s,%s,%s)
+                   ON CONFLICT(chat_id,message_id) DO NOTHING
+                   RETURNING message_id""",
+                (chat_id, message_id, kind)
+            ).fetchone()
+            if row is None:
+                existing = conn.execute(
+                    """SELECT kind FROM msk_bot_state.telegram_api_receipts
+                       WHERE chat_id=%s AND message_id=%s""",
+                    (chat_id, message_id)
+                ).fetchone()
+                if existing != (kind,):
+                    raise DurableStateError("Conflicting Telegram API send receipt")
+                return False
+            return True
+
+    def get_delivery_ack(self, chat_id, message_id):
+        """Read-only presence check for private staging and restore evidence."""
+        if type(chat_id) is not int or chat_id == 0:
+            raise ValueError("Invalid chat")
+        message_id = _id(message_id)
+        with self._connector(self._dsn) as conn:
+            row = conn.execute(
+                """SELECT kind FROM msk_bot_state.telegram_api_receipts
+                   WHERE chat_id=%s AND message_id=%s""",
+                (chat_id, message_id)
+            ).fetchone()
+            return row[0] if row else None
 
     def get_update_stage(self, update_id):
         update_id = _id(update_id, allow_zero=True)
