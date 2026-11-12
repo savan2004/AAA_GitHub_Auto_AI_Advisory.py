@@ -83,7 +83,11 @@ def _get_env_with_fallbacks(primary: str, *fallbacks: str, default: str = "") ->
 # TELEGRAM CONFIGURATION
 # ────────────────────────────────────────────────────────────────
 
-TELEGRAM_TOKEN: str = _get_env("TELEGRAM_TOKEN", required=True)
+# An isolated, read-only overnight market-data worker does not call Telegram.
+# Keep production bot startup strict unless that explicit worker flag is set.
+TELEGRAM_TOKEN: str = _get_env(
+    "TELEGRAM_TOKEN", required=os.getenv("MSK_RESEARCH_ONLY") != "1"
+)
 """
 Bot token from @BotFather.
 
