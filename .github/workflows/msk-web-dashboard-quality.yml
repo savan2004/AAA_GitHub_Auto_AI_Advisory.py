@@ -1,0 +1,57 @@
+name: MSK Dashboard Source-Aware Output
+on:
+  push:
+    branches: [web/msk-dashboard-output-quality-20261112]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-web-dashboard-quality.yml'
+  pull_request:
+    branches: [web/msk-web-advisory-mvp-20261027]
+    paths:
+      - 'web_advisory/**'
+      - '.github/workflows/msk-web-dashboard-quality.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dashboard-and-existing-pages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate JavaScript
+        run: |
+          for f in web_advisory/*.js web_advisory/tests/*.cjs; do node --check "$f"; done
+      - name: Existing backend safety
+        run: python -m unittest discover -s web_advisory/backend/tests -v
+      - name: Install isolated test packages
+        run: npm install --no-save --no-audit --no-fund jsdom@26 playwright-core@1.56.1
+      - name: Dashboard and all existing DOM regressions
+        run: node --test web_advisory/tests/ui.test.cjs
+      - name: Start local website
+        run: |
+          python -m http.server 8766 --bind 127.0.0.1 --directory web_advisory >/tmp/msk-dashboard-http.log 2>&1 &
+          for i in 1 2 3 4 5; do curl -fsS http://127.0.0.1:8766/ >/dev/null && break || sleep 1; done
+      - name: Nine standalone route tests with portfolio preserved
+        run: CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/pages-browser.cjs
+      - name: Existing nine-button and eight-page report tests
+        run: CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/branch-browser.cjs
+      - name: Existing portfolio upload audit download tests
+        run: CHROME_BIN="$(command -v google-chrome || command -v chromium)" node web_advisory/tests/portfolio-browser.cjs
+      - name: Check PDF evidence
+        run: |
+          python -m pip install --quiet pypdf
+          python - <<'PY'
+          from pypdf import PdfReader
+          assert len(PdfReader('/tmp/msk-report-branch.pdf').pages)==8
+          p=PdfReader('/tmp/msk-portfolio-audit-browser.pdf')
+          text=' '.join(x.extract_text() or '' for x in p.pages)
+          assert 'MSK Portfolio Audit' in text and 'AAA' in text and 'BBB' in text
+          print('REPORTS_OK',len(p.pages))
+          PY
