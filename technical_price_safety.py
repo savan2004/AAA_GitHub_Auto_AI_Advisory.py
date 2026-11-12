@@ -60,7 +60,10 @@ def technical_price_context(history, quote=None, *, now=None):
         status = quote.get("quote_status")
         try:
             observed = float(raw_price)
-            stamped = datetime.fromisoformat(str(raw_time)).astimezone(IST)
+            claimed_time = datetime.fromisoformat(str(raw_time))
+            if claimed_time.tzinfo is None or claimed_time.utcoffset() is None:
+                raise ValueError("Quote time must contain exchange timezone")
+            stamped = claimed_time.astimezone(IST)
             age_sec = (now - stamped).total_seconds()
             is_open = (now.weekday() < 5 and
                        (9, 15) <= (now.hour, now.minute) < (15, 30))
