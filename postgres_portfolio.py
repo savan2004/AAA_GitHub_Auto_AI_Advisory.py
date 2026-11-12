@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from portfolio_migration import load_legacy_holdings
+from portfolio_migration import load_legacy_holdings, load_legacy_account_ids
 
 _HOLDINGS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS holdings (
@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS holdings (
     qty NUMERIC(24,8) NOT NULL CHECK (qty > 0),
     avg NUMERIC(24,8) NOT NULL CHECK (avg >= 0),
     PRIMARY KEY(uid, symbol)
+)
+"""
+_ACCOUNTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS portfolio_accounts (
+    uid BIGINT PRIMARY KEY CHECK (uid > 0)
 )
 """
 _CUTOVER_SCHEMA = """
@@ -65,6 +70,7 @@ def _connect_postgres(dsn):
 
 
 def _create_schema(conn):
+    conn.execute(_ACCOUNTS_SCHEMA)
     conn.execute(_HOLDINGS_SCHEMA)
     conn.execute(_CUTOVER_SCHEMA)
 
@@ -155,6 +161,10 @@ class PostgresPortfolioStore:
             elif _amount(current[0], positive=True) + quantity > 10**9:
                 raise ValueError("Holding quantity exceeds limit")
             conn.execute(
+                "INSERT INTO portfolio_accounts(uid) VALUES(%s) "
+                "ON CONFLICT(uid) DO NOTHING", (uid,)
+            )
+            conn.execute(
                 """INSERT INTO holdings(uid, symbol, qty, avg)
                    VALUES (%s, %s, %s, %s)
                    ON CONFLICT (uid, symbol) DO UPDATE
@@ -213,6 +223,7 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
     except OSError as exc:
         raise PortfolioStorageError("Could not capture legacy portfolio snapshot") from exc
     rows = load_legacy_holdings(source, snapshot_bytes=frozen_bytes)
+    users = load_legacy_account_ids(source, snapshot_bytes=frozen_bytes)
     digest = hashlib.sha256(frozen_bytes).hexdigest()
     if not apply:
         return {"status": "dry-run", "positions": len(rows)}
@@ -234,11 +245,25 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
                     "Stored holdings differ from frozen migration snapshot; "
                     "refusing already-imported verification"
                 )
+            stored_users = [x[0] for x in conn.execute(
+                "SELECT uid FROM portfolio_accounts ORDER BY uid"
+            ).fetchall()]
+            if stored_users != users:
+                raise PortfolioStorageError(
+                    "Stored portfolio account IDs differ from frozen snapshot"
+                )
             return {"status": "already-imported", "positions": len(rows)}
         count = conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
-        if count:
+        accounts_count = conn.execute(
+            "SELECT COUNT(*) FROM portfolio_accounts"
+        ).fetchone()[0]
+        if count or accounts_count:
             raise PortfolioStorageError(
-                "Target already has holdings but no cutover marker; refusing overwrite"
+                "Target already has holdings/accounts but no cutover marker; refusing overwrite"
+            )
+        for uid in users:
+            conn.execute(
+                "INSERT INTO portfolio_accounts(uid) VALUES(%s)", (uid,)
             )
         for uid, symbol, qty, avg in rows:
             conn.execute(
@@ -250,6 +275,11 @@ def import_legacy_to_postgres(source, dsn, *, connector=None, apply=False, allow
         # while this transaction can still roll back on a failed readback.
         if not _holdings_match_snapshot(conn, rows):
             raise PortfolioStorageError("Imported portfolio readback mismatch")
+        observed_users = [x[0] for x in conn.execute(
+            "SELECT uid FROM portfolio_accounts ORDER BY uid"
+        ).fetchall()]
+        if observed_users != users:
+            raise PortfolioStorageError("Imported account readback mismatch")
         conn.execute(
             "INSERT INTO portfolio_cutover(id, source_sha256, initial_position_count)"
             " VALUES (1, %s, %s)", (digest, len(rows))
