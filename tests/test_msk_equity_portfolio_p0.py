@@ -120,6 +120,54 @@ class PortfolioSafetyTests(unittest.TestCase):
 
 
 class EquityPriceSafetyTests(unittest.TestCase):
+    def test_fundamentals_cache_must_not_reuse_hour_old_price(self):
+        import data_engine as de
+        old = {"price": 100.0, "pe": 17.5, "name": "SBIN"}
+        def cache(key, ttl):
+            return old if key.startswith("info_") else 125.0
+        with patch.object(de, "cached_get", side_effect=cache), \
+             patch.object(de, "_yahoo_v10_fundamentals") as fund, \
+             patch.object(de, "_yahoo_v8_quote") as quote:
+            card = de.get_info("SBIN")
+            self.assertEqual(card["price"], 125.0)
+            self.assertEqual(card["pe"], 17.5)
+            self.assertEqual(old["price"], 100.0)  # Cached object is untouched.
+            fund.assert_not_called()
+            quote.assert_not_called()
+
+    def test_no_current_quote_removes_stale_price_but_keeps_ratios(self):
+        import data_engine as de
+        cached_info = {"price": 99.0, "pe": 15.0}
+        def cache(key, ttl):
+            return cached_info if key.startswith("info_") else None
+        with patch.object(de, "cached_get", side_effect=cache), \
+             patch.object(de, "_yahoo_v8_quote", return_value=None), \
+             patch.object(de, "_nse_quote", return_value=None):
+            card = de.get_info("SBIN")
+            self.assertNotIn("price", card)
+            self.assertEqual(card["pe"], 15.0)
+            self.assertEqual(cached_info["price"], 99.0)
+
+    def test_invalid_v10_price_gets_current_nse_quote(self):
+        import data_engine as de
+        with patch.object(de, "cached_get", return_value=None), \
+             patch.object(de, "_yahoo_v10_fundamentals",
+                          return_value={"price": float("nan"), "pe": 12}), \
+             patch.object(de, "_yahoo_v8_quote", return_value={"price": float("nan")}), \
+             patch.object(de, "_nse_quote", return_value={"price": "1,010.50"}), \
+             patch.object(de, "cached_set"):
+            card = de.get_info("SBIN")
+            self.assertEqual(card["price"], 1010.5)
+            self.assertEqual(card["pe"], 12)
+
+    def test_index_info_cache_uses_five_minute_ttl(self):
+        import data_engine as de
+        with patch.object(de, "cached_get", return_value={"price": 25000}) as cache, \
+             patch.object(de, "_yahoo_v8_quote") as quote:
+            self.assertEqual(de.get_info("^NSEI")["price"], 25000)
+            cache.assert_called_once_with("info_v2_^NSEI", de.TTL_PRICE)
+            quote.assert_not_called()
+
     def test_nan_or_zero_quote_uses_valid_nse_fallback(self):
         import data_engine as de
         with patch.object(de, "cached_get", return_value=None), \
