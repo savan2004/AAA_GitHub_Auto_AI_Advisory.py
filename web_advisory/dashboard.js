@@ -41,9 +41,39 @@
    ai:{title:"Ask Research",subtitle:"Evidence-grounded educational Q&A; generative AI is not connected."},
    portfolio:{title:"Portfolio Health",subtitle:"Private holdings analysis from CSV; historical valuations only when matching EOD prices exist."}
  };
+ const ROUTES={
+   overview:"index.html",technical:"technical.html",fundamental:"fundamental.html",
+   chart:"chart.html",screener:"screener.html",breadth:"breadth.html",
+   pdf:"pdf.html",portfolio:"portfolio.html",ai:"ai.html"
+ };
+ function routeURL(tab){
+   const url=new URL(ROUTES[tab]||ROUTES.overview,window.location.href);
+   // Keep deep-link query parameters while changing research tools.
+   url.search=window.location.search;
+   url.hash="#"+tab;
+   return url.pathname+url.search+url.hash;
+ }
+ function currentRoute(){
+   const basename=window.location.pathname.split("/").pop().toLowerCase();
+   const page=Object.keys(ROUTES).find(key=>ROUTES[key]===basename);
+   const hash=window.location.hash.replace(/^#/,"");
+   // Legacy /#technical URLs remain supported; a distinct page wins
+   // when opened directly without a hash.
+   return page&&page!=="overview"?page:VIEWS[hash]?hash:"overview";
+ }
  function setView(tab){
    const meta=VIEWS[tab]||VIEWS.overview;
    root.dataset.page=tab;
+   for(const link of nav){
+     link.setAttribute("aria-current",link.dataset.tab===tab?"page":"false");
+     link.title="Open "+(VIEWS[link.dataset.tab]?.title||link.dataset.tab)+" page";
+   }
+   const crumb=document.getElementById("researchBreadcrumb");
+   if(crumb){
+     const label=crumb.querySelector("[data-current-page]");
+     if(label)label.textContent=meta.title;
+     crumb.hidden=tab==="overview";
+   }
    const title=document.querySelector(".heading-block h1");
    const sub=document.querySelector(".heading-block p");
    if(title)title.textContent=meta.title;
@@ -58,8 +88,9 @@
    try{target.click();}finally{syncingLocation=false;} // Real shared engine handler
    setView(tab);
    for(const a of actions)a.classList.toggle("active",a.dataset.go===tab);
-   if(updateHistory&&window.history?.pushState&&window.location.hash!=="#"+tab)
-     window.history.pushState({mskPage:tab},"","#"+tab);
+   if(updateHistory&&window.history?.pushState&&
+      (window.location.pathname.split("/").pop()!==ROUTES[tab]||window.location.hash!=="#"+tab))
+     window.history.pushState({mskPage:tab},"",routeURL(tab));
    closeMenu();
    const region=tab==="ai"?$("aiPanel"):$("researchDetail");
    if(scroll&&region&&typeof region.scrollIntoView==="function")
@@ -73,8 +104,9 @@
    item.addEventListener("click",()=>{
      setView(item.dataset.tab);
      for(const action of actions)action.classList.toggle("active",action.dataset.go===item.dataset.tab);
-     if(!syncingLocation&&window.history?.pushState&&window.location.hash!=="#"+item.dataset.tab)
-       window.history.pushState({mskPage:item.dataset.tab},"","#"+item.dataset.tab);
+     if(!syncingLocation&&window.history?.pushState&&
+         (window.location.pathname.split("/").pop()!==ROUTES[item.dataset.tab]||window.location.hash!=="#"+item.dataset.tab))
+       window.history.pushState({mskPage:item.dataset.tab},"",routeURL(item.dataset.tab));
      closeMenu();
      if(item.dataset.tab!=="overview"){
        const anchor=item.dataset.tab==="ai"?$("aiPanel"):$("researchDetail");
@@ -132,12 +164,11 @@
    syncEvidence();
  }
  function syncFromLocation(){
-   const tab=window.location.hash.replace(/^#/,"");
-   activateTab(VIEWS[tab]?tab:"overview",{scroll:false,updateHistory:false});
+   activateTab(currentRoute(),{scroll:false,updateHistory:false});
  }
  window.addEventListener("popstate",syncFromLocation);
  window.addEventListener("hashchange",syncFromLocation);
- // Deep link supports /?symbol=SBIN#fundamental or #ai,
+ // Deep links support /fundamental.html or legacy /?symbol=SBIN#fundamental,
  // and browser Back/Forward returns to the prior research workspace.
  syncFromLocation();
  // The draft action produces a local text summary in the Ask Research panel.
