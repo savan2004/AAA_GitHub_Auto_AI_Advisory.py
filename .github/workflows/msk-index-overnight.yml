@@ -78,6 +78,7 @@ jobs:
     env:
       MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
       MSK_INDEX_TEJ_FALLBACK: '1'
+      MSK_RESEARCH_ONLY: '1'
       PYTHONUNBUFFERED: '1'
       TZ: Asia/Kolkata
     steps:
