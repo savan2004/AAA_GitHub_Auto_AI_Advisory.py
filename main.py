@@ -878,25 +878,52 @@ def analysis_choice_keyboard(sym):
 
 
 # ── Safe Sender ──────────────────────────────────────────────────────────────
+def _record_telegram_api_ack(chat_id, result, kind):
+    """Only a successful Bot API response may create a durable receipt.
+
+    A message ID is an API acknowledgment, not end-user delivery/read proof.
+    No raw message text, chart, PDF or private Telegram username is persisted.
+    """
+    message_id = getattr(result, "message_id", None)
+    if type(message_id) is not int or message_id <= 0:
+        return False
+    ledger = globals().get("_durable_update_ledger")
+    if ledger is None:
+        return False
+    try:
+        ledger.record_delivery_ack(chat_id, message_id, kind)
+        return True
+    except Exception as exc:
+        # Do not resend a potentially delivered Telegram message on an ACK
+        # storage error: doing so would create a duplicate customer post.
+        logger.error("Telegram API receipt persistence failed (%s)",
+                     type(exc).__name__)
+        return False
+
+
 def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
     if text is None:
-        return
+        return None
     try:
-        bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
-    except Exception as e:
-        # Never log the bot token or message content. This used to fail silently,
-        # making missing discussion replies impossible to diagnose on Render.
-        logger.warning("[Telegram delivery] send failed: HTTP %s (%s)",
-                       getattr(e, "error_code", "unknown"), type(e).__name__)
-        err_str = str(e).lower()
-        if "can't parse" in err_str or "bad request" in err_str:
+        sent = bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
+        _record_telegram_api_ack(chat_id, sent, "text")
+        return sent
+    except Exception as exc:
+        # Never log bot token or user message content.
+        logger.warning("[Telegram API] text send failed: HTTP %s (%s)",
+                       getattr(exc, "error_code", "unknown"),
+                       type(exc).__name__)
+        if "can't parse" in str(exc).lower() or "bad request" in str(exc).lower():
             try:
                 plain = re.sub(r"<[^>]+>", "", str(text))
-                bot.send_message(chat_id, plain, **kwargs)
+                sent = bot.send_message(chat_id, plain, **kwargs)
+                _record_telegram_api_ack(chat_id, sent, "text")
+                return sent
             except Exception as fallback_error:
-                logger.warning("[Telegram delivery] plain-text fallback failed: HTTP %s (%s)",
+                logger.warning("[Telegram API] plain-text fallback failed: HTTP %s (%s)",
                                getattr(fallback_error, "error_code", "unknown"),
                                type(fallback_error).__name__)
+    return None
 
 
 def _allow_heavy(m):
