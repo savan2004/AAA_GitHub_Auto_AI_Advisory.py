@@ -972,25 +972,35 @@ def _appendix(R, story):
     story += [Spacer(1, 8), P("Data sources & completeness", "h2")]
     stm = R["stm"]
     n_core = sum(1 for k in ("pe", "roe", "eps", "pb", "de", "mcap") if R["fund"].get(k) is not None)
+    # Compact publisher's appendix: preserve source/basis and the entire
+    # financial-accuracy disclaimer without spilling a few lines onto a nearly
+    # empty final page. Stacked source bullets previously produced an orphan.
     items = [
-        f"Prices & volume: Yahoo Finance / NSE / Stooq daily candles ({R['t']['bars']} sessions); "
-        f"price as of {esc(R.get('price_session') or 'unverified')}; benchmark Nifty 50.",
-        (f"Financial statements: {esc(stm['source'])} — {len(stm.get('years') or [])} annual periods, "
-         f"{len(stm.get('quarters') or [])} quarters.") if stm else "Financial statements: not available.",
-        f"Ratios aggregated from Screener.in / Yahoo / Finnhub: {n_core}/6 core fields available "
-        "(availability is not independent accuracy verification).",
-        f"Shareholding: Screener.in, {len(R['sh'])} quarters." if R["sh"] else "Shareholding: not available.",
-        f"Peers: {len(R['peers'])} same-sector companies." if R["peers"] else "Peers: not available for this stock.",
-        "Analyst commentary: " + ("AI-assisted, with every figure checked against the data above." if R["ai_note"] else "rule-generated (no AI text used)."),
+        (f"Prices &amp; volume: public Yahoo / NSE / Stooq daily candles "
+         f"({R['t']['bars']} sessions); price session "
+         f"{esc(R.get('price_session') or 'unverified')}; Nifty 50 benchmark."),
+        (f"Statements: {esc(stm['source'])}, {len(stm.get('years') or [])} annual "
+         f"periods, {len(stm.get('quarters') or [])} quarters."
+         if stm else "Financial statements: unavailable."),
+        (f"Ratios: {n_core}/6 core fields available (availability is not "
+         f"independent accuracy verification). Shareholding: "
+         f"{len(R['sh']) if R['sh'] else 0} quarters; "
+         f"peers: {len(R['peers']) if R['peers'] else 0}."),
+        ("Commentary: " +
+         ("AI-assisted; financial facts require independent confirmation."
+          if R["ai_note"] else "rule-generated, no AI text.")),
+        ("Financial figures and ratios were not independently reconciled "
+         "to stock-exchange filings; verify consolidated/standalone scope, "
+         "fiscal period and restatements before any client use."),
     ]
-    items.append("Financial figures and ratios were not independently reconciled to stock-exchange filings; "
-                 "verify consolidated/standalone basis, period and any restatements before client use.")
     story += bullets(items)
-    story += [Spacer(1, 4), P("Glossary", "h2"),
-              P("<b>ATR</b> average true range, a typical daily move · <b>ADX</b> trend strength (above 25 = trending) · <b>RSI</b> momentum oscillator (70/30 bands) · "
-                "<b>EMA</b> exponential moving average · <b>OPM</b> operating profit margin · <b>ROCE/ROE</b> return on capital/equity · "
-                "<b>PEG</b> P/E divided by profit growth · <b>R-multiple</b> reward as a multiple of the risk taken · <b>VaR</b> value-at-risk · "
-                "<b>σ</b> standard deviation of returns.", "small")]
+    story += [Spacer(1, 3), P("Glossary", "h2"),
+              P("<b>ATR</b> average true range; <b>ADX</b> trend strength; "
+                "<b>RSI</b> momentum; <b>EMA</b> exponential moving average; "
+                "<b>OPM</b> operating profit margin; <b>ROCE/ROE</b> returns "
+                "on capital/equity; <b>PEG</b> price/earnings to growth; "
+                "<b>R-multiple</b> reward/risk; <b>VaR</b> value at risk.",
+                "tiny")]
     story += [Spacer(1, 5), HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceAfter=3),
               P("<b>Disclaimer.</b> This report is generated automatically from public market data and, where indicated, AI-assisted text. "
                 "It is for educational and informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell any security. "
