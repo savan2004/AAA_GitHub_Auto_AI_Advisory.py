@@ -83,6 +83,11 @@ class DurableBotState:
             for sql in _SCHEMA:
                 conn.execute(sql)
 
+    def ping(self):
+        """Read-only readiness check; never treats a network outage as healthy."""
+        with self._connector(self._dsn) as conn:
+            return conn.execute("SELECT 1").fetchone() == (1,)
+
     def claim(self, update_id, user_id=None):
         """Atomic first-claim wins across workers and restarts.
 
