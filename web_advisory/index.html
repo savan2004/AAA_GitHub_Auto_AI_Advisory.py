@@ -12,6 +12,7 @@
  <link rel="stylesheet" href="dashboard.css">
  <link rel="stylesheet" href="report.css">
  <link rel="stylesheet" href="portfolio_audit.css">
+ <link rel="stylesheet" href="pages.css">
  <script src="config.js" defer></script>
  <script src="app.js" defer></script>
  <script src="features.js" defer></script>
@@ -52,6 +53,9 @@
     <div class="header-right"><span id="backendIndicator" class="status" aria-live="polite">Checking research API…</span><span class="header-mark">EOD RESEARCH</span><span class="header-avatar" title="Guest workspace">MSK</span></div>
    </header>
    <main class="main" id="mainContent">
+    <nav class="research-breadcrumb" id="researchBreadcrumb" aria-label="Breadcrumb" hidden>
+      <a href="index.html#overview">Research Dashboard</a><span aria-hidden="true">/</span><span data-current-page>Research Module</span>
+     </nav>
     <div class="heading-block">
       <div><div class="eyebrow"><span class="small-dot"></span> FINANCIAL RESEARCH PLATFORM</div><h1>Research Dashboard</h1><p>Understand Indian equities through dated market data, readable charts and transparent analysis.</p></div>
       <div class="heading-aside"><span class="session-icon">◷</span><span><small>Market data mode</small><strong>Historical • End of day</strong></span></div>
@@ -71,7 +75,7 @@
       <div class="metric"><div class="metric-icon amber">▥</div><small>RELATIVE VOLUME</small><strong id="vol">—</strong><span id="volLabel">Against previous 20 days</span></div>
     </section>
     <section class="section-heading" aria-label="Research actions">
-     <div><div class="eyebrow">RESEARCH MODULES</div><h2>What would you like to analyse?</h2></div><span class="small-muted">Select a module to open its results below</span>
+     <div><div class="eyebrow">RESEARCH MODULES</div><h2>What would you like to analyse?</h2></div><span class="small-muted">Each tool opens on its own dedicated research page</span>
     </section>
     <section class="quick-actions" aria-label="Quick research buttons">
       <button type="button" class="action-card" data-go="technical"><span class="action-glyph teal">⌁</span><span class="action-copy"><strong>Technical</strong><small>Trend, ADX, EMA, volume</small></span><span class="action-chevron">↗</span></button>
