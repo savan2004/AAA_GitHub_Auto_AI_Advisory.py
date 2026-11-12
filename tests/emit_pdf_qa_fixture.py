@@ -39,6 +39,8 @@ def main():
             nonblank = sum(hist[:238]) / (image.width * image.height)
             if nonblank < 0.006:
                 raise RuntimeError(f"PDF page {i+1} appears nearly blank")
+            if i == len(pdf)-1 and nonblank < 0.075:
+                raise RuntimeError("Trailing research PDF page is a mostly empty orphan")
             coverage.append(round(nonblank, 4))
             thumb = image.copy()
             thumb.thumbnail((440, 615))
