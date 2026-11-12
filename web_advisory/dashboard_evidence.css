@@ -1,0 +1,54 @@
+/* Source-dated research brief — one truthfully gated dashboard summary. */
+.web-pro .dash-evidence{
+ margin:20px 0 24px;padding:20px 22px;border:1px solid #d9e5eb;
+ background:linear-gradient(132deg,#ffffff 10%,#f4fafb 100%);
+ border-radius:16px;box-shadow:0 8px 26px rgba(22,46,67,.055);
+}
+.web-pro[data-page]:not([data-page="overview"]) #dashboardEvidence{display:none!important}
+.web-pro .dash-evidence-head{
+ display:flex;justify-content:space-between;align-items:center;
+ flex-wrap:wrap;gap:12px;margin-bottom:18px;
+}
+.web-pro .dash-evidence-head h2{margin:6px 0 0;color:#142f47;font-size:21px;letter-spacing:-.03em}
+.web-pro .dash-evidence-pill{
+ display:inline-flex;align-items:center;padding:7px 10px;
+ font-size:11px;font-weight:800;letter-spacing:.055em;
+ border-radius:99px;color:#875c20;background:#fff4da;border:1px solid #f3d598;
+}
+.web-pro .dash-evidence-pill[data-kind="tej_eod"]{color:#116657;background:#e9f7ef;border-color:#c7e6da}
+.web-pro .dash-evidence-pill[data-kind="synthetic"]{color:#895527;background:#fff3dc;border-color:#eed4a2}
+.web-pro .dash-evidence-pill[data-kind="uploaded"]{color:#795d22;background:#fff9e7;border-color:#eadaad}
+.web-pro .dash-evidence-grid{
+ display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;
+}
+.web-pro .dash-evidence-metric{
+ padding:15px 14px;border:1px solid #e0ebef;border-radius:11px;
+ background:#fff;min-width:0;display:flex;flex-direction:column;gap:9px;
+}
+.web-pro .dash-evidence-label{color:#5b7186;font-size:11px;font-weight:750;letter-spacing:.035em;text-transform:uppercase}
+.web-pro .dash-evidence-value{
+ font-size:clamp(15px,1.65vw,19px);font-weight:790;letter-spacing:-.025em;
+ color:#193b55;line-height:1.24;overflow-wrap:anywhere;
+}
+.web-pro .dash-evidence-note{margin:0;color:#687d8c;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.web-pro .dash-evidence-notes{
+ display:grid;gap:8px;margin-top:14px;
+}
+.web-pro .dash-evidence-warning,.web-pro .dash-evidence-status{
+ padding:11px 13px;border:1px solid #eedbac;border-radius:9px;
+ background:#fff8e9;color:#745519;font-size:12px;line-height:1.6;margin:0;
+}
+.web-pro .dash-evidence-status{background:#eef8f5;border-color:#c6e8d9;color:#235b52}
+.web-pro .dash-evidence-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+.web-pro .dash-evidence-action{min-height:40px;font-size:12px}
+@media(max-width:1150px){.web-pro .dash-evidence-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:680px){
+ .web-pro .dash-evidence{padding:16px 12px;margin:14px 0 18px}
+ .web-pro .dash-evidence-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .web-pro .dash-evidence-metric{padding:11px 9px}
+ .web-pro .dash-evidence-value{font-size:14px}
+ .web-pro .dash-evidence-actions{flex-direction:column}
+ .web-pro .dash-evidence-action{width:100%}
+}
+@media(max-width:360px){.web-pro .dash-evidence-grid{grid-template-columns:minmax(0,1fr)}}
+@media print{.web-pro #dashboardEvidence{display:none!important}}
