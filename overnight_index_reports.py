@@ -357,6 +357,17 @@ def render_snapshot(profile, universe, records, session):
         if stale:lines.append(f"⚠️ Missing/stale EOD: {len(stale)} ({', '.join(stale[:7])})")
     elif not selected:
         lines.append("🛑 No fully rule-validated conditional setups. No Top 5 issued.")
+        qualified=[r for r in rows if r and
+                   r.get("membership_hash")==identity and
+                   r.get("fund_status")=="VALIDATED" and
+                   _fresh(r.get("technical"),session)]
+        waits=sum(r["technical"].get("signal")=="WAIT" for r in qualified)
+        if qualified and waits==len(qualified):
+            lines.append(f"🧭 All {len(qualified)} financially rule-qualified stocks currently show WAIT. No buy entry confirmed.")
+        elif qualified:
+            lines.append(f"🧭 {waits}/{len(qualified)} rule-qualified stocks show WAIT; remaining setups did not pass risk/entry filters.")
+        elif not verified:
+            lines.append("⚠️ No companies have passed the full fundamental rules.")
     else:
         lines.append(f"✅ <b>Verified-rule watchlist: {len(selected)} / 5 qualifying</b>")
         for i,t in enumerate(selected,1):
