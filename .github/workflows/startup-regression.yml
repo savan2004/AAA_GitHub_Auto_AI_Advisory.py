@@ -26,6 +26,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_msk_postgres_migration.py' -v
           python -m unittest discover -s tests -p 'test_portfolio_backup_preflight.py' -v
           python -m unittest discover -s tests -p 'test_msk_durable_state.py' -v
+          python -m unittest discover -s tests -p 'test_msk_delivery_receipts.py' -v
           python -m unittest discover -s tests -p 'test_msk_equity_portfolio_p0.py' -v
       - name: Run isolated regression suite
         run: |
