@@ -83,6 +83,50 @@ class ClaimOnceDatabaseRegression(unittest.TestCase):
         self.assertGreaterEqual(conn.execute.call_count, 10)
 
 
+class PdfLiveReceiptLedgerContract(unittest.TestCase):
+    def test_real_api_fields_saved_not_generated_fake_ids(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+        import msk_live_acceptance as acceptance
+        import msk_sbin_pdf_probe as probe
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "SBIN.pdf"
+            path.write_bytes(b"%PDF-1.4\nunit-test-only\n")
+            receipt = SimpleNamespace(
+                message_id=14199,
+                document=SimpleNamespace(file_id="telegram-test-file-id")
+            )
+            bot = SimpleNamespace(send_document=MagicMock(return_value=receipt))
+            ctx = {
+                "usage_analytics": SimpleNamespace(get_owner_id=lambda: 123456),
+                "generate_stock_report_pdf": lambda symbol:
+                    (True, str(path), "SBIN"),
+                "bot": bot,
+                "_record_telegram_api_ack": MagicMock(),
+            }
+            validator = SimpleNamespace(
+                validate_research_pdf=lambda *args, **kwargs:
+                    {"pages": 8, "bytes": 26000}
+            )
+            with patch.dict(os.environ, {"MSK_SBIN_PDF_LIVE_RUN_ID":"proof-run"}):
+                with patch.dict("sys.modules", {"pdf_release_gate":validator}):
+                    with patch.object(probe.time, "sleep"):
+                        with patch.object(acceptance, "_claim_once",return_value=True):
+                            with patch.object(acceptance, "_save_action") as save:
+                                probe.run_once(ctx)
+            self.assertEqual(save.call_args.args,
+                             ("sbinpdf-proof-run", "Report"))
+            self.assertEqual(save.call_args.kwargs["message_id"],14199)
+            self.assertEqual(save.call_args.kwargs["file_id"],
+                             "telegram-test-file-id")
+            self.assertTrue(save.call_args.kwargs["pdf_delivered"])
+            self.assertEqual(save.call_args.kwargs["status"],"UNVERIFIED")
+
+
 class SelectedFeatureRerunContract(unittest.TestCase):
     def test_unknown_feature_filter_sends_nothing(self):
         import os

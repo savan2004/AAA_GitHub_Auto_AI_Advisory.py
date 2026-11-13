@@ -63,6 +63,17 @@ def run_once(ctx):
         file_id = getattr(document, "file_id", None)
         if type(msg_id) is not int or msg_id <= 0 or not file_id:
             raise RuntimeError("Telegram did not return a verifiable document receipt")
+        # Commit the real Telegram API document receipt to the EXISTING
+        # MSK Neon acceptance ledger. This is transport proof, not a verified
+        # financial-quality score or proof the recipient opened the document.
+        from msk_live_acceptance import _save_action
+        _save_action("sbinpdf-" + run_id, "Report",
+                     status="UNVERIFIED", message_id=msg_id, file_id=file_id,
+                     validation_status="unverified",
+                     pdf_generated=True, pdf_delivered=True,
+                     error="Telegram document ACK; financial quality not yet certified")
+        LOG.info("MSK_SBIN_PDF_PROBE_NEON_SAVED message_id=%d file_id_present=true",
+                 msg_id)
         ctx["_record_telegram_api_ack"](owner_id, receipt, "document")
         LOG.info("MSK_SBIN_PDF_PROBE_RESULT state=delivered message_id=%d "
                  "document_file_id=%s bytes=%d pages=%d", msg_id, file_id, size, pages)
