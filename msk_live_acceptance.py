@@ -46,6 +46,12 @@ def capture_telegram_ack(kind, message_id, file_id=None, message_text=None):
             "LARGE CAP" in message_text and "Nifty 100" in message_text):
         LOG.info("MSK_ACCEPTANCE_LARGECAP_RETURNED_TEXT message_id=%d text=%r",
                  message_id, message_text)
+    if (probe["action"] == "MidCapTop5" and kind == "text" and
+            isinstance(message_text, str) and
+            0 < len(message_text) <= 5000 and
+            "MID CAP" in message_text and "Nifty Midcap 150" in message_text):
+        LOG.info("MSK_ACCEPTANCE_MIDCAP_RETURNED_TEXT message_id=%d text=%r",
+                 message_id, message_text)
 
 
 def _claim_once(run_id):
