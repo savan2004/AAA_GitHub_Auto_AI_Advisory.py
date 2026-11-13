@@ -78,7 +78,8 @@ def _check_manifest(data, month, source_chat, *, now=None):
         as_of = date.fromisoformat(data.get("as_of", ""))
     except (TypeError, ValueError) as exc:
         raise MagazineManifestError("Magazine dates invalid") from exc
-    if published > now or as_of > published:
+    today = now.date() if isinstance(now, datetime) else now
+    if published > today or as_of > published:
         raise MagazineManifestError("Magazine has future or conflicting dates")
     if approved_at.date() < published:
         raise MagazineManifestError("Magazine approval predates publication")
