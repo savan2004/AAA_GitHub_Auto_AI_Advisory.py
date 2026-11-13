@@ -38,7 +38,12 @@ class MenuAudit(unittest.TestCase):
         self.assertIn('_get_env("BRAND_NAME", "MSK Bot")', CONFIG)
 
     def test_duplicate_webhook_releases_slot(self):
-        self.assertRegex(MAIN, r'if uid in _processed_updates_set:\s+_webhook_slots.release\(\)\s+return "ok", 200')
+        # Shared finally releases slots after duplicate/rejected claims.
+        # An accepted async submission releases from its done callback.
+        self.assertIn("if uid in _processed_updates_set:", MAIN)
+        self.assertIn("if not claimed_in_db:", MAIN)
+        self.assertIn("if not submitted:", MAIN)
+        self.assertIn("_webhook_slots.release()", MAIN)
 
     def test_callback_validation(self):
         self.assertIn('re.fullmatch(r"[A-Za-z0-9&_.-]{1,30}", sym)', MAIN)

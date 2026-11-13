@@ -175,7 +175,10 @@ class HandlerIntegrationTests(unittest.TestCase):
         ns = {
             "resolve_symbol": lambda q: ("FAKE.NS", "Fake Co"),
             "get_hist": lambda s, p: pd.DataFrame(),
-            "inspect_history": aq.inspect_history,
+            # Freeze the clock at the fixture's as-of session. Without this,
+            # the October candles correctly become stale as calendar time passes
+            # and CI fails for the wrong reason.
+            "inspect_history": lambda frame: aq.inspect_history(frame, now=NOW),
             "format_snapshot": aq.format_snapshot,
             "main_keyboard": lambda: "MENU",
             "analysis_choice_keyboard": lambda s: "CALLBACKS",
@@ -188,15 +191,17 @@ class HandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(sent[-1][1]["reply_markup"], "MENU")
         self.assertNotIn("CALLBACKS", str(sent[-1]))
         self.assertNotIn("✅ Found", str(sent[-1]))
-        # Align the positive fixture with the last completed IST business day.
-        # Retain the empty/stale-data fail-closed assertion above.
-        completed_day = pd.bdate_range(
-            end=(datetime.now(IST) - timedelta(days=1)).date(), periods=1
-        )[-1].strftime("%Y-%m-%d")
-        ns["get_hist"] = lambda s, p: make_bars(last=completed_day)
+        ns["get_hist"] = lambda s, p: make_bars()
         ns["send_symbol_menu"](1, "FAKE")
         self.assertEqual(sent[-1][1]["reply_markup"], "CALLBACKS")
         self.assertIn("completed session", sent[-1][0][1])
+        # Genuine stale candles must still fail closed at a later fixed date.
+        ns["inspect_history"] = lambda frame: aq.inspect_history(
+            frame, now=NOW + timedelta(days=14)
+        )
+        ns["send_symbol_menu"](1, "FAKE")
+        self.assertEqual(sent[-1][1]["reply_markup"], "MENU")
+        self.assertIn("could not be verified", sent[-1][0][1])
 
 
 if __name__ == "__main__":

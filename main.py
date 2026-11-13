@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 import threading
 import hmac
 import html
+import math
 
 import requests
 import pandas as pd
@@ -26,12 +27,16 @@ import telebot
 from telebot import types
 
 # ── Local Module Imports ──────────────────────────────────────────────────────
-from data_engine import get_hist, get_info, get_live_price, batch_quotes
+from data_engine import get_hist, get_info, get_live_price, get_verified_quote, normalized_debt_equity_ratio, batch_quotes
+from financial_quality import financial_source_summary
+from technical_price_safety import technical_price_context, guarded_target_line
 from technical_indicators import (
     calc_rsi, calc_ema, calc_macd, calc_atr, calc_asi,
     calc_bollinger, trend_label, swing_signal, rsi_label,
 )
 from api_utils import API_RATE_LIMITER
+from postgres_portfolio import build_portfolio_backend
+from msk_durable_state import build_durable_bot_state
 from config import RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_CALLS
 from market_news import get_stock_news
 
@@ -178,114 +183,143 @@ _processed_updates = deque(maxlen=1000)
 _processed_updates_set = set()
 _webhook_lock = threading.Lock()
 _webhook_slots = threading.BoundedSemaphore(value=16)
+# Enabled only by an explicit DB-backed release flag; fails startup if it
+# cannot provide durable deduplication. Existing production defaults unchanged.
+_durable_update_ledger = build_durable_bot_state()
 
 
 # ── Thread-Safe Portfolio Manager ────────────────────────────────────────────
 class PortfolioManager:
-    """Legacy file-backed portfolio with atomic writes and fail-closed mutations.
-
-    This is a safety patch, not a replacement for durable PostgreSQL storage.
-    """
-    MAX_HOLDINGS = 10
-
-    def __init__(self, file_path="portfolio_data.json"):
+    """Legacy JSON storage. Atomic on this filesystem, NOT durable on Render free."""
+    def __init__(self, file_path="portfolio_data.json", allow_empty_init=False):
         self._data = {}
         self._file = file_path
         self._lock = threading.Lock()
+        self._recovery_required = False
+        self._allow_empty_init = allow_empty_init
         self._load()
 
     def _load(self):
         if not os.path.exists(self._file):
-            # Missing storage may mean lost ephemeral data. Never treat it as
-            # an empty existing account without explicit first-run approval.
-            if os.getenv("MSK_PORTFOLIO_INITIALIZE_EMPTY") != "1":
-                raise RuntimeError("Portfolio storage missing; restore backup or explicitly initialize first run")
-            self._save_locked({})
+            # Missing holdings after a redeploy cannot be distinguished from a fresh install.
+            # Never implicitly allow writes or report an empty account as authoritative.
+            if self._allow_empty_init:
+                self._persist_locked({})  # Explicit operator-approved first-run bootstrap only.
+                return
+            self._recovery_required = True
+            logger.error("Portfolio storage missing at %s: restore required before reads or writes", self._file)
             return
-        with open(self._file, encoding="utf-8") as f:
-            loaded = json.load(f)
-        if not isinstance(loaded, dict):
-            raise ValueError("Portfolio file must contain an object")
-        validated = {}
-        for raw_uid, positions in loaded.items():
-            uid = int(raw_uid)
-            if uid in validated or not isinstance(positions, dict):
-                raise ValueError("Invalid portfolio account structure")
-            if len(positions) > self.MAX_HOLDINGS:
-                raise ValueError("Portfolio exceeds maximum holdings")
-            clean = {}
-            for symbol, position in positions.items():
-                if not isinstance(symbol, str) or not symbol.strip() or not isinstance(position, dict):
-                    raise ValueError("Invalid portfolio position")
-                qty, avg = position.get("qty"), position.get("avg")
-                import math
-                if (not isinstance(qty, int) or isinstance(qty, bool) or qty <= 0
-                        or not isinstance(avg, (int, float)) or isinstance(avg, bool)
-                        or not math.isfinite(avg) or avg <= 0):
-                    raise ValueError("Invalid portfolio quantity or average")
-                clean[symbol] = {"qty": qty, "avg": avg}
-            validated[uid] = clean
-        self._data = validated
+        try:
+            import math
+            with open(self._file, encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                raise ValueError("Portfolio root must be an object")
+            parsed = {}
+            for uid, positions in raw.items():
+                if not isinstance(positions, dict):
+                    raise ValueError("Invalid user portfolio")
+                account = {}
+                for symbol, pos in positions.items():
+                    if (not isinstance(symbol, str) or not isinstance(pos, dict)
+                            or set(pos) != {"qty", "avg"}):
+                        raise ValueError("Invalid holding structure")
+                    qty, avg = pos["qty"], pos["avg"]
+                    if (type(qty) not in (int, float)
+                            or type(avg) not in (int, float)
+                            or not math.isfinite(qty) or not math.isfinite(avg)
+                            or qty <= 0 or avg < 0):
+                        raise ValueError("Invalid holding value")
+                    account[symbol] = {"qty": qty, "avg": avg}
+                parsed[int(uid)] = account
+            self._data = parsed
+        except Exception as exc:
+            logger.exception("Portfolio loading failed: operator recovery required")
+            raise RuntimeError("Portfolio data is invalid; manual recovery required") from exc
 
-    def _save_locked(self, data):
+    def _persist_locked(self, snapshot):
+        """Caller holds the lock; commit new state only after atomic file replacement."""
         import tempfile
         directory = os.path.dirname(os.path.abspath(self._file))
-        temp_path = None
+        temp_name = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
-                                             dir=directory, prefix=".msk-portfolio-",
-                                             suffix=".tmp", delete=False) as f:
-                temp_path = f.name
-                json.dump(data, f, indent=2, allow_nan=False)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(temp_path, self._file)
+                                             prefix=".msk-holdings-", suffix=".tmp",
+                                             dir=directory, delete=False) as handle:
+                temp_name = handle.name
+                os.chmod(temp_name, 0o600)
+                json.dump(snapshot, handle, indent=2, allow_nan=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, self._file)
+        except Exception as exc:
+            logger.exception("Portfolio storage write failed")
+            raise RuntimeError("Portfolio changes could not be saved") from exc
         finally:
-            if temp_path and os.path.exists(temp_path):
-                os.unlink(temp_path)
+            if temp_name and os.path.exists(temp_name):
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    logger.warning("Could not remove portfolio temporary file")
+
+    def _require_available(self):
+        if self._recovery_required:
+            raise RuntimeError("Portfolio storage missing; restore required before use")
+
+    def _save(self):
+        with self._lock:
+            self._require_available()
+            self._persist_locked(self._data)
 
     def get(self, uid):
         with self._lock:
-            return {sym: pos.copy() for sym, pos in self._data.get(uid, {}).items()}
+            self._require_available()
+            return {s: p.copy() for s, p in self._data.get(uid, {}).items()}
 
     def add(self, uid, sym, qty, price):
         import math
-        if not isinstance(qty, int) or isinstance(qty, bool) or qty <= 0:
-            raise ValueError("Quantity must be a positive integer")
-        if not math.isfinite(price) or price <= 0:
-            raise ValueError("Price must be positive and finite")
+        import re
+        if (type(qty) is not int or not 0 < qty <= 10**9
+                or type(price) not in (int, float)
+                or not math.isfinite(price) or not 0 < price <= 10**12
+                or not isinstance(sym, str)
+                or not re.fullmatch(r"[A-Za-z0-9&._-]{1,30}", sym)):
+            raise ValueError("Invalid portfolio holding")
         with self._lock:
-            current = self._data.get(uid, {})
-            if sym not in current and len(current) >= self.MAX_HOLDINGS:
-                raise ValueError("Maximum 10 distinct holdings per portfolio")
-            updated = {k: v.copy() for k, v in self._data.items()}
-            positions = updated.setdefault(uid, {}).copy()
+            self._require_available()
+            proposed = {u: {k: v.copy() for k, v in items.items()}
+                        for u, items in self._data.items()}
+            positions = proposed.setdefault(uid, {})
             if sym in positions:
-                old_qty, old_avg = positions[sym]["qty"], positions[sym]["avg"]
-                new_qty = old_qty + qty
-                positions[sym] = {"qty": new_qty,
-                                  "avg": round((old_qty * old_avg + qty * price) / new_qty, 2)}
+                prev = positions[sym]
+                newqty = prev["qty"] + qty
+                if newqty > 10**9:
+                    raise ValueError("Holding quantity exceeds limit")
+                positions[sym] = {
+                    "qty": newqty,
+                    "avg": round((prev["qty"] * prev["avg"] + qty * price) / newqty, 2),
+                }
             else:
+                if len(positions) >= 10:
+                    raise ValueError("Portfolio maximum is 10 distinct holdings")
                 positions[sym] = {"qty": qty, "avg": round(price, 2)}
-            updated[uid] = positions
-            self._save_locked(updated)
-            self._data = updated
+            self._persist_locked(proposed)
+            self._data = proposed
 
     def remove(self, uid, sym):
         with self._lock:
-            if sym not in self._data.get(uid, {}):
+            self._require_available()
+            if uid not in self._data or sym not in self._data[uid]:
                 return False
-            updated = {k: v.copy() for k, v in self._data.items()}
-            positions = updated[uid].copy()
-            del positions[sym]
-            updated[uid] = positions
-            self._save_locked(updated)
-            self._data = updated
+            proposed = {u: {k: v.copy() for k, v in items.items()}
+                        for u, items in self._data.items()}
+            del proposed[uid][sym]
+            self._persist_locked(proposed)
+            self._data = proposed
             return True
 
 
-portfolio = PortfolioManager()
-
+portfolio = build_portfolio_backend(PortfolioManager)
 
 # ── Safe Formatting Helpers ──────────────────────────────────────────────────
 def safe_val(d, *keys, mul=1.0):
@@ -365,10 +399,19 @@ def build_adv(sym):
     if len(df) < 2:
         return f"❌ <b>{sym}</b> insufficient historical data."
 
+    # The last daily candle is NOT live LTP. Reject undated/stale history,
+    # and permit targets only with independently timestamp-verified quotes.
+    try:
+        observed = get_verified_quote(sym)
+    except Exception:
+        observed = None
+    market = technical_price_context(df, observed)
+    if market is None:
+        return f"⚠️ <b>{sym}</b>: historical candles undated, stale or invalid; analysis withheld."
     close = df["Close"]
-    ltp = round(float(close.iloc[-1]), 2)
-    prev = float(close.iloc[-2])
-    chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+    ltp = market["historical_close"]
+    prev = market["previous_close"]
+    chg = round((ltp - prev) / prev * 100, 2)
     rsi = calc_rsi(close)
     macd, _, _ = calc_macd(close)
     ema20 = calc_ema(close, 20)
@@ -400,7 +443,11 @@ def build_adv(sym):
     eps = fund.get("eps") or safe_val(info, "eps")
     mcap = fund.get("mcap") or info.get("market_cap")
     rev = fund.get("rev") or info.get("totalRevenue")
-    de = fund.get("de") or safe_val(info, "debtToEquity")
+    # Yahoo debtToEquity is percent-scaled (125 means 1.25x), while
+    # Screener/Finnhub normalized aggregations are already unitless.
+    de = normalized_debt_equity_ratio({"debt_equity_ratio": fund.get("de")})
+    if de is None:
+        de = normalized_debt_equity_ratio(info)
     div_y = fund.get("div_y")
     w52h = fund.get("w52h") or safe_val(info, "high52")
     w52l = fund.get("w52l") or safe_val(info, "low52")
@@ -430,20 +477,25 @@ def build_adv(sym):
         pass
 
     ai_text = ""
-    try:
-        ai_text = engine_ai_insights(
-            sym, ltp, rsi, macd, trend,
-            str(pe if pe is not None else "N/A"),
-            str(roe if roe is not None else "N/A")
-        ) or ""
-    except Exception:
-        ai_text = "AI insights unavailable."
+    if market["target_price"] is None:
+        ai_text = "AI price-target insight withheld: no verified current-session price."
+    else:
+        try:
+            ai_text = engine_ai_insights(
+                sym, market["target_price"], rsi, macd, trend,
+                str(pe if pe is not None else "N/A"),
+                str(roe if roe is not None else "N/A")
+            ) or ""
+        except Exception:
+            ai_text = "AI insights unavailable."
 
     chg_icon = "🟢" if chg >= 0 else "🔴"
 
     rows = [
         f"🏢 <b>{name}</b>  ({sym})",
-        f"{chg_icon} LTP: ₹{ltp:,.2f}  <b>({chg:+.2f}%)</b>",
+        market["historical_line"],
+        market["verified_quote_line"],
+        f"{chg_icon} Historical close change: <b>{chg:+.2f}%</b> vs prior candle",
         "━━━━━━━━━━━━━━━━━━━━",
         f"📐 EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}",
         f"📏 52W H: ₹{w52h or 'N/A'}  |  52W L: ₹{w52l or 'N/A'}" + (f"  ({dist52:+.1f}% from peak)" if dist52 is not None else ""),
@@ -458,10 +510,12 @@ def build_adv(sym):
         frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
         frow("Price/Book", pb),
         frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
-        frow("Debt/Equity", de) + (f"  |  Beta: {beta}" if beta else ""),
+        frow("Debt/Equity", f"{de:g}" if de is not None else None, "x") + (f"  |  Beta: {beta}" if beta else ""),
         frow("Div Yield", div_y, "%"),
         "━━━━━━━━━━━━━━━━━━━━",
-        _get_tgt_line(trend, ltp, atr),
+        financial_source_summary(fund),
+        "━━━━━━━━━━━━━━━━━━━━",
+        guarded_target_line(_get_tgt_line, trend, atr, market),
     ]
     if news_text:
         rows += ["━━━━━━━━━━━━━━━━━━━━", f"📰 <b>NEWS</b>\n{news_text}"]
@@ -488,10 +542,19 @@ def build_technical_text(sym, cname=None):
     if df is None or df.empty or len(df) < 2:
         return f"❌ <b>{sym}</b> not found or insufficient data."
 
+    # The last daily candle is NOT live LTP. Reject undated/stale history,
+    # and permit targets only with independently timestamp-verified quotes.
+    try:
+        observed = get_verified_quote(sym)
+    except Exception:
+        observed = None
+    market = technical_price_context(df, observed)
+    if market is None:
+        return f"⚠️ <b>{sym}</b>: historical candles undated, stale or invalid; analysis withheld."
     close = df["Close"]
-    ltp = round(float(close.iloc[-1]), 2)
-    prev = float(close.iloc[-2])
-    chg = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+    ltp = market["historical_close"]
+    prev = market["previous_close"]
+    chg = round((ltp - prev) / prev * 100, 2)
     rsi = calc_rsi(close)
     macd, _, _ = calc_macd(close)
     ema20 = calc_ema(close, 20)
@@ -510,7 +573,9 @@ def build_technical_text(sym, cname=None):
     chg_icon = "🟢" if chg >= 0 else "🔴"
     rows = [
         f"📊 <b>{name}</b>  ({sym}) — Technical Analysis",
-        f"{chg_icon} LTP: ₹{ltp:,.2f}  <b>({chg:+.2f}%)</b>",
+        market["historical_line"],
+        market["verified_quote_line"],
+        f"{chg_icon} Historical close change: <b>{chg:+.2f}%</b> vs prior candle",
         "━━━━━━━━━━━━━━━━━━━━",
         f"📐 EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}",
         f"📏 52W H: ₹{w52h}  |  52W L: ₹{w52l}" + (f"  ({dist52:+.1f}% from peak)" if dist52 is not None else ""),
@@ -519,7 +584,7 @@ def build_technical_text(sym, cname=None):
         f"📊 RSI: {rsi}  |  MACD: {'▲' if macd > 0 else '▼'} {macd}  |  ASI: {asi}",
         f"📉 ATR(14): ₹{atr if atr else 'N/A'}",
         "━━━━━━━━━━━━━━━━━━━━",
-        _get_tgt_line(trend, ltp, atr),
+        guarded_target_line(_get_tgt_line, trend, atr, market),
         "━━━━━━━━━━━━━━━━━━━━",
         "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
     ]
@@ -548,7 +613,11 @@ def build_fundamental_text(sym, cname=None):
     eps = fund.get("eps") or safe_val(info, "eps")
     mcap = fund.get("mcap") or info.get("market_cap")
     rev = fund.get("rev") or info.get("totalRevenue")
-    de = fund.get("de") or safe_val(info, "debtToEquity")
+    # Yahoo debtToEquity is percent-scaled (125 means 1.25x), while
+    # Screener/Finnhub normalized aggregations are already unitless.
+    de = normalized_debt_equity_ratio({"debt_equity_ratio": fund.get("de")})
+    if de is None:
+        de = normalized_debt_equity_ratio(info)
     div_y = fund.get("div_y")
     beta = fund.get("beta") or safe_val(info, "beta")
 
@@ -563,8 +632,10 @@ def build_fundamental_text(sym, cname=None):
         frow("PE (TTM)", pe) + (f"  |  Fwd PE: {fwd_pe}" if fwd_pe else ""),
         frow("Price/Book", pb),
         frow("ROE", roe, "%") + (f"  |  EPS: ₹{eps}" if eps else ""),
-        frow("Debt/Equity", de) + (f"  |  Beta: {beta}" if beta else ""),
+        frow("Debt/Equity", f"{de:g}" if de is not None else None, "x") + (f"  |  Beta: {beta}" if beta else ""),
         frow("Div Yield", div_y, "%"),
+        "━━━━━━━━━━━━━━━━━━━━",
+        financial_source_summary(fund),
         "━━━━━━━━━━━━━━━━━━━━",
         "⚠️ <i>Educational only. Not SEBI-registered advice.</i>",
     ]
@@ -698,51 +769,87 @@ def build_breadth():
 
 # ── Build Portfolio Card ─────────────────────────────────────────────────────
 def build_portfolio_card(uid):
+    """Never treat an unavailable quote as the purchase price or zero P&L."""
+    import math
+    import html
     p = portfolio.get(uid)
     if not p:
         return "📂 <b>Portfolio Empty</b>\n\nAdd: <code>/buy RELIANCE 10 2500</code>"
 
-    t_inv = 0.0
-    t_cur = 0.0
-    rows = []
-    winners = []
-    losers = []
-
+    rows, t_inv, priced_basis, priced_value = [], 0.0, 0.0, 0.0
+    missing_quotes = []
     for sym, pos in p.items():
         qty, avg = pos["qty"], pos["avg"]
+        ltp = None
+        evidence = None
         try:
-            ltp_raw = get_live_price(sym)
-            ltp = round(float(ltp_raw), 2) if ltp_raw is not None else avg
+            quote = get_verified_quote(sym)
+            if quote is not None:
+                candidate = float(quote["price"])
+                source = quote["quote_source"]
+                asof = quote["quote_asof_ist"]
+                status = quote["quote_status"]
+                if (math.isfinite(candidate) and candidate > 0
+                        and source in ("Yahoo Finance v8", "NSE India")
+                        and isinstance(asof, str) and len(asof) >= 16
+                        and status in ("recent_observation", "last_observed_session")):
+                    ltp = round(candidate, 2)
+                    session_label = ("recent observation" if status == "recent_observation"
+                                     else "last observed session")
+                    evidence = (f"{source} | {asof[:16].replace('T', ' ')} IST "
+                                f"| {session_label}")
+        except (TypeError, ValueError, KeyError, OverflowError):
+            pass
         except Exception:
-            ltp = avg
-
+            logger.warning("Portfolio market quote lookup failed for %s", sym)
         inv = qty * avg
-        cur = qty * ltp
-        pnl = round(cur - inv, 2)
-        pct = round((ltp - avg) / avg * 100, 2) if avg > 0 else 0.0
-        rows.append({"sym": sym, "qty": qty, "avg": avg, "ltp": ltp, "inv": inv, "cur": cur, "pnl": pnl, "pct": pct})
         t_inv += inv
-        t_cur += cur
-        (winners if pnl >= 0 else losers).append((sym, pnl, pct))
+        if ltp is None:
+            missing_quotes.append(sym)
+            rows.append((sym, qty, avg, inv, None, None, None, None))
+            continue
+        cur = qty * ltp
+        priced_basis += inv
+        priced_value += cur
+        rows.append((sym, qty, avg, inv, ltp, cur - inv,
+                     ((ltp - avg) / avg * 100) if avg > 0 else None, evidence))
 
-    t_pnl = round(t_cur - t_inv, 2)
-    t_pct = round((t_cur - t_inv) / t_inv * 100, 2) if t_inv > 0 else 0.0
-    icon = "🟢" if t_pnl >= 0 else "🔴"
-
-    lines = [f"<b>━━━ 💼 PORTFOLIO ━━━</b>", f"📅 {date.today().strftime('%d-%b-%Y')}  |  {len(rows)} holdings", "", "<b>── HOLDINGS ──</b>"]
-
-    for r in sorted(rows, key=lambda x: x["pnl"], reverse=True):
-        wt = round(r["inv"] / t_inv * 100, 1) if t_inv > 0 else 0
-        lines += [
-            f"{'🟢' if r['pnl'] >= 0 else '🔴'} <b>{r['sym']}</b>",
-            f"   Qty:{r['qty']} ({wt}%)  Avg:₹{r['avg']:,.2f} → LTP:₹{r['ltp']:,.2f}",
-            f"   P&L: ₹{r['pnl']:+,.2f} ({r['pct']:+.2f}%)",
-            "   ···"
-        ]
-
-    lines += ["", f"{icon} <b>Total P&L: ₹{t_pnl:+,.2f} ({t_pct:+.2f}%)</b>", "─" * 32, "➕ /buy SYM QTY PRICE  ➖ /sell SYM", "⚠️ <i>Educational only.</i>"]
+    lines = ["<b>━━━ 💼 PORTFOLIO ━━━</b>",
+             f"📅 {date.today().strftime('%d-%b-%Y')}  |  {len(rows)} holdings",
+             "", "<b>── HOLDINGS ──</b>"]
+    for sym, qty, avg, inv, ltp, pnl, pct, evidence in sorted(
+        rows, key=lambda r: (r[5] is not None, r[5] or 0), reverse=True
+    ):
+        wt = inv / t_inv * 100 if t_inv > 0 else 0
+        safe_sym = html.escape(str(sym), quote=False)
+        if ltp is None:
+            lines.extend([f"⚪ <b>{safe_sym}</b>",
+                          f"   Qty:{qty} ({wt:.1f}%) Avg:₹{avg:,.2f} → LTP:Unavailable",
+                          "   P&L: Unavailable (excluded from totals)", "   ···"])
+        else:
+            lines.extend([
+                f"{'🟢' if pnl >= 0 else '🔴'} <b>{safe_sym}</b>",
+                f"   Qty:{qty} ({wt:.1f}%) Avg:₹{avg:,.2f} → Observed:₹{ltp:,.2f}",
+                f"   Source: {evidence}",
+                f"   P&L: ₹{pnl:+,.2f} ({pct:+.2f}%)" if pct is not None else
+                f"   P&L: ₹{pnl:+,.2f} (percentage unavailable)", "   ···",
+            ])
+    if priced_basis > 0:
+        pnl = priced_value - priced_basis
+        pct = pnl / priced_basis * 100
+        label = "Partial P&L" if missing_quotes else "Total P&L"
+        lines.append(f"\n{'🟢' if pnl >= 0 else '🔴'} <b>{label}: ₹{pnl:+,.2f} ({pct:+.2f}%)</b>")
+    else:
+        lines.append("\n⚪ <b>P&L unavailable — no valid market quotes</b>")
+    lines.extend(["─" * 32,
+                  "⏱️ P&L is indicative from dated quotes, not guaranteed real-time.",
+                  "➕ /buy SYM QTY PRICE  ➖ /sell SYM",
+                  "⚠️ <i>Educational only.</i>"])
+    if missing_quotes:
+        lines.append("⚠️ Missing quotes: " + ", ".join(html.escape(sym) for sym in missing_quotes)
+                     + ". Excluded from P&L.")
+        lines.append(f"📌 Cost basis: ₹{t_inv:,.2f}; priced holdings: ₹{priced_basis:,.2f}.")
     return "\n".join(lines)
-
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
 def main_keyboard():
@@ -771,25 +878,52 @@ def analysis_choice_keyboard(sym):
 
 
 # ── Safe Sender ──────────────────────────────────────────────────────────────
+def _record_telegram_api_ack(chat_id, result, kind):
+    """Only a successful Bot API response may create a durable receipt.
+
+    A message ID is an API acknowledgment, not end-user delivery/read proof.
+    No raw message text, chart, PDF or private Telegram username is persisted.
+    """
+    message_id = getattr(result, "message_id", None)
+    if type(message_id) is not int or message_id <= 0:
+        return False
+    ledger = globals().get("_durable_update_ledger")
+    if ledger is None:
+        return False
+    try:
+        ledger.record_delivery_ack(chat_id, message_id, kind)
+        return True
+    except Exception as exc:
+        # Do not resend a potentially delivered Telegram message on an ACK
+        # storage error: doing so would create a duplicate customer post.
+        logger.error("Telegram API receipt persistence failed (%s)",
+                     type(exc).__name__)
+        return False
+
+
 def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
     if text is None:
-        return
+        return None
     try:
-        bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
-    except Exception as e:
-        # Never log the bot token or message content. This used to fail silently,
-        # making missing discussion replies impossible to diagnose on Render.
-        logger.warning("[Telegram delivery] send failed: HTTP %s (%s)",
-                       getattr(e, "error_code", "unknown"), type(e).__name__)
-        err_str = str(e).lower()
-        if "can't parse" in err_str or "bad request" in err_str:
+        sent = bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
+        _record_telegram_api_ack(chat_id, sent, "text")
+        return sent
+    except Exception as exc:
+        # Never log bot token or user message content.
+        logger.warning("[Telegram API] text send failed: HTTP %s (%s)",
+                       getattr(exc, "error_code", "unknown"),
+                       type(exc).__name__)
+        if "can't parse" in str(exc).lower() or "bad request" in str(exc).lower():
             try:
                 plain = re.sub(r"<[^>]+>", "", str(text))
-                bot.send_message(chat_id, plain, **kwargs)
+                sent = bot.send_message(chat_id, plain, **kwargs)
+                _record_telegram_api_ack(chat_id, sent, "text")
+                return sent
             except Exception as fallback_error:
-                logger.warning("[Telegram delivery] plain-text fallback failed: HTTP %s (%s)",
+                logger.warning("[Telegram API] plain-text fallback failed: HTTP %s (%s)",
                                getattr(fallback_error, "error_code", "unknown"),
                                type(fallback_error).__name__)
+    return None
 
 
 def _allow_heavy(m):
@@ -859,7 +993,7 @@ def run_report(chat_id, query):
         if ok:
             try:
                 with open(result, "rb") as f:
-                    bot.send_document(
+                    sent = bot.send_document(
                         chat_id, f,
                         visible_file_name=f"{sym}_Research_Report.pdf",
                         caption=(f"📄 <b>{name or sym} — Equity Research Report</b>\n"
@@ -868,6 +1002,7 @@ def run_report(chat_id, query):
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
                     )
+                    _record_telegram_api_ack(chat_id, sent, "document")
             finally:
                 try:
                     os.remove(result)
@@ -983,7 +1118,8 @@ def handle_analysis_callback(call):
                 success, meta, path = gen.generate(f"{s}.NS", cname or s)
                 if success and path:
                     with open(path, "rb") as f:
-                        bot.send_photo(cid, f, caption=f"<b>📈 {cname or s}</b>\n\n{meta}", parse_mode="HTML")
+                        sent = bot.send_photo(cid, f, caption=f"<b>📈 {cname or s}</b>\n\n{meta}", parse_mode="HTML")
+                        _record_telegram_api_ack(cid, sent, "photo")
                 else:
                     safe_send(cid, "⚠️ Chart failed, sending text instead:")
                     safe_send(cid, build_technical_text(s, cname))
@@ -1033,7 +1169,8 @@ def cmd_chart(m):
             success, meta, path = gen.generate(*args)
             if success and path:
                 with open(path, "rb") as f:
-                    bot.send_photo(chat_id, f, caption=f"<b>📈 {cname}</b>\n\n{meta}", parse_mode="HTML")
+                    sent = bot.send_photo(chat_id, f, caption=f"<b>📈 {cname}</b>\n\n{meta}", parse_mode="HTML")
+                    _record_telegram_api_ack(chat_id, sent, "photo")
             else:
                 safe_send(chat_id, "⚠️ Chart failed, sending text:")
                 safe_send(chat_id, build_adv(sym))
@@ -1068,10 +1205,29 @@ def chart_button(m):
     executor.submit(_run)
 
 
+def _require_private_portfolio(m):
+    """Never mutate or expose a group-owned portfolio through chat IDs."""
+    chat = getattr(m, "chat", None)
+    actor = getattr(m, "from_user", None)
+    chat_id = getattr(chat, "id", None)
+    actor_id = getattr(actor, "id", None)
+    if (getattr(chat, "type", None) == "private" and
+            type(chat_id) is int and chat_id > 0 and
+            type(actor_id) is int and actor_id == chat_id):
+        return True
+    if type(chat_id) is int:
+        safe_send(chat_id, "🔒 Portfolio changes and holdings are available only in your private bot chat.")
+    return False
+
+
 @bot.message_handler(commands=["buy"])
 def cmd_buy(m):
     if not _allow_heavy(m):
         return
+    if not _require_private_portfolio(m):
+        return
+    import math
+    import html
     parts = m.text.strip().split()
     if len(parts) != 4:
         safe_send(m.chat.id, "Usage: <code>/buy SYM QTY PRICE</code>")
@@ -1082,25 +1238,39 @@ def cmd_buy(m):
     except ValueError:
         safe_send(m.chat.id, "❌ Invalid format.")
         return
-    if qty <= 0 or price <= 0:
-        safe_send(m.chat.id, "❌ Must be positive.")
+    if qty <= 0 or qty > 10**9 or not math.isfinite(price) or not 0 < price <= 10**12:
+        safe_send(m.chat.id, "❌ Quantity and price must be finite and positive.")
         return
     ticker, _ = resolve_symbol(parts[1])
     sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else parts[1].upper().replace(".NS", "")
     try:
         portfolio.add(m.chat.id, sym, qty, price)
-    except ValueError as exc:
-        safe_send(m.chat.id, f"❌ Portfolio rejected: {html.escape(str(exc))}")
+    except (ValueError, RuntimeError, OSError):
+        logger.exception("Portfolio buy was rejected or storage failed")
+        safe_send(m.chat.id, "⚠️ Holding NOT saved; please retry or contact support.")
         return
-    except (OSError, TypeError) as exc:
-        logger.error("Portfolio buy persistence failed: %s", type(exc).__name__)
-        safe_send(m.chat.id, "❌ Portfolio save failed; no holding was added.")
+    try:
+        stored = portfolio.get(m.chat.id)
+        position = stored.get(sym)
+        if not position or float(position["qty"]) < qty:
+            raise RuntimeError("Portfolio write/readback mismatch")
+    except (ValueError, RuntimeError, OSError, TypeError, KeyError):
+        logger.exception("Portfolio saved but post-write readback failed")
+        safe_send(m.chat.id, "⚠️ Portfolio write could not be verified. Please contact support before repeating.")
         return
-    safe_send(m.chat.id, f"✅ Added <b>{qty}×{sym}</b> @ ₹{price:.2f}")
+    storage = ("durable database" if os.getenv("PORTFOLIO_BACKEND", "legacy_json").lower() == "postgres"
+               else "temporary server file; backup required")
+    safe_send(m.chat.id,
+              f"✅ Portfolio saved and read back ({storage}): <b>{qty}×{html.escape(sym)}</b> @ ₹{price:.2f}")
 
 
 @bot.message_handler(commands=["sell"])
 def cmd_sell(m):
+    if not _allow_heavy(m):
+        return
+    if not _require_private_portfolio(m):
+        return
+    import html
     parts = m.text.strip().split()
     if len(parts) < 2:
         safe_send(m.chat.id, "Usage: <code>/sell SYM</code>")
@@ -1108,19 +1278,30 @@ def cmd_sell(m):
     sym = " ".join(parts[1:]).upper().replace(".NS", "").replace(".BO", "")
     try:
         removed = portfolio.remove(m.chat.id, sym)
-    except (OSError, TypeError) as exc:
-        logger.error("Portfolio sell persistence failed: %s", type(exc).__name__)
-        safe_send(m.chat.id, "❌ Portfolio save failed; holding was not removed.")
+    except (ValueError, RuntimeError, OSError):
+        logger.exception("Portfolio sell was rejected or storage failed")
+        safe_send(m.chat.id, "⚠️ Holding NOT removed; storage unavailable.")
         return
     if removed:
-        safe_send(m.chat.id, f"✅ Removed <b>{sym}</b>.")
+        try:
+            if sym in portfolio.get(m.chat.id):
+                raise RuntimeError("Portfolio delete/readback mismatch")
+        except (ValueError, RuntimeError, OSError, TypeError):
+            logger.exception("Portfolio removal readback failed")
+            safe_send(m.chat.id, "⚠️ Portfolio removal could not be verified. Contact support.")
+            return
+        storage = ("durable database" if os.getenv("PORTFOLIO_BACKEND", "legacy_json").lower() == "postgres"
+                   else "temporary server file; backup required")
+        safe_send(m.chat.id, f"✅ Portfolio save verified ({storage}); removed <b>{html.escape(sym)}</b>.")
     else:
-        safe_send(m.chat.id, f"❌ <b>{sym}</b> not found.")
+        safe_send(m.chat.id, f"❌ <b>{html.escape(sym)}</b> not found.")
 
 
 @bot.message_handler(commands=["portfolio"])
 def cmd_portfolio(m):
     if not _allow_heavy(m):
+        return
+    if not _require_private_portfolio(m):
         return
     safe_send(m.chat.id, "⏳ Loading…")
 
@@ -1331,7 +1512,7 @@ _sector_waiters = set()
 
 def _deliver_sector(chat_id, path, summary):
     with open(path, "rb") as f:
-        bot.send_document(
+        sent = bot.send_document(
             chat_id, f,
             visible_file_name=f"Index_Sectoral_Update_{datetime.now().strftime('%d%b%Y')}.pdf",
             caption=("🏭 <b>Index &amp; Sectoral Update</b>\n"
@@ -1339,6 +1520,7 @@ def _deliver_sector(chat_id, path, summary):
                      "⚠️ Educational only. Not SEBI-registered advice."),
             parse_mode="HTML",
         )
+        _record_telegram_api_ack(chat_id, sent, "document")
     if summary:
         import html as _h
         safe_send(chat_id, "🧭 <b>Key takeaways</b>\n" + "\n".join(f"• {_h.escape(x, quote=False)}" for x in summary[:6]))
@@ -1426,8 +1608,9 @@ def _group_stock_review(chat_id, message_id, query):
             success, meta, path = get_chart_generator().generate(ticker, cname)
             if success and path:
                 with open(path, "rb") as chart:
-                    bot.send_photo(chat_id, chart, caption=f"📈 {cname or sym} — Technical chart",
+                    sent = bot.send_photo(chat_id, chart, caption=f"📈 {cname or sym} — Technical chart",
                                    reply_to_message_id=message_id)
+                    _record_telegram_api_ack(chat_id, sent, "photo")
             else:
                 logger.warning("Group chart unavailable for %s: %s", sym, str(meta)[:120])
         except Exception:
@@ -1546,7 +1729,15 @@ def handle_text(m):
 # ── Flask Webhook Routes ─────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"status": "ok", "name": "MSK Bot", "version": "6.3"})
+    # Render's currently configured healthCheckPath is "/" (not /health/ready).
+    # Make that existing path reflect actual intake readiness without making
+    # a risky live Render configuration change before customer-data backup.
+    _body, ready_status = health_ready()
+    return jsonify({
+        "status": "ok" if ready_status == 200 else "degraded",
+        "name": "MSK Bot", "version": "6.3",
+        "scope": "local_webhook_intake_only",
+    }), ready_status
 
 
 @app.route("/api/status", methods=["GET"])
@@ -1601,23 +1792,30 @@ def health_ready():
     can_accept = (not getattr(executor, "_shutdown", True)
                   and not getattr(webhook_executor, "_shutdown", True))
     configured = not WEBHOOK_URL or bool(WEBHOOK_SECRET)
-    ready = bool(can_accept and configured)
+    ledger = globals().get("_durable_update_ledger")
+    ledger_status = "not_enabled"
+    if ledger is not None:
+        try:
+            ledger_status = "ready" if ledger.ping() else "unavailable"
+        except Exception:
+            ledger_status = "unavailable"
+    ready = bool(can_accept and configured and ledger_status != "unavailable")
     return jsonify({
         "status": "ready" if ready else "degraded",
         "scope": "local_webhook_intake_only",
         "telegram_delivery": "not_verified",
+        "durable_update_ledger": ledger_status,
     }), 200 if ready else 503
 
 
 
 def _process_webhook(data_str):
+    """Return dispatch success; it does NOT prove downstream Telegram delivery."""
     try:
         update = telebot.types.Update.de_json(data_str)
         if update:
-            # Record accepted Telegram interactions without storing message text.
-            # Analytics failures/delays never alter the bot response or quota.
-            # Some offline regression harnesses extract this function alone.
-            # Telemetry is optional and must not prevent processing in those cases.
+            # Optional usage analytics remains best effort and is NOT a
+            # subscriber entitlement or update-deduplication database.
             tracker = globals().get("usage_analytics")
             slots = globals().get("_usage_slots")
             queue = globals().get("usage_executor")
@@ -1629,8 +1827,26 @@ def _process_webhook(data_str):
                     except Exception:
                         slots.release()
             bot.process_new_updates([update])
-    except Exception as e:
-        logger.error(f"Webhook process err: {e}")
+        return True
+    except Exception as exc:
+        logger.error("Webhook dispatch failed (%s)", type(exc).__name__)
+        return False
+
+
+def _complete_durable_webhook(future, ledger, update_id):
+    """Always release capacity, and leave an auditable FAILED/CLAIMED row."""
+    try:
+        try:
+            dispatched = bool(future.result())
+        except Exception:
+            dispatched = False
+        ledger.finish(update_id, dispatched=dispatched)
+    except Exception as exc:
+        # Never delete a claim that may already have caused a /buy or /sell.
+        # A DB outage here needs a manual reconciliation, not replay.
+        logger.error("Durable webhook completion unverified (%s)", type(exc).__name__)
+    finally:
+        _webhook_slots.release()
 
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
@@ -1642,7 +1858,9 @@ def webhook():
     if request.content_length is not None and request.content_length > 256_000:
         return "payload too large", 413
     payload = request.get_json(silent=True)
-    if not isinstance(payload, dict) or not isinstance(payload.get("update_id"), int):
+    if (not isinstance(payload, dict) or
+            type(payload.get("update_id")) is not int or
+            not 0 <= payload["update_id"] <= 9223372036854775807):
         return "invalid Telegram update", 400
     # Log only message type and visibility; never user text, IDs or secrets.
     msg = payload.get("message")
@@ -1652,28 +1870,77 @@ def webhook():
     uid = payload["update_id"]
     if not _webhook_slots.acquire(blocking=False):
         return "server busy", 503  # Telegram retries non-2xx.
+    ledger = globals().get("_durable_update_ledger")
+    reserved_in_memory = False
+    claimed_in_db = False
+    submitted = False
     try:
-        with _webhook_lock:
-            if uid in _processed_updates_set:
-                _webhook_slots.release()
-                return "ok", 200
-            if len(_processed_updates) == _processed_updates.maxlen:
-                _processed_updates_set.discard(_processed_updates[0])
-            _processed_updates.append(uid)
-            _processed_updates_set.add(uid)
-        future = webhook_executor.submit(_process_webhook, json.dumps(payload))
-        future.add_done_callback(lambda _: _webhook_slots.release())
-    except Exception:
-        with _webhook_lock:
-            _processed_updates_set.discard(uid)
+        if ledger is not None:
+            # Do not create a subscription from messages without a verified
+            # sender. New identities are always inactive / unentitled.
+            sender_id = None
+            for kind in ("message", "edited_message", "callback_query",
+                         "inline_query", "my_chat_member", "chat_member"):
+                event = payload.get(kind)
+                if not isinstance(event, dict):
+                    continue
+                sender = event.get("from")
+                candidate = sender.get("id") if isinstance(sender, dict) else None
+                if type(candidate) is int and 0 < candidate <= 9223372036854775807:
+                    sender_id = candidate
+                    break
             try:
-                _processed_updates.remove(uid)
-            except ValueError:
-                pass
-        _webhook_slots.release()
-        logger.exception("Unable to schedule webhook update")
-        return "busy", 503
-    return "ok", 200
+                claimed_in_db = ledger.claim(uid, user_id=sender_id)
+            except Exception as exc:
+                # No handlers run when durable storage is unavailable.
+                logger.error("Durable webhook claim unavailable (%s)", type(exc).__name__)
+                return "durable queue unavailable", 503
+            if not claimed_in_db:
+                return "ok", 200  # Already claimed, dispatched or failed.
+        else:
+            # Pre-release/legacy mode: this is NOT restart-safe. Never treat
+            # the 1000-entry cache as durable release evidence.
+            with _webhook_lock:
+                if uid in _processed_updates_set:
+                    return "ok", 200
+                if len(_processed_updates) == _processed_updates.maxlen:
+                    _processed_updates_set.discard(_processed_updates[0])
+                _processed_updates.append(uid)
+                _processed_updates_set.add(uid)
+                reserved_in_memory = True
+
+        try:
+            future = webhook_executor.submit(_process_webhook, json.dumps(payload))
+        except Exception:
+            if ledger is not None and claimed_in_db:
+                # submit() raising guarantees no handler was scheduled.
+                try:
+                    ledger.abandon_unscheduled(uid)
+                except Exception as exc:
+                    logger.error("Durable unscheduled claim retained (%s)",
+                                 type(exc).__name__)
+            if reserved_in_memory:
+                with _webhook_lock:
+                    _processed_updates_set.discard(uid)
+                    try:
+                        _processed_updates.remove(uid)
+                    except ValueError:
+                        pass
+            logger.exception("Unable to schedule webhook update")
+            return "busy", 503
+        if ledger is not None:
+            future.add_done_callback(
+                lambda finished: _complete_durable_webhook(finished, ledger, uid)
+            )
+        else:
+            future.add_done_callback(lambda _: _webhook_slots.release())
+        submitted = True
+        return "ok", 200
+    finally:
+        # Accepted submissions release capacity from their done callback.
+        # All other exits (duplicate, DB failure, submit failure) release here.
+        if not submitted:
+            _webhook_slots.release()
 
 
 # ── Runner ───────────────────────────────────────────────────────────────────

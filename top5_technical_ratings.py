@@ -67,6 +67,17 @@ def technical_candidate(sym, raw, profile, now=None):
         loss_pct = risk/trigger*100
         maxloss = _PROFILE_MAX_LOSS[profile]
         status = "CONDITIONAL BUY" if (uptrend and breakout and rsi >= 54 and adx >= 18 and loss_pct <= maxloss) else "WAIT"
+        blocking=[]
+        if not uptrend:
+            blocking.append("trend_not_confirmed")
+        if not breakout:
+            blocking.append("breakout_not_confirmed")
+        if rsi < 54:
+            blocking.append("rsi_below_54")
+        if adx < 18:
+            blocking.append("adx_below_18")
+        if loss_pct > maxloss:
+            blocking.append("stop_risk_above_profile_limit")
         risk_label = ("HIGH" if loss_pct > maxloss or atr_pct > maxloss*.7
                       else "MEDIUM" if loss_pct > maxloss*.55 or atr_pct > maxloss*.45
                       else "LOWER")
@@ -78,6 +89,11 @@ def technical_candidate(sym, raw, profile, now=None):
             "entry":round(trigger,2), "sl":round(stop,2),
             "t1":round(trigger + 2*risk,2), "t2":round(trigger + 3*risk,2),
             "rr1":2., "rr2":3., "signal":status, "risk_label":risk_label,
+            "signal_reasons":blocking, "trend_confirmed":bool(uptrend),
+            "breakout_confirmed":bool(breakout),
+            "risk_within_limit":bool(loss_pct<=maxloss),
+            "breakout_trigger":round(swing_high*1.002,2),
+            "max_allowed_risk_pct":maxloss,
             "asof":bars.index[-1].date().isoformat(),
         }
     except (KeyError,IndexError,ValueError,TypeError,ZeroDivisionError,OverflowError):
