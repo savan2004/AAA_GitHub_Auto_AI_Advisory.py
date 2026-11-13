@@ -41,6 +41,16 @@ def _validate(image, meta, session):
     height = int.from_bytes(image[20:24], "big")
     if not (800 <= width <= 8000 and 500 <= height <= 5000):
         raise ValueError("Chart image dimensions invalid")
+    # Verify actual PNG structure and checksums, not just the magic header.
+    import io
+    from PIL import Image
+    try:
+        with Image.open(io.BytesIO(image)) as checked:
+            if checked.format != "PNG" or checked.size != (width, height):
+                raise ValueError("Not a valid PNG chart")
+            checked.verify()
+    except Exception as exc:
+        raise ValueError("Chart image failed PNG integrity verification") from exc
     match = META.fullmatch(meta or "")
     if not match or match.group(12) != str(session):
         raise ValueError("Chart metadata does not match completed market session")
@@ -148,7 +158,7 @@ def load_verified_daily_chart(session, output_dir="output"):
                 if os.path.exists(tmp):
                     os.unlink(tmp)
         return caption, str(file_path)
-    except (ValueError, OSError, ImportError, Exception) as exc:
+    except Exception as exc:
         # Never log DSNs or Telegram content. A missing table is not a PASS.
         import logging
         logging.getLogger(__name__).warning(
