@@ -111,6 +111,23 @@ class LiveEvidenceGate(unittest.TestCase):
         finally:
             _PROBE.reset(token)
 
+    def test_midcap_owner_returned_public_text_is_isolated(self):
+        from unittest.mock import patch
+        from msk_live_acceptance import _PROBE, capture_telegram_ack
+        report = "📊 MID CAP | Nifty Midcap 150\\n149/149 checked; no BUY"
+        for action, allowed in (("MidCapTop5", True), ("LargeCapTop5", False),
+                                ("Portfolio", False)):
+            probe = {"action": action, "receipts": [], "files": {}, "closed": False}
+            token = _PROBE.set(probe)
+            try:
+                with patch("msk_live_acceptance.LOG.info") as log:
+                    capture_telegram_ack("text", 14225, message_text=report)
+                    observed = any("MIDCAP_RETURNED_TEXT" in x.args[0]
+                                   for x in log.call_args_list)
+                    self.assertEqual(observed, allowed)
+            finally:
+                _PROBE.reset(token)
+
     def test_full_audit_does_not_label_an_api_ack_as_pass(self):
         code = (ROOT / "msk_live_acceptance.py").read_text(encoding="utf-8")
         self.assertIn('record_status = "FAIL" if fail else "UNVERIFIED"', code)
