@@ -1021,7 +1021,7 @@ def _appendix(R, story):
                 "Consult a SEBI-registered adviser before making investment decisions.", "disc")]
 
 
-def build_pdf(R: dict, output_path: str) -> str:
+def build_pdf(R: dict, output_path: str, *, compact=False) -> str:
     story: list = []
     _cover(R, story)
     story.append(PageBreak())
@@ -1034,8 +1034,13 @@ def build_pdf(R: dict, output_path: str) -> str:
     _risks_catalysts(R, story)
     _appendix(R, story)
 
-    doc = SimpleDocTemplate(output_path, pagesize=A4, topMargin=19 * mm, bottomMargin=18 * mm,
-                            leftMargin=16 * mm, rightMargin=16 * mm,
+    # A narrow reflow is used only after the strict gate detects an orphan
+    # final page.  Keep the actual content and the independent PDF gate intact.
+    # Footer rule is 13 mm above the bottom; maintain a 15 mm bottom margin.
+    top_mm, bottom_mm, side_mm = (13, 15, 14) if compact else (19, 18, 16)
+    doc = SimpleDocTemplate(output_path, pagesize=A4,
+                            topMargin=top_mm * mm, bottomMargin=bottom_mm * mm,
+                            leftMargin=side_mm * mm, rightMargin=side_mm * mm,
                             title=f"{strip_emoji(R['name'])} — Equity Research Report", author="MSK Bot Automated Research")
     meta = {"brand": "MSK Bot", "sym": R["sym"], "name": strip_emoji(R["name"]), "generated": R["generated"]}
     doc.build(story, canvasmaker=make_canvas(meta))
@@ -1058,7 +1063,17 @@ def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
         # assert readable pages, instrument identity and financial caveats.
         from pdf_release_gate import validate_research_pdf, ResearchPDFRefused
         try:
-            inspected = validate_research_pdf(out, expected_symbol=sym)
+            try:
+                inspected = validate_research_pdf(out, expected_symbol=sym)
+            except ResearchPDFRefused as first:
+                if str(first) != "Nearly blank trailing research PDF page":
+                    raise
+                # One bounded reflow fixes a valid-but-orphaned appendix.
+                # Never weaken page count, issuer identity or disclaimer gates.
+                logger.info("[Report] SBIN/issuer PDF orphan page detected for %s; "
+                            "retrying with compact margins once", sym)
+                build_pdf(R, out, compact=True)
+                inspected = validate_research_pdf(out, expected_symbol=sym)
             logger.info("[Report] PDF release approved sym=%s pages=%d bytes=%d",
                         sym, inspected["pages"], inspected["bytes"])
         except ResearchPDFRefused as exc:

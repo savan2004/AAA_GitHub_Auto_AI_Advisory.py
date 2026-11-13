@@ -67,6 +67,61 @@ class PDFReleaseGateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stale or unverified"):
                 rg.collect_inputs("SBIN")
 
+    def test_compact_reflow_produces_real_readable_eight_page_report(self):
+        fixture = strong()
+        assembled = rg.assemble(fixture, use_ai=False)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "STRONGCO-compact.pdf"
+            try:
+                rg.build_pdf(assembled, str(path), compact=True)
+                quality = validate_research_pdf(path, expected_symbol="STRONGCO")
+                self.assertGreaterEqual(quality["pages"], 8)
+                self.assertGreater(quality["bytes"], 25000)
+            finally:
+                for key in ("tech_price", "tech_momentum", "tech", "quarterly"):
+                    f = (assembled.get("ch") or {}).get(key)
+                    if isinstance(f, str):
+                        Path(f).unlink(missing_ok=True)
+
+    def test_orphan_last_page_is_reflowed_once_then_fully_rechecked(self):
+        built = []
+        def pdf_build(R, path, *, compact=False):
+            built.append(compact)
+            Path(path).write_bytes(b"%PDF-" + b"x" * 30000)
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(rg, "OUTPUT_DIR", td), \
+             patch.object(rg, "collect_inputs", return_value={}), \
+             patch.object(rg, "assemble", return_value={"name": "SBIN"}), \
+             patch.object(rg, "build_pdf", side_effect=pdf_build), \
+             patch("pdf_release_gate.validate_research_pdf",
+                   side_effect=[ResearchPDFRefused("Nearly blank trailing research PDF page"),
+                                {"pages": 8, "bytes": 30005}]) as gate:
+            ok, report, name = rg.generate_stock_report_pdf("SBIN")
+            self.assertTrue(ok)
+            self.assertEqual(name, "SBIN")
+            self.assertTrue(Path(report).exists())
+            self.assertEqual(built, [False, True])
+            self.assertEqual(gate.call_count, 2)
+
+    def test_reflow_does_not_publish_when_second_gate_refuses(self):
+        built = []
+        def pdf_build(R, path, *, compact=False):
+            built.append(compact)
+            Path(path).write_bytes(b"%PDF-" + b"x" * 30000)
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(rg, "OUTPUT_DIR", td), \
+             patch.object(rg, "collect_inputs", return_value={}), \
+             patch.object(rg, "assemble", return_value={"name": "SBIN"}), \
+             patch.object(rg, "build_pdf", side_effect=pdf_build), \
+             patch("pdf_release_gate.validate_research_pdf",
+                   side_effect=ResearchPDFRefused("Nearly blank trailing research PDF page")) as gate:
+            ok, error, name = rg.generate_stock_report_pdf("SBIN")
+            self.assertFalse(ok)
+            self.assertIn("withheld", error)
+            self.assertEqual(built, [False, True])
+            self.assertEqual(gate.call_count, 2)
+            self.assertFalse(list(Path(td).glob("*.pdf")))
+
     def test_invalid_generated_report_is_deleted_before_sender_receives_success(self):
         with tempfile.TemporaryDirectory() as td, \
              patch.object(rg, "collect_inputs", return_value={}), \
