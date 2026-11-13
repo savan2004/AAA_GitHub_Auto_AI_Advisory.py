@@ -175,14 +175,14 @@ def run_once(ctx):
         probe = {"action": label, "receipts": [], "blocked": False, "error": None}
         LOG.info("MSK_ACCEPTANCE_ACTION_START action=%s", label)
 
-        def _execute():
-            token = _PROBE.set(probe)
+        def _execute(_probe=probe, _func=func, _label=label):
+            token = _PROBE.set(_probe)
             try:
-                func()
+                _func()
             except Exception as exc:
-                probe["error"] = type(exc).__name__
+                _probe["error"] = type(exc).__name__
                 LOG.error("MSK_ACCEPTANCE_ACTION_ERROR action=%s type=%s",
-                          label, type(exc).__name__, exc_info=True)
+                          _label, type(exc).__name__, exc_info=True)
             finally:
                 _PROBE.reset(token)
 
