@@ -13,6 +13,18 @@ on:
       - 'technical_indicators.py'
       - 'tests/test_pdf_technical_setup.py'
       - '.github/workflows/msk-pdf-technical-setup-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'pdf_technical_setup.py'
+      - 'report_generator.py'
+      - 'pdf_release_gate.py'
+      - 'tests/test_pdf_release_gate.py'
+      - 'tests/emit_pdf_qa_fixture.py'
+      - 'requirements.txt'
+      - 'technical_indicators.py'
+      - 'tests/test_pdf_technical_setup.py'
+      - '.github/workflows/msk-pdf-technical-setup-tests.yml'
   workflow_dispatch:
 
 permissions:

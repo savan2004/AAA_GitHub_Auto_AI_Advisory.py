@@ -1056,15 +1056,27 @@ def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
         build_pdf(R, out)
         # A successful ReportLab write is NOT enough for Telegram delivery:
         # assert readable pages, instrument identity and financial caveats.
-        from pdf_release_gate import validate_research_pdf
+        from pdf_release_gate import validate_research_pdf, ResearchPDFRefused
         try:
-            validate_research_pdf(out, expected_symbol=sym)
-        except Exception:
+            inspected = validate_research_pdf(out, expected_symbol=sym)
+            logger.info("[Report] PDF release approved sym=%s pages=%d bytes=%d",
+                        sym, inspected["pages"], inspected["bytes"])
+        except ResearchPDFRefused as exc:
+            logger.warning("[Report] PDF release withheld sym=%s reason=%s", sym, exc)
             try:
                 os.unlink(out)
             except OSError:
                 pass
-            raise ValueError("Research report withheld: PDF release validation failed")
+            # The gate returns only fixed, non-sensitive rejection reasons.
+            raise ValueError(f"Research report withheld: {exc}") from exc
+        except Exception as exc:
+            logger.error("[Report] PDF release checker crashed for %s (%s)",
+                         sym, type(exc).__name__, exc_info=True)
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
+            raise ValueError("Research report withheld: PDF validation unavailable") from exc
         return True, out, R["name"]
     except ValueError as e:
         return False, str(e), None

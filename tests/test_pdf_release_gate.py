@@ -80,6 +80,7 @@ class PDFReleaseGateTests(unittest.TestCase):
             ok, message, name = rg.generate_stock_report_pdf("STRONGCO")
             self.assertFalse(ok)
             self.assertIn("withheld", message)
+            self.assertIn("size outside delivery bounds", message)
             self.assertFalse(list(Path(td).glob("*.pdf")))
 
 
