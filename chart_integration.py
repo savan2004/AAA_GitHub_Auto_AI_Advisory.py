@@ -71,12 +71,13 @@ class ChartGenerator:
 
             if result.returncode != 0:
                 # Surface the real error from stderr/stdout
-                err = stderr or stdout
-                # Strip yfinance noise — find the [ERROR] line
-                for line in err.splitlines():
-                    if "[ERROR]" in line:
-                        err = line
-                        break
+                # Yahoo may print nonfatal "failed downloads" to stderr.
+                # Prefer our explicit [ERROR] diagnostic from stdout/stderr.
+                combined = stdout + "\n" + stderr
+                errors = [line.strip() for line in combined.splitlines()
+                          if line.strip().startswith("[ERROR]")]
+                err = errors[-1] if errors else next((line for line in (stderr or stdout).splitlines() if line.strip()), "Unknown chart subprocess error")
+
                 logger.error(f"[Chart] Failed (rc={result.returncode}): {err[:200]}")
                 return False, f"Chart failed: {err[:200]}", None
 

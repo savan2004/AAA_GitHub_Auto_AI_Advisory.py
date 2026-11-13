@@ -77,5 +77,25 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertEqual((sampled, valid, total), (2, 1, 2))
 
 
+    def test_all_nan_yahoo_ticker_is_skipped(self):
+        """Real provider returned all-NaN rows, previously crashing at index[-1]."""
+        good = self.history()
+        empty = good.copy()
+        empty.loc[:, :] = np.nan
+        data = pd.concat({"SBIN.NS": good, "FAKE.NS": empty}, axis=1)
+        universe = [("SBIN.NS", "SBI"), ("FAKE.NS", "Fake")]
+
+        def scorer(sym, name, *, df):
+            self.assertFalse(df.empty)
+            return {"sym": sym, "close": float(df["Close"].iloc[-1]),
+                    "score": 2.0, "cross_dir": 0, "reason": "Fresh"}
+
+        chosen, sampled, valid, universe_count = choose_auto_chart(
+            universe, download=lambda **kw: data,
+            scorer=scorer, session_key=self.SESSION)
+        self.assertEqual(chosen["sym"], "SBIN.NS")
+        self.assertEqual((sampled, valid, universe_count), (2, 1, 2))
+
+
 if __name__ == "__main__":
     unittest.main()
