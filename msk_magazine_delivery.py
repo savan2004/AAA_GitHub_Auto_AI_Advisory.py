@@ -189,10 +189,15 @@ def find_magazine(month=None, *, env=None, root=None, now=None):
             return value
     return None
 
-def copy_approved_magazine(bot, chat_id, *, month=None, env=None, root=None, now=None):
+def copy_approved_magazine(bot, chat_id, *, month=None, env=None, root=None, now=None,
+                           source_attachment_loader=None):
     """Copy approved source channel message to a private-chat user on demand.
 
     Caller verifies Telegram chat is private and applies existing bot rate limit.
+    source_attachment_loader(chat, message_id) must retrieve independently
+    authenticated source metadata and bytes, returning (document, pdf_bytes).
+    Never build its result from the manifest or a caller-supplied local PDF.
+    No provider is configured by default: delivery stays blocked until wired.
     Bot's channel membership/permissions and actual PDF must be checked at release.
     """
     env = os.environ if env is None else env
@@ -201,6 +206,15 @@ def copy_approved_magazine(bot, chat_id, *, month=None, env=None, root=None, now
     info = find_magazine(month, env=env, root=root, now=now)
     if info is None:
         return "unavailable"
+    if not callable(source_attachment_loader):
+        raise MagazineManifestError("Source attachment verification unavailable")
+    try:
+        document, pdf_bytes = source_attachment_loader(
+            info["source_chat"], info["source_message_id"])
+    except Exception:
+        # Provider failures can contain authenticated URLs; expose no raw detail.
+        raise MagazineManifestError("Source attachment retrieval failed") from None
+    verify_downloaded_source_attachment(document, pdf_bytes, info)
     caption = ("📘 MSK Monthly Market Outlook — " + info["issue"] +
                "\nEditorial approval recorded; verify source evidence independently. Educational research only.")
     receipt = bot.copy_message(chat_id, info["source_chat"], info["source_message_id"],

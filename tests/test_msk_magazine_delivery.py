@@ -15,6 +15,14 @@ ENV = {
     "MSK_MAGAZINE_SOURCE_CHAT": "@AiAutoUpdater",
 }
 
+PDF_BYTES = b"%PDF-1.4\nSynthetic offline fixture only\n%%EOF"
+
+
+def source_attachment(source_chat, source_message_id):
+    return ({"source_chat": source_chat, "source_message_id": source_message_id,
+             "mime_type": "application/pdf", "file_size": len(PDF_BYTES)}, PDF_BYTES)
+
+
 class FakeBot:
     def __init__(self):
         self.copies = []
@@ -30,13 +38,53 @@ def approved(issue="2026-11"):
         "title": "MSK Monthly Market Outlook",
         "published_at": "2026-11-02", "as_of": "2026-10-30",
         "source_chat": "@AiAutoUpdater", "source_message_id": 777,
-        "mime_type": "application/pdf", "verified_pdf_sha256": "a" * 64,
+        "mime_type": "application/pdf", "verified_pdf_sha256": hashlib.sha256(PDF_BYTES).hexdigest(),
     }
 
 def save(root, issue, data):
     (Path(root) / (issue + ".json")).write_text(json.dumps(data), encoding="utf-8")
 
 class MagazineCopyTests(unittest.TestCase):
+    def test_delivery_requires_independent_source_attachment(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            save(root, "2026-11", approved())
+            with self.assertRaisesRegex(MagazineManifestError, "Source attachment verification unavailable"):
+                copy_approved_magazine(bot, 123, env=ENV, root=root,
+                                       now=date(2026, 11, 3))
+            self.assertEqual(bot.copies, [])
+
+    def test_delivery_rejects_bad_source_attachment_before_copy(self):
+        document, payload = source_attachment("@AiAutoUpdater", 777)
+        cases = [None, ({**document, "source_chat": "@WrongSource"}, payload),
+                 ({**document, "source_message_id": 778}, payload),
+                 ({**document, "file_size": True}, payload),
+                 ({**document, "file_size": len(payload) + 1}, payload),
+                 (document, payload.replace(b"fixture", b"changed")),
+                 (document, None)]
+        with tempfile.TemporaryDirectory() as root:
+            save(root, "2026-11", approved())
+            for result in cases:
+                bot = FakeBot()
+                with self.subTest(result=result):
+                    with self.assertRaises(MagazineManifestError):
+                        copy_approved_magazine(bot, 123, env=ENV, root=root,
+                            now=date(2026, 11, 3),
+                            source_attachment_loader=lambda chat, mid: result)
+                    self.assertEqual(bot.copies, [])
+
+    def test_download_failure_never_copies_or_leaks_provider_error(self):
+        def failed_download(chat, mid):
+            raise OSError("sensitive provider URL")
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            save(root, "2026-11", approved())
+            with self.assertRaisesRegex(MagazineManifestError, "Source attachment retrieval failed") as caught:
+                copy_approved_magazine(bot, 123, env=ENV, root=root,
+                    now=date(2026, 11, 3), source_attachment_loader=failed_download)
+            self.assertNotIn("sensitive", str(caught.exception))
+            self.assertEqual(bot.copies, [])
+
     def test_downloaded_source_attachment_must_match_message_and_bytes(self):
         pdf = b"%PDF-1.4\\nsource document\\n%%EOF"
         manifest = approved()
@@ -102,7 +150,7 @@ class MagazineCopyTests(unittest.TestCase):
                 save(root, "2026-11", record)
                 with self.subTest(invalid=invalid):
                     with self.assertRaisesRegex(MagazineManifestError, "approval timestamp"):
-                        copy_approved_magazine(bot, 123, month="2026-11",
+                        copy_approved_magazine(bot, 123, source_attachment_loader=source_attachment, month="2026-11",
                                                env=ENV, root=root, now=date(2026, 11, 3))
             self.assertEqual(bot.copies, [])
 
@@ -114,12 +162,12 @@ class MagazineCopyTests(unittest.TestCase):
             record["approval_timestamp"] = "2026-11-02T23:30:00-05:00"
             save(root, "2026-11", record)
             with self.assertRaisesRegex(MagazineManifestError, "in the future"):
-                copy_approved_magazine(bot, 123, month="2026-11",
+                copy_approved_magazine(bot, 123, source_attachment_loader=source_attachment, month="2026-11",
                                        env=ENV, root=root, now=date(2026, 11, 2))
             self.assertEqual(bot.copies, [])
             # The same timestamp becomes valid once the IST calendar reaches Nov 3.
             self.assertEqual(copy_approved_magazine(
-                bot, 123, month="2026-11", env=ENV, root=root,
+                bot, 123, source_attachment_loader=source_attachment, month="2026-11", env=ENV, root=root,
                 now=date(2026, 11, 3)), "sent")
             self.assertEqual(len(bot.copies), 1)
 
@@ -130,7 +178,7 @@ class MagazineCopyTests(unittest.TestCase):
             record["approval_timestamp"] = "2026-11-01T10:00:00+05:30"
             save(root, "2026-11", record)
             with self.assertRaisesRegex(MagazineManifestError, "predates publication"):
-                copy_approved_magazine(bot, 123, month="2026-11", env=ENV,
+                copy_approved_magazine(bot, 123, source_attachment_loader=source_attachment, month="2026-11", env=ENV,
                                        root=root, now=date(2026, 11, 3))
             self.assertEqual(bot.copies, [])
 
@@ -139,7 +187,7 @@ class MagazineCopyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             save(root, "2026-11", approved())
             self.assertEqual(copy_approved_magazine(
-                bot, 123, env={}, root=root, now=date(2026,11,3)), "disabled")
+                bot, 123, source_attachment_loader=source_attachment, env={}, root=root, now=date(2026,11,3)), "disabled")
             self.assertEqual(bot.copies, [])
 
     def test_approved_copy_and_explicit_archive(self):
@@ -147,7 +195,7 @@ class MagazineCopyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             save(root, "2026-11", approved())
             status = copy_approved_magazine(
-                bot, 123, month="2026-11", env=ENV, root=root, now=date(2026,11,3))
+                bot, 123, source_attachment_loader=source_attachment, month="2026-11", env=ENV, root=root, now=date(2026,11,3))
             self.assertEqual(status, "sent")
             self.assertEqual(len(bot.copies), 1)
             self.assertEqual(bot.copies[0][0], (123, "@AiAutoUpdater", 777))
@@ -168,7 +216,7 @@ class MagazineCopyTests(unittest.TestCase):
                 with self.subTest(invalid=invalid):
                     with self.assertRaisesRegex(MagazineManifestError, "delivery message id"):
                         copy_approved_magazine(
-                            bot, 123, month="2026-11", env=ENV,
+                            bot, 123, source_attachment_loader=source_attachment, month="2026-11", env=ENV,
                             root=root, now=date(2026, 11, 3))
                     self.assertEqual(len(bot.copies), 1)
 
@@ -179,7 +227,7 @@ class MagazineCopyTests(unittest.TestCase):
             record["approved"] = False
             save(root, "2026-11", record)
             self.assertEqual(copy_approved_magazine(
-                bot, 123, month="2026-11", env=ENV, root=root,
+                bot, 123, source_attachment_loader=source_attachment, month="2026-11", env=ENV, root=root,
                 now=date(2026,11,3)), "unavailable")
             self.assertEqual(bot.copies, [])
 
@@ -187,18 +235,18 @@ class MagazineCopyTests(unittest.TestCase):
         bot = FakeBot()
         with tempfile.TemporaryDirectory() as root:
             self.assertEqual(copy_approved_magazine(
-                bot, 123, env=ENV, root=root, now=date(2026,11,3)), "unavailable")
+                bot, 123, source_attachment_loader=source_attachment, env=ENV, root=root, now=date(2026,11,3)), "unavailable")
             bad = approved()
             bad["verified_pdf_sha256"] = ""
             save(root, "2026-11", bad)
             with self.assertRaises(MagazineManifestError):
-                copy_approved_magazine(bot, 123, env=ENV,
+                copy_approved_magazine(bot, 123, source_attachment_loader=source_attachment, env=ENV,
                                        root=root, now=date(2026,11,3))
             bad = approved()
             bad["source_chat"] = "@OtherBot"
             save(root, "2026-11", bad)
             with self.assertRaises(MagazineManifestError):
-                copy_approved_magazine(bot, 123, env=ENV,
+                copy_approved_magazine(bot, 123, source_attachment_loader=source_attachment, env=ENV,
                                        root=root, now=date(2026,11,3))
             self.assertEqual(bot.copies, [])
 
@@ -221,7 +269,7 @@ class MagazineCopyTests(unittest.TestCase):
             save(root, "2026-11", record)
             with self.assertRaisesRegex(MagazineManifestError, "publication month"):
                 copy_approved_magazine(
-                    bot, 123, month="2026-11", env=ENV,
+                    bot, 123, source_attachment_loader=source_attachment, month="2026-11", env=ENV,
                     root=root, now=date(2026, 11, 3))
             self.assertEqual(bot.copies, [])
 
@@ -233,7 +281,7 @@ class MagazineCopyTests(unittest.TestCase):
             (Path(root) / "2026-11.json").symlink_to(outside_manifest)
             with self.assertRaisesRegex(MagazineManifestError, "Symlinked"):
                 copy_approved_magazine(
-                    bot, 123, month="2026-11", env=ENV,
+                    bot, 123, source_attachment_loader=source_attachment, month="2026-11", env=ENV,
                     root=root, now=date(2026, 11, 3))
             self.assertEqual(bot.copies, [])
 
@@ -247,7 +295,7 @@ class MagazineCopyTests(unittest.TestCase):
             alias.symlink_to(actual, target_is_directory=True)
             with self.assertRaisesRegex(MagazineManifestError, "Symlinked"):
                 copy_approved_magazine(
-                    bot, 123, month="2026-11", env=ENV,
+                    bot, 123, source_attachment_loader=source_attachment, month="2026-11", env=ENV,
                     root=alias, now=date(2026, 11, 3))
             self.assertEqual(bot.copies, [])
 
@@ -259,7 +307,7 @@ class MagazineCopyTests(unittest.TestCase):
                  "approval_timestamp": "2026-10-05T10:00:00+05:30"})
             save(root, "2026-11", {**approved(), "approved": False})
             self.assertEqual(copy_approved_magazine(
-                bot, 123, env=ENV, root=root, now=date(2026,11,3)), "sent")
+                bot, 123, source_attachment_loader=source_attachment, env=ENV, root=root, now=date(2026,11,3)), "sent")
             self.assertIn("2026-10", bot.copies[0][1]["caption"])
 
 if __name__ == "__main__":
