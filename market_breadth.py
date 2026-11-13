@@ -3,6 +3,7 @@ import csv
 import io
 import html
 import logging
+import os
 import threading
 import time
 from datetime import datetime, time as daytime, timedelta, timezone
@@ -170,6 +171,93 @@ def load_universe():
     return list(mapping), mapping, 'Built-in stock sample; NOT full Nifty 500', True
 
 
+def _valid_daily_snapshot(report, expected):
+    """Reject corrupted, incomplete or stale database rows before display."""
+    if not isinstance(report, dict) or report.get("session") != expected:
+        return False
+    if report.get("stale") is not False or report.get("source") != "Nifty 500 constituent CSV (current membership)":
+        return False
+    required = ("requested", "valid", "coverage", "advances", "declines",
+                "unchanged", "sectors", "ma20", "ma50", "ma200",
+                "highs", "lows", "high_low_count", "interpretation", "fetched")
+    if not all(key in report for key in required):
+        return False
+    try:
+        requested = int(report["requested"])
+        valid = int(report["valid"])
+        coverage = float(report["coverage"])
+        if not (450 <= requested <= 550 and 0 <= valid <= requested
+                and coverage >= 80
+                and abs(coverage - round(100 * valid / requested, 1)) < 0.11):
+            return False
+        return (sum(int(report[k]) for k in ("advances", "declines", "unchanged"))
+                == valid and isinstance(report["sectors"], dict)
+                and all(isinstance(report[k], dict) for k in ("ma20", "ma50", "ma200")))
+    except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+        return False
+
+
+def _breadth_db_url():
+    """Research DB only; never read or replace the separate portfolio storage."""
+    value = os.environ.get("MSK_INDEX_DATABASE_URL", "")
+    if value.startswith(("postgresql://", "postgres://")) and "sslmode=require" in value:
+        return value
+    return None
+
+
+def _load_daily_snapshot(expected):
+    url = _breadth_db_url()
+    if url is None:
+        return None
+    try:
+        import psycopg
+        with psycopg.connect(url, connect_timeout=3,
+                             options="-c statement_timeout=4000") as conn:
+            row = conn.execute(
+                "SELECT body FROM public.msk_breadth_snapshots_v1 "
+                "WHERE session_date = %s", (expected,)
+            ).fetchone()
+        report = row[0] if row else None
+        if _valid_daily_snapshot(report, expected):
+            LOG.info("MSK_BREADTH_DB_READY session=%s coverage=%s",
+                     expected, report["coverage"])
+            return report
+        return None
+    except Exception as exc:
+        LOG.warning("MSK_BREADTH_DB_READ_FAILED type=%s", type(exc).__name__)
+        return None
+
+
+def persist_daily_snapshot(report):
+    """Atomic independent Neon record: never modify index Top5 or portfolio tables."""
+    expected = str(expected_completed_session())
+    if not _valid_daily_snapshot(report, expected):
+        raise ValueError("Only complete verified current-session breadth may be stored")
+    url = _breadth_db_url()
+    if url is None:
+        raise RuntimeError("Dedicated research database connection unavailable")
+    import psycopg
+    from psycopg.types.json import Jsonb
+    with psycopg.connect(url, connect_timeout=8,
+                         options="-c statement_timeout=12000") as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS public.msk_breadth_snapshots_v1 ("
+            "session_date DATE PRIMARY KEY, "
+            "coverage NUMERIC(5,1) NOT NULL, "
+            "body JSONB NOT NULL, "
+            "stored_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+        )
+        conn.execute(
+            "INSERT INTO public.msk_breadth_snapshots_v1 "
+            "(session_date,coverage,body) VALUES (%s,%s,%s) "
+            "ON CONFLICT (session_date) DO UPDATE SET "
+            "coverage=EXCLUDED.coverage,body=EXCLUDED.body,stored_at=NOW()",
+            (expected, report["coverage"], Jsonb(report))
+        )
+    LOG.info("MSK_BREADTH_DB_SAVED session=%s coverage=%s valid=%s",
+             expected, report["coverage"], report["valid"])
+
+
 def _collect_breadth():
     """Collect a VERIFIED completed-session snapshot. Never run in request thread."""
     from market_data import bulk_history, index_history
@@ -230,6 +318,11 @@ def _refresh_breadth():
         with _lock:
             _cache, _cache_at = report, time.time()
             _last_error, _next_retry_at = None, 0.0
+        try:
+            if _breadth_db_url():
+                persist_daily_snapshot(report)
+        except Exception as exc:
+            LOG.warning("MSK_BREADTH_DB_WRITE_FAILED type=%s", type(exc).__name__)
         LOG.info("MSK_BREADTH_READY session=%s coverage=%s valid=%s",
                  report["session"], report["coverage"], report["valid"])
     except Exception as exc:
@@ -244,18 +337,23 @@ def _refresh_breadth():
 
 
 def get_breadth():
-    """Fast request-side read of a verified snapshot; schedule one refresh if missing.
-
-    A completed-session snapshot is immutable until the expected NSE session
-    changes, so do not refetch all 500 histories every 15 minutes.
-    """
-    global _refresh_thread
+    """Get a verified completed-session report without waiting on 500 symbols."""
+    global _refresh_thread, _cache, _cache_at
     expected = str(expected_completed_session())
     with _lock:
         report = _cache
-        if (report is not None and report.get("session") == expected
-                and not report.get("stale") and report.get("coverage", 0) >= 80):
+        if _valid_daily_snapshot(report, expected):
             return report
+
+    # Reuse the completed report across Render restarts. Database access has a
+    # strict time budget and never holds the worker lock.
+    persisted = _load_daily_snapshot(expected)
+    if persisted is not None:
+        with _lock:
+            _cache, _cache_at = persisted, time.time()
+        return persisted
+
+    with _lock:
         if _refresh_thread is None and time.monotonic() >= _next_retry_at:
             _refresh_thread = threading.Thread(
                 target=_refresh_breadth, name="msk-breadth-collector", daemon=True)
