@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 30
     env:
       MSK_INDEX_PREPARED_ONLY: '0'
+      MSK_RESEARCH_ONLY: '1'  # allow independent financial worker without Telegram token
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
