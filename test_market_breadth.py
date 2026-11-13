@@ -234,7 +234,7 @@ class BreadthTests(unittest.TestCase):
         release = threading.Event()
         old = {'session': '2026-10-22', 'stale': False, 'coverage': 100}
         with patch.object(b, "expected_completed_session", return_value=date(2026, 10, 23)), \
-             patch.object(b, "_collect_breadth", side_effect=lambda: release.wait(2) or old):
+             patch.object(b, "_collect_breadth", side_effect=lambda: (release.wait(2), {'session': '2026-10-23', 'stale': False, 'coverage': 90, 'valid': 450})[1]):
             b._cache, b._refresh_thread, b._last_error, b._next_retry_at = old, None, None, 0.0
             try:
                 result = b.get_breadth()
