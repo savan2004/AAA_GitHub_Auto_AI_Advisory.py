@@ -51,14 +51,16 @@ _HEADERS = {
 def _cget(key):
     with _lock:
         e = _cache.get(key)
-    if e and time.time() - e["ts"] < _TTL:
+    if e and time.time() - e["ts"] < e.get("ttl", _TTL):
         return e["val"]
     return None
 
 
-def _cset(key, val):
+def _cset(key, val, *, ttl=None):
+    """Full TTL only for usable data; failed fetches must expire quickly."""
+    lifetime = _TTL if ttl is None else max(1, int(ttl))
     with _lock:
-        _cache[key] = {"val": val, "ts": time.time()}
+        _cache[key] = {"val": val, "ts": time.time(), "ttl": lifetime}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -170,16 +172,40 @@ def _screener_html(sym: str) -> Optional[str]:
         from config import TIMEOUT_SCREENER as TO
     except Exception:
         TO = 8
+    partial_html = None
     for url in (f"https://www.screener.in/company/{sym}/consolidated/",
                 f"https://www.screener.in/company/{sym}/"):
-        try:
-            r = requests.get(url, headers=_HEADERS, timeout=max(TO, 10))
-            if r.ok and "data-table" in r.text:
-                _cset(f"scr_html_{sym}", r.text)
-                return r.text
-        except Exception as e:
-            logger.info(f"[research_data] screener {sym} failed: {str(e)[:100]}")
-    return None
+        for attempt in range(2):
+            try:
+                r = requests.get(url, headers=_HEADERS, timeout=max(TO, 10))
+                if r.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                    time.sleep(0.4)
+                    continue
+                if not r.ok or "data-table" not in r.text:
+                    break
+                if partial_html is None:
+                    partial_html = r.text
+                # A site response can contain unrelated tables but no financials.
+                # Do not cache it for six hours or hide the standalone alternative.
+                try:
+                    useful = bool(parse_years(r.text) or parse_quarters(r.text))
+                except (KeyError, TypeError, ValueError) as exc:
+                    useful = False
+                    logger.info("[research_data] %s statement parse unavailable (%s)",
+                                sym, type(exc).__name__)
+                if useful:
+                    _cset(f"scr_html_{sym}", r.text)
+                    return r.text
+                logger.info("[research_data] %s consolidated/standalone page lacks "
+                            "usable statements; checking next source", sym)
+                break
+            except requests.RequestException as exc:
+                logger.info("[research_data] screener %s request unavailable (%s)",
+                            sym, type(exc).__name__)
+                break
+    # May still have independently useful shareholding/growth, but do not
+    # persist incomplete HTML: the next request can recover on its own.
+    return partial_html
 
 
 def parse_growth(html: str) -> dict:
@@ -365,7 +391,11 @@ def get_screener_extras(sym: str) -> dict:
             except Exception as e:
                 logger.warning(f"[research_data] parse {key} {sym}: {e}")
                 out[key] = {} if key == "growth" else []
-    _cset(f"scr_{sym}", out)
+    usable = bool(out.get("years") or out.get("quarters"))
+    _cset(f"scr_{sym}", out, ttl=_TTL if usable else 45)
+    if not usable:
+        logger.warning("[research_data] %s Screener statements unavailable; "
+                       "retry permitted after 45 seconds", sym)
     return out
 
 
@@ -561,7 +591,9 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
     years, ysrc = _fresher(s_years, y_years)
     quarters, qsrc = _fresher(s_quarters, y_quarters)
     if not years and not quarters:
-        _cset(f"stm_{sym}", {})
+        _cset(f"stm_{sym}", {}, ttl=45)
+        logger.warning("[research_data] %s annual/quarter statements unavailable "
+                       "from both sources; short retry cache (45s)", sym)
         return None
     names = {"a": "Screener.in", "b": "Yahoo Finance"}
     # a Yahoo annual block can't carry lender detail Screener would; keep Screener years if equally fresh
@@ -572,7 +604,11 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
     }
     result["freshness"] = freshness(quarters, today) if quarters else {"status": "MISSING"}
     if today is None:
-        _cset(f"stm_{sym}", result)
+        # Partial or stale statements must be refreshed much sooner than a
+        # verified multi-year, current-quarter source response.
+        fresh = result["freshness"].get("status") == "FRESH"
+        ttl = _TTL if len(years) >= 4 and fresh else 300
+        _cset(f"stm_{sym}", result, ttl=ttl)
     return result
 
 

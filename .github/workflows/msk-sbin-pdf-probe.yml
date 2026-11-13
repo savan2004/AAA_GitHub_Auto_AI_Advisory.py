@@ -7,6 +7,7 @@ on:
       - .github/workflows/msk-sbin-pdf-probe.yml
       - pdf_release_gate.py
       - report_generator.py
+      - research_data.py
   workflow_dispatch:
 permissions:
   contents: read
