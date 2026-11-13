@@ -101,7 +101,7 @@ class BreadthTests(unittest.TestCase):
         import market_data
         past = frame()
         breadth._cache = None
-        with patch.object(breadth, 'load_universe', return_value=(['UP'], {}, 'fixture', False)), \
+        with patch.object(breadth, 'load_universe', return_value=(['UP'] + [f'EQ{i}' for i in range(499)], {}, 'fixture', False)), \
              patch.object(market_data, 'bulk_history', return_value={'UP': past}), \
              patch.object(market_data, 'index_history', return_value=past), \
              patch.object(breadth, 'expected_completed_session', return_value=date(2026, 10, 26)):
