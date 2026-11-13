@@ -1996,6 +1996,10 @@ if __name__ == "__main__":
             from msk_live_acceptance import run_once as run_owner_acceptance
             threading.Thread(target=run_owner_acceptance, args=(globals(),),
                              name="msk-owner-acceptance", daemon=True).start()
+        if os.getenv("MSK_SBIN_PDF_LIVE_RUN_ID"):
+            from msk_sbin_pdf_probe import run_once as run_sbin_pdf_acceptance
+            threading.Thread(target=run_sbin_pdf_acceptance, args=(globals(),),
+                             name="msk-sbin-pdf-release", daemon=True).start()
         from waitress import serve
         logger.info("Production HTTP server listening on port %s", os.getenv("PORT", "8000"))
         serve(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), threads=12, connection_limit=200)

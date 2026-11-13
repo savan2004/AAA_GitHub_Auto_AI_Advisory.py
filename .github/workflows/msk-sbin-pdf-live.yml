@@ -1,0 +1,23 @@
+name: MSK SBIN Owner PDF Receipt Safety
+on:
+  push:
+    branches: [main]
+    paths:
+      - main.py
+      - msk_sbin_pdf_probe.py
+      - tests/test_sbin_pdf_live_acceptance.py
+      - .github/workflows/msk-sbin-pdf-live.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  safe-owner-report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_sbin_pdf_live_acceptance.py' -v
+      - run: python -m py_compile main.py msk_sbin_pdf_probe.py
