@@ -976,8 +976,8 @@ try:
     price_bg  = TV_GREEN_L if change_pct >= 0 else TV_RED_L
     header.add_patch(FancyBboxPatch((0.15,0.15), 0.22, 0.70,
         boxstyle="round,pad=0.02", fc=price_bg, ec=price_col, lw=1.0, zorder=5))
-    header.text(0.17, 0.72, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center")
-    header.text(0.17, 0.22, f"{chg_icon} {change_pct:+.2f}%  Today", fontsize=7.5, color=price_col, va="center")
+    header.text(0.17, 0.72, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center", zorder=8)
+    header.text(0.17, 0.22, f"{chg_icon} {change_pct:+.2f}%  Today", fontsize=7.5, color=price_col, va="center", zorder=8)
     pills = []
     if _mcap_str: pills.append(("MCap", _mcap_str))
     if _pe_str:   pills.append(("",     _pe_str))
@@ -1009,8 +1009,8 @@ try:
         boxstyle="round,pad=0.01", lw=0, fc=sig_bg_c, zorder=3))
     sa.text(0.5, 0.985, "AUTOAI ADVISORY  v7.0", fontsize=6.5, color=TEXT_SEC,
         ha="center", va="top", style="italic", zorder=5)
-    hmap = {"STRONG BUY":"⬆⬆ STRONG BUY","BUY":"⬆ BUY","WAIT":"⏸ WAIT — No Setup",
-            "SELL":"⬇ SELL","STRONG SELL":"⬇⬇ STRONG SELL"}
+    hmap = {"STRONG BUY":"STRONG BUY","BUY":"BUY","WAIT":"WAIT — No Setup",
+            "SELL":"SELL","STRONG SELL":"STRONG SELL"}
     sa.text(0.5, 0.950, hmap.get(signal_text, signal_text), fontsize=12,
         fontweight="bold", color=sig_fg, ha="center", va="top", zorder=5)
 
@@ -1067,7 +1067,7 @@ try:
         # No-Trade Zone — show no levels, just explanation
         sa.add_patch(FancyBboxPatch((0.04,0.042), 0.92, 0.145,
             boxstyle="round,pad=0.01", fc="#2A2410", ec=TV_YELLOW, lw=1.2, zorder=4))
-        sa.text(0.5, 0.172, "⏸  NO TRADE ZONE", fontsize=9, fontweight="bold",
+        sa.text(0.5, 0.172, "NO TRADE ZONE", fontsize=9, fontweight="bold",
             color=TV_YELLOW, ha="center", va="top", zorder=5)
         sa.text(0.5, 0.145, f"Score {score:+d} — need ≥+12 for BUY", fontsize=7.5,
             color=TEXT_SEC, ha="center", va="top", zorder=5)
@@ -1110,15 +1110,9 @@ try:
                 sa.text(0.64, y - 0.006, f"{pct:+.1f}%{rr_str}", fontsize=6.8,
                     color=col, va="top", zorder=5)
 
-    # ── 52W bar ───────────────────────────────────────────────────────────────
-    sa.text(0.5, 0.038, "52-WEEK RANGE", fontsize=6, color=TEXT_SEC, ha="center", va="center")
-    sa.add_patch(FancyBboxPatch((0.06,0.018), 0.88, 0.014,
-        boxstyle="round,pad=0.002", fc=BG_CARD, ec=BORDER_COL, lw=0.5, zorder=4))
-    _52f = max(0.0, min(1.0, _52w_pct/100))
-    sa.add_patch(FancyBboxPatch((0.06,0.018), 0.88*_52f, 0.014,
-        boxstyle="round,pad=0.002", fc=sig_fg, ec="none", alpha=0.8, zorder=5))
-    sa.text(0.06, 0.014, f"₹{_52l:,.0f}", fontsize=5.5, color=TV_RED, va="top", zorder=6)
-    sa.text(0.94, 0.014, f"₹{_52h:,.0f}", fontsize=5.5, color=TV_GREEN, va="top", ha="right", zorder=6)
+    # 52-week position is already shown in the top header.
+    # Do not draw a second bar below the right-side panel: its labels
+    # previously overlapped the footer and were cropped by savefig.
 
     # ── Watermark + Footer ────────────────────────────────────────────────────
     fig.text(0.5 * ratio, 0.5, "AutoAI\nAdvisory",
@@ -1127,8 +1121,6 @@ try:
     fig.text(0.38*ratio, 0.005,
         "AI-generated. Not SEBI registered. Not financial advice.",
         ha="center", va="bottom", color=TEXT_SEC, fontsize=6.5)
-    fig.text(0.99, 0.005, "AutoAiAdvisory (SK)  v7.0",
-        ha="right", va="bottom", color=TEXT_SEC, fontsize=6.5, fontweight="bold", style="italic")
 
     # ── SAVE ──────────────────────────────────────────────────────────────────
     fig.savefig(OUT_FILE, dpi=160, bbox_inches="tight",
