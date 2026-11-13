@@ -34,10 +34,14 @@ class SBINLiveProbeTests(unittest.TestCase):
             with patch.dict(os.environ, {"MSK_SBIN_PDF_LIVE_RUN_ID":"test-sbin-run-2"}), \
                  patch.object(probe.time,"sleep",return_value=None), \
                  patch("msk_live_acceptance._claim_once",return_value=True), \
+                 patch("msk_live_acceptance._save_action") as save, \
                  patch("pdf_release_gate.validate_research_pdf",
                        return_value={"pages":8,"bytes":29005}):
                 probe.run_once(ctx)
             bot.send_document.assert_called_once()
+            save.assert_called_once()
+            self.assertEqual(save.call_args.kwargs["message_id"], 12345)
+            self.assertEqual(save.call_args.kwargs["file_id"], "real-document-receipt-abc")
             ack.assert_called_once_with(112233,document,"document")
             self.assertFalse(path.exists())
 
