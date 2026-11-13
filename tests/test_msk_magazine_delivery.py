@@ -3,7 +3,7 @@ import json
 import hashlib
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
 from msk_magazine_delivery import (
@@ -83,6 +83,32 @@ class MagazineCopyTests(unittest.TestCase):
                     with self.assertRaisesRegex(MagazineManifestError, "approval timestamp"):
                         copy_approved_magazine(bot, 123, month="2026-11",
                                                env=ENV, root=root, now=date(2026, 11, 3))
+            self.assertEqual(bot.copies, [])
+
+    def test_future_approval_same_day_is_rejected_with_exact_clock(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            record = approved()
+            record["approval_timestamp"] = "2026-11-03T18:00:00+05:30"
+            save(root, "2026-11", record)
+            now = datetime(2026, 11, 3, 9, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+            with self.assertRaisesRegex(MagazineManifestError, "in the future"):
+                copy_approved_magazine(bot, 123, month="2026-11",
+                                       env=ENV, root=root, now=now)
+            self.assertEqual(bot.copies, [])
+            record["approval_timestamp"] = "2026-11-03T08:00:00+05:30"
+            save(root, "2026-11", record)
+            self.assertEqual(copy_approved_magazine(
+                bot, 123, month="2026-11", env=ENV, root=root, now=now), "sent")
+
+    def test_naive_verification_clock_rejected(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            save(root, "2026-11", approved())
+            with self.assertRaisesRegex(MagazineManifestError, "Verification time"):
+                copy_approved_magazine(
+                    bot, 123, month="2026-11", env=ENV, root=root,
+                    now=datetime(2026, 11, 3, 9, 0))
             self.assertEqual(bot.copies, [])
 
     def test_approval_cannot_predate_publication(self):
