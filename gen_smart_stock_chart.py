@@ -240,13 +240,14 @@ def detect_candle_pattern(data):
     return "", ""
 
 # ── NEW: WEIGHTED 11-CHECK SCORING ENGINE ────────────────────────────────────
-def score_symbol_weighted(sym, name):
+def score_symbol_weighted(sym, name, df=None):
     """
     Lightweight scorer for auto-scan. Uses weighted EMA freshness.
     Returns candidate dict or None.
     """
     try:
-        df = yf.download(sym, period="6mo", interval="1d", progress=False, auto_adjust=True)
+        if df is None:
+            df = yf.download(sym, period="6mo", interval="1d", progress=False, auto_adjust=True)
         if df.empty or len(df) < 55: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         df = df.dropna(subset=["Open","High","Low","Close","Volume"])
@@ -632,24 +633,22 @@ if len(sys.argv) >= 3:
     winner = {"sym": forced_sym, "name": forced_name, "score": 0, "reason": "Manual pick"}
     print(f"SCAN: skipped (manual) period={CHART_PERIOD}")
 else:
-    import time
-    candidates = []; checked = 0
-    for i in range(0, len(UNIVERSE), 10):
-        batch = UNIVERSE[i:i+10]
-        for sym, name in batch:
-            r = score_symbol_weighted(sym, name); checked += 1
-            if r and r.get("cross_dir") != 0: candidates.append(r)
-        time.sleep(0.4)
-        if len(candidates) >= 12: break
-    if not candidates:
-        for sym, name in UNIVERSE:
-            r = score_symbol_weighted(sym, name); checked += 1
-            if r: candidates.append(r)
-    print(f"SCAN: checked {checked}, candidates {len(candidates)}")
-    if not candidates:
-        print("[ERROR] No candidates", file=sys.stderr); sys.exit(1)
-    candidates.sort(key=lambda r: -r["score"])
-    winner = candidates[0]
+    # One bounded real batch, not one 6-month Yahoo request per NSE symbol.
+    # Preserve the 11-check chart's independent BUY/WAIT gating.
+    from smart_chart_fast_scan import choose_auto_chart, ChartScanUnavailable
+    from market_breadth import expected_completed_session
+    session_key = str(expected_completed_session())
+    try:
+        winner, sampled, valid, universe_size = choose_auto_chart(
+            UNIVERSE, download=yf.download, scorer=score_symbol_weighted,
+            session_key=session_key, sample_limit=60)
+    except ChartScanUnavailable as exc:
+        print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
+        sys.exit(1)
+    winner["scope_note"] = (
+        f"Sample: {valid}/{sampled} verified NSE symbols from {universe_size}; "
+        f"not a full-universe ranking; EOD {session_key}")
+    print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key}")
     print(f"WINNER: {winner['sym']}|{winner['name']}|{winner['reason']}|{winner['score']:+d}")
     forced_sym = winner["sym"]; forced_name = winner["name"]
 
@@ -1108,7 +1107,7 @@ try:
     plt.close(fig)
 
     print(f"OUTPUT: {OUT_FILE}")
-    print(f"META: {symbol}|{company_name}|{signal_text}|{score_str}|{last_close:.2f}|{sl_val:.2f}|{t1_val:.2f}|{t2_val:.2f}")
+    print(f"META: {symbol}|{company_name}|{signal_text}|{score_str}|{last_close:.2f}|{sl_val:.2f}|{t1_val:.2f}|{t2_val:.2f}|{winner.get('scope_note', '')}")
 
 except Exception as e:
     print(f"[ERROR] Chart generation failed: {e}", file=sys.stderr)
