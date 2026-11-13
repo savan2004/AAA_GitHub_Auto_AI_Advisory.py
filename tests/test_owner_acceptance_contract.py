@@ -83,6 +83,40 @@ class ClaimOnceDatabaseRegression(unittest.TestCase):
         self.assertGreaterEqual(conn.execute.call_count, 10)
 
 
+class SelectedFeatureRerunContract(unittest.TestCase):
+    def test_unknown_feature_filter_sends_nothing(self):
+        import os
+        from unittest.mock import patch
+        import msk_live_acceptance as acceptance
+        ctx = {"bot": object(), "safe_send": lambda uid, msg: None}
+        with patch.dict(os.environ, {"MSK_LIVE_ACCEPTANCE_ONLY_FEATURES":
+                                     "UnknownFeature"}):
+            with patch.object(acceptance, "_claim_action") as claim:
+                acceptance._run_actions(ctx, 1234, "test-run")
+                claim.assert_not_called()
+
+    def test_selected_feature_avoids_other_button_sends(self):
+        import os
+        from unittest.mock import patch
+        import msk_live_acceptance as acceptance
+        output = []
+        ctx = {
+            "bot": object(),
+            "safe_send": lambda uid, msg: output.append(msg),
+            "request_index_top5": lambda profile, uid, send:
+                                   "🛑 Overnight report withheld",
+        }
+        with patch.dict(os.environ, {"MSK_LIVE_ACCEPTANCE_ONLY_FEATURES":
+                                     "LargeCapTop5"}):
+            with patch.object(acceptance,"_claim_action",return_value=True) as claim:
+                with patch.object(acceptance,"_save_action") as save:
+                    with patch.object(acceptance,"_finish_action",return_value=True):
+                        acceptance._run_actions(ctx,1234,"test-run")
+        claim.assert_called_once_with("test-run","LargeCapTop5")
+        self.assertEqual(len(output),1)
+        self.assertEqual(save.call_args.kwargs["status"],"FAIL")
+
+
 class ResumeSafetyContract(unittest.TestCase):
     def test_restart_resume_uses_durable_claim_before_sending(self):
         import os
