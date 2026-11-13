@@ -887,6 +887,7 @@ def _record_telegram_api_ack(chat_id, result, kind):
     message_id = getattr(result, "message_id", None)
     if type(message_id) is not int or message_id <= 0:
         return False
+    logger.info("MSK_TELEGRAM_API_ACK kind=%s message_id=%d", kind, message_id)
     ledger = globals().get("_durable_update_ledger")
     if ledger is None:
         return False
@@ -991,6 +992,18 @@ def run_report(chat_id, query):
         finally:
             done_event.set()
         if ok:
+            try:
+                from pypdf import PdfReader
+                size_bytes = os.path.getsize(result)
+                page_count = len(PdfReader(result).pages)
+                if size_bytes < 1024 or page_count < 1:
+                    raise ValueError("PDF empty or unreadable")
+                logger.info("MSK_PDF_VALIDATED kind=research bytes=%d pages=%d",
+                            size_bytes, page_count)
+            except Exception as exc:
+                logger.error("Research PDF integrity check failed (%s)", type(exc).__name__)
+                safe_send(chat_id, "❌ Research PDF could not be verified; not sent.")
+                return
             try:
                 with open(result, "rb") as f:
                     sent = bot.send_document(
@@ -1511,6 +1524,13 @@ _sector_waiters = set()
 
 
 def _deliver_sector(chat_id, path, summary):
+    from pypdf import PdfReader
+    size_bytes = os.path.getsize(path)
+    page_count = len(PdfReader(path).pages)
+    if size_bytes < 1024 or page_count < 1:
+        raise ValueError("Sector PDF empty or unreadable")
+    logger.info("MSK_PDF_VALIDATED kind=sector bytes=%d pages=%d",
+                size_bytes, page_count)
     with open(path, "rb") as f:
         sent = bot.send_document(
             chat_id, f,
