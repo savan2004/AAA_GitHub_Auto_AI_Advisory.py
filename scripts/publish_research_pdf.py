@@ -35,18 +35,10 @@ def main(symbol="SBIN"):
         # text. Do not infer financial freshness from a PDF text substring.
         # Independently fetch genuine last completed NSE daily history instead.
         from data_engine import get_hist
-        import pandas as pd
-        prices = get_hist(symbol, "1y")
-        if prices is None or prices.empty:
-            raise RuntimeError("Real report price-session verification unavailable")
-        last_date = str(pd.Timestamp(prices.index[-1]).date())
-        if last_date != session:
-            raise RuntimeError(
-                "Real report NOT READY: latest source market session differs from "
-                "required completed-session date")
         from technical_price_safety import technical_price_context
-        if technical_price_context(prices) is None:
-            raise RuntimeError("Real report EOD price quality verification refused")
+        from research_pdf_price_guard import verified_completed_price_session
+        last_date, audited_close = verified_completed_price_session(
+            symbol, session, get_hist, technical_price_context)
         session_label = datetime.strptime(session, "%Y-%m-%d").strftime("%d-%b-%Y")
         # Only a textual label check is optional; source freshness is mandatory.
         cover_normalized = "".join(page_texts[0].split()).upper()
@@ -58,10 +50,11 @@ def main(symbol="SBIN"):
             raise RuntimeError("Real report has unreadable page")
         print("MSK_RESEARCH_PDF_CONTENT_AUDIT symbol={} session={} pages={} "
               "per_page_characters={} genuine_last_price_session={} "
-              "cover_date_text_extracted={} issuer_identified=true "
-              "disclosures_verified=true issuer_accounting_reconciled=false".format(
+              "verified_close_inr={:.2f} cover_date_text_extracted={} "
+              "issuer_identified=true disclosures_verified=true "
+              "issuer_accounting_reconciled=false".format(
                  symbol, session, len(page_texts), [len(text) for text in page_texts],
-                 last_date, str(printed_label_present).lower()))
+                 last_date, audited_close, str(printed_label_present).lower()))
         if not printed_label_present:
             print("MSK_RESEARCH_PDF_COVER_TEXT_PREVIEW symbol={} excerpt={!r}".format(
                 symbol, page_texts[0][:420]))
