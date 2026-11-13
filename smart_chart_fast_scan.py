@@ -50,6 +50,10 @@ def choose_auto_chart(universe, *, download, scorer, session_key, sample_limit=6
                 frame = prices
             else:
                 continue
+            # Reject stale last sessions even when six months of history exist.
+            last_session = frame.dropna(subset=["Close"]).index[-1]
+            if str(last_session.date()) != str(session_key):
+                continue
             candidate = scorer(symbol, name, df=frame.copy())
             if candidate and (candidate.get("sym") == symbol
                               and math.isfinite(float(candidate.get("close", math.nan)))
