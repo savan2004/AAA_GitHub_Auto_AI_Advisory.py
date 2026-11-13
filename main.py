@@ -892,7 +892,16 @@ def _record_telegram_api_ack(chat_id, result, kind):
     if _os.getenv("MSK_LIVE_ACCEPTANCE_RUN_ID"):
         try:
             from msk_live_acceptance import capture_telegram_ack
-            capture_telegram_ack(kind, message_id)
+            # Store the actual Telegram-assigned file ID for document/photo
+            # acceptance, never invent one from a local filename.
+            file_id = None
+            if kind == "document":
+                file_id = getattr(getattr(result, "document", None), "file_id", None)
+            elif kind == "photo":
+                photos = getattr(result, "photo", None) or []
+                if photos:
+                    file_id = getattr(photos[-1], "file_id", None)
+            capture_telegram_ack(kind, message_id, file_id=file_id)
         except Exception:
             logger.warning("MSK owner acceptance receipt recording unavailable")
     ledger = globals().get("_durable_update_ledger")
