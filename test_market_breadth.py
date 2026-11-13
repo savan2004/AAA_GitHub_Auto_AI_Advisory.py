@@ -292,5 +292,56 @@ class BreadthTests(unittest.TestCase):
         self.assertFalse(b._valid_daily_snapshot(dict(example, source='Sample'), '2026-10-23'))
 
 
+    def test_neon_pooler_never_receives_unsupported_startup_options(self):
+        """Real 13-Nov CI failed on options=-c statement_timeout through pooler."""
+        import os
+        import sys
+        import types
+        from unittest.mock import MagicMock
+        import market_breadth as b
+
+        record = {'session': '2026-10-23', 'stale': False,
+                  'source': 'Nifty 500 constituent CSV (current membership)',
+                  'coverage': 90.0, 'valid': 450, 'requested': 500,
+                  'advances': 250, 'declines': 190, 'unchanged': 10,
+                  'sectors': {}, 'ma20': {}, 'ma50': {}, 'ma200': {},
+                  'highs': 0, 'lows': 0, 'high_low_count': 0,
+                  'interpretation': 'Verified', 'fetched': 'fixture'}
+        fake = types.ModuleType('psycopg')
+        fake_types = types.ModuleType('psycopg.types')
+        fake_json = types.ModuleType('psycopg.types.json')
+        fake_json.Jsonb = lambda value: value
+        connection = MagicMock()
+        connection.execute.return_value.fetchone.return_value = (record,)
+        ctx = MagicMock()
+        ctx.__enter__.return_value = connection
+
+        def pooler_connect(*args, **kwargs):
+            if 'options' in kwargs:
+                raise RuntimeError("Neon pooler rejects startup parameter")
+            return ctx
+
+        fake.connect = MagicMock(side_effect=pooler_connect)
+        modules = {'psycopg': fake, 'psycopg.types': fake_types,
+                   'psycopg.types.json': fake_json}
+        with patch.dict(sys.modules, modules), patch.dict(
+                os.environ, {'MSK_INDEX_DATABASE_URL':
+                             'postgresql://test.invalid/research?sslmode=require'}):
+            self.assertEqual(b._load_daily_snapshot('2026-10-23'), record)
+            self.assertEqual(fake.connect.call_count, 1)
+            self.assertNotIn('options', fake.connect.call_args.kwargs)
+            self.assertIn('SET LOCAL statement_timeout',
+                          connection.execute.call_args_list[0].args[0])
+            fake.connect.reset_mock()
+            connection.execute.reset_mock()
+            with patch.object(b, 'expected_completed_session',
+                              return_value=date(2026, 10, 23)):
+                b.persist_daily_snapshot(record)
+            self.assertEqual(fake.connect.call_count, 1)
+            self.assertNotIn('options', fake.connect.call_args.kwargs)
+            self.assertIn('SET LOCAL statement_timeout',
+                          connection.execute.call_args_list[0].args[0])
+
+
 if __name__ == '__main__':
     unittest.main()
