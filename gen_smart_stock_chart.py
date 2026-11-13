@@ -976,8 +976,8 @@ try:
     price_bg  = TV_GREEN_L if change_pct >= 0 else TV_RED_L
     header.add_patch(FancyBboxPatch((0.15,0.15), 0.22, 0.70,
         boxstyle="round,pad=0.02", fc=price_bg, ec=price_col, lw=1.0, zorder=5))
-    header.text(0.17, 0.72, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center", zorder=8)
-    header.text(0.17, 0.22, f"{chg_icon} {change_pct:+.2f}%  Today", fontsize=7.5, color=price_col, va="center", zorder=8)
+    header.text(0.17, 0.58, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center", zorder=8)
+    header.text(0.17, 0.24, f"{chg_icon} {change_pct:+.2f}%  Today", fontsize=7.5, color=price_col, va="center", zorder=8)
     pills = []
     if _mcap_str: pills.append(("MCap", _mcap_str))
     if _pe_str:   pills.append(("",     _pe_str))
@@ -1007,7 +1007,7 @@ try:
     # Signal header
     sa.add_patch(FancyBboxPatch((0.03,0.89), 0.94, 0.08,
         boxstyle="round,pad=0.01", lw=0, fc=sig_bg_c, zorder=3))
-    sa.text(0.5, 0.985, "AUTOAI ADVISORY  v7.0", fontsize=6.5, color=TEXT_SEC,
+    sa.text(0.5, 0.968, "AUTOAI ADVISORY  v7.0", fontsize=6.5, color=TEXT_SEC,
         ha="center", va="top", style="italic", zorder=5)
     hmap = {"STRONG BUY":"STRONG BUY","BUY":"BUY","WAIT":"WAIT — No Setup",
             "SELL":"SELL","STRONG SELL":"STRONG SELL"}
