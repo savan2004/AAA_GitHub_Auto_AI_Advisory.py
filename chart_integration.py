@@ -103,6 +103,8 @@ class ChartGenerator:
                             )
                         else:
                             meta_text += "⏸ No-Trade Zone — wait for ≥12/20 score"
+                        if len(parts) >= 9 and parts[8].startswith("Sample:"):
+                            meta_text += "\n🔎 " + parts[8]
 
             if not png_path or not os.path.exists(png_path):
                 logger.warning(f"[Chart] PNG missing: {png_path!r}")
