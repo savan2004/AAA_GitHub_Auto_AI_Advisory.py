@@ -1,0 +1,25 @@
+name: MSK SBIN Bank Layout Offline Diagnostics
+on:
+  push:
+    branches: [main]
+    paths:
+      - tests/probe_sbin_layout.py
+      - .github/workflows/msk-sbin-layout.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bank-layout:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      TELEGRAM_TOKEN: '123:synthetic-test'
+      MPLBACKEND: 'Agg'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - run: PYTHONPATH=.:tests python -u tests/probe_sbin_layout.py
