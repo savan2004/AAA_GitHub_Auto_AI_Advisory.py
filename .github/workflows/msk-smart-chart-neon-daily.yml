@@ -1,0 +1,73 @@
+name: MSK Smart Chart Verified Daily Neon PNG
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'smart_chart_snapshot.py'
+      - 'chart_integration.py'
+      - 'scripts/publish_smart_chart.py'
+      - 'test_smart_chart_snapshot.py'
+      - '.github/workflows/msk-smart-chart-neon-daily.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'smart_chart_snapshot.py'
+      - 'chart_integration.py'
+      - 'scripts/publish_smart_chart.py'
+      - 'test_smart_chart_snapshot.py'
+      - '.github/workflows/msk-smart-chart-neon-daily.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '50 12 * * 1-5'  # 18:20 IST after completed NSE daily candles
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msk-smart-chart-verified-daily
+  cancel-in-progress: false
+
+jobs:
+  offline-safety:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install 'pillow>=10,<14' 'numpy>=1.26,<3' 'pandas>=2.1,<3'
+      - name: Compile snapshot and delivery code
+        run: python -m py_compile smart_chart_snapshot.py chart_integration.py scripts/publish_smart_chart.py test_smart_chart_snapshot.py
+      - name: Verify PNG integrity, immutable EOD date, fast actual-photo path
+        run: python -m unittest -v test_smart_chart_snapshot test_chart_real_error_diagnostics
+
+  genuine-chart-publish:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONUNBUFFERED: '1'
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require existing protected research database
+        run: |
+          if [ -z "$MSK_INDEX_DATABASE_URL" ]; then
+            echo "::error::Independent chart research connection not configured"
+            exit 1
+          fi
+      - name: Install actual production chart runtime
+        run: python -m pip install -r requirements.txt
+      - name: Generate genuine current EOD chart, write and read back verified Neon PNG
+        run: python -m scripts.publish_smart_chart
