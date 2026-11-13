@@ -88,12 +88,43 @@ class EvidenceStore:
         self.pg = self.url.startswith(("postgresql://", "postgres://"))
         if self.pg:
             import psycopg
-            self.db = psycopg.connect(self.url, connect_timeout=8)
+            # Neon can briefly suspend/replace a compute. Retry only transient
+            # connection failures; bad credentials/DB names must fail closed.
+            self.db = None
+            for attempt in range(1, 4):
+                try:
+                    self.db = psycopg.connect(self.url, connect_timeout=8)
+                    self.prepare()
+                    if attempt > 1:
+                        LOG.info("MSK_INDEX_DB_RECOVERED attempt=%d/3", attempt)
+                    break
+                except psycopg.OperationalError as exc:
+                    if self.db is not None:
+                        try:
+                            self.db.close()
+                        except Exception:
+                            pass
+                        self.db = None
+                    sqlstate = getattr(exc, "sqlstate", None)
+                    permanent = sqlstate in ("28P01", "28000", "3D000")
+                    LOG.warning(
+                        "MSK_INDEX_DB_CONNECTION_FAILED attempt=%d/3 "
+                        "type=%s sqlstate=%s permanent=%s",
+                        attempt, type(exc).__name__, sqlstate or "unknown",
+                        permanent,
+                    )
+                    if permanent or attempt == 3:
+                        raise
+                    time.sleep(0.4 * (2 ** (attempt - 1)))
         elif self.url.startswith("sqlite:///"):
             self.db = sqlite3.connect(self.url[10:], timeout=25)
+            self.prepare()
         else:
-            raise ValueError("Expected postgres:// or sqlite:/// store URI")
-        self.prepare()
+            LOG.error("MSK_INDEX_DB_CONFIG_INVALID full PostgreSQL URL required")
+            raise ValueError(
+                "MSK_INDEX_DATABASE_URL must be a full postgres:// or "
+                "postgresql:// URI (database name alone is invalid)"
+            )
 
     def __enter__(self):
         return self

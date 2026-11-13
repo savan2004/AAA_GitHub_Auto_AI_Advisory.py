@@ -1,0 +1,49 @@
+name: MSK Live Chart and Index DB Recovery
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'overnight_index_reports.py'
+      - 'builder.sh'
+      - 'requirements.txt'
+      - 'tests/test_index_db_connection_recovery.py'
+      - '.github/workflows/msk-live-chart-index-recovery.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  db-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'psycopg[binary]>=3.2,<3.4'
+      - run: python -m unittest discover -s tests -p 'test_index_db_connection_recovery.py' -v
+      - run: python -m py_compile overnight_index_reports.py
+  chart-dependency:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test exactly the Render builder
+        run: bash builder.sh
+      - name: Prove required pinned six package
+        run: |
+          python -c "import six; assert six.__version__=='1.17.0'; print('MSK_SIX_PIN_VERIFIED')"
+          python -m py_compile chart_integration.py gen_smart_stock_chart.py
+  portfolio-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Confirm missing, altered or empty source can never silently approve cutover
+        run: python -m unittest discover -s tests -p 'test_portfolio_backup_preflight.py' -v

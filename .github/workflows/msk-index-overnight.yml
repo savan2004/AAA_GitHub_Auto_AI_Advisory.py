@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install offline numerical dependencies
-        run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'requests>=2.32,<3' 'yfinance>=0.2.60,<0.3'
+        run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'requests>=2.32,<3' 'yfinance>=0.2.60,<0.3' 'psycopg[binary]>=3.2,<3.4'
       - name: Compile pipeline
         run: python -m py_compile overnight_index_reports.py overnight_index_sources.py index_top5.py index_constituents.py top5_company_ratings.py tests/test_overnight_index_reports.py
       - name: Test index-wide 100, 150, 250, staleness, reports and resumability
