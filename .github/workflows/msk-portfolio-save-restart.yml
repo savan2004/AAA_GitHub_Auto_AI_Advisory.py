@@ -1,0 +1,27 @@
+name: MSK Portfolio Save Restart Acceptance
+on:
+  pull_request:
+    paths:
+      - main.py
+      - tests/test_portfolio_save_restart.py
+      - .github/workflows/msk-portfolio-save-restart.yml
+  push:
+    branches: [main]
+    paths:
+      - main.py
+      - tests/test_portfolio_save_restart.py
+      - .github/workflows/msk-portfolio-save-restart.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify save restart and reload
+        run: python -m unittest discover -s tests -p 'test_portfolio_save_restart.py' -v

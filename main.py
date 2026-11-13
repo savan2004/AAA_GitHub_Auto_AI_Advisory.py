@@ -1249,7 +1249,19 @@ def cmd_buy(m):
         logger.exception("Portfolio buy was rejected or storage failed")
         safe_send(m.chat.id, "⚠️ Holding NOT saved; please retry or contact support.")
         return
-    safe_send(m.chat.id, f"✅ Added <b>{qty}×{html.escape(sym)}</b> @ ₹{price:.2f}")
+    try:
+        stored = portfolio.get(m.chat.id)
+        position = stored.get(sym)
+        if not position or float(position["qty"]) < qty:
+            raise RuntimeError("Portfolio write/readback mismatch")
+    except (ValueError, RuntimeError, OSError, TypeError, KeyError):
+        logger.exception("Portfolio saved but post-write readback failed")
+        safe_send(m.chat.id, "⚠️ Portfolio write could not be verified. Please contact support before repeating.")
+        return
+    storage = ("durable database" if os.getenv("PORTFOLIO_BACKEND", "legacy_json").lower() == "postgres"
+               else "temporary server file; backup required")
+    safe_send(m.chat.id,
+              f"✅ Portfolio saved and read back ({storage}): <b>{qty}×{html.escape(sym)}</b> @ ₹{price:.2f}")
 
 
 @bot.message_handler(commands=["sell"])
@@ -1271,7 +1283,16 @@ def cmd_sell(m):
         safe_send(m.chat.id, "⚠️ Holding NOT removed; storage unavailable.")
         return
     if removed:
-        safe_send(m.chat.id, f"✅ Removed <b>{html.escape(sym)}</b>.")
+        try:
+            if sym in portfolio.get(m.chat.id):
+                raise RuntimeError("Portfolio delete/readback mismatch")
+        except (ValueError, RuntimeError, OSError, TypeError):
+            logger.exception("Portfolio removal readback failed")
+            safe_send(m.chat.id, "⚠️ Portfolio removal could not be verified. Contact support.")
+            return
+        storage = ("durable database" if os.getenv("PORTFOLIO_BACKEND", "legacy_json").lower() == "postgres"
+                   else "temporary server file; backup required")
+        safe_send(m.chat.id, f"✅ Portfolio save verified ({storage}); removed <b>{html.escape(sym)}</b>.")
     else:
         safe_send(m.chat.id, f"❌ <b>{html.escape(sym)}</b> not found.")
 
