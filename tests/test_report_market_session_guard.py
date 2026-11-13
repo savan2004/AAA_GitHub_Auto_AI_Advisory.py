@@ -48,5 +48,28 @@ class ResearchReportMarketSessionGuardTests(unittest.TestCase):
                 "SBIN","2026-11-13",lambda *a:self.sample(),lambda x:None)
 
 
+    def test_exact_rendered_report_evidence_uses_one_market_fetch(self):
+        from research_pdf_price_guard import verified_generated_report_session
+        self.assertEqual(
+            verified_generated_report_session(
+                "DLF", "2026-11-13",
+                {"symbol": "DLF", "price_session": "13-Nov-2026",
+                 "historical_close": 758.75}),
+            ("2026-11-13", 758.75))
+
+    def test_reject_wrong_or_stale_generated_evidence(self):
+        from research_pdf_price_guard import verified_generated_report_session
+        examples = [
+            {"symbol":"DLF","price_session":"12-Nov-2026","historical_close":758.75},
+            {"symbol":"SBIN","price_session":"13-Nov-2026","historical_close":758.75},
+            {"symbol":"DLF","price_session":"undated","historical_close":758.75},
+            {"symbol":"DLF","price_session":"13-Nov-2026","historical_close":None},
+        ]
+        for evidence in examples:
+            with self.subTest(evidence=evidence):
+                with self.assertRaises(RuntimeError):
+                    verified_generated_report_session("DLF","2026-11-13",evidence)
+
+
 if __name__ == "__main__":
     unittest.main()
