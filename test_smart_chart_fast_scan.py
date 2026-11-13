@@ -1,5 +1,6 @@
 """Offline regression: chart auto scan never guesses prices or ranks 500 unscanned names."""
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
 import numpy as np
@@ -98,6 +99,17 @@ class FastSmartChartTests(unittest.TestCase):
             scorer=scorer, session_key=self.SESSION)
         self.assertEqual(chosen["sym"], "SBIN.NS")
         self.assertEqual((sampled, valid, universe_count), (2, 1, 2))
+
+
+    def test_rendered_chart_readability_layout_guards(self):
+        source = (Path(__file__).resolve().parent /
+                  "gen_smart_stock_chart.py").read_text(encoding="utf-8")
+        self.assertIn('color=price_col, va="center", zorder=8)', source)
+        self.assertIn('"WAIT — No Setup"', source)
+        self.assertIn('"NO TRADE ZONE"', source)
+        self.assertNotIn('"⏸  NO TRADE ZONE"', source)
+        self.assertNotIn('"52-WEEK RANGE"', source)
+        self.assertNotIn('fig.text(0.99, 0.005', source)
 
 
 if __name__ == "__main__":
