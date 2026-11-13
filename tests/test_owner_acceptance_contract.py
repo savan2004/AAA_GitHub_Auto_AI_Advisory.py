@@ -79,6 +79,38 @@ class LiveEvidenceGate(unittest.TestCase):
         finally:
             _PROBE.reset(token)
 
+    def test_largecap_owner_text_only_and_no_other_chat_content(self):
+        from unittest.mock import patch
+        from msk_live_acceptance import _PROBE, capture_telegram_ack
+        market = "📊 <b>LARGE CAP | Nifty 100</b>\\nNo valid Top 5 today."
+        for action, expected in (("LargeCapTop5", True),
+                                 ("Portfolio", False),
+                                 ("Report", False)):
+            probe = {"action": action, "receipts": [],
+                     "files": {}, "closed": False}
+            token = _PROBE.set(probe)
+            try:
+                with patch("msk_live_acceptance.LOG.info") as log:
+                    capture_telegram_ack("text", 14223, message_text=market)
+                    found = [
+                        call for call in log.call_args_list
+                        if "LARGECAP_RETURNED_TEXT" in call.args[0]
+                    ]
+                    self.assertEqual(bool(found), expected)
+            finally:
+                _PROBE.reset(token)
+        probe = {"action": "LargeCapTop5", "receipts": [], "files": {},
+                 "closed": False}
+        token = _PROBE.set(probe)
+        try:
+            with patch("msk_live_acceptance.LOG.info") as log:
+                capture_telegram_ack("text", 14223,
+                                     message_text="private customer message")
+                self.assertFalse(any("LARGECAP_RETURNED_TEXT" in call.args[0]
+                                     for call in log.call_args_list))
+        finally:
+            _PROBE.reset(token)
+
     def test_full_audit_does_not_label_an_api_ack_as_pass(self):
         code = (ROOT / "msk_live_acceptance.py").read_text(encoding="utf-8")
         self.assertIn('record_status = "FAIL" if fail else "UNVERIFIED"', code)
