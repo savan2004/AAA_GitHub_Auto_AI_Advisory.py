@@ -78,9 +78,10 @@ def verified_pdf_history(symbol, base_fetch, expected_session, alternate_fetch=N
                     symbol, type(exc).__name__)
         verified = None
     if verified is None:
-        raise RuntimeError(
-            "Research PDF withheld: no current completed-session full-year "
-            "NSE OHLCV from either real source"
+        raise ValueError(
+            "Research report withheld: historical price session stale or "
+            "unverified; no current completed-session full-year NSE OHLCV "
+            "from either real source"
         )
     LOG.info("MSK_PDF_FRESH_ALT_ACCEPTED symbol=%s session=%s rows=%d",
              symbol, expected_session, len(verified))
