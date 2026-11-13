@@ -351,7 +351,16 @@ def collect_inputs(sym: str) -> dict:
     from market_data import index_history
     import research_data as rd
 
-    df = get_hist(sym, "1y")
+    if sym in ("SBIN", "DLF"):
+        # Publisher-only strict recovery: primary history can lag one session.
+        # Require genuine full-year bars ending at the latest completed NSE
+        # session; use one bounded alternative provider or withhold the PDF.
+        from research_pdf_fresh_history import verified_pdf_history
+        from market_breadth import expected_completed_session
+        df = verified_pdf_history(
+            sym, get_hist, str(expected_completed_session()))
+    else:
+        df = get_hist(sym, "1y")
     if df is None or df.empty or len(df) < 60:
         raise ValueError(f"Not enough price history for {sym} (need at least 60 sessions).")
     # A complete-looking but year-old chart must never publish current

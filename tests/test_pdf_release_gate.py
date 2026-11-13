@@ -63,7 +63,8 @@ class PDFReleaseGateTests(unittest.TestCase):
             "Low": [99.] * 80, "Close": [100.] * 80,
             "Volume": [1000] * 80,
         }, index=pd.bdate_range(end=date(2025, 7, 15), periods=80))
-        with patch("data_engine.get_hist", return_value=frame):
+        with patch("data_engine.get_hist", return_value=frame), \
+             patch("yfinance.download", return_value=pd.DataFrame()):
             with self.assertRaisesRegex(ValueError, "stale or unverified"):
                 rg.collect_inputs("SBIN")
 
