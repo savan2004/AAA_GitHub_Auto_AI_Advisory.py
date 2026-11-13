@@ -576,27 +576,63 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
     return result
 
 
+_CONSENSUS_AUTH_BLOCKED = False
+
+
 def get_consensus(sym: str, ltp: float) -> Optional[dict]:
-    """Analyst consensus target from Yahoo (often absent for Indian small caps)."""
+    """Optional sourced analyst target; never invent or retry a 401.
+
+    Yahoo Finance analyst endpoints can reject NSE requests with HTTP 401.
+    A rejected endpoint is disabled for this process; we omit the consensus
+    and continue with independent Screener/statement fundamentals instead.
+    Only temporary 429/5xx errors merit a single bounded retry.
+    """
+    global _CONSENSUS_AUTH_BLOCKED
     sym = sym.upper().replace(".NS", "")
     cached = _cget(f"cons_{sym}")
     if cached is not None:
         return cached or None
+    with _lock:
+        blocked = _CONSENSUS_AUTH_BLOCKED
+    if blocked:
+        _cset(f"cons_{sym}", {})
+        return None
     out = None
-    try:
-        import yfinance as yf
-        t = yf.Ticker(f"{sym}.NS")
-        apt = getattr(t, "analyst_price_targets", None)
-        if apt and isinstance(apt, dict):
-            mean = apt.get("mean") or apt.get("median")
-            if mean and ltp and 0.3 < float(mean) / ltp < 3.0:        # sanity band
-                out = {"mean": float(mean), "high": apt.get("high"), "low": apt.get("low"),
-                       "upside": (float(mean) / ltp - 1) * 100}
-    except Exception as e:
-        logger.info(f"[research_data] consensus {sym}: {str(e)[:100]}")
+    for attempt in range(2):
+        try:
+            import yfinance as yf
+            target = getattr(yf.Ticker(f"{sym}.NS"), "analyst_price_targets", None)
+            if isinstance(target, dict):
+                mean = target.get("mean") or target.get("median")
+                try:
+                    value = float(mean) if mean is not None else 0
+                    price = float(ltp)
+                except (ValueError, TypeError):
+                    value, price = 0, 0
+                if value > 0 and price > 0 and 0.3 < value / price < 3.0:
+                    out = {"mean": value, "high": target.get("high"),
+                           "low": target.get("low"),
+                           "upside": (value / price - 1) * 100}
+            break
+        except Exception as exc:
+            error = str(exc).lower()
+            code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+            if code in (401, 403) or "http error 401" in error or "http error 403" in error:
+                with _lock:
+                    _CONSENSUS_AUTH_BLOCKED = True
+                logger.warning("[research_data] Yahoo analyst consensus unauthorized; "
+                               "disabled for this process (no invented target)")
+                break
+            transient = (code in (429, 500, 502, 503, 504) or
+                         any(s in error for s in ("429", "502", "503", "504", "timed out")))
+            if transient and attempt == 0:
+                time.sleep(0.3)
+                continue
+            logger.info("[research_data] analyst consensus unavailable (%s)",
+                        type(exc).__name__)
+            break
     _cset(f"cons_{sym}", out or {})
     return out
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # Derived metrics from statements (used by the research engine)
