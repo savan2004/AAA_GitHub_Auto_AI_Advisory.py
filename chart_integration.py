@@ -76,7 +76,7 @@ class ChartGenerator:
                 combined = stdout + "\n" + stderr
                 errors = [line.strip() for line in combined.splitlines()
                           if line.strip().startswith("[ERROR]")]
-                err = errors[-1] if errors else (stderr or stdout).splitlines()[-1]
+                err = errors[-1] if errors else next((line for line in (stderr or stdout).splitlines() if line.strip()), "Unknown chart subprocess error")
 
                 logger.error(f"[Chart] Failed (rc={result.returncode}): {err[:200]}")
                 return False, f"Chart failed: {err[:200]}", None
