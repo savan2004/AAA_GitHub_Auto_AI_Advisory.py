@@ -45,6 +45,9 @@ jobs:
           cache: pip
       - name: Install locked research dependencies for offline image/PDF fixture
         run: python -m pip install --disable-pip-version-check -r requirements.txt pypdf
+      - name: Verify live chart subprocess runtime dependencies
+        run: |
+          python -c "import six, mplfinance, matplotlib, pandas; print('MSK_CHART_DEPS_OK')"
       - name: Generate two chart pages and full PDF with synthetic fixtures
         run: python -m unittest discover -s tests -p test_pdf_technical_setup.py -v
       # Full legacy fundamental suite currently fails against main because
