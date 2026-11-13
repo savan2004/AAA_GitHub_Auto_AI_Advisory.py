@@ -94,7 +94,7 @@ def _claim_once(run_id):
                 recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
-        conn.execute(
+        row = conn.execute(
             "INSERT INTO msk_bot_acceptance_runs(run_id) VALUES(%s) "
             "ON CONFLICT DO NOTHING RETURNING run_id", (run_id,)
         ).fetchone()

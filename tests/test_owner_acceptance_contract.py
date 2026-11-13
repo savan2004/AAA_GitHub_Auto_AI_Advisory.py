@@ -127,5 +127,31 @@ class ResumeSafetyContract(unittest.TestCase):
         self.assertIn("SKIP_EXISTING_RESULT", str(connection.execute.call_args_list))
 
 
+    def test_pdf_probe_run_claim_returns_saved_database_result(self):
+        """A recorded claim must return a Boolean, never NameError."""
+        import os
+        from unittest.mock import MagicMock, patch
+        import msk_live_acceptance as acceptance
+
+        def fake_db_result(inserted):
+            connection = MagicMock()
+            connection.__enter__.return_value = connection
+            statements = [MagicMock() for _ in range(5)]
+            # Four DDL statements then the INSERT.
+            statements[-1].fetchone.return_value = ("test-run",) if inserted else None
+            connection.execute.side_effect = statements
+            return connection
+
+        for inserted in (True, False):
+            with self.subTest(inserted=inserted):
+                connection = fake_db_result(inserted)
+                psycopg = MagicMock()
+                psycopg.connect.return_value = connection
+                with patch.dict(os.environ, {
+                    "PORTFOLIO_DATABASE_URL": "postgresql://db.invalid/test?sslmode=require"
+                }), patch.dict("sys.modules", {"psycopg": psycopg}):
+                    self.assertIs(acceptance._claim_once("sbinpdf-test-run"), inserted)
+
+
 if __name__ == "__main__":
     unittest.main()
