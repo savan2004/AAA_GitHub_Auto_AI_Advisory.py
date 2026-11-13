@@ -51,6 +51,16 @@ class TechWatchlistTests(unittest.TestCase):
             self.assertEqual(row["asof"],"2026-10-29")
         self.assertEqual(technical.technical_candidate("TEST",candles(False),"aggressive",NOW)["signal"],"WAIT")
 
+    def test_wait_signal_explains_missing_buy_conditions(self):
+        row=technical.technical_candidate("TEST",candles(up=False),"aggressive",NOW)
+        self.assertEqual(row["signal"],"WAIT")
+        self.assertTrue(row["signal_reasons"])
+        self.assertIn("trend_not_confirmed",row["signal_reasons"])
+        self.assertIn("breakout_not_confirmed",row["signal_reasons"])
+        self.assertEqual(row["risk_within_limit"],
+                         row["risk_pct"] <= row["max_allowed_risk_pct"])
+        self.assertGreater(row["breakout_trigger"],0)
+
     def test_stale_missing_or_invalid_prices_get_no_rating(self):
         self.assertIsNone(technical.technical_candidate("TEST",candles(stale=True),"aggressive",NOW))
         self.assertIsNone(technical.technical_candidate("TEST",candles(days=40),"aggressive",NOW))
@@ -76,7 +86,7 @@ class FinanceRatingTests(unittest.TestCase):
         self.assertNotEqual(row["fund_status"],"VALIDATED")
         self.assertIsNone(row.get("eps"))
         self.assertEqual(row["fund_status"],"PRELIMINARY")
-        self.assertEqual(row["fund_reason"],"earnings_missing_or_loss")
+        self.assertEqual(row["fund_reason"],"eps_unavailable")
         self.assertGreater(row["fund_known"],2)
 
     def test_completely_missing_returns_unverified_not_zero_score(self):

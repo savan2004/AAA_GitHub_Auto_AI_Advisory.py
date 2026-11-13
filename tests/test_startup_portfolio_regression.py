@@ -28,7 +28,7 @@ class PortfolioRegressionTests(unittest.TestCase):
         cls = load_portfolio_manager()
         with tempfile.TemporaryDirectory() as folder:
             path = str(Path(folder) / "positions.json")
-            manager = cls(path)
+            manager = cls(path, allow_empty_init=True)
             manager.add(100, "SBIN", 2, 500)
             result = []
             worker = threading.Thread(target=lambda: result.append(manager.remove(100, "SBIN")), daemon=True)
@@ -41,7 +41,7 @@ class PortfolioRegressionTests(unittest.TestCase):
     def test_missing_position_returns_false(self):
         cls = load_portfolio_manager()
         with tempfile.TemporaryDirectory() as folder:
-            self.assertFalse(cls(str(Path(folder) / "positions.json")).remove(1, "MISSING"))
+            self.assertFalse(cls(str(Path(folder) / "positions.json"), allow_empty_init=True).remove(1, "MISSING"))
 
 
 class WebhookSecurityTests(unittest.TestCase):
@@ -72,7 +72,7 @@ class TelegramMockSessionTests(unittest.TestCase):
             "StateManager", "PortfolioManager", "safe_send",
             "cmd_start", "cmd_help", "cmd_buy", "cmd_sell",
             "cmd_portfolio", "build_portfolio_card",
-            "handle_analysis_callback", "_process_webhook", "webhook", "_allow_heavy",
+            "handle_analysis_callback", "_process_webhook", "webhook", "_allow_heavy", "_require_private_portfolio", "_record_telegram_api_ack",
         }
         nodes = []
         for node in tree.body:
@@ -112,7 +112,8 @@ class TelegramMockSessionTests(unittest.TestCase):
                     if "message" in update:
                         body = update["message"]
                         message = SimpleNamespace(
-                            chat=SimpleNamespace(id=body["chat"]["id"]),
+                            chat=SimpleNamespace(id=body["chat"]["id"], type=body["chat"].get("type", "private")),
+                            from_user=SimpleNamespace(id=body.get("from", {}).get("id", body["chat"]["id"])),
                             text=body["text"],
                         )
                         handlers = {
@@ -171,13 +172,13 @@ class TelegramMockSessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             positions = str(Path(folder) / "fake_positions.json")
             namespace["state"] = namespace["StateManager"]()
-            namespace["portfolio"] = namespace["PortfolioManager"](positions)
+            namespace["portfolio"] = namespace["PortfolioManager"](positions, allow_empty_init=True)
             namespace["state"].set(mock_chat_id, "old_state")
 
             def fake_update(update_id, *, text=None, callback=None, token=secret):
                 if text is not None:
                     body = {"update_id": update_id, "message": {
-                        "chat": {"id": mock_chat_id}, "text": text
+                        "chat": {"id": mock_chat_id, "type": "private"}, "from": {"id": mock_chat_id}, "text": text
                     }}
                 else:
                     body = {"update_id": update_id, "callback_query": {

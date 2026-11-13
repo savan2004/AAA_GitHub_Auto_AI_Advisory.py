@@ -494,10 +494,19 @@ def freshness(quarters: List[dict], today: Optional[date] = None, max_age_days: 
             max_age_days = 135
     today = today or date.today()
     exp = expected_latest_quarter(today)
-    latest = period_end(quarters[-1]["label"]) if quarters else None
+    # Rows may end with TTM, an undated label or a stale revision.
+    # Select the newest dated, completed fiscal quarter explicitly.
+    dated = []
+    for item in quarters or []:
+        if not isinstance(item, dict):
+            continue
+        end = period_end(str(item.get("label") or ""))
+        if end is not None and end <= today:
+            dated.append((end, item))
+    latest, latest_row = max(dated, key=lambda item: item[0]) if dated else (None, None)
     if latest is None:
         return {"status": "MISSING", "latest": None, "expected": exp, "lag_quarters": None,
-                "age_days": None, "label": quarters[-1]["label"] if quarters else None}
+                "age_days": None, "label": quarters[-1].get("label") if quarters and isinstance(quarters[-1], dict) else None}
     lag_q = max(0, _months_between(latest, exp) // 3)
     age = (today - latest).days
     status = "FRESH" if lag_q == 0 else "LAGGING" if lag_q == 1 else "STALE"
@@ -506,13 +515,16 @@ def freshness(quarters: List[dict], today: Optional[date] = None, max_age_days: 
     if age > max_age_days and lag_q >= 1:
         status = "STALE" if lag_q >= 2 else status
     return {"status": status, "latest": latest, "expected": exp, "lag_quarters": lag_q,
-            "age_days": age, "label": quarters[-1]["label"]}
+            "age_days": age, "label": latest_row.get("label") if latest_row else None}
 
 
 def _fresher(a: List[dict], b: List[dict]) -> tuple:
     """Pick the list whose last period is most recent; tie → longer, then `a`. Returns (list, 'a'|'b')."""
-    ea = period_end(a[-1]["label"]) if a else None
-    eb = period_end(b[-1]["label"]) if b else None
+    def most_recent_dated(rows):
+        parsed = [period_end(str(item.get("label") or ""))
+                  for item in rows if isinstance(item, dict)]
+        return max((x for x in parsed if x is not None), default=None)
+    ea, eb = most_recent_dated(a), most_recent_dated(b)
     if ea is None and eb is None:
         return (a, "a") if len(a) >= len(b) else (b, "b")
     if eb is None or (ea is not None and ea > eb):

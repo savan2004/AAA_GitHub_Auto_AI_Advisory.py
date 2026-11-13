@@ -89,18 +89,42 @@ def rate_financial_evidence(profile, fundamentals, stm, industry, today):
 def fetch_company_evidence(symbol, industry, profile, today=None):
     """Use pre-existing public market data collectors. Failure is explicit."""
     today=today or datetime.now(IST).date()
+    # Retrieve each independent source separately. One transient outage must
+    # never throw away values successfully obtained from the other provider.
+    fv, stm = {}, {}
     try:
         from fundamentals import get_fundamentals
-        from research_data import get_statements
-        fv=get_fundamentals(symbol) or {}
-        stm=get_statements(symbol) or {}
-        return rate_financial_evidence(profile,fv,stm,industry,today)
+        candidate = get_fundamentals(symbol)
+        if isinstance(candidate, dict):
+            fv = candidate
     except Exception as exc:
-        LOG.warning("MSK Top5 company evidence %s unavailable (%s)",symbol,type(exc).__name__)
+        LOG.warning("MSK %s fundamentals provider failed (%s)",
+                    symbol, type(exc).__name__)
+    try:
+        from research_data import get_statements
+        candidate = get_statements(symbol)
+        if isinstance(candidate, dict):
+            stm = candidate
+    except Exception as exc:
+        LOG.warning("MSK %s financial statements provider failed (%s)",
+                    symbol, type(exc).__name__)
+    if not fv and not stm:
         return {
             "fund_score":None, "fund_status":"UNVERIFIED",
             "fund_reason":"provider_unavailable", "fund_known":0,
             "fund_source":"unavailable",
+            "roe":None,"pe":None,"pb":None,"de":None,"eps":None,
+            "profit_growth":None,"sales_growth":None,"quarter":"unverified","fin":False,
+        }
+    try:
+        return rate_financial_evidence(profile,fv,stm,industry,today)
+    except (TypeError, ValueError, KeyError) as exc:
+        LOG.warning("MSK %s fundamental source rejected (%s)",
+                    symbol,type(exc).__name__)
+        return {
+            "fund_score":None, "fund_status":"UNVERIFIED",
+            "fund_reason":"invalid_financial_source", "fund_known":0,
+            "fund_source":"unverified",
             "roe":None,"pe":None,"pb":None,"de":None,"eps":None,
             "profit_growth":None,"sales_growth":None,"quarter":"unverified","fin":False,
         }

@@ -40,6 +40,8 @@ import time
 import logging
 import math
 import random
+from datetime import date
+from financial_quality import annual_sales_from_table, normalize_roe_percent
 from typing import Dict, Any, Optional
 
 import requests
@@ -155,7 +157,10 @@ def _fetch_screener(sym: str) -> Optional[dict]:
 
         html = resp.text
 
-        result: dict = {}
+        result: dict = {
+            "_screener_scope": ("standalone" if url.endswith(f"/{sym}/")
+                                else "consolidated")
+        }
 
         # ── Key Ratios (li items in #top-ratios) ─────────────────────────────
         # Pattern: <li> <span class="name">Market Cap</span> <span class="..."><span>3,29,000</span> Cr</span> </li>
@@ -219,40 +224,28 @@ def _fetch_screener(sym: str) -> Optional[dict]:
         # name="..."/value span pair), so it can't accidentally match an
         # unrelated "EPS" mention elsewhere on the page.
 
-        # ── Revenue (Sales) from the Profit & Loss table ───────────────────
-        # Previously NOT scraped here at all — this left Revenue with only
-        # Yahoo v10 / yfinance as sources, both of which are frequently
-        # rate-limited or blocked from cloud IPs, so Revenue showed N/A far
-        # more often than the other fields. Screener.in's P&L table is the
-        # most reliable free source, so we pull the "Sales" row and take its
-        # last populated column (most recent period — TTM if present, else
-        # latest FY), matching the "last column = latest" convention already
-        # used above for the 52W high/low parsing.
+        # ── Dated annual Revenue, no guessed TTM period ──────────────────
+        # The last numeric column is often TTM, whose period end is not
+        # explicitly identified. Match FY headers and cells; never silently
+        # label an undated TTM number as the latest annual financial statement.
         pl_section = re.search(
             r'(?:id="profit-loss"|Profit\s*&amp;\s*Loss)(.*?)(?:id="balance-sheet"|Balance\s*Sheet)',
             html, re.DOTALL | re.IGNORECASE,
         )
-        pl_html = pl_section.group(1) if pl_section else html
-        sales_row = re.search(
-            r'<tr[^>]*>\s*<td[^>]*>\s*(?:Sales|Revenue)\b.*?</tr>',
-            pl_html, re.DOTALL | re.IGNORECASE,
-        )
-        if sales_row:
-            cells = re.findall(r'<td[^>]*>\s*([\d,\.\-]+)\s*</td>', sales_row.group(0))
-            # Walk from the end so a trailing empty/placeholder cell doesn't
-            # get picked over the last real figure.
-            for cell in reversed(cells):
-                rev_val = _parse_crore(cell)
-                if rev_val and rev_val > 0:
-                    result["rev"] = rev_val
-                    break
+        if pl_section:
+            checked = annual_sales_from_table(pl_section.group(1), today=date.today())
+            if checked:
+                result["rev"] = checked["rev"]
+                result["_revenue_period_end"] = checked["period_end"]
+                result["_revenue_period_basis"] = checked["period_basis"]
 
         # ── PB from Book Value (if price available) ───────────────────────────
         # PB = price / book_value — we'll compute in get_fundamentals
 
-        if result:
+        if any(not key.startswith("_") for key in result):
             logger.info(f"Screener.in {sym}: fetched {list(result.keys())}")
-        return result if result else None
+            return result
+        return None
 
     except Exception as e:
         logger.warning(f"Screener.in {sym}: {e}")
@@ -345,7 +338,8 @@ def _fetch_yfinance(sym: str) -> dict:
 
 def get_fundamentals(sym: str) -> dict:
     sym       = sym.upper().replace(".NS", "")
-    cache_key = f"fund_{sym}"
+    # Version bump excludes old cache entries with no field-by-field origin.
+    cache_key = f"fund_provenance_v2_roe_unit_{sym}"
     cached    = _get_cached(cache_key, CACHE_TTL_FUND)
     if cached:
         return cached
@@ -356,24 +350,41 @@ def get_fundamentals(sym: str) -> dict:
         "roe": None, "eps": None, "de": None,
         "div_y": None, "w52h": None, "w52l": None, "beta": None,
     }
+    _metric_fields = ("pe", "fwd_pe", "pb", "roe", "eps", "de",
+                      "mcap", "rev", "div_y", "w52h", "w52l", "beta")
+    _origins = {}
+
+    def mark_new_fields(before, provider, *, scope="unknown", period_end=None):
+        # Record the provider that FIRST populated each field. No source
+        # inherits the fiscal period of another provider's metric.
+        for key in _metric_fields:
+            if before.get(key) is None and result[key] is not None:
+                _origins[key] = {"source": provider, "scope": scope,
+                                 "period_end": period_end if key == "rev" else None}
+
+
 
     # ── Source 1: data_engine (Yahoo v8/v10 + NSE, rate-limited) ─────────────
+    before_source = dict(result)
     try:
-        from data_engine import get_info
+        from data_engine import get_info, normalized_debt_equity_ratio
         info = get_info(sym) or {}
         if info:
             result["name"]   = info.get("name") or sym
             result["pe"]     = safe_val(info, "pe")
             result["fwd_pe"] = safe_val(info, "forwardPE")
             result["pb"]     = safe_val(info, "pb")
-            roe_raw = safe_val(info, "roe")
-            result["roe"]    = round(roe_raw * 100, 1) if roe_raw is not None and abs(roe_raw) <= 1 else roe_raw
+            # Avoid safe_val() here: it rounds the FRACTION to two decimal
+            # places before multiplying, corrupting a valid 0.08% ROE.
+            result["roe"] = normalize_roe_percent(
+                info.get("roe"), info.get("roe_unit")
+            )
             result["eps"]    = safe_val(info, "eps")
             result["mcap"]   = info.get("market_cap")
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
             # fmt_mcap() correctly converts to Crores by dividing by 1e7
             result["rev"]    = info.get("totalRevenue")
-            result["de"]     = safe_val(info, "debtToEquity")
+            result["de"]     = normalized_debt_equity_ratio(info)
             result["beta"]   = safe_val(info, "beta")
             result["w52h"]   = safe_val(info, "high52")
             result["w52l"]   = safe_val(info, "low52")
@@ -383,10 +394,13 @@ def get_fundamentals(sym: str) -> dict:
     except Exception as e:
         logger.warning(f"get_fundamentals data_engine {sym}: {e}")
 
+    mark_new_fields(before_source, "data_engine (mixed)", scope="unknown")
+
     # ── Source 2: Screener.in (NO key required — fills most gaps) ────────────
     missing = [k for k in ["pe", "roe", "de", "mcap", "rev", "w52h", "w52l", "eps", "div_y", "pb"]
                if result[k] is None]
     if missing:
+        before_source = dict(result)
         sc = _fetch_screener(sym)
         if sc:
             if result["pe"]   is None: result["pe"]   = sc.get("pe")
@@ -409,11 +423,15 @@ def get_fundamentals(sym: str) -> dict:
                 except Exception:
                     pass
             logger.info(f"get_fundamentals {sym}: Screener.in filled {[k for k in missing if result[k] is not None]}")
+            mark_new_fields(before_source, "Screener.in",
+                            scope=sc.get("_screener_scope", "unknown"),
+                            period_end=sc.get("_revenue_period_end"))
 
     # ── Source 3: Finnhub (fills PE/ROE/EPS/beta/D-E if still missing) ───────
     still_missing = [k for k in ["pe", "fwd_pe", "roe", "eps", "w52h", "w52l", "beta", "pb", "de", "div_y"]
                       if result[k] is None]
     if still_missing:
+        before_source = dict(result)
         fh = _fetch_finnhub(sym)
         if fh:
             if result["pe"]    is None: result["pe"]     = safe_val(fh, "pe")
@@ -427,10 +445,12 @@ def get_fundamentals(sym: str) -> dict:
             if result["w52l"]  is None: result["w52l"]   = safe_val(fh, "low52")
             if result["div_y"] is None:
                 result["div_y"] = safe_val(fh, "dividend_yield")
+            mark_new_fields(before_source, "Finnhub", scope="unknown")
 
     # ── Source 4: yfinance (last resort — attempt EVERY still-missing field) ──
     still_missing2 = [k for k in result if k != "name" and result[k] is None]
     if still_missing2:
+        before_source = dict(result)
         yf_info = _fetch_yfinance(sym)
         if yf_info:
             if result["name"] == sym:
@@ -439,19 +459,27 @@ def get_fundamentals(sym: str) -> dict:
             if result["fwd_pe"] is None: result["fwd_pe"] = safe_val(yf_info, "forwardPE")
             if result["pb"]    is None: result["pb"]    = safe_val(yf_info, "priceToBook")
             if result["roe"]   is None:
-                roe_raw = safe_val(yf_info, "returnOnEquity")
-                result["roe"] = round(roe_raw * 100, 1) if roe_raw and abs(roe_raw) <= 1 else roe_raw
+                result["roe"] = normalize_roe_percent(
+                    yf_info.get("returnOnEquity"), "fraction"
+                )
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
             if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
             if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
-            if result["de"]    is None: result["de"]   = safe_val(yf_info, "debtToEquity")
+            if result["de"]    is None:
+                from data_engine import normalized_debt_equity_ratio
+                result["de"] = normalized_debt_equity_ratio(yf_info)
             if result["w52h"]  is None: result["w52h"] = safe_val(yf_info, "fiftyTwoWeekHigh")
             if result["w52l"]  is None: result["w52l"] = safe_val(yf_info, "fiftyTwoWeekLow")
             if result["beta"]  is None: result["beta"] = safe_val(yf_info, "beta")
             if result["div_y"] is None:
                 div_raw = safe_val(yf_info, "dividendYield")
                 result["div_y"] = round(div_raw * 100, 2) if div_raw and div_raw <= 1 else div_raw
+            mark_new_fields(before_source, "yfinance", scope="unknown")
 
+    # Full period/source proof requires issuer XBRL or signed financial
+    # statements. These third-party values are always labeled indicative.
+    result["_field_provenance"] = _origins
+    result["_issuer_filing_verified"] = False
     filled = [k for k, v in result.items() if v is not None]
     logger.info(f"get_fundamentals {sym}: filled={filled}")
 

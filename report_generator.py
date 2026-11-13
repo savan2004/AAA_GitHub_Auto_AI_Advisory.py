@@ -354,7 +354,13 @@ def collect_inputs(sym: str) -> dict:
     df = get_hist(sym, "1y")
     if df is None or df.empty or len(df) < 60:
         raise ValueError(f"Not enough price history for {sym} (need at least 60 sessions).")
-    ltp = float(df["Close"].iloc[-1])
+    # A complete-looking but year-old chart must never publish current
+    # valuation/trade commentary. Refuse undated, future and stale OHLCV.
+    from technical_price_safety import technical_price_context
+    market = technical_price_context(df)
+    if market is None:
+        raise ValueError("Research report withheld: historical price session stale or unverified")
+    ltp = market["historical_close"]
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         f_nifty = pool.submit(_safe, index_history, "^NSEI", "1y")
@@ -947,44 +953,66 @@ def _risks_catalysts(R, story):
 def _appendix(R, story):
     story += section("Appendix — Methodology, Data & Disclaimer")
     story.append(P("Scoring framework", "h2"))
+    # Two-column three-row methodology keeps every model pillar readable
+    # without wasting six full-width rows and orphaning the legal disclaimer.
     desc = {
-        "Trend": "Price vs EMA 20/50/200, EMA alignment, weekly trend, ADX strength and direction",
-        "Momentum": "RSI zone, MACD, 3-month relative strength vs Nifty, 1-month return",
-        "Quality": "ROE, ROCE, leverage, cash conversion, margin trend, earnings consistency",
-        "Valuation": "P/E vs peers and absolute, PEG, P/B for financials",
-        "Growth": "3-year sales & profit CAGR, latest-quarter YoY growth",
-        "Risk": "Volatility, max drawdown, beta, liquidity (higher score = safer)",
+        "Trend": "EMA 20/50/200, price structure and ADX",
+        "Momentum": "RSI, MACD and relative strength",
+        "Quality": "ROE/ROCE, cash conversion and leverage",
+        "Valuation": "P/E, P/B and peer-relative value",
+        "Growth": "3Y sales/profit and recent quarter",
+        "Risk": "Volatility, beta and drawdown",
     }
-    rows = [[P(k, "cellb"), P(f"{int(w * 100)}%", "cellr"), P(desc[k])] for k, w in eng.WEIGHTS.items()]
-    story.append(table([[P("Pillar", "th"), P("Weight", "thr"), P("What it measures", "th")]] + rows, [28 * mm, 20 * mm, 130 * mm]))
-    story.append(P("Pillars without data are excluded and remaining weights re-normalised; "
-                   "model pillar coverage is NOT the percentage of financial facts independently verified. "
-                   "Stance bands: 75+ high-conviction constructive · 62–74 constructive · 48–61 neutral/wait · 35–47 cautious · below 35 negative. "
-                   "A technical veto caps the stance at neutral when the trend pillar is below 35. "
-                   "The framework is a structured summary of the data, not a forecast and not a back-tested trading system.", "tiny"))
+    pillars = list(eng.WEIGHTS.items())
+    method_rows = []
+    for i in range(0, len(pillars), 2):
+        pair = []
+        for key, weight in pillars[i:i+2]:
+            pair.append(P(f"<b>{esc(key)}: {int(weight*100)}%</b> — "
+                          f"{esc(desc.get(key, key))}", "small"))
+        if len(pair) == 1:
+            pair.append(P("", "small"))
+        method_rows.append(pair)
+    story.append(table(method_rows, [89 * mm, 89 * mm], header=False))
+    story.append(P("Missing pillars are omitted and remaining weights re-normalised; "
+                   "coverage does not mean issuer facts independently verified. "
+                   "Stance bands: 75+ strongly constructive, 62–74 constructive, "
+                   "48–61 neutral/wait, 35–47 cautious, under 35 negative. "
+                   "Trend below 35 vetoes a constructive stance. "
+                   "This rule model is not a forecast or backtested win rate.", "tiny"))
 
     story += [Spacer(1, 8), P("Data sources & completeness", "h2")]
     stm = R["stm"]
     n_core = sum(1 for k in ("pe", "roe", "eps", "pb", "de", "mcap") if R["fund"].get(k) is not None)
+    # Compact publisher's appendix: preserve source/basis and the entire
+    # financial-accuracy disclaimer without spilling a few lines onto a nearly
+    # empty final page. Stacked source bullets previously produced an orphan.
     items = [
-        f"Prices & volume: Yahoo Finance / NSE / Stooq daily candles ({R['t']['bars']} sessions); "
-        f"price as of {esc(R.get('price_session') or 'unverified')}; benchmark Nifty 50.",
-        (f"Financial statements: {esc(stm['source'])} — {len(stm.get('years') or [])} annual periods, "
-         f"{len(stm.get('quarters') or [])} quarters.") if stm else "Financial statements: not available.",
-        f"Ratios aggregated from Screener.in / Yahoo / Finnhub: {n_core}/6 core fields available "
-        "(availability is not independent accuracy verification).",
-        f"Shareholding: Screener.in, {len(R['sh'])} quarters." if R["sh"] else "Shareholding: not available.",
-        f"Peers: {len(R['peers'])} same-sector companies." if R["peers"] else "Peers: not available for this stock.",
-        "Analyst commentary: " + ("AI-assisted, with every figure checked against the data above." if R["ai_note"] else "rule-generated (no AI text used)."),
+        (f"Prices &amp; volume: public Yahoo / NSE / Stooq daily candles "
+         f"({R['t']['bars']} sessions); price as of {esc(R.get('price_session') or 'unverified')}; "
+         f"Nifty 50 benchmark."),
+        (f"Statements: {esc(stm['source'])}, {len(stm.get('years') or [])} annual "
+         f"periods, {len(stm.get('quarters') or [])} quarters."
+         if stm else "Financial statements: unavailable."),
+        (f"Ratios: {n_core}/6 core fields available "
+         "(availability is not independent accuracy verification). "
+         f"Shareholding: {len(R['sh']) if R['sh'] else 0} quarters; "
+         f"peers: {len(R['peers']) if R['peers'] else 0}."),
+        ("Commentary: " +
+         ("AI-assisted; financial facts require independent confirmation."
+          if R["ai_note"] else "rule-generated, no AI text.")),
+        ("Financial figures and ratios were not independently reconciled "
+         "to stock-exchange filings; verify consolidated/standalone scope, "
+         "fiscal period and restatements before any client use."),
     ]
-    items.append("Financial figures and ratios were not independently reconciled to stock-exchange filings; "
-                 "verify consolidated/standalone basis, period and any restatements before client use.")
     story += bullets(items)
-    story += [Spacer(1, 4), P("Glossary", "h2"),
-              P("<b>ATR</b> average true range, a typical daily move · <b>ADX</b> trend strength (above 25 = trending) · <b>RSI</b> momentum oscillator (70/30 bands) · "
-                "<b>EMA</b> exponential moving average · <b>OPM</b> operating profit margin · <b>ROCE/ROE</b> return on capital/equity · "
-                "<b>PEG</b> P/E divided by profit growth · <b>R-multiple</b> reward as a multiple of the risk taken · <b>VaR</b> value-at-risk · "
-                "<b>σ</b> standard deviation of returns.", "small")]
+    story += [Spacer(1, 3), P("Glossary", "h2"),
+              P("<b>ATR</b> average true range; <b>ADX</b> trend strength; "
+                "<b>RSI</b> momentum; <b>EMA</b> exponential moving average; "
+                "<b>OPM</b> operating profit margin; <b>ROCE/ROE</b> returns "
+                "on capital/equity; <b>PEG</b> price/earnings to growth; "
+                "<b>R-multiple</b> reward/risk; <b>VaR</b> value at risk.",
+                "tiny")]
     story += [Spacer(1, 5), HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceAfter=3),
               P("<b>Disclaimer.</b> This report is generated automatically from public market data and, where indicated, AI-assisted text. "
                 "It is for educational and informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell any security. "
@@ -1026,6 +1054,17 @@ def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
         R = assemble(inputs)
         out = os.path.join(OUTPUT_DIR, f"{sym}_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
         build_pdf(R, out)
+        # A successful ReportLab write is NOT enough for Telegram delivery:
+        # assert readable pages, instrument identity and financial caveats.
+        from pdf_release_gate import validate_research_pdf
+        try:
+            validate_research_pdf(out, expected_symbol=sym)
+        except Exception:
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
+            raise ValueError("Research report withheld: PDF release validation failed")
         return True, out, R["name"]
     except ValueError as e:
         return False, str(e), None

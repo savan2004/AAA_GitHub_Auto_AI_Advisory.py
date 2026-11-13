@@ -23,7 +23,7 @@ from config import TIMEOUT_YAHOO, TIMEOUT_NSE, CACHE_TTL_LIVE, CACHE_TTL_FUND, C
 import logging
 import threading
 from collections import deque
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional, Dict, List
 from io import StringIO
 
@@ -246,6 +246,8 @@ def _yahoo_v8_quote(symbol: str) -> Optional[dict]:
         meta = result.get("meta", {})
         return {
             "price":       meta.get("regularMarketPrice"),
+            "quote_timestamp": meta.get("regularMarketTime"),
+            "provider_symbol": meta.get("symbol"),
             "prev_close":  meta.get("chartPreviousClose") or meta.get("previousClose"),
             "high52":      meta.get("fiftyTwoWeekHigh"),
             "low52":       meta.get("fiftyTwoWeekLow"),
@@ -331,6 +333,7 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                     return v if math.isfinite(v) else None
                 except (TypeError, ValueError):
                     return None
+            out["roe_unit"] = "fraction" if out.get("roe") is not None else None
             out["roe_pct"] = scaled(raw(fd, "returnOnEquity"), 100)
             out["revenue_growth_pct"] = scaled(raw(fd, "revenueGrowth"), 100)
             out["debt_equity_ratio"] = scaled(raw(fd, "debtToEquity"), 0.01)
@@ -389,6 +392,9 @@ def _nse_quote(symbol: str) -> Optional[dict]:
         md   = data.get("metadata",  {})
         return {
             "price":      pd_.get("lastPrice"),
+            # NSE's exchange-local update time, not the HTTP retrieval time.
+            "quote_timestamp": md.get("lastUpdateTime") or pd_.get("lastUpdateTime"),
+            "provider_symbol": md.get("symbol"),
             "prev_close": pd_.get("previousClose") or pd_.get("close"),
             "high52":     pd_.get("weekHighLow", {}).get("max"),
             "low52":      pd_.get("weekHighLow", {}).get("min"),
@@ -405,7 +411,7 @@ def _nse_hist(symbol: str, series: str = "EQ") -> Optional[pd.DataFrame]:
     """Fetch ~1 year OHLCV history from NSE historical data API."""
     try:
         end   = date.today()
-        start = date(end.year - 1, end.month, end.day)
+        start = end - timedelta(days=380)  # safe for leap-day, enough for 1Y history
         sess  = _get_nse_session()
         url   = (
             "https://www.nseindia.com/api/historical/cm/equity"
@@ -532,8 +538,11 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     Fetch OHLCV history for `symbol` (NSE ticker without .NS suffix).
     Returns a DataFrame with columns [Open, High, Low, Close, Volume].
     """
-    sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
-    yahoo_sym = f"{sym_clean}.NS"
+    raw = str(symbol).strip().upper()
+    is_index = raw.startswith("^")
+    is_bse = raw.endswith(".BO")
+    sym_clean = raw.removesuffix(".NS").removesuffix(".NSE").removesuffix(".BO")
+    yahoo_sym = raw if is_index or is_bse else f"{sym_clean}.NS"
 
     ttl = TTL_HIST if period not in ("5d", "2d", "1d") else TTL_PRICE
     cache_key = f"hist_{yahoo_sym}_{period}"
@@ -551,12 +560,12 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     }.get(period, "1y")
     df = _yahoo_v8_hist(yahoo_sym, period=yf_period)
 
-    if df is None or df.empty:
-        logger.info(f"[DataEngine] Yahoo v8 failed for {sym_clean} — trying NSE")
+    if (df is None or df.empty) and not is_index and not is_bse:
+        logger.info("[DataEngine] Yahoo v8 unavailable for %s; trying NSE equity history", sym_clean)
         df = _nse_hist(sym_clean)
 
-    if df is None or df.empty:
-        logger.info(f"[DataEngine] NSE failed for {sym_clean} — trying Stooq")
+    if (df is None or df.empty) and not is_index:
+        logger.info("[DataEngine] earlier sources unavailable for %s; trying Stooq", sym_clean)
         days_map = {
             "1y": 365, "6mo": 180, "3mo": 90,
             "2mo": 60, "1mo": 30, "5d": 5, "2d": 2,
@@ -577,23 +586,167 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def get_info(symbol: str) -> dict:
-    """
-    Fetch live quote + fundamentals for `symbol` (NSE ticker without .NS suffix).
-    Keys: price, prev_close, high52, low52, pe, pb, roe,
-          eps, dividend_yield, market_cap, name.
-    """
-    sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
-    yahoo_sym = f"{sym_clean}.NS"
-    cache_key = f"info_v2_{yahoo_sym}"
+# Price acceptance requires provider evidence, not merely a successful HTTP response.
+# A 30-minute cap tolerates delayed feeds, but never labels them real-time.
+_IST = timezone(timedelta(hours=5, minutes=30))
+_OPEN_SESSION_QUOTE_AGE_SECONDS = 30 * 60
+_CLOSED_SESSION_QUOTE_AGE_SECONDS = 4 * 24 * 60 * 60
+_ALLOWED_QUOTE_SOURCES = frozenset(("Yahoo Finance v8", "NSE India"))
 
-    cached = cached_get(cache_key, TTL_FUND)
+
+def _exchange_timestamp(value):
+    """Parse only the known Yahoo epoch or NSE IST timestamp formats."""
+    if type(value) in (int, float):
+        import math
+        if not math.isfinite(value) or value <= 0:
+            return None
+        try:
+            return datetime.fromtimestamp(value, timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            return None
+    if isinstance(value, str):
+        for pattern in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M"):
+            try:
+                return datetime.strptime(value.strip(), pattern).replace(tzinfo=_IST)
+            except ValueError:
+                pass
+    return None
+
+
+def _verified_quote_payload(payload, source, expected_symbol, *, now_epoch=None):
+    """Reject unknown/stale/future provider data; never infer its timestamp."""
+    import math
+    if source not in _ALLOWED_QUOTE_SOURCES or not isinstance(payload, dict):
+        return None
+    reported_symbol = payload.get("provider_symbol")
+    # A price without provider-reported instrument identity cannot be
+    # matched independently to the requested NSE ticker. Fail closed.
+    if (not isinstance(reported_symbol, str) or
+            not reported_symbol.strip() or
+            reported_symbol.upper() != expected_symbol.upper()):
+        return None
+    raw = payload.get("price")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        price = float(str(raw).replace(",", "").strip())
+    except (ValueError, TypeError, OverflowError):
+        return None
+    if not math.isfinite(price) or price <= 0:
+        return None
+    stamp = _exchange_timestamp(payload.get("quote_timestamp"))
+    if stamp is None:
+        return None
+    now = datetime.fromtimestamp(time.time() if now_epoch is None else now_epoch,
+                                 timezone.utc).astimezone(_IST)
+    stamp_ist = stamp.astimezone(_IST)
+    age = (now - stamp_ist).total_seconds()
+    is_open = (now.weekday() < 5
+               and (9, 15) <= (now.hour, now.minute) < (15, 30))
+    max_age = (_OPEN_SESSION_QUOTE_AGE_SECONDS if is_open
+               else _CLOSED_SESSION_QUOTE_AGE_SECONDS)
+    if age < -120 or age > max_age:
+        return None
+    return {
+        "price": price,
+        "quote_timestamp": stamp.timestamp(),
+        "quote_asof_ist": stamp_ist.isoformat(timespec="seconds"),
+        "quote_source": source,
+        "quote_status": "recent_observation" if is_open else "last_observed_session",
+    }
+
+
+def get_verified_quote(symbol: str) -> Optional[dict]:
+    """Read a price with actual provider time/source. Missing proof => no quote.
+
+    Outside trading hours a dated last-session price may be returned, explicitly
+    labelled as such; a previous-session quote is not accepted as current intraday.
+    """
+    raw = str(symbol).strip().upper()
+    is_index = raw.startswith("^")
+    sym_clean = raw.removesuffix(".NS").removesuffix(".NSE")
+    yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
+    cache_key = f"price_{yahoo_sym}"
+    cached = cached_get(cache_key, TTL_PRICE)
+    if isinstance(cached, dict):
+        safe = _verified_quote_payload(
+            cached, cached.get("quote_source"), yahoo_sym
+            if cached.get("quote_source") == "Yahoo Finance v8" else sym_clean
+        )
+        if safe is not None:
+            return safe
+    # Legacy numeric-only caches lack source timestamps: never trust them.
+    yahoo = _yahoo_v8_quote(yahoo_sym)
+    verified = _verified_quote_payload(yahoo, "Yahoo Finance v8", yahoo_sym)
+    if verified is None and not is_index and not raw.endswith(".BO"):
+        nse = _nse_quote(sym_clean)
+        verified = _verified_quote_payload(nse, "NSE India", sym_clean)
+    if verified is None:
+        logger.warning("[DataEngine] No timestamp-verified quote for %s", yahoo_sym)
+        return None
+    cached_set(cache_key, verified, TTL_PRICE)
+    return verified
+
+
+def _with_current_quote(info: dict, symbol: str) -> dict:
+    """Do not reuse an old fundamental-price field or claim live when closed."""
+    result = dict(info)
+    for key in ("price", "quote_timestamp", "quote_asof_ist", "quote_source",
+                "quote_status"):
+        result.pop(key, None)
+    verified = get_verified_quote(symbol)
+    if verified:
+        result.update(verified)
+    return result
+
+
+def normalized_debt_equity_ratio(info: dict) -> Optional[float]:
+    """Express Yahoo debt/equity as a unitless x-ratio, not a percent.
+
+    Yahoo quoteSummary's `debtToEquity` is scaled by 100 (125 means
+    1.25x). Prefer the already-normalized `debt_equity_ratio` when present.
+    Unknown, negative or nonfinite ratios are withheld, not displayed.
+    This does not assign units to unrelated providers' debt ratios.
+    """
+    import math
+
+    if not isinstance(info, dict):
+        return None
+    for key, scale in (("debt_equity_ratio", 1.0),
+                       ("debtToEquity", 0.01)):
+        raw = info.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        try:
+            value = float(raw) * scale
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(value) and value >= 0:
+            return round(value, 4)
+    return None
+
+
+def get_info(symbol: str) -> dict:
+    """Return fundamentals with separately timestamp-verified exchange price."""
+    raw = str(symbol).strip().upper()
+    is_index = raw.startswith("^")
+    sym_clean = raw.removesuffix(".NS").removesuffix(".NSE")
+    yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
+    cache_key = f"info_v3_roe_unit_{yahoo_sym}"
+
+    cached = cached_get(cache_key, TTL_PRICE if is_index else TTL_FUND)
     if cached is not None:
         logger.debug(f"[Cache HIT] {cache_key}")
-        return cached
+        return _with_current_quote(cached, raw)
+
+    if is_index:
+        verified = get_verified_quote(raw)
+        if verified:
+            cached_set(cache_key, verified, TTL_PRICE)
+            return verified
+        return {}
 
     info: dict = {}
-
     v10 = _yahoo_v10_fundamentals(yahoo_sym)
     if v10:
         info.update({k: v for k, v in v10.items() if v is not None})
@@ -619,11 +772,8 @@ def get_info(symbol: str) -> dict:
             try:
                 r = requests.get(
                     "https://finnhub.io/api/v1/stock/metric",
-                    params={
-                        "symbol": f"NSE:{sym_clean}",
-                        "metric": "all",
-                        "token": finnhub_key,
-                    },
+                    params={"symbol": f"NSE:{sym_clean}",
+                            "metric": "all", "token": finnhub_key},
                     timeout=8,
                 ).json()
                 m = r.get("metric", {})
@@ -632,8 +782,9 @@ def get_info(symbol: str) -> dict:
                         info["pe"] = m.get("peNormalizedAnnual") or m.get("peTTM")
                     if not info.get("pb"):
                         info["pb"] = m.get("pbQuarterly") or m.get("pbAnnual")
-                    if not info.get("roe"):
+                    if info.get("roe") is None and m.get("roeTTM") is not None:
                         info["roe"] = m.get("roeTTM")
+                        info["roe_unit"] = "percent"  # Finnhub roeTTM metric
                     if not info.get("eps"):
                         info["eps"] = m.get("epsTTM")
                     if not info.get("high52"):
@@ -646,38 +797,13 @@ def get_info(symbol: str) -> dict:
 
     if info:
         cached_set(cache_key, info, TTL_FUND)
-
-    return info
+    return _with_current_quote(info, raw)
 
 
 def get_live_price(symbol: str) -> Optional[float]:
-    """
-    Return only the current market price (₹).
-    Uses a 5-minute TTL — suitable for screener and swing scanner loops.
-    """
-    sym_clean = symbol.upper().replace(".NS", "").replace(".NSE", "")
-    yahoo_sym = f"{sym_clean}.NS"
-    cache_key = f"price_{yahoo_sym}"
-
-    cached = cached_get(cache_key, TTL_PRICE)
-    if cached is not None:
-        return cached
-
-    q = _yahoo_v8_quote(yahoo_sym)
-    price = q.get("price") if q else None
-
-    if price is None:
-        nq = _nse_quote(sym_clean)
-        price = nq.get("price") if nq else None
-
-    if price is not None:
-        try:
-            price = float(price)
-            cached_set(cache_key, price, TTL_PRICE)
-        except (TypeError, ValueError):
-            price = None
-
-    return price
+    """Compatibility API: numeric last observed quote, never an undated price."""
+    verified = get_verified_quote(symbol)
+    return verified["price"] if verified is not None else None
 
 
 def batch_quotes(symbols: List[str]) -> Dict[str, Optional[dict]]:
