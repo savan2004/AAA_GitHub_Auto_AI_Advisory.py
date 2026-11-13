@@ -88,10 +88,12 @@ class ResearchPdfButtonGateTests(unittest.TestCase):
             run, send, bot, ack = _world(file)
             run.__globals__["generate_stock_report_pdf"] = Mock(
                 side_effect=AssertionError("No new provider calls for certified cache"))
-            with patch("research_pdf_snapshot.load_verified_report",
-                       return_value=(str(file), "2026-11-13")) as read, \\
-                 patch("pdf_release_gate.validate_research_pdf",
-                       return_value={"pages":8,"bytes":685897}):
+            with (
+                patch("research_pdf_snapshot.load_verified_report",
+                      return_value=(str(file), "2026-11-13")) as read,
+                patch("pdf_release_gate.validate_research_pdf",
+                      return_value={"pages":8,"bytes":685897}),
+            ):
                 run(12, "SBIN")
             read.assert_called_once_with("SBIN")
             bot.send_document.assert_called_once()
