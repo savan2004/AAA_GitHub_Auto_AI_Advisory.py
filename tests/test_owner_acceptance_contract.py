@@ -61,6 +61,28 @@ class LiveEvidenceGate(unittest.TestCase):
         self.assertIn('MSK_ACCEPTANCE_NEON_SAVED', code)
         self.assertIn('MSK_ACCEPTANCE_NEON_FAILED', code)
 
+class ClaimOnceDatabaseRegression(unittest.TestCase):
+    def test_inserted_and_existing_runs_return_correct_boolean(self):
+        import os
+        from unittest.mock import MagicMock, patch
+        from msk_live_acceptance import _claim_once
+
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        cursor = MagicMock()
+        conn.execute.return_value = cursor
+        psycopg = MagicMock()
+        psycopg.connect.return_value = conn
+        with patch.dict(os.environ, {"PORTFOLIO_DATABASE_URL":
+                                     "postgresql://sample.invalid/neondb?sslmode=require"}):
+            with patch.dict("sys.modules", {"psycopg": psycopg}):
+                cursor.fetchone.return_value = ("run-id",)
+                self.assertTrue(_claim_once("run-id"))
+                cursor.fetchone.return_value = None
+                self.assertFalse(_claim_once("run-id"))
+        self.assertGreaterEqual(conn.execute.call_count, 10)
+
+
 class ResumeSafetyContract(unittest.TestCase):
     def test_restart_resume_uses_durable_claim_before_sending(self):
         import os
