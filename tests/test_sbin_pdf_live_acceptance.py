@@ -50,9 +50,31 @@ class SBINLiveProbeTests(unittest.TestCase):
         }
         with patch.dict(os.environ, {"MSK_SBIN_PDF_LIVE_RUN_ID":"test-sbin-run-3"}), \
              patch.object(probe.time,"sleep",return_value=None), \
-             patch("msk_live_acceptance._claim_once",return_value=True):
+             patch("msk_live_acceptance._claim_once",return_value=True) as claim:
             probe.run_once(ctx)
         bot.send_document.assert_not_called()
+        claim.assert_not_called()
+
+
+    def test_already_claimed_skips_duplicate_telegram_document(self):
+        with TemporaryDirectory() as folder:
+            path=Path(folder)/"SBIN_report.pdf"
+            path.write_bytes(b"%PDF-" + b"x"*29000)
+            bot=SimpleNamespace(send_document=Mock())
+            ctx={
+                "usage_analytics":SimpleNamespace(get_owner_id=lambda:112233),
+                "generate_stock_report_pdf":Mock(return_value=(True,str(path),"SBIN")),
+                "bot":bot,
+            }
+            with patch.dict(os.environ, {"MSK_SBIN_PDF_LIVE_RUN_ID":"test-sbin-duplicate"}), \
+                 patch.object(probe.time,"sleep",return_value=None), \
+                 patch("msk_live_acceptance._claim_once",return_value=False) as claim, \
+                 patch("pdf_release_gate.validate_research_pdf",
+                       return_value={"pages":8,"bytes":29005}):
+                probe.run_once(ctx)
+            claim.assert_called_once_with("sbinpdf-test-sbin-duplicate")
+            bot.send_document.assert_not_called()
+            self.assertFalse(path.exists())
 
 
 if __name__=="__main__":

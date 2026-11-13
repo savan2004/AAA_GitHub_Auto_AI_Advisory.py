@@ -22,17 +22,6 @@ def run_once(ctx):
     if type(owner_id) is not int or owner_id <= 0:
         LOG.error("MSK_SBIN_PDF_PROBE_NOT_STARTED reason=no_verified_owner")
         return
-    from msk_live_acceptance import _claim_once
-    try:
-        claimed = _claim_once("sbinpdf-" + run_id)
-    except Exception as exc:
-        LOG.error("MSK_SBIN_PDF_PROBE_NOT_STARTED reason=durable_claim_error type=%s",
-                  type(exc).__name__)
-        return
-    if not claimed:
-        LOG.info("MSK_SBIN_PDF_PROBE_NOT_STARTED reason=already_executed")
-        return
-
     LOG.info("MSK_SBIN_PDF_PROBE_BEGIN symbol=SBIN run_id=%s", run_id)
     path = None
     try:
@@ -47,6 +36,21 @@ def run_once(ctx):
         pages = verified["pages"]
         if pages < 8 or size < 25_000:
             raise ValueError("Real SBIN PDF failed release size or page guard")
+        # Only claim immediately before Telegram send. If Render restarts during
+        # the slow source/figure generation, a new instance may safely retry.
+        # After the claim, fail closed: never resend an uncertain message.
+        from msk_live_acceptance import _claim_once
+        try:
+            claimed = _claim_once("sbinpdf-" + run_id)
+        except Exception as exc:
+            LOG.error("MSK_SBIN_PDF_PROBE_RESULT state=withheld "
+                      "reason=durable_claim_error type=%s", type(exc).__name__)
+            return
+        if not claimed:
+            LOG.info("MSK_SBIN_PDF_PROBE_RESULT state=skipped reason=already_claimed")
+            return
+        LOG.info("MSK_SBIN_PDF_PROBE_VERIFIED pages=%d bytes=%d; "
+                 "one-time Telegram send claimed", pages, size)
         with path.open("rb") as pdf:
             receipt = ctx["bot"].send_document(
                 owner_id, pdf,
