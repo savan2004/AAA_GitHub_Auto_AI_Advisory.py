@@ -888,6 +888,12 @@ def _record_telegram_api_ack(chat_id, result, kind):
     if type(message_id) is not int or message_id <= 0:
         return False
     logger.info("MSK_TELEGRAM_API_ACK kind=%s message_id=%d", kind, message_id)
+    if os.getenv("MSK_LIVE_ACCEPTANCE_RUN_ID"):
+        try:
+            from msk_live_acceptance import capture_telegram_ack
+            capture_telegram_ack(kind, message_id)
+        except Exception:
+            logger.warning("MSK owner acceptance receipt recording unavailable")
     ledger = globals().get("_durable_update_ledger")
     if ledger is None:
         return False
@@ -1976,6 +1982,10 @@ if __name__ == "__main__":
                              args=(bot.send_message, _usage_stop),
                              name="msk-owner-daily", daemon=True).start()
         logger.info("Webhook registered at %s%s", WEBHOOK_URL, WEBHOOK_PATH)
+        if os.getenv("MSK_LIVE_ACCEPTANCE_RUN_ID"):
+            from msk_live_acceptance import run_once as run_owner_acceptance
+            threading.Thread(target=run_owner_acceptance, args=(globals(),),
+                             name="msk-owner-acceptance", daemon=True).start()
         from waitress import serve
         logger.info("Production HTTP server listening on port %s", os.getenv("PORT", "8000"))
         serve(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), threads=12, connection_limit=200)
