@@ -888,7 +888,8 @@ def _record_telegram_api_ack(chat_id, result, kind):
     if type(message_id) is not int or message_id <= 0:
         return False
     logger.info("MSK_TELEGRAM_API_ACK kind=%s message_id=%d", kind, message_id)
-    if os.getenv("MSK_LIVE_ACCEPTANCE_RUN_ID"):
+    import os as _os  # function is also extracted in isolated delivery tests
+    if _os.getenv("MSK_LIVE_ACCEPTANCE_RUN_ID"):
         try:
             from msk_live_acceptance import capture_telegram_ack
             capture_telegram_ack(kind, message_id)
