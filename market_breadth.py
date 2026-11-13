@@ -211,8 +211,9 @@ def _load_daily_snapshot(expected):
         return None
     try:
         import psycopg
-        with psycopg.connect(url, connect_timeout=3,
-                             options="-c statement_timeout=4000") as conn:
+        with psycopg.connect(url, connect_timeout=3) as conn:
+            # SET LOCAL works inside the transaction even through Neon pooler.
+            conn.execute("SET LOCAL statement_timeout = '4000ms'")
             row = conn.execute(
                 "SELECT body FROM public.msk_breadth_snapshots_v1 "
                 "WHERE session_date = %s", (expected,)
@@ -238,8 +239,8 @@ def persist_daily_snapshot(report):
         raise RuntimeError("Dedicated research database connection unavailable")
     import psycopg
     from psycopg.types.json import Jsonb
-    with psycopg.connect(url, connect_timeout=8,
-                         options="-c statement_timeout=12000") as conn:
+    with psycopg.connect(url, connect_timeout=8) as conn:
+        conn.execute("SET LOCAL statement_timeout = '12000ms'")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS public.msk_breadth_snapshots_v1 ("
             "session_date DATE PRIMARY KEY, "
