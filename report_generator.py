@@ -1050,13 +1050,22 @@ def build_pdf(R: dict, output_path: str, *, compact=False) -> str:
 # ══════════════════════════════════════════════════════════════════════════
 # Public entrypoint (signature unchanged)
 # ══════════════════════════════════════════════════════════════════════════
-def generate_stock_report_pdf(symbol: str) -> Tuple[bool, str, Optional[str]]:
+def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, str, Optional[str]]:
     sym = str(symbol).upper().replace(".NS", "").replace(".BO", "").strip()
     if not sym:
         return False, "No symbol provided.", None
     try:
         inputs = collect_inputs(sym)
         R = assemble(inputs)
+        # CI-only provenance of the exact inputs used to draw the report.
+        # Normal Telegram callers continue receiving the unchanged 3-tuple.
+        if evidence_out is not None:
+            if not isinstance(evidence_out, dict):
+                raise ValueError("PDF evidence receiver must be a dict")
+            evidence_out.clear()
+            evidence_out.update(
+                symbol=R["sym"], price_session=R["price_session"],
+                historical_close=R["t"]["ltp"])
         out = os.path.join(OUTPUT_DIR, f"{sym}_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
         build_pdf(R, out)
         # A successful ReportLab write is NOT enough for Telegram delivery:
