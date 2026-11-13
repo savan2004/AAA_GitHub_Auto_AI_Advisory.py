@@ -1011,16 +1011,27 @@ def run_report(chat_id, query):
             done_event.set()
         if ok:
             try:
-                from pypdf import PdfReader
-                size_bytes = os.path.getsize(result)
-                page_count = len(PdfReader(result).pages)
-                if size_bytes < 1024 or page_count < 1:
-                    raise ValueError("PDF empty or unreadable")
-                logger.info("MSK_PDF_VALIDATED kind=research bytes=%d pages=%d",
-                            size_bytes, page_count)
+                # The actual customer button must use the SAME release gate as
+                # the verified-owner PDF probe. A readable one-page PDF is not
+                # an acceptable complete research report.
+                from pdf_release_gate import validate_research_pdf
+                verified_pdf = validate_research_pdf(
+                    result, expected_symbol=sym, min_pages=8)
+                logger.info(
+                    "MSK_PDF_VALIDATED kind=research pages=%d bytes=%d "
+                    "scope=structure_and_disclosure_only",
+                    verified_pdf["pages"], verified_pdf["bytes"])
             except Exception as exc:
-                logger.error("Research PDF integrity check failed (%s)", type(exc).__name__)
-                safe_send(chat_id, "❌ Research PDF could not be verified; not sent.")
+                logger.error(
+                    "MSK_PDF_WITHHELD reason=release_gate type=%s symbol=%s",
+                    type(exc).__name__, sym)
+                try:
+                    os.remove(result)
+                except OSError:
+                    pass
+                safe_send(chat_id,
+                          "⚠️ Research PDF withheld: full 8-page structure, "
+                          "source disclosures or content verification failed.")
                 return
             try:
                 with open(result, "rb") as f:
