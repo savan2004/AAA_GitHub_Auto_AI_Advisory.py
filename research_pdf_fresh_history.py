@@ -50,6 +50,55 @@ def normalize_real_history(history, expected_session, minimum=200):
         return None
 
 
+def stitch_yahoo_windows(annual, recent, expected_session):
+    """Complete annual Yahoo bars with only genuine same-provider missing days.
+
+    Both windows must be unadjusted OHLCV from market_data._download_chunk.
+    Require 10 fully matching overlapping candle closes and volumes; reject
+    adjusted/raw mixes, altered bars, unverified gaps and unavailable data.
+    """
+    session = str(expected_session)
+    fresh = normalize_real_history(recent, session, minimum=25)
+    if fresh is None:
+        return None
+    full = normalize_real_history(annual, session, minimum=200)
+    if full is not None:
+        return full
+    # Only the previous business day is allowed as annual's last session.
+    previous = pd.bdate_range(end=pd.Timestamp(session), periods=2)[0]
+    long = normalize_real_history(annual, str(previous.date()), minimum=200)
+    if long is None:
+        return None
+    overlap = long.index.intersection(fresh.index)
+    if len(overlap) < 10:
+        return None
+    # Compare unadjusted close + volume. A 0.5% mismatch implies different
+    # adjustment basis or unreliable providers; never merge those series.
+    recent_overlap = fresh.loc[overlap]
+    long_overlap = long.loc[overlap]
+    for key in ("Close", "Volume"):
+        diff = (long_overlap[key] - recent_overlap[key]).abs()
+        tolerance = (long_overlap[key].abs() * (0.005 if key == "Close" else 0.01))
+        if (diff > tolerance).any():
+            return None
+    appended = fresh.loc[fresh.index > long.index[-1]]
+    if len(appended) != 1 or appended.index[-1].date().isoformat() != session:
+        return None
+    merged = pd.concat([long, appended]).sort_index()
+    return normalize_real_history(merged, session, minimum=200)
+
+
+def _independent_yahoo_windows(symbol, expected_session):
+    """Use the same real bulk Yahoo collector already used by index research."""
+    from market_data import _download_chunk
+    ticker = symbol + ".NS"
+    annual = _download_chunk([ticker], "1y", retries=0, adjusted=False, timeout=12).get(ticker)
+    recent = _download_chunk([ticker], "6mo", retries=0, adjusted=False, timeout=12).get(ticker)
+    if annual is None or recent is None:
+        return None
+    return stitch_yahoo_windows(annual, recent, expected_session)
+
+
 def verified_pdf_history(symbol, base_fetch, expected_session, alternate_fetch=None):
     """Latest confirmed full-year issuer OHLCV; recover only if base is stale."""
     if symbol not in ("SBIN", "DLF"):
@@ -62,13 +111,8 @@ def verified_pdf_history(symbol, base_fetch, expected_session, alternate_fetch=N
     LOG.warning("MSK_PDF_STALE_PRIMARY symbol=%s required=%s", symbol, expected_session)
 
     if alternate_fetch is None:
-        import yfinance as yf
-
         def alternate_fetch(ticker):
-            return yf.download(
-                ticker + ".NS", period="1y", interval="1d",
-                auto_adjust=True, progress=False, threads=False, timeout=12,
-            )
+            return _independent_yahoo_windows(ticker, expected_session)
 
     try:
         alternate = alternate_fetch(symbol)
