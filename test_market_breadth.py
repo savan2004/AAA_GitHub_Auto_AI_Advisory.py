@@ -183,7 +183,12 @@ class BreadthTests(unittest.TestCase):
         release = threading.Event()
         collected = threading.Event()
         good = {'session': '2026-10-23', 'stale': False,
-                'coverage': 90, 'valid': 450, 'requested': 500}
+                'coverage': 90, 'valid': 450, 'requested': 500,
+                'source': 'Nifty 500 constituent CSV (current membership)',
+                'advances': 250, 'declines': 190, 'unchanged': 10,
+                'sectors': {}, 'ma20': {}, 'ma50': {}, 'ma200': {},
+                'highs': 0, 'lows': 0, 'high_low_count': 0,
+                'interpretation': 'Fixture', 'fetched': 'fixture'}
 
         def slow_scan():
             collected.set()
@@ -245,6 +250,46 @@ class BreadthTests(unittest.TestCase):
                 if b._refresh_thread:
                     b._refresh_thread.join(timeout=2)
                 b._cache, b._refresh_thread, b._last_error, b._next_retry_at = None, None, None, 0.0
+
+
+    def test_persisted_neon_snapshot_is_fast_and_avoids_download(self):
+        import market_breadth as b
+        expected = '2026-10-23'
+        verified = {'session': expected, 'stale': False,
+                    'source': 'Nifty 500 constituent CSV (current membership)',
+                    'coverage': 90.0, 'valid': 450, 'requested': 500,
+                    'advances': 250, 'declines': 190, 'unchanged': 10,
+                    'sectors': {}, 'ma20': {}, 'ma50': {}, 'ma200': {},
+                    'highs': 0, 'lows': 0, 'high_low_count': 0,
+                    'interpretation': 'Verified', 'fetched': 'fixture'}
+        self.assertTrue(b._valid_daily_snapshot(verified, expected))
+        b._cache, b._refresh_thread, b._last_error, b._next_retry_at = None, None, None, 0.0
+        with patch.object(b, "expected_completed_session", return_value=date(2026, 10, 23)), \
+             patch.object(b, "_load_daily_snapshot", return_value=verified) as read, \
+             patch.object(b, "_collect_breadth") as download:
+            started = time.monotonic()
+            self.assertIs(b.get_breadth(), verified)
+            self.assertLess(time.monotonic() - started, .5)
+            self.assertIs(b.get_breadth(), verified)
+            read.assert_called_once_with(expected)
+            download.assert_not_called()
+        b._cache = None
+
+    def test_neon_snapshot_fails_closed_on_missing_coverage_or_stale_session(self):
+        import market_breadth as b
+        example = {'session': '2026-10-23', 'stale': False,
+                   'source': 'Nifty 500 constituent CSV (current membership)',
+                   'coverage': 90.0, 'valid': 450, 'requested': 500,
+                   'advances': 250, 'declines': 190, 'unchanged': 10,
+                   'sectors': {}, 'ma20': {}, 'ma50': {}, 'ma200': {},
+                   'highs': 0, 'lows': 0, 'high_low_count': 0,
+                   'interpretation': 'Verified', 'fetched': 'fixture'}
+        self.assertTrue(b._valid_daily_snapshot(example, '2026-10-23'))
+        self.assertFalse(b._valid_daily_snapshot(example, '2026-10-26'))
+        self.assertFalse(b._valid_daily_snapshot(dict(example, coverage=79), '2026-10-23'))
+        self.assertFalse(b._valid_daily_snapshot(dict(example, advances=500), '2026-10-23'))
+        self.assertFalse(b._valid_daily_snapshot(dict(example, stale=True), '2026-10-23'))
+        self.assertFalse(b._valid_daily_snapshot(dict(example, source='Sample'), '2026-10-23'))
 
 
 if __name__ == '__main__':
