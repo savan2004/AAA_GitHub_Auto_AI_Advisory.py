@@ -14,8 +14,8 @@ class ChartRealFailureDiagnosticTests(unittest.TestCase):
                                        output_dir=folder)
             process = subprocess.CompletedProcess(
                 args=["python", "gen_smart_stock_chart.py"], returncode=1,
-                stdout="SCAN: sample 60/501\\n",
-                stderr="7 Failed downloads:\\nYahoo partial failure\\n[ERROR] No verified chart candidate: no fresh bars",
+                stdout="SCAN: sample 60/501\n",
+                stderr="7 Failed downloads:\nYahoo partial failure\n[ERROR] No verified chart candidate: no fresh bars",
             )
             with patch("chart_integration.subprocess.run", return_value=process):
                 ok, message, path = generator.generate()
