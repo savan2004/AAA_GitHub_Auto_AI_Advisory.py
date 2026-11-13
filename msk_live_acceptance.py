@@ -98,8 +98,10 @@ def _claim_once(run_id):
             "INSERT INTO msk_bot_acceptance_runs(run_id) VALUES(%s) "
             "ON CONFLICT DO NOTHING RETURNING run_id", (run_id,)
         ).fetchone()
-    # An existing run is resumable. Each action is claimed separately.
-    return True
+    # Preserve one-time claims used by the standalone PDF probe.
+    # run_once resumes regardless of this return value; per-action claims
+    # decide which Telegram sends are safe.
+    return row is not None
 
 
 def _claim_action(run_id, label):
