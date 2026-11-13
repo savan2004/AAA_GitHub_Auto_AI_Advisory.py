@@ -16,7 +16,7 @@ LOG = logging.getLogger("msk_acceptance")
 _PROBE = contextvars.ContextVar("msk_acceptance_probe", default=None)
 
 
-def capture_telegram_ack(kind, message_id, file_id=None):
+def capture_telegram_ack(kind, message_id, file_id=None, message_text=None):
     """Capture only Telegram API returns, never an assumed user delivery."""
     probe = _PROBE.get()
     if (probe is None or probe.get("closed") or
@@ -30,6 +30,14 @@ def capture_telegram_ack(kind, message_id, file_id=None):
         probe.setdefault("files", {})[message_id] = file_id
     LOG.info("MSK_ACCEPTANCE_RECEIPT action=%s kind=%s message_id=%d",
              probe["action"], kind, message_id)
+    # Owner-only quality evidence: this is PUBLIC market data returned by
+    # Telegram itself; never log arbitrary conversations or other buttons.
+    if (probe["action"] == "Breadth" and kind == "text" and
+            isinstance(message_text, str) and
+            0 < len(message_text) <= 3500 and
+            "MARKET PARTICIPATION" in message_text):
+        LOG.info("MSK_ACCEPTANCE_BREADTH_RETURNED_TEXT message_id=%d text=%r",
+                 message_id, message_text)
 
 
 def _claim_once(run_id):
