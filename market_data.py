@@ -112,7 +112,7 @@ def _split_multi(raw: pd.DataFrame, tickers: List[str]) -> Dict[str, pd.DataFram
     return out
 
 
-def _download_chunk(tickers: List[str], period: str, retries: int = 2, adjusted: bool = False) -> Dict[str, pd.DataFrame]:
+def _download_chunk(tickers: List[str], period: str, retries: int = 2, adjusted: bool = False, timeout: int = 30) -> Dict[str, pd.DataFrame]:
     import yfinance as yf
     result = {}
     pending = list(dict.fromkeys(tickers))
@@ -126,7 +126,7 @@ def _download_chunk(tickers: List[str], period: str, retries: int = 2, adjusted:
                     tickers=pending if len(pending) > 1 else pending[0],
                     period=period, interval="1d",
                     group_by="ticker", auto_adjust=adjusted,
-                    progress=False, threads=(attempt == 0 and len(pending) > 1), timeout=30,
+                    progress=False, threads=(attempt == 0 and len(pending) > 1), timeout=timeout,
                 )
             result.update(_split_multi(raw, pending))
             pending = [t for t in pending if t not in result]
@@ -191,6 +191,8 @@ def bulk_history(
     cache_ttl: int = 0,
     adjusted: bool = False,
     retries: int = 2,
+    max_fallbacks: int = 120,
+    download_timeout: int = 30,
 ) -> Dict[str, pd.DataFrame]:
     """
     Download daily OHLCV for many NSE symbols.
@@ -221,12 +223,12 @@ def bulk_history(
     total = len(syms)
     done = len(result)
     # Cap each chunk and the entire scan: bound latency while allowing later chunks recovery.
-    remaining_fallbacks = min(len(todo), 120)
+    remaining_fallbacks = min(len(todo), max(0, min(max_fallbacks, 120)))
     for i in range(0, len(todo), chunk_size):
         chunk_budget = min(12, remaining_fallbacks)
         part = todo[i:i + chunk_size]
         y_map = {to_yahoo(s): s for s in part}
-        got = _download_chunk(list(y_map.keys()), period, retries=max(0, min(retries, 2)), adjusted=adjusted)
+        got = _download_chunk(list(y_map.keys()), period, retries=max(0, min(retries, 2)), adjusted=adjusted, timeout=download_timeout)
         for yt, df in got.items():
             plain = y_map.get(yt) or from_yahoo(yt)
             result[plain] = df
@@ -262,10 +264,10 @@ def bulk_history(
     return result
 
 
-def index_history(ticker: str = "^NSEI", period: str = "1y") -> Optional[pd.DataFrame]:
+def index_history(ticker: str = "^NSEI", period: str = "1y", *, retries: int = 1, timeout: int = 30) -> Optional[pd.DataFrame]:
     """Benchmark index history (default Nifty 50). Never raises."""
     try:
-        got = _download_chunk([ticker], period, retries=1)
+        got = _download_chunk([ticker], period, retries=retries, timeout=timeout)
         return got.get(ticker)
     except Exception as e:
         logger.warning(f"[market_data] index {ticker} failed: {e}")

@@ -16,7 +16,7 @@ class OwnerAcceptanceContract(unittest.TestCase):
 
     def test_16_actions_and_pdf_checks(self):
         tree = ast.parse((ROOT / "msk_live_acceptance.py").read_text(encoding="utf-8"))
-        run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_once")
+        run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_run_actions")
         actions = next(n.value for n in ast.walk(run) if isinstance(n, ast.Assign)
                        and any(isinstance(t, ast.Name) and t.id == "actions" for t in n.targets))
         self.assertEqual(len(actions.elts), 16)
@@ -60,6 +60,72 @@ class LiveEvidenceGate(unittest.TestCase):
         self.assertIn('record_status = "FAIL" if fail else "UNVERIFIED"', code)
         self.assertIn('MSK_ACCEPTANCE_NEON_SAVED', code)
         self.assertIn('MSK_ACCEPTANCE_NEON_FAILED', code)
+
+class ResumeSafetyContract(unittest.TestCase):
+    def test_restart_resume_uses_durable_claim_before_sending(self):
+        import os
+        from unittest.mock import MagicMock, patch
+        import msk_live_acceptance as acceptance
+
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        # Newly claimed action; there is no old Neon acceptance result.
+        claimed = MagicMock()
+        claimed.fetchone.return_value = ("LargeCapTop5",)
+        old = MagicMock()
+        old.fetchone.return_value = None
+        connection.execute.side_effect = [claimed, old, MagicMock()]
+        psycopg = MagicMock()
+        psycopg.connect.return_value = connection
+        with patch.dict(os.environ, {"PORTFOLIO_DATABASE_URL":
+                                     "postgresql://sample.invalid/neondb?sslmode=require"}):
+            with patch.dict("sys.modules", {"psycopg": psycopg}):
+                self.assertTrue(acceptance._claim_action("run-v2", "LargeCapTop5"))
+        self.assertEqual(connection.execute.call_count, 3)
+
+    def test_interrupted_action_never_replayed(self):
+        import os
+        from unittest.mock import MagicMock, patch
+        import msk_live_acceptance as acceptance
+
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        no_claim = MagicMock()
+        no_claim.fetchone.return_value = None
+        started = MagicMock()
+        started.fetchone.return_value = ("STARTED",)
+        connection.execute.side_effect = [
+            no_claim, started, MagicMock(), MagicMock(), MagicMock()
+        ]
+        psycopg = MagicMock()
+        psycopg.connect.return_value = connection
+        with patch.dict(os.environ, {"PORTFOLIO_DATABASE_URL":
+                                     "postgresql://sample.invalid/neondb?sslmode=require"}):
+            with patch.dict("sys.modules", {"psycopg": psycopg}):
+                self.assertFalse(acceptance._claim_action("run-v2", "StocksBuzz"))
+        self.assertEqual(connection.execute.call_count, 5)
+        self.assertIn("INTERRUPTED", str(connection.execute.call_args_list))
+
+    def test_successful_record_does_not_trigger_duplicate_send(self):
+        import os
+        from unittest.mock import MagicMock, patch
+        import msk_live_acceptance as acceptance
+
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        claimed = MagicMock()
+        claimed.fetchone.return_value = ("Analysis",)
+        old = MagicMock()
+        old.fetchone.return_value = ("UNVERIFIED", 14165)
+        connection.execute.side_effect = [claimed, old, MagicMock(), MagicMock()]
+        psycopg = MagicMock()
+        psycopg.connect.return_value = connection
+        with patch.dict(os.environ, {"PORTFOLIO_DATABASE_URL":
+                                     "postgresql://sample.invalid/neondb?sslmode=require"}):
+            with patch.dict("sys.modules", {"psycopg": psycopg}):
+                self.assertFalse(acceptance._claim_action("run-v2", "Analysis"))
+        self.assertIn("SKIP_EXISTING_RESULT", str(connection.execute.call_args_list))
+
 
 if __name__ == "__main__":
     unittest.main()

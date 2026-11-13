@@ -5,6 +5,7 @@ Never runs against customer chats or changes portfolio holdings.  The separate
 MSK portfolio PostgreSQL database is used only for a one-time run claim.
 """
 import contextvars
+import hashlib
 import logging
 import os
 import re
@@ -68,11 +69,155 @@ def _claim_once(run_id):
                      (pdf_generated AND file_id IS NOT NULL AND message_id > 0))
             )
         """)
-        row = conn.execute(
+        # Durable per-button claims preserve progress if Render restarts.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS public.msk_bot_acceptance_steps (
+                run_id TEXT NOT NULL REFERENCES public.msk_bot_acceptance_runs(run_id),
+                feature_name TEXT NOT NULL,
+                phase TEXT NOT NULL CHECK
+                    (phase IN ('STARTED','DONE','FAILED','INTERRUPTED')),
+                started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                finished_at TIMESTAMPTZ,
+                error TEXT,
+                PRIMARY KEY(run_id,feature_name)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS public.msk_bot_acceptance_events (
+                event_id BIGSERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES public.msk_bot_acceptance_runs(run_id),
+                feature_name TEXT NOT NULL,
+                event TEXT NOT NULL,
+                detail TEXT,
+                message_id BIGINT,
+                file_id TEXT,
+                recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        conn.execute(
             "INSERT INTO msk_bot_acceptance_runs(run_id) VALUES(%s) "
             "ON CONFLICT DO NOTHING RETURNING run_id", (run_id,)
         ).fetchone()
+    # Preserve one-time claims used by the standalone PDF probe.
+    # run_once resumes regardless of this return value; per-action claims
+    # decide which Telegram sends are safe.
     return row is not None
+
+
+def _claim_action(run_id, label):
+    """Claim once before ANY Telegram send. Interrupted actions never resend.
+
+    Telegram Bot API has no idempotency key. A process can die after Telegram
+    accepted a message but before its receipt was saved. The only safe
+    automatic choice is to mark that action INTERRUPTED, not send it again.
+    Subsequent actions continue on startup.
+    """
+    import psycopg
+    dsn = os.getenv("PORTFOLIO_DATABASE_URL", "")
+    if not dsn or "sslmode=require" not in dsn:
+        raise RuntimeError("Acceptance action claims require TLS PostgreSQL")
+    with psycopg.connect(dsn, connect_timeout=12) as conn:
+        created = conn.execute(
+            """INSERT INTO public.msk_bot_acceptance_steps
+               (run_id,feature_name,phase) VALUES(%s,%s,'STARTED')
+               ON CONFLICT DO NOTHING RETURNING feature_name""",
+            (run_id, label)
+        ).fetchone()
+        if created:
+            # Old runs might have acceptance results, but no step journal.
+            # Backfill them without sending any duplicate messages.
+            prior = conn.execute(
+                """SELECT status,message_id FROM
+                   public.msk_bot_acceptance_actions
+                   WHERE run_id=%s AND feature_name=%s""",
+                (run_id, label)
+            ).fetchone()
+            if prior:
+                conn.execute(
+                    """UPDATE public.msk_bot_acceptance_steps
+                       SET phase=%s,finished_at=NOW(),error='legacy_result_retained'
+                       WHERE run_id=%s AND feature_name=%s""",
+                    ("FAILED" if prior[0] == "FAIL" else "DONE", run_id, label)
+                )
+                conn.execute(
+                    """INSERT INTO public.msk_bot_acceptance_events
+                       (run_id,feature_name,event,detail,message_id)
+                       VALUES (%s,%s,'SKIP_EXISTING_RESULT',
+                               'Existing Neon result preserved; no resend',%s)""",
+                    (run_id, label, prior[1])
+                )
+                LOG.info("MSK_ACCEPTANCE_SKIP_EXISTING action=%s", label)
+                return False
+            conn.execute(
+                """INSERT INTO public.msk_bot_acceptance_events
+                   (run_id,feature_name,event,detail)
+                   VALUES (%s,%s,'STARTED','Durably claimed before Telegram send')""",
+                (run_id, label)
+            )
+            return True
+
+        existing = conn.execute(
+            """SELECT phase FROM public.msk_bot_acceptance_steps
+               WHERE run_id=%s AND feature_name=%s FOR UPDATE""",
+            (run_id, label)
+        ).fetchone()
+        if existing and existing[0] == "STARTED":
+            conn.execute(
+                """UPDATE public.msk_bot_acceptance_steps
+                   SET phase='INTERRUPTED',finished_at=NOW(),
+                       error='Process restarted; Telegram delivery uncertain; no resend'
+                   WHERE run_id=%s AND feature_name=%s AND phase='STARTED'""",
+                (run_id, label)
+            )
+            conn.execute(
+                """INSERT INTO public.msk_bot_acceptance_actions
+                   (run_id,feature_name,status,validation_status,error)
+                   VALUES(%s,%s,'FAIL','failed',
+                   'Interrupted before result stored; delivery uncertain; no resend')
+                   ON CONFLICT (run_id,feature_name) DO NOTHING""",
+                (run_id, label)
+            )
+            conn.execute(
+                """INSERT INTO public.msk_bot_acceptance_events
+                   (run_id,feature_name,event,detail)
+                   VALUES(%s,%s,'INTERRUPTED',
+                          'Delivery uncertain: automatic resend prohibited')""",
+                (run_id, label)
+            )
+            LOG.warning("MSK_ACCEPTANCE_INTERRUPTED action=%s no_resend=true", label)
+        else:
+            LOG.info("MSK_ACCEPTANCE_SKIP_COMPLETED action=%s phase=%s",
+                     label, existing[0] if existing else "unknown")
+        return False
+
+
+def _finish_action(run_id, label, *, result, message_id=None, file_id=None,
+                   error=None):
+    """Append event and complete only our claimed action in one transaction."""
+    import psycopg
+    dsn = os.getenv("PORTFOLIO_DATABASE_URL", "")
+    if not dsn or "sslmode=require" not in dsn:
+        raise RuntimeError("Acceptance event commit requires TLS PostgreSQL")
+    phase = "DONE" if result == "api_ack" else "FAILED"
+    with psycopg.connect(dsn, connect_timeout=12) as conn:
+        row = conn.execute(
+            """UPDATE public.msk_bot_acceptance_steps
+               SET phase=%s,finished_at=NOW(),error=%s
+               WHERE run_id=%s AND feature_name=%s AND phase='STARTED'
+               RETURNING feature_name""",
+            (phase, str(error)[:160] if error else None, run_id, label)
+        ).fetchone()
+        if row is None:
+            LOG.warning("MSK_ACCEPTANCE_LATE_OUTCOME action=%s ignored=true", label)
+            return False
+        conn.execute(
+            """INSERT INTO public.msk_bot_acceptance_events
+               (run_id,feature_name,event,detail,message_id,file_id)
+               VALUES(%s,%s,%s,%s,%s,%s)""",
+            (run_id,label,result,str(error)[:160] if error else None,
+             message_id,file_id)
+        )
+        return True
 
 
 def _save_action(run_id, label, *, status, message_id=None, file_id=None,
@@ -141,16 +286,35 @@ def run_once(ctx):
         LOG.error("MSK_ACCEPTANCE_NOT_STARTED reason=no_verified_private_owner")
         return
     try:
-        if not _claim_once(run_id):
-            LOG.info("MSK_ACCEPTANCE_NOT_STARTED reason=run_id_already_claimed")
-            return
+        _claim_once(run_id)
     except Exception as exc:
         LOG.error("MSK_ACCEPTANCE_NOT_STARTED reason=durable_claim_failed type=%s",
                   type(exc).__name__)
         return
 
+    # Only one live process may walk a run at once. The session lock releases
+    # automatically if Render kills the process. Step claims prevent resends
+    # if Telegram accepted a message just before that crash.
+    import psycopg
+    dsn = os.getenv("PORTFOLIO_DATABASE_URL", "")
+    lock_key = int(hashlib.sha256(run_id.encode("ascii")).hexdigest()[:15], 16)
+    try:
+        with psycopg.connect(dsn, connect_timeout=12) as guard:
+            locked = guard.execute(
+                "SELECT pg_try_advisory_lock(%s)", (lock_key,)
+            ).fetchone()[0]
+            if not locked:
+                LOG.info("MSK_ACCEPTANCE_NOT_STARTED reason=another_runner_active")
+                return
+            _run_actions(ctx, uid, run_id)
+    except Exception as exc:
+        LOG.exception("MSK_ACCEPTANCE_RUN_FAILED run_id=%s type=%s",
+                      run_id, type(exc).__name__)
+
+
+def _run_actions(ctx, uid, run_id):
     bot, send = ctx["bot"], ctx["safe_send"]
-    LOG.info("MSK_ACCEPTANCE_BEGIN run_id=%s actions=16 owner_verified=true", run_id)
+    LOG.info("MSK_ACCEPTANCE_RESUME run_id=%s actions=16 owner_verified=true", run_id)
 
     def emit(message):
         if not isinstance(message, str) or not message.strip():
@@ -263,6 +427,14 @@ def run_once(ctx):
         "InlineResearchPDF": "document",
     }
     for label, func in actions:
+        try:
+            if not _claim_action(run_id, label):
+                continue
+        except Exception as exc:
+            # A missing Neon claim must NEVER fall back to sending Telegram.
+            LOG.error("MSK_ACCEPTANCE_CLAIM_FAILED action=%s type=%s",
+                      label,type(exc).__name__)
+            return
         probe = {"action": label, "receipts": [], "files": {},
                  "blocked": False, "error": None, "closed": False}
         LOG.info("MSK_ACCEPTANCE_ACTION_START action=%s", label)
@@ -307,7 +479,7 @@ def run_once(ctx):
         fail = result in ("timeout", "error", "data_withheld") or result.startswith("missing_")
         record_status = "FAIL" if fail else "UNVERIFIED"
         validation_status = "failed" if fail else "unverified"
-        issue = (probe["error"] or result) if fail else "pending_independent_data_validation"
+        issue = (probe["error"] or ("timeout_after_%ss" % timeouts[label] if result == "timeout" else result)) if fail else "pending_independent_data_validation"
         try:
             _save_action(
                 run_id, label, status=record_status, message_id=message_id,
@@ -320,6 +492,18 @@ def run_once(ctx):
         except Exception as exc:
             LOG.error("MSK_ACCEPTANCE_NEON_FAILED action=%s type=%s",
                       label, type(exc).__name__)
+            # Do not mark the claim DONE if its evidence is missing.
+            return
+        try:
+            if not _finish_action(run_id, label, result=result,
+                                  message_id=message_id, file_id=file_id,
+                                  error=issue if fail else None):
+                LOG.error("MSK_ACCEPTANCE_FINISH_REJECTED action=%s", label)
+                return
+        except Exception as exc:
+            LOG.error("MSK_ACCEPTANCE_FINISH_FAILED action=%s type=%s",
+                      label,type(exc).__name__)
+            return
         LOG.info("MSK_ACCEPTANCE_ACTION_END action=%s result=%s receipts=%d required=%s",
                  label, result, len(receipts), required_kind)
     LOG.info("MSK_ACCEPTANCE_FINAL run_id=%s api_ack_actions=%d total=16",

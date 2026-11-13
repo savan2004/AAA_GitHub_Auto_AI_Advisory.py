@@ -101,7 +101,7 @@ class BreadthTests(unittest.TestCase):
         import market_data
         past = frame()
         breadth._cache = None
-        with patch.object(breadth, 'load_universe', return_value=(['UP'], {}, 'fixture', False)), \
+        with patch.object(breadth, 'load_universe', return_value=(['UP'] + [f'EQ{i}' for i in range(499)], {}, 'fixture', False)), \
              patch.object(market_data, 'bulk_history', return_value={'UP': past}), \
              patch.object(market_data, 'index_history', return_value=past), \
              patch.object(breadth, 'expected_completed_session', return_value=date(2026, 10, 26)):
@@ -139,6 +139,42 @@ class BreadthTests(unittest.TestCase):
             md.bulk_history(['A'],'2y',cache_ttl=900,adjusted=False)
             self.assertEqual(fetch.call_count,2)
         md._cache.clear()
+
+
+    def test_full_breadth_never_uses_unverified_sample(self):
+        import market_breadth as b
+        import market_data as md
+        b._cache = None
+        with patch.object(b, 'load_universe',
+                          return_value=(['DUMMYHEG'], {}, 'Built-in sample', True)), \
+             patch.object(md, 'bulk_history') as download:
+            with self.assertRaisesRegex(ValueError, 'Official Nifty 500 CSV unavailable'):
+                b.get_breadth()
+            download.assert_not_called()
+        b._cache = None
+
+    def test_breadth_bounded_fetch_and_single_retry(self):
+        import market_breadth as b
+        import market_data as md
+        b._cache = None
+        syms = ['SYM'+str(i) for i in range(500)]
+        partial = {sym: frame() for sym in syms[:300]}
+        additional = {sym: frame() for sym in syms[300:450]}
+        valid = {'session': '2026-10-23', 'expected_session': '2026-10-23',
+                 'stale': False, 'coverage': 90, 'valid': 450,
+                 'interpretation': 'Verified'}
+        with patch.object(b,'load_universe',return_value=(syms, {}, 'Official CSV', False)), \
+             patch.object(md,'bulk_history',side_effect=[partial, additional]) as bulk, \
+             patch.object(md,'index_history',return_value=frame()) as index, \
+             patch.object(b,'calculate_breadth',return_value=valid):
+            report=b.get_breadth()
+        self.assertEqual(report['coverage'],90)
+        self.assertEqual(bulk.call_count,2)
+        self.assertEqual(bulk.call_args_list[0].kwargs['max_fallbacks'],0)
+        self.assertEqual(bulk.call_args_list[1].kwargs['retries'],0)
+        self.assertEqual(len(bulk.call_args_list[1].args[0]),200)
+        self.assertEqual(index.call_count,1)
+        b._cache = None
 
 
 if __name__ == '__main__':

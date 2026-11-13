@@ -2,6 +2,7 @@
 import csv
 import io
 import html
+import logging
 import threading
 import time
 from datetime import datetime, time as daytime, timedelta, timezone
@@ -10,6 +11,7 @@ import pandas as pd
 import requests
 
 IST = timezone(timedelta(hours=5, minutes=30))
+LOG = logging.getLogger("msk_market_breadth")
 INDEX_LIST = 'https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv'
 _lock = threading.Lock()
 _cache = None
@@ -149,7 +151,6 @@ def calculate_breadth(hist, symbols, benchmark, sectors=None, now=None):
         elif ap <= 40 and not weak_sma and not weak_highs:
             latest['trend_context'] = ('Weak daily participation alone does not establish a persistent downtrend.')
     return latest
-    return latest
 
 
 def load_universe():
@@ -180,8 +181,36 @@ def get_breadth():
             return _cache
         from market_data import bulk_history, index_history
         syms, sectors, source, degraded = load_universe()
-        hist = bulk_history(syms, '2y', chunk_size=100, cache_ttl=900, adjusted=True)
-        result = calculate_breadth(hist, syms, index_history('^NSEI', '2y'), sectors)
+        if degraded:
+            LOG.error("MSK_BREADTH_FAILED reason=official_nifty500_unavailable source=%s",source)
+            raise ValueError("Official Nifty 500 CSV unavailable; built-in sample blocked")
+        if not 450 <= len(syms) <= 550:
+            raise ValueError("Nifty 500 member count invalid; breadth withheld")
+        # Bulk only: the old 120-symbol sequential NSE/Yahoo/Stooq fallback could
+        # spend minutes on 401/invalid symbols and time out at 170 seconds.
+        # Never create or substitute prices for unavailable symbols.
+        hist = bulk_history(syms, '2y', chunk_size=250, cache_ttl=900,
+                            adjusted=True, retries=0, max_fallbacks=0,
+                            download_timeout=20)
+        if len(hist) < len(syms) * 0.8:
+            missing = [sym for sym in syms if sym not in hist]
+            LOG.warning("MSK_BREADTH_RETRY missing=%d retrieved=%d total=%d",
+                        len(missing),len(hist),len(syms))
+            # Exactly one bounded retry for missing symbols, without individual
+            # provider fallbacks that held the old single-threaded scan open.
+            recovered = bulk_history(missing, '2y', chunk_size=250, cache_ttl=900,
+                                     adjusted=True, retries=0, max_fallbacks=0,
+                                     download_timeout=20)
+            hist.update(recovered)
+        benchmark = index_history('^NSEI', '2y', retries=0, timeout=20)
+        if benchmark is None or benchmark.empty:
+            LOG.warning("MSK_BREADTH_RETRY benchmark=NSEI")
+            benchmark = index_history('^NSEI', '2y', retries=0, timeout=20)
+        if benchmark is None or benchmark.empty:
+            raise ValueError("Nifty benchmark price provider unavailable after retry")
+        LOG.info("MSK_BREADTH_FETCH fetched=%d requested=%d benchmark_latest=%s",
+                 len(hist),len(syms),str(benchmark.index[-1]))
+        result = calculate_breadth(hist, syms, benchmark, sectors)
         if result['stale']:
             raise ValueError(f"Latest verified NSE session {result['session']} is not expected "
                              f"session {result['expected_session']}; no stale breadth report.")
