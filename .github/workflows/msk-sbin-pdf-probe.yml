@@ -28,4 +28,4 @@ jobs:
       - name: Install research dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Build and validate actual SBIN PDF without Telegram
-        run: timeout 720s python -u tests/probe_sbin_pdf.py
+        run: PYTHONPATH=. timeout 720s python -u tests/probe_sbin_pdf.py
