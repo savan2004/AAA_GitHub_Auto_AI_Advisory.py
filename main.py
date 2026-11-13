@@ -985,30 +985,40 @@ def run_report(chat_id, query):
         ticker, cname = resolve_symbol(query)
         sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else query.upper().replace(" ", "")
 
-        safe_send(chat_id, f"📄 Building institutional research report for <b>{cname or sym}</b>… (~60-90s: price action, financials, ownership, peers)")
+        # A genuine, fully validated completed-session PDF can be delivered
+        # immediately. Cold symbols still use the existing real generator.
+        from research_pdf_snapshot import load_verified_report
+        cached = load_verified_report(sym)
+        if cached is not None:
+            ok, result, name = True, cached[0], (cname or sym)
+            logger.info("MSK_PDF_CACHE_HIT symbol=%s session=%s", sym, cached[1])
+        else:
+            safe_send(
+                chat_id,
+                f"📄 Building institutional research report for "
+                f"<b>{cname or sym}</b>… (source data and charts take time)")
+            done_event = threading.Event()
 
-        done_event = threading.Event()
+            def _ping():
+                if done_event.wait(15):
+                    return
+                try:
+                    safe_send(chat_id, "⏳ Still compiling the report…")
+                except Exception:
+                    pass
+                if done_event.wait(20):
+                    return
+                try:
+                    safe_send(chat_id,
+                              "⏳ Almost there — rendering charts and PDF…")
+                except Exception:
+                    pass
 
-        def _ping():
-            if done_event.wait(15):
-                return
+            threading.Thread(target=_ping, daemon=True).start()
             try:
-                safe_send(chat_id, "⏳ Still compiling the report…")
-            except Exception:
-                pass
-            if done_event.wait(20):
-                return
-            try:
-                safe_send(chat_id, "⏳ Almost there — rendering charts and PDF…")
-            except Exception:
-                pass
-
-        threading.Thread(target=_ping, daemon=True).start()
-
-        try:
-            ok, result, name = generate_stock_report_pdf(sym)
-        finally:
-            done_event.set()
+                ok, result, name = generate_stock_report_pdf(sym)
+            finally:
+                done_event.set()
         if ok:
             try:
                 # The actual customer button must use the SAME release gate as
