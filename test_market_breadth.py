@@ -1,6 +1,7 @@
 """Offline breadth regression tests; no live market calls."""
 import io
 import threading
+import time
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
@@ -111,7 +112,7 @@ class BreadthTests(unittest.TestCase):
                                               now=datetime(2026, 10, 26, 20, tzinfo=IST))
             with patch.object(breadth, 'calculate_breadth', return_value=stale_result):
                 with self.assertRaisesRegex(ValueError, 'no stale breadth report'):
-                    breadth.get_breadth()
+                    breadth._collect_breadth()
         breadth._cache = None
 
     def test_five_session_fixed_cohort_and_html(self):
@@ -149,7 +150,7 @@ class BreadthTests(unittest.TestCase):
                           return_value=(['DUMMYHEG'], {}, 'Built-in sample', True)), \
              patch.object(md, 'bulk_history') as download:
             with self.assertRaisesRegex(ValueError, 'Official Nifty 500 CSV unavailable'):
-                b.get_breadth()
+                b._collect_breadth()
             download.assert_not_called()
         b._cache = None
 
@@ -167,7 +168,7 @@ class BreadthTests(unittest.TestCase):
              patch.object(md,'bulk_history',side_effect=[partial, additional]) as bulk, \
              patch.object(md,'index_history',return_value=frame()) as index, \
              patch.object(b,'calculate_breadth',return_value=valid):
-            report=b.get_breadth()
+            report=b._collect_breadth()
         self.assertEqual(report['coverage'],90)
         self.assertEqual(bulk.call_count,2)
         self.assertEqual(bulk.call_args_list[0].kwargs['max_fallbacks'],0)
@@ -175,6 +176,75 @@ class BreadthTests(unittest.TestCase):
         self.assertEqual(len(bulk.call_args_list[1].args[0]),200)
         self.assertEqual(index.call_count,1)
         b._cache = None
+
+
+    def test_nonblocking_request_and_verified_daily_cache(self):
+        import market_breadth as b
+        release = threading.Event()
+        collected = threading.Event()
+        good = {'session': '2026-10-23', 'stale': False,
+                'coverage': 90, 'valid': 450, 'requested': 500}
+
+        def slow_scan():
+            collected.set()
+            if not release.wait(3):
+                raise AssertionError("Test worker did not finish")
+            return good
+
+        with patch.object(b, "expected_completed_session", return_value=date(2026, 10, 23)), \
+             patch.object(b, "_collect_breadth", side_effect=slow_scan) as scan:
+            b._cache, b._refresh_thread, b._last_error, b._next_retry_at = None, None, None, 0.0
+            try:
+                started = time.monotonic()
+                pending = b.get_breadth()
+                self.assertLess(time.monotonic() - started, 0.5)
+                self.assertEqual(pending['state'], 'warming')
+                self.assertTrue(collected.wait(1))
+                self.assertEqual(b.get_breadth()['state'], 'warming')
+                scan.assert_called_once()
+                release.set()
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline and b._refresh_thread is not None:
+                    time.sleep(.01)
+                self.assertIsNone(b._refresh_thread)
+                self.assertIs(b.get_breadth(), good)
+                scan.assert_called_once()
+            finally:
+                release.set()
+                b._cache, b._refresh_thread, b._last_error, b._next_retry_at = None, None, None, 0.0
+
+    def test_failed_scan_never_returns_false_market_numbers(self):
+        import market_breadth as b
+        with patch.object(b, "expected_completed_session", return_value=date(2026, 10, 23)), \
+             patch.object(b, "_collect_breadth", side_effect=ValueError("bad provider")):
+            b._cache, b._refresh_thread, b._last_error, b._next_retry_at = None, None, None, 0.0
+            self.assertEqual(b.get_breadth()['state'], 'warming')
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and b._refresh_thread is not None:
+                time.sleep(.01)
+            self.assertIsNone(b._refresh_thread)
+            state = b.get_breadth()
+            self.assertEqual(state['state'], 'unavailable')
+            self.assertNotIn('advances', state)
+            self.assertTrue(format_breadth(state).startswith('⚠️'))
+            b._cache, b._refresh_thread, b._last_error, b._next_retry_at = None, None, None, 0.0
+
+    def test_previous_session_cache_not_released(self):
+        import market_breadth as b
+        release = threading.Event()
+        old = {'session': '2026-10-22', 'stale': False, 'coverage': 100}
+        with patch.object(b, "expected_completed_session", return_value=date(2026, 10, 23)), \
+             patch.object(b, "_collect_breadth", side_effect=lambda: release.wait(2) or old):
+            b._cache, b._refresh_thread, b._last_error, b._next_retry_at = old, None, None, 0.0
+            try:
+                result = b.get_breadth()
+                self.assertEqual(result['state'], 'warming')
+                self.assertTrue(format_breadth(result).startswith('⏳'))
+            finally:
+                release.set()
+                if b._refresh_thread:
+                    b._refresh_thread.join(timeout=2)
+                b._cache, b._refresh_thread, b._last_error, b._next_retry_at = None, None, None, 0.0
 
 
 if __name__ == '__main__':
