@@ -18,7 +18,7 @@ class ChartRealFailureDiagnosticTests(unittest.TestCase):
                 stderr="7 Failed downloads:\nYahoo partial failure\n[ERROR] No verified chart candidate: no fresh bars",
             )
             with patch("chart_integration.subprocess.run", return_value=process):
-                ok, message, path = generator.generate()
+                ok, message, path = generator.generate("SBIN.NS", "SBIN")
             self.assertFalse(ok)
             self.assertIsNone(path)
             self.assertIn("No verified chart candidate: no fresh bars", message)
@@ -33,7 +33,7 @@ class ChartRealFailureDiagnosticTests(unittest.TestCase):
                 stdout="", stderr="",
             )
             with patch("chart_integration.subprocess.run", return_value=process):
-                ok, message, path = generator.generate()
+                ok, message, path = generator.generate("SBIN.NS", "SBIN")
             self.assertFalse(ok)
             self.assertIn("Unknown chart subprocess error", message)
             self.assertIsNone(path)
