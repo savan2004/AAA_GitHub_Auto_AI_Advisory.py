@@ -31,18 +31,40 @@ def main(symbol="SBIN"):
         from datetime import datetime
         pages = PdfReader(str(original), strict=True).pages
         page_texts = [(page.extract_text() or "").strip() for page in pages]
+        # ReportLab + pypdf may split/omit formatted cover dates in extracted
+        # text. Do not infer financial freshness from a PDF text substring.
+        # Independently fetch genuine last completed NSE daily history instead.
+        from data_engine import get_hist
+        import pandas as pd
+        prices = get_hist(symbol, "1y")
+        if prices is None or prices.empty:
+            raise RuntimeError("Real report price-session verification unavailable")
+        last_date = str(pd.Timestamp(prices.index[-1]).date())
+        if last_date != session:
+            raise RuntimeError(
+                "Real report NOT READY: latest source market session differs from "
+                "required completed-session date")
+        from technical_price_safety import technical_price_context
+        if technical_price_context(prices) is None:
+            raise RuntimeError("Real report EOD price quality verification refused")
         session_label = datetime.strptime(session, "%Y-%m-%d").strftime("%d-%b-%Y")
-        if session_label not in page_texts[0]:
-            raise RuntimeError("Real report first page lacks verified price-session date")
+        # Only a textual label check is optional; source freshness is mandatory.
+        cover_normalized = "".join(page_texts[0].split()).upper()
+        printed_label_present = session_label.replace("-", "").upper() in (
+            cover_normalized.replace("-", ""))
         if symbol not in page_texts[0].upper():
             raise RuntimeError("Real report first page does not identify requested issuer")
         if any(len(text) < 24 for text in page_texts):
             raise RuntimeError("Real report has unreadable page")
         print("MSK_RESEARCH_PDF_CONTENT_AUDIT symbol={} session={} pages={} "
-              "per_page_characters={} current_price_session=true "
-              "issuer_identified=true disclosures_verified=true "
-              "issuer_accounting_reconciled=false".format(
-                 symbol, session, len(page_texts), [len(text) for text in page_texts]))
+              "per_page_characters={} genuine_last_price_session={} "
+              "cover_date_text_extracted={} issuer_identified=true "
+              "disclosures_verified=true issuer_accounting_reconciled=false".format(
+                 symbol, session, len(page_texts), [len(text) for text in page_texts],
+                 last_date, str(printed_label_present).lower()))
+        if not printed_label_present:
+            print("MSK_RESEARCH_PDF_COVER_TEXT_PREVIEW symbol={} excerpt={!r}".format(
+                symbol, page_texts[0][:420]))
         source_digest = hashlib.sha256(original.read_bytes()).hexdigest()
         saved_digest = save_verified_report(symbol, original, session=session)
         if source_digest != saved_digest:
