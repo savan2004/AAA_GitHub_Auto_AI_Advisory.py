@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+import threading
 
 LOG = logging.getLogger("msk_acceptance")
 _PROBE = contextvars.ContextVar("msk_acceptance_probe", default=None)
@@ -76,6 +77,9 @@ def run_once(ctx):
         if any(word in response.lower() for word in (
                 "unavailable", "withheld", "not ready", "insufficient coverage")):
             LOG.warning("MSK_ACCEPTANCE_DATA_WITHHELD profile=%s", profile)
+            active = _PROBE.get()
+            if active is not None:
+                active["blocked"] = True
         emit(response)
 
     def swing(mode):
@@ -130,6 +134,9 @@ def run_once(ctx):
             emit(ctx["build_portfolio_card"](uid))
         except RuntimeError:
             LOG.warning("MSK_ACCEPTANCE_DATA_WITHHELD profile=portfolio_storage")
+            active = _PROBE.get()
+            if active is not None:
+                active["blocked"] = True
             emit("⚠️ Portfolio storage unavailable: existing positions require safe recovery.")
 
     actions = [
@@ -151,21 +158,52 @@ def run_once(ctx):
         ("InlineResearchPDF", lambda: ctx["run_report"](uid, "SBIN")),
     ]
     completed = 0
+    timeouts = {
+        "Analysis": 90, "Breadth": 170, "StocksBuzz": 360,
+        "LargeCapTop5": 90, "MidCapTop5": 90, "SmallCapTop5": 90,
+        "SwingSafe": 180, "SwingAggressive": 180, "Portfolio": 45,
+        "Chart": 210, "Report": 300, "SectorReport": 330,
+        "InlineTechnical": 90, "InlineFundamental": 120,
+        "InlineChart": 180, "InlineResearchPDF": 300,
+    }
+    required = {
+        "Chart": "photo", "InlineChart": "photo",
+        "Report": "document", "SectorReport": "document",
+        "InlineResearchPDF": "document",
+    }
     for label, func in actions:
-        probe = {"action": label, "receipts": []}
-        token = _PROBE.set(probe)
+        probe = {"action": label, "receipts": [], "blocked": False, "error": None}
         LOG.info("MSK_ACCEPTANCE_ACTION_START action=%s", label)
-        try:
-            func()
-            receipts = probe["receipts"]
-            if receipts:
-                completed += 1
-            LOG.info("MSK_ACCEPTANCE_ACTION_END action=%s result=%s receipts=%d",
-                     label, "api_ack" if receipts else "no_api_ack", len(receipts))
-        except Exception as exc:
-            LOG.error("MSK_ACCEPTANCE_ACTION_END action=%s result=error type=%s",
-                      label, type(exc).__name__, exc_info=True)
-        finally:
-            _PROBE.reset(token)
+
+        def _execute():
+            token = _PROBE.set(probe)
+            try:
+                func()
+            except Exception as exc:
+                probe["error"] = type(exc).__name__
+                LOG.error("MSK_ACCEPTANCE_ACTION_ERROR action=%s type=%s",
+                          label, type(exc).__name__, exc_info=True)
+            finally:
+                _PROBE.reset(token)
+
+        worker = threading.Thread(target=_execute,
+                                  name=f"msk-test-{label}", daemon=True)
+        worker.start()
+        worker.join(timeouts[label])
+        receipts = probe["receipts"]
+        required_kind = required.get(label, "text")
+        if worker.is_alive():
+            result = "timeout"
+        elif probe["error"]:
+            result = "error"
+        elif probe["blocked"]:
+            result = "data_withheld"
+        elif not any(kind == required_kind for kind, _ in receipts):
+            result = "missing_" + required_kind + "_ack"
+        else:
+            result = "api_ack"
+            completed += 1
+        LOG.info("MSK_ACCEPTANCE_ACTION_END action=%s result=%s receipts=%d required=%s",
+                 label, result, len(receipts), required_kind)
     LOG.info("MSK_ACCEPTANCE_FINAL run_id=%s api_ack_actions=%d total=16",
              run_id, completed)
