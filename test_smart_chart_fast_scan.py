@@ -48,6 +48,9 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(calls[0][0]), 60)
         self.assertEqual(calls[0][1]["timeout"], 12)
+        self.assertEqual(calls[0][1]["period"], "1y")
+        self.assertFalse(first[0]["_daily_history"].empty)
+        self.assertEqual(str(first[0]["_daily_history"].index[-1].date()), self.SESSION)
         self.assertTrue(calls[0][1]["threads"])
 
     def test_stale_or_missing_quote_fails_closed(self):

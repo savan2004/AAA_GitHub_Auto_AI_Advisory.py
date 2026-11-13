@@ -657,41 +657,70 @@ company_name = forced_name
 _sym_safe    = symbol.replace(".NS","").replace(".BO","").upper()
 OUT_FILE     = os.path.join(OUT_DIR, f"chart_{_sym_safe}_{int(_time.time())}.png")
 
-# ── DATA DOWNLOAD ─────────────────────────────────────────────────────────────
-data = yf.download(symbol, period=CHART_PERIOD, interval="1d", progress=False, auto_adjust=True)
+# ── PRICE HISTORY (only real, completed bars) ─────────────────────────────────
+# Auto-selection already fetched one full year of real daily OHLCV.
+# Reuse that data instead of making another two Yahoo requests on the button.
+auto_history = winner.pop("_daily_history", None)
+if auto_history is None:
+    data = yf.download(symbol, period=CHART_PERIOD, interval="1d",
+                       progress=False, auto_adjust=True)
+else:
+    data = auto_history.copy()
 if data.empty:
-    print(f"[ERROR] No data for {symbol}", file=sys.stderr); sys.exit(1)
-if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-data = data.dropna(subset=["Open","High","Low","Close","Volume"])
+    print(f"[ERROR] No verified daily data for {symbol}", file=sys.stderr)
+    sys.exit(1)
+if isinstance(data.columns, pd.MultiIndex):
+    data.columns = data.columns.get_level_values(0)
+data = data.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+if len(data) < 55:
+    print(f"[ERROR] Insufficient completed daily data for {symbol}", file=sys.stderr)
+    sys.exit(1)
 
-# Weekly data for trend alignment check
-try:
-    weekly_data = yf.download(symbol, period="1y", interval="1wk", progress=False, auto_adjust=True)
-    if isinstance(weekly_data.columns, pd.MultiIndex):
-        weekly_data.columns = weekly_data.columns.get_level_values(0)
-    weekly_data = weekly_data.dropna(subset=["Close"])
-    if len(weekly_data) < 5: weekly_data = None
-except Exception:
-    weekly_data = None
+# Weekly trend derives from genuine DAILY closes using Friday week-end; a
+# manual chart keeps its existing 1-year weekly provider request.
+if auto_history is not None:
+    weekly_close = data["Close"].resample("W-FRI").last().dropna()
+    weekly_data = (pd.DataFrame({"Close": weekly_close})
+                   if len(weekly_close) >= 10 else None)
+    if CHART_PERIOD == "6mo":
+        cutoff = data.index.max() - pd.DateOffset(months=6)
+        data = data.loc[data.index >= cutoff].copy()
+else:
+    try:
+        weekly_data = yf.download(symbol, period="1y", interval="1wk",
+                                  progress=False, auto_adjust=True)
+        if isinstance(weekly_data.columns, pd.MultiIndex):
+            weekly_data.columns = weekly_data.columns.get_level_values(0)
+        weekly_data = weekly_data.dropna(subset=["Close"])
+        if len(weekly_data) < 5:
+            weekly_data = None
+    except Exception:
+        weekly_data = None
 
-# Fetch real company name + sector
+# Auto-chart uses verified price-derived metrics instead of blocking on
+# optional, potentially slow company-info HTTP requests. Manual behavior
+# remains unchanged, and missing optional metrics are not fabricated.
 sector_name = ""
-try:
-    _ti  = yf.Ticker(symbol).info
-    _fetched = _ti.get("longName") or _ti.get("shortName") or company_name
-    if _fetched and len(_fetched) > 2:
-        company_name = _fetched
-    sector_name = _ti.get("sector") or _ti.get("industry") or ""
-    _mcap_raw   = _ti.get("marketCap")
-    _mcap_str   = ""
-    if _mcap_raw:
-        cr = _mcap_raw / 1e7
-        _mcap_str = f"₹{cr/1000:.1f}K Cr" if cr > 1000 else f"₹{cr:.0f} Cr"
-    _pe_str = f"PE {_ti.get('trailingPE',0):.1f}" if _ti.get("trailingPE") else ""
-    _52h    = _ti.get("fiftyTwoWeekHigh")
-    _52l    = _ti.get("fiftyTwoWeekLow")
-except Exception:
-    _mcap_str = ""; _pe_str = ""; _52h = None; _52l = None
+_mcap_str = ""
+_pe_str = ""
+_52h = None
+_52l = None
+if auto_history is None:
+    try:
+        _ti = yf.Ticker(symbol).info
+        _fetched = _ti.get("longName") or _ti.get("shortName") or company_name
+        if _fetched and len(_fetched) > 2:
+            company_name = _fetched
+        sector_name = _ti.get("sector") or _ti.get("industry") or ""
+        _mcap_raw = _ti.get("marketCap")
+        if _mcap_raw:
+            cr = _mcap_raw / 1e7
+            _mcap_str = f"₹{cr/1000:.1f}K Cr" if cr > 1000 else f"₹{cr:.0f} Cr"
+        _pe_str = f"PE {_ti.get('trailingPE', 0):.1f}" if _ti.get("trailingPE") else ""
+        _52h = _ti.get("fiftyTwoWeekHigh")
+        _52l = _ti.get("fiftyTwoWeekLow")
+    except Exception:
+        pass
 
 # ── INDICATORS ────────────────────────────────────────────────────────────────
 close_s  = data["Close"]; vol_s = data["Volume"]

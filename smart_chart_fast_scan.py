@@ -30,7 +30,7 @@ def choose_auto_chart(universe, *, download, scorer, session_key, sample_limit=6
     symbols = [s for s, _ in selected]
     try:
         prices = download(
-            tickers=symbols, period="6mo", interval="1d", progress=False,
+            tickers=symbols, period="1y", interval="1d", progress=False,
             auto_adjust=True, group_by="ticker", threads=True, timeout=12
         )
     except Exception as exc:
@@ -63,6 +63,9 @@ def choose_auto_chart(universe, *, download, scorer, session_key, sample_limit=6
             if candidate and (candidate.get("sym") == symbol
                               and math.isfinite(float(candidate.get("close", math.nan)))
                               and math.isfinite(float(candidate.get("score", math.nan)))):
+                # Reuse this SAME verified one-year daily history for the chart
+                # and locally derived weekly trend; no repeated provider calls.
+                candidate["_daily_history"] = complete.copy()
                 candidates.append(candidate)
         except (KeyError, ValueError, TypeError, AttributeError):
             continue
