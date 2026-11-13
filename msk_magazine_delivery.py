@@ -61,7 +61,14 @@ def _check_manifest(data, month, source_chat, *, now=None):
         raise MagazineManifestError("Magazine approval timestamp invalid") from exc
     if approved_at.tzinfo is None or approved_at.utcoffset() is None:
         raise MagazineManifestError("Magazine approval timestamp must include timezone")
-    if approved_at.date() > now:
+    # Compare the complete instant when a clock is supplied; comparing only
+    # calendar dates can accept an approval hours ahead of the current time.
+    if isinstance(now, datetime):
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise MagazineManifestError("Verification time must include timezone")
+        if approved_at > now:
+            raise MagazineManifestError("Magazine approval timestamp is in the future")
+    elif approved_at.date() > now:
         raise MagazineManifestError("Magazine approval timestamp is in the future")
     name = data.get("title")
     if not isinstance(name, str) or not 3 <= len(name.strip()) <= 120:
