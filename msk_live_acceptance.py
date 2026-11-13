@@ -426,7 +426,19 @@ def _run_actions(ctx, uid, run_id):
         "Report": "document", "SectorReport": "document",
         "InlineResearchPDF": "document",
     }
+    # Owner-only targeted retests use a *new run ID* but do not resend
+    # unrelated buttons. No selection means the original full 16-action run.
+    names = {name for name, _ in actions}
+    only = os.getenv("MSK_LIVE_ACCEPTANCE_ONLY_FEATURES", "").strip()
+    selected = {name.strip() for name in only.split(",") if name.strip()} if only else names
+    if not selected or not selected.issubset(names):
+        LOG.error("MSK_ACCEPTANCE_NOT_STARTED reason=invalid_feature_filter")
+        return
+    LOG.info("MSK_ACCEPTANCE_SELECTED run_id=%s count=%d features=%s",
+             run_id, len(selected), ",".join(sorted(selected)))
     for label, func in actions:
+        if label not in selected:
+            continue
         try:
             if not _claim_action(run_id, label):
                 continue
@@ -506,5 +518,5 @@ def _run_actions(ctx, uid, run_id):
             return
         LOG.info("MSK_ACCEPTANCE_ACTION_END action=%s result=%s receipts=%d required=%s",
                  label, result, len(receipts), required_kind)
-    LOG.info("MSK_ACCEPTANCE_FINAL run_id=%s api_ack_actions=%d total=16",
-             run_id, completed)
+    LOG.info("MSK_ACCEPTANCE_FINAL run_id=%s api_ack_actions=%d total=%d",
+             run_id, completed, len(selected))
