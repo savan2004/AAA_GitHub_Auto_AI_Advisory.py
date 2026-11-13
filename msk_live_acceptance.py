@@ -84,9 +84,6 @@ def _save_action(run_id, label, *, status, message_id=None, file_id=None,
     Do not treat a Telegram API ACK as proof of content, data freshness,
     database commit, or user receipt. Missing proof => unverified.
     """
-    dsn = os.getenv("PORTFOLIO_DATABASE_URL", "")
-    if not dsn or "sslmode=require" not in dsn:
-        raise RuntimeError("Owner acceptance evidence requires TLS PostgreSQL")
     if status not in ("PASS", "FAIL", "UNVERIFIED"):
         raise ValueError("Invalid acceptance status")
     if validation_status not in ("passed", "failed", "unverified"):
@@ -105,6 +102,9 @@ def _save_action(run_id, label, *, status, message_id=None, file_id=None,
     if final_score is not None and (status != "PASS" or
                                     not 8.5 <= final_score <= 10):
         raise ValueError("Scores require passed evidence gate")
+    dsn = os.getenv("PORTFOLIO_DATABASE_URL", "")
+    if not dsn or "sslmode=require" not in dsn:
+        raise RuntimeError("Owner acceptance evidence requires TLS PostgreSQL")
     import psycopg
     with psycopg.connect(dsn, connect_timeout=12) as conn:
         conn.execute(
