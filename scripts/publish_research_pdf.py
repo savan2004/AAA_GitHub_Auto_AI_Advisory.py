@@ -19,8 +19,9 @@ def main(symbol="SBIN"):
     session = _current_session()
     original = None
     recovered = None
+    actual_report_evidence = {}
     try:
-        ok, result, _ = generate_stock_report_pdf(symbol)
+        ok, result, _ = generate_stock_report_pdf(symbol, evidence_out=actual_report_evidence)
         if not ok:
             raise RuntimeError("Real SBIN research PDF generation withheld; no snapshot written")
         original = Path(result)
@@ -34,11 +35,9 @@ def main(symbol="SBIN"):
         # ReportLab + pypdf may split/omit formatted cover dates in extracted
         # text. Do not infer financial freshness from a PDF text substring.
         # Independently fetch genuine last completed NSE daily history instead.
-        from data_engine import get_hist
-        from technical_price_safety import technical_price_context
-        from research_pdf_price_guard import verified_completed_price_session
-        last_date, audited_close = verified_completed_price_session(
-            symbol, session, get_hist, technical_price_context)
+        from research_pdf_price_guard import verified_generated_report_session
+        last_date, audited_close = verified_generated_report_session(
+            symbol, session, actual_report_evidence)
         session_label = datetime.strptime(session, "%Y-%m-%d").strftime("%d-%b-%Y")
         # Only a textual label check is optional; source freshness is mandatory.
         cover_normalized = "".join(page_texts[0].split()).upper()
