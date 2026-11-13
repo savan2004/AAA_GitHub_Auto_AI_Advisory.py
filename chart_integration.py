@@ -45,6 +45,32 @@ class ChartGenerator:
                 logger.info(f"[Chart] Cache hit: {cache_key}")
                 return True, cached["meta"], cached["path"]
 
+        if not symbol:
+            # The automatic Chart button must always respond promptly.
+            # Read the actual pre-generated, hash-verified completed EOD PNG.
+            from market_breadth import expected_completed_session
+            from smart_chart_snapshot import load_verified_daily_chart
+            expected_session = str(expected_completed_session())
+            day_key = "__verified_daily__" + expected_session
+            cached_day = self.cache.get(day_key)
+            if (cached_day is not None and os.path.exists(cached_day["path"])):
+                return True, cached_day["meta"], cached_day["path"]
+            stored = load_verified_daily_chart(expected_session, self.output_dir)
+            if stored is not None:
+                meta_text, png_path = stored
+                self.cache[day_key] = {
+                    "ts": time.time(), "meta": meta_text, "path": png_path
+                }
+                logger.info("[Chart] MSK_SMART_CHART_VERIFIED_SNAPSHOT session=%s", expected_session)
+                return True, meta_text, png_path
+            logger.warning("[Chart] MSK_SMART_CHART_SNAPSHOT_NOT_READY session=%s",
+                           expected_session)
+            return (False,
+                    "⚠️ <b>Smart Chart preparing</b> — current completed-session "
+                    "image not independently verified. No stale or invented chart "
+                    "will be sent. Please try again after the daily chart refresh.",
+                    None)
+
         try:
             # ── Build subprocess command ──────────────────────────────────────
             # FIX: period passed directly here — no self._period needed
