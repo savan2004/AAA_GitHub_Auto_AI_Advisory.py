@@ -55,6 +55,8 @@ class IndexEvidenceStoreConnectionTest(unittest.TestCase):
             connect=MagicMock(side_effect=TemporaryConnectionFailure()),
             OperationalError=TemporaryConnectionFailure)
         with patch.dict(sys.modules, {"psycopg": fake}), \
+             patch.dict(module.os.environ, {"MSK_INDEX_DATABASE_URL":
+                                             "postgresql://test.invalid/msk?sslmode=require"}), \
              patch.object(module.time, "sleep"):
             result = module.load_prepared_report("conservative")
         self.assertIn("database unavailable", result)
