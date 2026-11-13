@@ -320,6 +320,14 @@ def run_once(ctx):
                       run_id, type(exc).__name__)
 
 
+def _owner_report_symbol():
+    """Only vetted public NSE company symbols for owner-only Report tests."""
+    requested = os.getenv("MSK_LIVE_ACCEPTANCE_REPORT_SYMBOL", "SBIN").strip().upper()
+    if requested not in ("SBIN", "DLF"):
+        raise ValueError("Owner PDF acceptance symbol must be SBIN or DLF")
+    return requested
+
+
 def _run_actions(ctx, uid, run_id):
     bot, send = ctx["bot"], ctx["safe_send"]
     LOG.info("MSK_ACCEPTANCE_RESUME run_id=%s actions=16 owner_verified=true", run_id)
@@ -413,7 +421,7 @@ def _run_actions(ctx, uid, run_id):
         ("SwingAggressive", lambda: swing("aggressive")),
         ("Portfolio", portfolio),
         ("Chart", auto_chart),
-        ("Report", lambda: ctx["run_report"](uid, "SBIN")),
+        ("Report", lambda: ctx["run_report"](uid, _owner_report_symbol())),
         ("SectorReport", lambda: ctx["run_sector_report"](uid)),
         ("InlineTechnical", lambda: emit(ctx["build_technical_text"]("SBIN", "SBIN"))),
         ("InlineFundamental", lambda: emit(ctx["build_fundamental_text"]("SBIN", "SBIN"))),
