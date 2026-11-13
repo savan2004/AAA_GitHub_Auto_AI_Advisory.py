@@ -5,6 +5,7 @@ Never runs against customer chats or changes portfolio holdings.  The separate
 MSK portfolio PostgreSQL database is used only for a one-time run claim.
 """
 import contextvars
+import hashlib
 import logging
 import os
 import re
@@ -289,8 +290,29 @@ def run_once(ctx):
                   type(exc).__name__)
         return
 
+    # Only one live process may walk a run at once. The session lock releases
+    # automatically if Render kills the process. Step claims prevent resends
+    # if Telegram accepted a message just before that crash.
+    import psycopg
+    dsn = os.getenv("PORTFOLIO_DATABASE_URL", "")
+    lock_key = int(hashlib.sha256(run_id.encode("ascii")).hexdigest()[:15], 16)
+    try:
+        with psycopg.connect(dsn, connect_timeout=12) as guard:
+            locked = guard.execute(
+                "SELECT pg_try_advisory_lock(%s)", (lock_key,)
+            ).fetchone()[0]
+            if not locked:
+                LOG.info("MSK_ACCEPTANCE_NOT_STARTED reason=another_runner_active")
+                return
+            _run_actions(ctx, uid, run_id)
+    except Exception as exc:
+        LOG.exception("MSK_ACCEPTANCE_RUN_FAILED run_id=%s type=%s",
+                      run_id, type(exc).__name__)
+
+
+def _run_actions(ctx, uid, run_id):
     bot, send = ctx["bot"], ctx["safe_send"]
-    LOG.info("MSK_ACCEPTANCE_BEGIN run_id=%s actions=16 owner_verified=true", run_id)
+    LOG.info("MSK_ACCEPTANCE_RESUME run_id=%s actions=16 owner_verified=true", run_id)
 
     def emit(message):
         if not isinstance(message, str) or not message.strip():
@@ -455,7 +477,7 @@ def run_once(ctx):
         fail = result in ("timeout", "error", "data_withheld") or result.startswith("missing_")
         record_status = "FAIL" if fail else "UNVERIFIED"
         validation_status = "failed" if fail else "unverified"
-        issue = (probe["error"] or result) if fail else "pending_independent_data_validation"
+        issue = (probe["error"] or ("timeout_after_%ss" % timeouts[label] if result == "timeout" else result)) if fail else "pending_independent_data_validation"
         try:
             _save_action(
                 run_id, label, status=record_status, message_id=message_id,
