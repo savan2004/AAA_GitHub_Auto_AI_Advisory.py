@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import numpy as np
 import pandas as pd
 from research_pdf_fresh_history import (
-    normalize_real_history, verified_pdf_history,
+    normalize_real_history, verified_pdf_history, stitch_yahoo_windows,
 )
 
 SESSION = "2026-11-13"
@@ -55,6 +55,24 @@ class PdfCurrentEodRecovery(unittest.TestCase):
         invalid = bars()
         invalid.loc[invalid.index[-1], "High"] = 1
         self.assertIsNone(normalize_real_history(invalid, SESSION))
+
+    def test_same_provider_fresh_six_month_window_recovers_one_missing_day(self):
+        annual = bars().iloc[:-1]
+        short = bars().iloc[-120:]
+        result = stitch_yahoo_windows(annual, short, SESSION)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), len(bars()))
+        self.assertEqual(str(result.index[-1].date()), SESSION)
+        self.assertEqual(float(result.iloc[-1]["Close"]), float(bars().iloc[-1]["Close"]))
+
+    def test_reject_nonmatching_or_short_overlapping_windows(self):
+        annual = bars().iloc[:-1]
+        recent = bars().iloc[-120:].copy()
+        recent.loc[recent.index[-2], "Close"] *= 1.5
+        self.assertIsNone(stitch_yahoo_windows(annual, recent, SESSION))
+        recent = bars().iloc[-8:]
+        self.assertIsNone(stitch_yahoo_windows(annual, recent, SESSION))
+        self.assertIsNone(stitch_yahoo_windows(bars().iloc[-80:], bars().iloc[-120:], SESSION))
 
     def test_future_price_excluded_and_symbol_not_overridden(self):
         frame = bars()
