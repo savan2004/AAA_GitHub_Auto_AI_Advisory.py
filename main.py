@@ -901,7 +901,9 @@ def _record_telegram_api_ack(chat_id, result, kind):
                 photos = getattr(result, "photo", None) or []
                 if photos:
                     file_id = getattr(photos[-1], "file_id", None)
-            capture_telegram_ack(kind, message_id, file_id=file_id)
+            capture_telegram_ack(kind, message_id, file_id=file_id,
+                                 message_text=(getattr(result, "text", None)
+                                               if kind == "text" else None))
         except Exception:
             logger.warning("MSK owner acceptance receipt recording unavailable")
     ledger = globals().get("_durable_update_ledger")
