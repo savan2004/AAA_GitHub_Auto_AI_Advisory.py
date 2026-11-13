@@ -13,8 +13,9 @@ from research_pdf_snapshot import (
 logging.basicConfig(level=logging.INFO)
 
 
-def main():
-    symbol = "SBIN"
+def main(symbol="SBIN"):
+    if symbol not in ("SBIN", "DLF"):
+        raise ValueError("Only explicitly audited SBIN or DLF reports can be published")
     session = _current_session()
     original = None
     recovered = None
@@ -49,4 +50,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 2:
+        raise SystemExit("Usage: python -m scripts.publish_research_pdf [SBIN|DLF]")
+    main(sys.argv[1] if len(sys.argv) == 2 else "SBIN")
