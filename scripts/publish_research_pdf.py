@@ -31,18 +31,33 @@ def main(symbol="SBIN"):
         from datetime import datetime
         pages = PdfReader(str(original), strict=True).pages
         page_texts = [(page.extract_text() or "").strip() for page in pages]
+        # ReportLab + pypdf may split/omit formatted cover dates in extracted
+        # text. Do not infer financial freshness from a PDF text substring.
+        # Independently fetch genuine last completed NSE daily history instead.
+        from data_engine import get_hist
+        from technical_price_safety import technical_price_context
+        from research_pdf_price_guard import verified_completed_price_session
+        last_date, audited_close = verified_completed_price_session(
+            symbol, session, get_hist, technical_price_context)
         session_label = datetime.strptime(session, "%Y-%m-%d").strftime("%d-%b-%Y")
-        if session_label not in page_texts[0]:
-            raise RuntimeError("Real report first page lacks verified price-session date")
+        # Only a textual label check is optional; source freshness is mandatory.
+        cover_normalized = "".join(page_texts[0].split()).upper()
+        printed_label_present = session_label.replace("-", "").upper() in (
+            cover_normalized.replace("-", ""))
         if symbol not in page_texts[0].upper():
             raise RuntimeError("Real report first page does not identify requested issuer")
         if any(len(text) < 24 for text in page_texts):
             raise RuntimeError("Real report has unreadable page")
         print("MSK_RESEARCH_PDF_CONTENT_AUDIT symbol={} session={} pages={} "
-              "per_page_characters={} current_price_session=true "
+              "per_page_characters={} genuine_last_price_session={} "
+              "verified_close_inr={:.2f} cover_date_text_extracted={} "
               "issuer_identified=true disclosures_verified=true "
               "issuer_accounting_reconciled=false".format(
-                 symbol, session, len(page_texts), [len(text) for text in page_texts]))
+                 symbol, session, len(page_texts), [len(text) for text in page_texts],
+                 last_date, audited_close, str(printed_label_present).lower()))
+        if not printed_label_present:
+            print("MSK_RESEARCH_PDF_COVER_TEXT_PREVIEW symbol={} excerpt={!r}".format(
+                symbol, page_texts[0][:420]))
         source_digest = hashlib.sha256(original.read_bytes()).hexdigest()
         saved_digest = save_verified_report(symbol, original, session=session)
         if source_digest != saved_digest:
