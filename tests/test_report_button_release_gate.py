@@ -81,6 +81,23 @@ class ResearchPdfButtonGateTests(unittest.TestCase):
             self.assertEqual(ack.call_args.args[2], "document")
             self.assertFalse(file.exists())
 
+    def test_verified_daily_cache_skips_all_slow_downloads(self):
+        with TemporaryDirectory() as folder:
+            file = Path(folder) / "SBIN_20261113_verified.pdf"
+            file.write_bytes(b"%PDF-1.4\\nverified internal fixture")
+            run, send, bot, ack = _world(file)
+            run.__globals__["generate_stock_report_pdf"] = Mock(
+                side_effect=AssertionError("No new provider calls for certified cache"))
+            with patch("research_pdf_snapshot.load_verified_report",
+                       return_value=(str(file), "2026-11-13")) as read, \\
+                 patch("pdf_release_gate.validate_research_pdf",
+                       return_value={"pages":8,"bytes":685897}):
+                run(12, "SBIN")
+            read.assert_called_once_with("SBIN")
+            bot.send_document.assert_called_once()
+            ack.assert_called_once()
+            self.assertFalse(file.exists())
+
     def test_invalid_symbol_disclosure_never_bypasses_gate(self):
         from pdf_release_gate import ResearchPDFRefused
         with TemporaryDirectory() as folder:
