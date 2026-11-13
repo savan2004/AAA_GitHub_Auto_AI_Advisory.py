@@ -9,6 +9,7 @@ on:
       - 'scripts/publish_research_pdf.py'
       - 'tests/test_report_button_release_gate.py'
       - 'tests/test_research_pdf_snapshot.py'
+      - 'tests/test_live_pdf_symbol_choice.py'
       - '.github/workflows/msk-research-pdf-neon-daily.yml'
   push:
     branches: [main]
@@ -16,6 +17,7 @@ on:
       - 'research_pdf_snapshot.py'
       - 'scripts/publish_research_pdf.py'
       - 'tests/test_research_pdf_snapshot.py'
+      - 'tests/test_live_pdf_symbol_choice.py'
       - '.github/workflows/msk-research-pdf-neon-daily.yml'
   workflow_dispatch:
   schedule:
@@ -46,6 +48,8 @@ jobs:
         run: python -m unittest discover -s tests -p test_research_pdf_snapshot.py -v
       - name: Verify customer button sends only disclosure-checked PDFs
         run: python -m unittest discover -s tests -p test_report_button_release_gate.py -v
+      - name: Verify independent DLF owner-only Report test scope
+        run: python -m unittest discover -s tests -p test_live_pdf_symbol_choice.py -v
 
   real-public-report:
     if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -74,3 +78,31 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Generate and verify real SBIN PDF bytes, pages and Neon readback
         run: python -m scripts.publish_research_pdf
+
+  real-dlf-report:
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONUNBUFFERED: '1'
+      TZ: Asia/Kolkata
+      MPLBACKEND: 'Agg'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fail closed if independent research Neon is absent
+        run: |
+          if [ -z "$MSK_INDEX_DATABASE_URL" ]; then
+            echo "::error::Protected MSK research database unavailable"
+            exit 1
+          fi
+      - name: Install real equity research and PDF generation dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Generate real DLF 8-page report and verify Neon bytes/readback
+        run: python -m scripts.publish_research_pdf DLF
