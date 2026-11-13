@@ -6,6 +6,9 @@ on:
     paths:
       - 'smart_chart_snapshot.py'
       - 'chart_integration.py'
+      - 'gen_smart_stock_chart.py'
+      - 'smart_chart_fast_scan.py'
+      - 'test_smart_chart_fast_scan.py'
       - 'scripts/publish_smart_chart.py'
       - 'test_smart_chart_snapshot.py'
       - '.github/workflows/msk-smart-chart-neon-daily.yml'
@@ -14,6 +17,9 @@ on:
     paths:
       - 'smart_chart_snapshot.py'
       - 'chart_integration.py'
+      - 'gen_smart_stock_chart.py'
+      - 'smart_chart_fast_scan.py'
+      - 'test_smart_chart_fast_scan.py'
       - 'scripts/publish_smart_chart.py'
       - 'test_smart_chart_snapshot.py'
       - '.github/workflows/msk-smart-chart-neon-daily.yml'
