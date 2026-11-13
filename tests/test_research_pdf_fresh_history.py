@@ -41,7 +41,7 @@ class PdfCurrentEodRecovery(unittest.TestCase):
 
     def test_both_sources_stale_fail_closed(self):
         old = bars().iloc[:-1]
-        with self.assertRaisesRegex(RuntimeError, "withheld"):
+        with self.assertRaisesRegex(ValueError, "stale or"):
             verified_pdf_history(
                 "SBIN", lambda sym, period: old, SESSION,
                 lambda sym: old)
