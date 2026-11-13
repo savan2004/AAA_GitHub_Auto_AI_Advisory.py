@@ -1,0 +1,76 @@
+name: MSK Research PDF Verified Daily Neon Snapshot
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'research_pdf_snapshot.py'
+      - 'scripts/publish_research_pdf.py'
+      - 'tests/test_report_button_release_gate.py'
+      - 'tests/test_research_pdf_snapshot.py'
+      - '.github/workflows/msk-research-pdf-neon-daily.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'research_pdf_snapshot.py'
+      - 'scripts/publish_research_pdf.py'
+      - 'tests/test_research_pdf_snapshot.py'
+      - '.github/workflows/msk-research-pdf-neon-daily.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '15 13 * * 1-5'  # 18:45 IST weekdays, completed NSE daily session
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msk-research-pdf-verified-daily
+  cancel-in-progress: false
+
+jobs:
+  cache-safety-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install only offline validation dependencies
+        run: python -m pip install 'pypdf>=5,<7'
+      - name: Compile cache, real button and publishing scripts
+        run: python -m py_compile main.py research_pdf_snapshot.py scripts/publish_research_pdf.py tests/test_research_pdf_snapshot.py tests/test_report_button_release_gate.py
+      - name: Verify no stale data, no forged PDF and no slow re-download on cache hit
+        run: python -m unittest discover -s tests -p test_research_pdf_snapshot.py -v
+      - name: Verify customer button sends only disclosure-checked PDFs
+        run: python -m unittest discover -s tests -p test_report_button_release_gate.py -v
+
+  real-public-report:
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONUNBUFFERED: '1'
+      TZ: Asia/Kolkata
+      MPLBACKEND: 'Agg'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require dedicated TLS research connection (never portfolio)
+        run: |
+          if [ -z "$MSK_INDEX_DATABASE_URL" ]; then
+            echo "::error::Protected research Neon connection not configured"
+            exit 1
+          fi
+      - name: Install genuine research/report dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Generate and verify real SBIN PDF bytes, pages and Neon readback
+        run: python -m scripts.publish_research_pdf
