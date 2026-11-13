@@ -51,10 +51,15 @@ def choose_auto_chart(universe, *, download, scorer, session_key, sample_limit=6
             else:
                 continue
             # Reject stale last sessions even when six months of history exist.
-            last_session = frame.dropna(subset=["Close"]).index[-1]
+            # Yahoo can return a valid multi-symbol frame with some all-NaN
+            # constituents. An empty per-symbol history is NOT a candidate.
+            complete = frame.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+            if complete.empty:
+                continue
+            last_session = complete.index[-1]
             if str(last_session.date()) != str(session_key):
                 continue
-            candidate = scorer(symbol, name, df=frame.copy())
+            candidate = scorer(symbol, name, df=complete.copy())
             if candidate and (candidate.get("sym") == symbol
                               and math.isfinite(float(candidate.get("close", math.nan)))
                               and math.isfinite(float(candidate.get("score", math.nan)))):
