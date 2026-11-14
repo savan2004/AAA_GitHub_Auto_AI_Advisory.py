@@ -366,6 +366,11 @@ def get_breadth():
 
 
 def format_breadth(r):
+    """Investor-first summary of VERIFIED breadth data (no trading prediction).
+
+    The single-session direction is deliberately separate from the share of
+    stocks above moving averages. Sampled industries do not become buy calls.
+    """
     if r.get("state") == "warming":
         return ("⏳ <b>Market Breadth preparing</b>\n"
                 "Collecting genuine Nifty 500 completed-session prices. "
@@ -375,27 +380,99 @@ def format_breadth(r):
         return ("⚠️ <b>Market Breadth unavailable</b>\n"
                 "No verified current-session snapshot. The provider failed; "
                 "the next bounded refresh will retry. No stale data shown.")
-    pct = lambda x: 'unavailable' if x is None else f'{x:.1f}%'
-    lines = ['📊 <b>MARKET PARTICIPATION</b>', f"Session: {r['session']} • completed daily bars",
-             html.escape(r['source']), f"Coverage: {r['valid']}/{r['requested']} ({r['coverage']:.1f}%)",
-             f"Advances {r['advances']} | Declines {r['declines']} | Unchanged {r['unchanged']}",
-             'A/D ratio: ' + (str(r['ad_ratio']) if r['ad_ratio'] is not None else 'N/A (no declines)'), '']
-    for n in (20,50,200):
-        m = r[f'ma{n}']; lines.append(f"Above {n}-day SMA: {pct(m['pct'])} ({m['count']} eligible)")
-    lines += [f"252-session closing highs/lows: {r['highs']}/{r['lows']} ({r['high_low_count']} eligible)"]
-    if r['trend_delta'] is not None:
-        lines.append(f"Advance share, first→last of 5 sessions: {r['trend_delta']:+.1f} pp (same {r['trend_count']} stocks)")
+
+    def pct(value):
+        return 'unavailable' if value is None else f'{value:.1f}%'
+
+    # Rates below are calculated from the same verified stock universe.
+    valid = r['valid']
+    advances, declines = r['advances'], r['declines']
+    rising = 100.0 * advances / valid if valid else None
+    falling = 100.0 * declines / valid if valid else None
+    ma20, ma50, ma200 = (r[f'ma{n}'] for n in (20, 50, 200))
+    weak_day = rising is not None and rising < 40
+    strong_day = rising is not None and rising > 60
+    short_trend_positive = ma20['pct'] is not None and ma20['pct'] >= 50
+
+    if weak_day and short_trend_positive:
+        headline = "⚠️ <b>Weak trading day; short-term trend not yet broadly broken</b>"
+        plain = ("Fewer than 4 in 10 stocks rose today, but a majority of "
+                 "eligible stocks remain above their 20-day average. "
+                 "This is near-term selling pressure, not proof of a lasting downtrend.")
+        action = ("<b>Fresh investments:</b> Consider staggered entries rather than "
+                  "treating one weak day as an all-clear or a crash signal.")
+    elif weak_day:
+        headline = "🔴 <b>Weak participation and soft short-term trend</b>"
+        plain = ("Most covered stocks fell today, and fewer than half are above "
+                 "their 20-day average. Market participation is weak.")
+        action = ("<b>Fresh investments:</b> Consider smaller position sizes; "
+                  "wait for broader participation before increasing risk.")
+    elif strong_day and short_trend_positive:
+        headline = "🟢 <b>Broad daily strength with supportive short-term trend</b>"
+        plain = ("Most covered stocks rose and a majority remain above their "
+                 "20-day average. This supports participation, not a guaranteed rally.")
+        action = ("<b>Fresh investments:</b> Confirm stock-specific valuations, "
+                  "earnings and risk before taking a new position.")
+    else:
+        headline = "🟡 <b>Mixed market participation</b>"
+        plain = ("Daily breadth is mixed; these figures alone do not confirm "
+                 "a sustained market direction.")
+        action = ("<b>Fresh investments:</b> Prefer company fundamentals and "
+                  "planned risk limits over the day's market-wide reading.")
+
+    lines = [
+        "📊 <b>MSK MARKET HEALTH | NIFTY 500</b>",
+        f"📅 Last completed session: {html.escape(str(r['session']))}",
+        headline,
+        html.escape(plain),
+        "",
+        "<b>1. What happened?</b>",
+        f"📉 {declines}/{valid} stocks fell ({pct(falling)})",
+        f"📈 {advances}/{valid} stocks rose ({pct(rising)})",
+    ]
     if r['benchmark_change'] is not None:
-        lines.append(f"Nifty 50: {r['benchmark_change']:+.2f}%")
-    lines += ['', '<b>' + html.escape(r['interpretation']) + '</b>']
+        lines.append(f"Nifty 50 daily move: {r['benchmark_change']:+.2f}%")
+
+    lines.extend([
+        "",
+        "<b>2. Is the wider trend still holding?</b>",
+        f"Above 20-day average: {pct(ma20['pct'])} ({ma20['count']} measured)",
+        f"Above 50-day average: {pct(ma50['pct'])} ({ma50['count']} measured)",
+        f"Above 200-day average: {pct(ma200['pct'])} ({ma200['count']} measured)",
+        "A stock can fall today yet remain above its average; these measure different things.",
+    ])
+    if r.get('trend_delta') is not None:
+        change = r['trend_delta']
+        direction = "weakened" if change < 0 else ("improved" if change > 0 else "was unchanged")
+        lines.append(
+            f"5-session participation {direction}: {change:+.1f} percentage points "
+            f"(same {r['trend_count']} stocks; first vs last session).")
+
+    lines.extend(["", "<b>3. What this means for investors</b>", action,
+                  "<b>Existing holdings:</b> Review position concentration and "
+                  "your planned risk limits; a breadth reading is not a sell signal."])
+
+    eligible_sectors = [(name, data) for name, data in r.get('sectors', {}).items()
+                        if data.get('count', 0) >= 5]
+    ranked = sorted(eligible_sectors,
+                    key=lambda pair: pair[1]['adv_pct'], reverse=True)
+    chosen = ranked[:3] + [item for item in ranked[-3:] if item not in ranked[:3]]
+    if chosen:
+        lines.extend(["", "<b>4. Industry snapshot — daily participation only</b>"])
+        for name, data in chosen:
+            rate = data['adv_pct']
+            n = data['count']
+            mark = "⚠️" if n < 15 else "•"
+            lines.append(f"{mark} {html.escape(str(name))}: {rate:.0f}% rising ({n} covered)")
+        lines.append("Small groups can swing sharply; this is NOT a sector buy/sell ranking.")
+
+    lines.extend([
+        "",
+        f"✅ Verified coverage: {valid}/{r['requested']} ({r['coverage']:.1f}%)",
+        f"Data: {html.escape(str(r['source']))}; fetched {html.escape(str(r['fetched']))}.",
+        "Adjusted completed daily closes. Current members, not a backtest.",
+        "Educational market context; no individual stock recommendation.",
+    ])
     if r.get('trend_context'):
-        lines.append('⚠️ ' + html.escape(r['trend_context']))
-    lines += ['', '<b>Industry participation (≥5 covered stocks)</b>']
-    sectors = [(s,v) for s,v in r['sectors'].items() if v['count'] >= 5]
-    ranked = sorted(sectors, key=lambda x: x[1]['adv_pct'], reverse=True)
-    chosen = ranked[:3] + [x for x in ranked[-3:] if x not in ranked[:3]]
-    for s,v in chosen:
-        lines.append(f"{html.escape(s)}: {v['adv_pct']:.0f}% advancing ({v['count']})")
-    lines += ['', f"Fetched {r['fetched']}. Adjusted prices; highs/lows use closes, not intraday extremes.",
-              'Missing/stale sessions excluded. Current constituents, not a historical backtest. Educational indicators.']
-    return '\n'.join(lines)
+        lines.append("⚠️ " + html.escape(r['trend_context']))
+    return "\n".join(lines)
