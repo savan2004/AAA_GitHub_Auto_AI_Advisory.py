@@ -1095,7 +1095,10 @@ def cmd_daily_report(m):
 
 
 @bot.message_handler(
-    func=lambda m: bool(parse_daily_report_request(getattr(m, "text", None))),
+    # Existing emoji buttons keep their direct scan handler; both paths
+    # still invoke deliver_daily_reports() with exactly the same formatter.
+    func=lambda m: not str(getattr(m, "text", "")).startswith(("🏦", "⚖️", "🚀")) and
+                   bool(parse_daily_report_request(getattr(m, "text", None))),
     content_types=["text"],
 )
 def plain_daily_report(m):
