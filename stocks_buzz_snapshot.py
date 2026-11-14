@@ -66,10 +66,13 @@ def _verified(payload, expected=None):
                 raise ValueError("Wrong Buzz setup classification")
             for key in ("ltp", "entry", "sl", "t1", "t2", "score"):
                 value = entry.get(key)
-                if (type(value) not in (float, int) or not math.isfinite(value)
-                        or value <= 0 if key != "score" else
-                        type(value) not in (float, int) or not math.isfinite(value) or not 0 <= value <= 100):
+                if type(value) not in (float, int) or not math.isfinite(value):
                     raise ValueError("Invalid Buzz market number")
+                if key == "score":
+                    if not 0 <= value <= 100:
+                        raise ValueError("Invalid Buzz rating")
+                elif value <= 0:
+                    raise ValueError("Invalid Buzz market price")
             if not entry["sl"] < entry["entry"] < entry["t1"] < entry["t2"]:
                 raise ValueError("Buzz trade level ordering invalid")
     return payload
