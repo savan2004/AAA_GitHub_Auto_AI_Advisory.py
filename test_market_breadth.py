@@ -16,6 +16,41 @@ def frame(n=300, up=True):
 
 NOW = datetime(2026,10,24,18,tzinfo=IST)
 
+class InvestorFriendlyBreadthTests(unittest.TestCase):
+    def test_weak_day_with_good_ma_does_not_claim_downtrend(self):
+        r = {
+            'session': '2026-11-13', 'source': 'Nifty 500 constituent CSV',
+            'requested': 501, 'valid': 497, 'coverage': 99.2,
+            'advances': 161, 'declines': 335, 'unchanged': 1,
+            'ma20': {'pct': 81.9, 'count': 497},
+            'ma50': {'pct': 59.0, 'count': 497},
+            'ma200': {'pct': 50.6, 'count': 490},
+            'benchmark_change': -0.61, 'trend_delta': -11.5,
+            'trend_count': 497, 'trend_context': None,
+            'sectors': {
+                'Textiles': {'adv_pct': 60, 'count': 5},
+                'Telecommunication': {'adv_pct': 54, 'count': 11},
+                'Capital Goods': {'adv_pct': 51, 'count': 69},
+                'Metals & Mining': {'adv_pct': 5, 'count': 20},
+            },
+            'fetched': '13-Nov 22:25 IST',
+        }
+        msg = format_breadth(r)
+        self.assertIn('Weak trading day; short-term trend not yet broadly broken', msg)
+        self.assertIn('335/497 stocks fell (67.4%)', msg)
+        self.assertIn('161/497 stocks rose (32.4%)', msg)
+        self.assertIn('Above 20-day average: 81.9%', msg)
+        self.assertIn('5-session participation weakened: -11.5 percentage points', msg)
+        self.assertIn('Small groups can swing sharply', msg)
+        self.assertIn('NOT a sector buy/sell ranking', msg)
+        self.assertNotIn('confirmed downtrend', msg)
+        self.assertLess(len(msg), 3500)
+
+    def test_warming_and_missing_data_do_not_make_recommendations(self):
+        self.assertIn('preparing', format_breadth({'state': 'warming'}))
+        self.assertIn('unavailable', format_breadth({'state': 'unavailable'}))
+
+
 class BreadthTests(unittest.TestCase):
     def test_participation_denominators_and_short_history(self):
         f=frame();down=frame(up=False);short=frame(30)
