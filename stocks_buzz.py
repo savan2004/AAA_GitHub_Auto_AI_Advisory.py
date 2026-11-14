@@ -332,6 +332,19 @@ def get_cached() -> Optional[dict]:
         if (result and result.get("data_session") == _last_completed_session() and
                 result.get("coverage", 0) >= MIN_SCAN_COVERAGE):
             return result
+    # Render restarts wipe RAM. Reuse ONLY a verified completed-session scan
+    # produced after market close by the independent research Neon worker.
+    try:
+        from stocks_buzz_snapshot import load_verified_scan
+        result = load_verified_scan()
+        if result is not None:
+            result["coverage"] = result["downloaded"] / result["universe_size"]
+            with _state_lock:
+                _state.update(result=result, ts=time.time())
+            return result
+    except Exception as exc:
+        logger.warning("Stocks Buzz durable snapshot unavailable: %s",
+                       type(exc).__name__)
     return None
 
 
@@ -388,6 +401,13 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
         _state["ts"] = time.time()
     logger.info(f"[buzz] scan done in {result['elapsed']:.0f}s: {len(hist)}/{len(symbols)} "
                 f"downloaded, {liquid} liquid, {len(breakouts)} breakouts, {len(watch)} watch")
+    # Save only after the genuine index-wide scan passed all coverage gates.
+    try:
+        from stocks_buzz_snapshot import save_verified_scan
+        if save_verified_scan(result):
+            logger.info("MSK_BUZZ_SCAN_DURABLE session=%s", completed)
+    except Exception as exc:
+        logger.warning("MSK_BUZZ_SCAN_DURABLE_FAILED type=%s", type(exc).__name__)
     return result
 
 
