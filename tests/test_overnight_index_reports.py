@@ -169,7 +169,11 @@ class OvernightLedgerTests(unittest.TestCase):
                 })
             self.store.save_report(self.day,profile,"READY",stats,"SYNTHETIC READY")
         state=n.readiness_check(self.store,self.day)
-        self.assertTrue(state["ready"])
+        # A synthetic READY summary with no actual qualifying Smallcap pick
+        # must not satisfy the aggregate morning publication gate.
+        self.assertFalse(state["ready"])
+        self.assertEqual([row["ready"] for row in state["profiles"]],
+                         [True, True, False])
         self.assertEqual([row["expected"] for row in state["profiles"]],
                          [100,150,250])
         # Without any real records on the following session, a healthy DB
