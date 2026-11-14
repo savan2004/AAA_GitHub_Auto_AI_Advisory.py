@@ -369,7 +369,12 @@ def render_snapshot(profile, universe, records, session):
         sectors[sector]+=1;selected.append(row)
         if len(selected)==5:
             break
-    state="READY" if publishable else "PARTIAL"
+    # A complete index audit is not the same as a publishable Top 5.
+    # Smallcap READY must include at least one independently qualified setup.
+    # Do not lower any fundamental, risk, or technical trading gate.
+    state=("READY" if publishable and (profile!="aggressive" or selected)
+           else "NO_CANDIDATES" if publishable and profile=="aggressive"
+           else "PARTIAL")
     lines=[
         f"📊 <b>{html.escape(universe['cap'].upper())} | {html.escape(universe['name'])}</b>",
         f"📅 NSE completed session: <b>{session}</b> | Prepared overnight",
@@ -483,6 +488,8 @@ def load_prepared_report(profile, *, store=None, now=None):
         return (f"⏳ Latest report is dated {date_loaded}; expected completed "
                 f"NSE session {expected}. Overnight report not ready. "
                 "Old rankings will not be presented as fresh.")
+    if record["state"]=="NO_CANDIDATES":
+        return record["text"]+"\n⛔ No Top 5 issued; await a new verified market setup."
     if record["state"]!="READY":
         return record["text"]+"\n⏳ Awaiting next overnight retry."
     # Telegram must apply the same real-ledger gate as morning CI. A report
