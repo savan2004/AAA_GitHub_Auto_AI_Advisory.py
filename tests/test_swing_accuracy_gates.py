@@ -29,7 +29,7 @@ class SwingAccuracy(unittest.TestCase):
         idx = pd.bdate_range(end=session, periods=140)
         nifty = pd.DataFrame({"Close": [100 + i for i in range(140)]}, index=idx)
         symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
-        histories = {sym: object() for sym in symbols}
+        histories = {sym: [1] for sym in symbols}
         used = iter([session] * matching + [pd.Timestamp("2026-11-12")] * (5 - matching))
         cached = Mock()
         scan = extracted("_scan", {
@@ -69,7 +69,7 @@ class SwingAccuracy(unittest.TestCase):
         saved.assert_not_called()
 
     def test_no_candidate_can_be_sent_from_unverified_cache(self):
-        func = extracted("get_swing_trades", {"_load": lambda: {
+        func = extracted("get_swing_trades", {"THRESHOLDS": {"conservative": {"LONG": 7, "SHORT": 8}}, "_load": lambda: {
             "quality": "INSUFFICIENT_COVERAGE", "rows": [{"sym": "DUMMY"}],
             "scanned": 3, "total": 5,
         }})
