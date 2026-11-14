@@ -5,6 +5,7 @@ import time
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional, Callable
 from unittest.mock import Mock
 
 import numpy as np
@@ -21,7 +22,8 @@ def load_functions(*names, globals_=None):
     if set(names) != set(found):
         raise AssertionError("Stocks Buzz source function missing")
     ns = {"pd": pd, "np": np, "datetime": datetime, "time": time,
-          "IST": IST, "MIN_SCAN_COVERAGE": .8}
+          "IST": IST, "MIN_SCAN_COVERAGE": .8,
+          "Optional": Optional, "Callable": Callable}
     ns.update(globals_ or {})
     exec(compile(ast.Module(body=[found[name] for name in names],
                             type_ignores=[]), "stocks_buzz.py", "exec"), ns)
