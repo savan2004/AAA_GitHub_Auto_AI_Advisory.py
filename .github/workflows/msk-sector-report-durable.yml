@@ -1,0 +1,72 @@
+name: MSK Sector Report Durable PDF
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sector_report.py'
+      - 'sector_report_snapshot.py'
+      - 'tests/test_sector_report_snapshot.py'
+      - '.github/workflows/msk-sector-report-durable.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'sector_report.py'
+      - 'sector_report_snapshot.py'
+      - 'tests/test_sector_report_snapshot.py'
+  workflow_dispatch:
+  schedule:
+    # 17:30 IST after completed NSE trading session, Mon-Fri.
+    - cron: '0 12 * * 1-5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msk-sector-session-pdf
+  cancel-in-progress: false
+
+jobs:
+  verify-code:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PDF reader for genuine structural validation
+        run: pip install 'pypdf>=5,<7'
+      - name: Compile real sector pipeline
+        run: python -m py_compile sector_report.py sector_report_snapshot.py tests/test_sector_report_snapshot.py
+      - name: Verify stale and corrupt reports cannot be cached
+        run: python -m unittest discover -s tests -p 'test_sector_report_snapshot.py' -v
+
+  produce-verified-pdf:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: verify-code
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_RESEARCH_ONLY: '1'
+      TZ: Asia/Kolkata
+      MPLBACKEND: 'Agg'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require TLS research database, never portfolio storage
+        run: |
+          if [ -z "$MSK_INDEX_DATABASE_URL" ]; then
+            echo "::error::Research Neon secret missing. No PDF is published."
+            exit 1
+          fi
+      - name: Install authentic public-data and PDF dependencies
+        run: pip install -r requirements.txt
+      - name: Generate completed-session sector report and verify Neon readback
+        run: python -m sector_report_snapshot
