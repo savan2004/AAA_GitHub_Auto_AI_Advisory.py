@@ -99,7 +99,13 @@ def _score(f, t):
                       + 0.3 * _bound(relvol * 50))
     valuation = _bound(100 - (pe - 10) * 1.7)
     earnings = _bound(45 + roe * 0.9 + growth * 0.8)
-    liquidity_risk = _bound(100 - risk * 4)
+    # Risk and actual 20-session turnover share the final 10%. Historic
+    # screened rows without persisted turnover receive a neutral 50/100
+    # liquidity score, never an invented traded-value number.
+    turnover = _num(t.get("turnover_20d"))
+    liquidity = (_bound(50 + 25 * math.log10(turnover / 2e7))
+                 if turnover is not None and turnover >= 2e7 else 50.0)
+    liquidity_risk = _bound(0.7 * _bound(100 - risk * 4) + 0.3 * liquidity)
     return round(sum(v * w for v, w in zip(
         (trend, momentum, valuation, earnings, liquidity_risk), WEIGHTS)), 1)
 
