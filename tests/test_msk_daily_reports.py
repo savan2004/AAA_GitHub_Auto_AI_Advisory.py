@@ -1,11 +1,14 @@
 """No provider calls: deterministic on-demand Telegram report acceptance."""
 import re
+import sys
+import types
 import unittest
 from copy import deepcopy
 from datetime import datetime
+from unittest.mock import patch
 
 from index_constituents import IST
-from msk_daily_reports import NAMES, parse_request, format_report
+from msk_daily_reports import NAMES, parse_request, format_report, _intraday_quotes, _score
 
 
 def sample(i, profile="conservative"):
@@ -99,6 +102,47 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("3/5", out)
         self.assertNotIn("SBIN | Score", out)
         self.assertNotIn("AXISBANK | Score", out)
+
+    def test_real_liquidity_changes_only_risk_component(self):
+        row = sample(0)
+        financial = row["fundamental"]
+        technical = row["technical"]
+        old = _score(financial, technical)
+        technical["turnover_20d"] = 20000000
+        low = _score(financial, technical)
+        technical["turnover_20d"] = 200000000
+        high = _score(financial, technical)
+        self.assertIsNotNone(old)
+        self.assertLess(low, high)
+
+    def test_intraday_quotes_require_live_session_and_current_timestamp(self):
+        now = datetime.fromisoformat("2026-11-16T10:30:00+05:30")
+        quotes = {
+            "SBIN": {"quote_status": "recent_observation",
+                     "quote_source": "NSE India", "price": 1111.2,
+                     "quote_asof_ist": "2026-11-16T10:27:00+05:30"},
+            "AXISBANK": {"quote_status": "recent_observation",
+                         "quote_source": "Yahoo Finance v8", "price": 1500,
+                         "quote_asof_ist": "2026-11-16T09:30:00+05:30"},
+        }
+        fake = types.ModuleType("data_engine")
+        fake.get_verified_quote = lambda sym: quotes.get(sym)
+        with patch.dict(sys.modules, {"data_engine": fake}):
+            result = _intraday_quotes(["SBIN", "AXISBANK"], now)
+            closed = _intraday_quotes(["SBIN"], datetime.fromisoformat(
+                "2026-11-15T10:30:00+05:30"))
+        self.assertIn("SBIN", result)
+        self.assertNotIn("AXISBANK", result)
+        self.assertEqual(closed, {})
+
+        records = {sample(i)["symbol"]: sample(i) for i in range(5)}
+        rendered = format_report("conservative", records,
+                                 {"membership_hash":"1234567890abcdef"},
+                                 "2026-11-13", now=now, quotes=result)
+        self.assertIn("LTP ₹1,111.20 at 10:27 IST", rendered)
+        self.assertIn("verified quotes", rendered)
+        self.assertNotIn("Status: <b>BUY</b>", rendered)
+        self.assertIn("trade levels: 2026-11-13 close", rendered)
 
     def test_unsafe_html_escaped(self):
         rows = {sample(i)["symbol"]: sample(i) for i in range(5)}

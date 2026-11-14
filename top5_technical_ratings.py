@@ -85,6 +85,7 @@ def technical_candidate(sym, raw, profile, now=None):
             "sym":str(sym), "score":score, "tech_score":score,
             "ltp":round(last,2), "chg":round((last/float(close.iloc[-2])-1)*100,2),
             "rsi":round(float(rsi),1), "adx":round(adx,1), "volx":round(volx,2),
+            "turnover_20d":round(turnover,2),
             "atr_pct":round(atr_pct,2), "risk_pct":round(loss_pct,2),
             "entry":round(trigger,2), "sl":round(stop,2),
             "t1":round(trigger + 2*risk,2), "t2":round(trigger + 3*risk,2),

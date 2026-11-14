@@ -8,7 +8,8 @@ from __future__ import annotations
 import html
 import math
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, time as dtime
+from concurrent.futures import ThreadPoolExecutor, wait
 
 # Keep command routing dependency-free: the original menu smoke suite runs
 # without third-party networking packages installed.
@@ -98,7 +99,13 @@ def _score(f, t):
                       + 0.3 * _bound(relvol * 50))
     valuation = _bound(100 - (pe - 10) * 1.7)
     earnings = _bound(45 + roe * 0.9 + growth * 0.8)
-    liquidity_risk = _bound(100 - risk * 4)
+    # Risk and actual 20-session turnover share the final 10%. Historic
+    # screened rows without persisted turnover receive a neutral 50/100
+    # liquidity score, never an invented traded-value number.
+    turnover = _num(t.get("turnover_20d"))
+    liquidity = (_bound(50 + 25 * math.log10(turnover / 2e7))
+                 if turnover is not None and turnover >= 2e7 else 50.0)
+    liquidity_risk = _bound(0.7 * _bound(100 - risk * 4) + 0.3 * liquidity)
     return round(sum(v * w for v, w in zip(
         (trend, momentum, valuation, earnings, liquidity_risk), WEIGHTS)), 1)
 
@@ -158,7 +165,42 @@ def _context(breadth, session, segment, risk_limit):
     return lines[:3]
 
 
-def format_report(profile, records, stats, session, *, now=None, breadth=None):
+# Shared bounded quote pool; incomplete provider requests must never hold reports.
+_QUOTE_POOL = ThreadPoolExecutor(max_workers=5, thread_name_prefix="msk-top5-quote")
+
+
+def _intraday_quotes(symbols, now):
+    """Optional timestamp-verified LTPs; no price-only cache becomes a BUY signal."""
+    if (now.weekday() > 4 or
+            not dtime(9, 15) <= now.timetz().replace(tzinfo=None) < dtime(15, 30)):
+        return {}
+    try:
+        from data_engine import get_verified_quote
+    except ImportError:
+        return {}
+    tasks = {_QUOTE_POOL.submit(get_verified_quote, sym): sym for sym in symbols}
+    done, _unfinished = wait(tasks, timeout=5)
+    result = {}
+    for future in done:
+        try:
+            quote = future.result()
+            if not isinstance(quote, dict) or quote.get("quote_status") != "recent_observation":
+                continue
+            stamp = datetime.fromisoformat(quote.get("quote_asof_ist", ""))
+            price = _num(quote.get("price"))
+            source = quote.get("quote_source")
+            seconds = (now - stamp.astimezone(IST)).total_seconds()
+            if (price is not None and price > 0 and stamp.tzinfo is not None
+                    and stamp.astimezone(IST).date() == now.date()
+                    and -30 <= seconds <= 900
+                    and source in ("NSE India", "Yahoo Finance v8")):
+                result[tasks[future]] = (price, stamp.astimezone(IST))
+        except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+            continue
+    return result
+
+
+def format_report(profile, records, stats, session, *, now=None, breadth=None, quotes=None):
     """Fresh rendering for each request, no fabricated price levels or winners."""
     if profile not in NAMES:
         raise ValueError("unknown_profile")
@@ -168,8 +210,13 @@ def format_report(profile, records, stats, session, *, now=None, breadth=None):
     if day > now.date():
         raise ValueError("future_candle_is_not_valid")
     ranked = _ranked(profile, records, stats, day)
+    quotes = quotes or {}
     label = (f"As of {day.isoformat()} close" if day == now.date()
              else f"As of {day.isoformat()} — next update after market close")
+    if quotes:
+        latest = max(stamp for _price, stamp in quotes.values())
+        label = (f"As of {latest.strftime('%d %b %H:%M')} IST (verified quotes); "
+                 f"trade levels: {day.isoformat()} close")
     lines = [
         "━━━━━━━━━━━━━━━━━━━━━━━",
         "📊 <b>MSK MARKET UPDATE</b>",
@@ -210,6 +257,10 @@ def format_report(profile, records, stats, session, *, now=None, breadth=None):
             # The range is purely an observation band, never a BUY order.
             high = round(entry * 1.005, 2)
             rr = (t1 - entry) / (entry - sl)
+            if sym in quotes:
+                live_price, stamp = quotes[sym]
+                reason += (f"; LTP ₹{live_price:,.2f} at "
+                           f"{stamp.strftime('%H:%M')} IST (not a breakout confirmation)")
             lines.extend([
                 "",
                 f"<b>{i}. {html.escape(sym)} | Score {score:.1f}/100</b>",
@@ -255,5 +306,9 @@ def render_latest_profile(profile, *, now=None):
         breadth = _load_daily_snapshot(str(report["day"]))
     except (ValueError, RuntimeError, OSError, ImportError, KeyError, TypeError):
         pass
+    now = now or datetime.now(IST)
+    candidates = _ranked(profile, rows, report["stats"], report["day"])
+    quotes = (_intraday_quotes([sym for _score, sym, _sector, _tech in candidates], now)
+              if len(candidates) == 5 else {})
     return format_report(profile, rows, report["stats"], report["day"],
-                         now=now, breadth=breadth)
+                         now=now, breadth=breadth, quotes=quotes)
