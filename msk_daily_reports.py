@@ -200,6 +200,141 @@ def _intraday_quotes(symbols, now):
     return result
 
 
+def _large_cap_telegram_print(ranked, session, now, breadth, quotes, risk_limit):
+    """Investor-approved Large Cap Telegram layout; all numbers from dated evidence.
+
+    Separate this presentation from the scoring/eligibility path so that Mid
+    and Small Cap output remains untouched until their own acceptance passes.
+    """
+    session_label = session.strftime("%d %B %Y")
+    lines = [
+        "━━━━━━━━━━━━━━━━━━━━━━━",
+        "📊 <b>MSK MARKET UPDATE</b>",
+        "",
+        "<b>LARGE CAP | Nifty 100</b>",
+        "",
+        f"📅 {now.strftime('%d %B %Y')}",
+        f"🕒 As of {session_label} close",
+    ]
+    if session != now.date():
+        lines.append("Next update after market close")
+    if quotes:
+        latest = max(stamp for _price, stamp in quotes.values())
+        lines.append(f"Live quotes checked {latest.strftime('%H:%M')} IST; "
+                     "entry levels use the last completed close.")
+    lines.extend(["", "🎯 <b>TOP 5 RANKED CANDIDATES</b>", "",
+                  "━━━━━━━━━━━━━━━━━━━━━━━"])
+    active_buy = 0
+    for i, (score, symbol, sector, tech) in enumerate(ranked, 1):
+        entry, stop, target1, target2 = (
+            _num(tech[k]) for k in ("entry", "sl", "t1", "t2")
+        )
+        risk_pct = _num(tech.get("risk_pct"))
+        confirmed = (
+            tech.get("signal") == "CONDITIONAL BUY"
+            and session == now.date()
+            and risk_pct <= risk_limit
+            and tech.get("breakout_confirmed") is True
+            and tech.get("trend_confirmed") is True
+            and (_num(tech.get("volx")) or 0) >= 1
+        )
+        status = "BUY" if confirmed else "WAIT"
+        if confirmed:
+            active_buy += 1
+        labels = {
+            "breakout_not_confirmed": "Breakout unconfirmed",
+            "trend_not_confirmed": "Trend unconfirmed",
+            "rsi_below_54": "RSI below 54",
+            "adx_below_18": "ADX below 18",
+            "stop_risk_above_profile_limit":
+                f"stop risk {risk_pct:.2f}% exceeds {risk_limit:.0f}% limit",
+        }
+        explanations = [
+            labels.get(code, str(code).replace("_", " "))
+            for code in (tech.get("signal_reasons") or [])
+        ]
+        if risk_pct > risk_limit and not any(
+                str(x) == "stop_risk_above_profile_limit"
+                for x in tech.get("signal_reasons") or []):
+            explanations.append(
+                f"stop risk {risk_pct:.2f}% exceeds {risk_limit:.0f}% limit")
+        reason = ("Breakout, trend and volume confirmed at the last close."
+                  if confirmed else
+                  "; ".join(explanations) + ("." if explanations else
+                  "Awaiting a confirmed fresh-session entry."))
+        if symbol in quotes:
+            observed, stamp = quotes[symbol]
+            reason += (f" Quote ₹{observed:,.2f} at "
+                       f"{stamp.strftime('%H:%M')} IST, not an entry confirmation.")
+        # Upper entry bound is a WATCH zone, not a new permitted BUY trigger.
+        zone_max = round(entry * 1.005, 2)
+        rr1 = (target1 - entry) / (entry - stop)
+        rr2 = (target2 - entry) / (entry - stop)
+        lines.extend([
+            "",
+            f"<b>{i}. {html.escape(symbol)} | Score {score:.1f}/100</b>",
+            "",
+            f"Sector: {html.escape(sector)}",
+            f"Entry: ₹{entry:,.2f}–₹{zone_max:,.2f} | SL: ₹{stop:,.2f}",
+            f"T1: ₹{target1:,.2f} | T2: ₹{target2:,.2f}",
+            f"R:R = 1:{rr1:.1f} (T1) | 1:{rr2:.1f} (T2)",
+            f"🟢 <b>Status: {status}</b>" if confirmed
+            else "🟡 <b>Status: WAIT</b>",
+            f"Reason: {html.escape(reason)}",
+        ])
+
+    lines.extend(["", "━━━━━━━━━━━━━━━━━━━━━━━", "",
+                  "🧠 <b>MARKET CONTEXT</b>", ""])
+    if isinstance(breadth, dict) and str(breadth.get("session")) == str(session):
+        nifty = _num(breadth.get("benchmark_change"))
+        valid = _num(breadth.get("valid"))
+        declines = _num(breadth.get("declines"))
+        ma20 = breadth.get("ma20") or {}
+        above20 = _num(ma20.get("pct")) if isinstance(ma20, dict) else None
+        if nifty is not None:
+            lines.append(f"📉 Nifty 50: {nifty:+.2f}%".replace("-", "−"))
+        if valid and declines is not None:
+            lines.append(f"🔴 Nifty 500: {declines/valid*100:.1f}% stocks declined.")
+        if above20 is not None:
+            lines.append(
+                f"📊 {above20:.1f}% of covered stocks remain above "
+                "their 20-day average.")
+    if not any("Nifty 500:" in line for line in lines):
+        lines.append("⚠️ Market-wide participation data unavailable for this session.")
+    sectors = {s.casefold() for _score, _sym, s, _tech in ranked}
+    if len(sectors) == 1:
+        sector_name = ranked[0][2].lower()
+        lines.append(f"⚠️ All five candidates belong to {html.escape(sector_name)}; "
+                     "sector concentration is high.")
+    else:
+        lines.append("⚠️ Check portfolio sector concentration before taking new risk.")
+
+    lines.extend(["", "✅ <b>ACTION SUMMARY</b>", ""])
+    watch = ", ".join(
+        f"{html.escape(sym)} {'above ' if i == 0 else ''}₹{_num(t['entry']):,.2f}"
+        for i, (_score, sym, _sector, t) in enumerate(ranked)
+    )
+    # Keep the investor-readable one-line watch order; every price from Neon.
+    watch = watch.rsplit(", ", 1)
+    watch_line = (watch[0] + " and " + watch[1]) if len(watch) == 2 else watch[0]
+    lines.append("Watch " + watch_line + ".")
+    if active_buy == 0:
+        lines.append(
+            f"Require confirmed breakout, volume support and stop risk within "
+            f"{risk_limit:.0f}% before considering entry. <b>No BUY is active.</b>")
+    else:
+        lines.append(
+            f"{active_buy} entry setup(s) meet the completed-session gates. "
+            "Recheck live price and exposure before trading.")
+    lines.extend(["", "⛔ <b>STATUS: " + VERDICT_FIVE + "</b>",
+                  "", f"📍 Data as of {session_label}. Educational purposes only.",
+                  "", "━━━━━━━━━━━━━━━━━━━━━━━"])
+    output = "\n".join(lines)
+    if len(output) > 4096:
+        raise ValueError("large_cap_report_exceeds_telegram_limit")
+    return output
+
+
 def format_report(profile, records, stats, session, *, now=None, breadth=None, quotes=None):
     """Fresh rendering for each request, no fabricated price levels or winners."""
     if profile not in NAMES:
@@ -211,6 +346,8 @@ def format_report(profile, records, stats, session, *, now=None, breadth=None, q
         raise ValueError("future_candle_is_not_valid")
     ranked = _ranked(profile, records, stats, day)
     quotes = quotes or {}
+    if profile == "conservative" and len(ranked) == 5:
+        return _large_cap_telegram_print(ranked, day, now, breadth, quotes, cap)
     label = (f"As of {day.isoformat()} close" if day == now.date()
              else f"As of {day.isoformat()} — next update after market close")
     if quotes:
