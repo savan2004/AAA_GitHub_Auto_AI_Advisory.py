@@ -318,7 +318,7 @@ def _completed_session_frame(frame, session):
     try:
         days = [pd.Timestamp(x).date() for x in frame.index]
         clean = frame.loc[[d <= session for d in days]].sort_index()
-        if (clean.empty or not clean.index.is_unique or
+        if (len(clean) < MIN_BARS or not clean.index.is_unique or
                 pd.Timestamp(clean.index[-1]).date() != session):
             return None
         return clean
