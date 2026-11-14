@@ -32,6 +32,7 @@ import time
 import html
 import logging
 import threading
+import os
 from datetime import datetime, timezone, timedelta, date
 from typing import Callable, Dict, List, Optional
 
@@ -49,6 +50,7 @@ MIN_BARS = 130
 MAX_AGE = 2                     # breakout may be up to 2 sessions old
 CACHE_TTL = 30 * 60
 MIN_SCAN_COVERAGE = 0.80  # Never claim a 1000-stock ranking from a tiny partial sample
+MIN_UNIVERSE_FOR_TOP1000 = 800
 
 IST = timezone(timedelta(hours=5, minutes=30))
 _state: Dict = {"result": None, "ts": 0.0}
@@ -317,7 +319,7 @@ def _completed_session_frame(frame, session):
     try:
         days = [pd.Timestamp(x).date() for x in frame.index]
         clean = frame.loc[[d <= session for d in days]].sort_index()
-        if (clean.empty or not clean.index.is_unique or
+        if (len(clean) < MIN_BARS or not clean.index.is_unique or
                 pd.Timestamp(clean.index[-1]).date() != session):
             return None
         return clean
@@ -332,6 +334,19 @@ def get_cached() -> Optional[dict]:
         if (result and result.get("data_session") == _last_completed_session() and
                 result.get("coverage", 0) >= MIN_SCAN_COVERAGE):
             return result
+    # Render restarts wipe RAM. Reuse ONLY a verified completed-session scan
+    # produced after market close by the independent research Neon worker.
+    try:
+        from stocks_buzz_snapshot import load_verified_scan
+        result = load_verified_scan()
+        if result is not None:
+            result["coverage"] = result["downloaded"] / result["universe_size"]
+            with _state_lock:
+                _state.update(result=result, ts=time.time())
+            return result
+    except Exception as exc:
+        logger.warning("Stocks Buzz durable snapshot unavailable: %s",
+                       type(exc).__name__)
     return None
 
 
@@ -340,6 +355,8 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
     uni = get_universe()
     symbols: List[str] = uni["symbols"]
     delivery: Dict[str, float] = uni.get("delivery", {}) or {}
+    if len(symbols) < MIN_UNIVERSE_FOR_TOP1000 or uni.get("degraded"):
+        raise ValueError("Stock universe degraded: not enough NSE companies for a Top-1000 scan")
 
     completed = _last_completed_session()
     downloaded = bulk_history(symbols, "1y", chunk_size=100, progress_cb=progress_cb)
@@ -349,7 +366,28 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
     nifty_close = nifty["Close"]
     hist = {sym: clean for sym, df in downloaded.items()
             if (clean := _completed_session_frame(df, completed)) is not None}
+    secondary_count = 0
     coverage = len(hist) / len(symbols) if symbols else 0.0
+    # Only the scheduled after-close research worker may make hundreds of
+    # slower keyless fallback requests. Telegram button calls stay bounded.
+    # Every fallback requires matching NSE symbol, exchange and completed
+    # session; no quote is inferred or substituted.
+    if (coverage < MIN_SCAN_COVERAGE and
+            os.getenv("MSK_BUZZ_ALLOW_SECONDARY_EOD", "").lower() == "true"):
+        from concurrent.futures import ThreadPoolExecutor
+        from overnight_index_sources import fetch_tej_history
+        missing = [sym for sym in symbols if sym not in hist]
+        def fetch_verified(sym):
+            frame = fetch_tej_history(sym, completed)
+            return sym, _completed_session_frame(frame, completed)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for sym, frame in pool.map(fetch_verified, missing):
+                if frame is not None:
+                    hist[sym] = frame
+                    secondary_count += 1
+        coverage = len(hist) / len(symbols) if symbols else 0.0
+        logger.info("MSK_BUZZ_SECONDARY_EOD session=%s recovered=%d total=%d",
+                    completed, secondary_count, len(symbols))
     if coverage < MIN_SCAN_COVERAGE:
         raise ValueError(
             f"Current NSE session {completed}: only {len(hist)}/{len(symbols)} "
@@ -380,6 +418,9 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
         "data_session": completed, "coverage": coverage,
         "universe_size": len(symbols), "downloaded": len(hist), "liquid": liquid,
         "source": uni.get("source", "?"), "note": uni.get("note"), "degraded": uni.get("degraded", False),
+        "secondary_count": secondary_count,
+        "price_sources": ("Yahoo EOD + TejHQ verified raw NSE EOD" if secondary_count
+                          else "Yahoo EOD"),
         "breakouts": breakouts, "watch": watch, "extended": extended,
         "regime": market_regime(nifty),
     }
@@ -388,6 +429,13 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
         _state["ts"] = time.time()
     logger.info(f"[buzz] scan done in {result['elapsed']:.0f}s: {len(hist)}/{len(symbols)} "
                 f"downloaded, {liquid} liquid, {len(breakouts)} breakouts, {len(watch)} watch")
+    # Save only after the genuine index-wide scan passed all coverage gates.
+    try:
+        from stocks_buzz_snapshot import save_verified_scan
+        if save_verified_scan(result):
+            logger.info("MSK_BUZZ_SCAN_DURABLE session=%s", completed)
+    except Exception as exc:
+        logger.warning("MSK_BUZZ_SCAN_DURABLE_FAILED type=%s", type(exc).__name__)
     return result
 
 
@@ -445,6 +493,7 @@ def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
         + (f" · 🚫 {result['extended']} extended (skipped — don't chase)" if result.get("extended") else ""),
         f"🧭 {_e(result['regime']['text'])}",
         f"📚 Universe: {_e(result['source'])}",
+        f"📊 EOD candle sources: {_e(result.get('price_sources', 'not recorded'))}",
     ]
     if result.get("note"):
         head.append(f"⚠️ {_e(result['note'])}")

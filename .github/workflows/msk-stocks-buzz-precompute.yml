@@ -1,0 +1,52 @@
+name: MSK Stocks Buzz Durable Precompute
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'stocks_buzz_snapshot.py'
+      - 'stocks_buzz.py'
+      - 'tests/test_stocks_buzz_snapshot.py'
+      - '.github/workflows/msk-stocks-buzz-precompute.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'stocks_buzz_snapshot.py'
+      - 'stocks_buzz.py'
+      - 'tests/test_stocks_buzz_snapshot.py'
+  workflow_dispatch:
+  schedule:
+    # Monday-Friday 17:00 IST; safe after 15:30 NSE close.
+    - cron: '30 11 * * 1-5'
+permissions:
+  contents: read
+jobs:
+  snapshot-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m py_compile stocks_buzz_snapshot.py stocks_buzz.py tests/test_stocks_buzz_snapshot.py
+      - run: python -m unittest discover -s tests -p 'test_stocks_buzz_snapshot.py' -v
+  actual-completed-session-scan:
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: snapshot-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_BUZZ_ALLOW_SECONDARY_EOD: 'true'
+      MSK_RESEARCH_ONLY: '1'
+      TZ: Asia/Kolkata
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install free public-market data and research database clients
+        run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'yfinance>=0.2.61,<0.3' 'requests>=2.32,<3' 'psycopg[binary]>=3.2,<3.4'
+      - name: Compute real 1000-stock scan and save verified session in Neon
+        run: python -m stocks_buzz_snapshot
