@@ -346,6 +346,20 @@ def _scan():
         except Exception:
             nclose = None
 
+    # All picks and relative-strength calculations must use the same
+    # completed NSE benchmark session; a lagging stock cannot rank beside
+    # a newer stock. Unknown benchmark = no investment signals.
+    if nclose is None or len(nclose) < 130:
+        logger.warning("[Swing] benchmark unavailable/short; withholding ranking")
+        return dict(asof="n/a", rows=[], trades=[], regime="unknown",
+                    scanned=0, total=len(syms), secs=round(time.time() - t0, 1),
+                    quality="NO_BENCHMARK")
+    benchmark_session = pd.Timestamp(nclose.index[-1]).date()
+    if (_now_ist().date() - benchmark_session).days > 6:
+        logger.warning("[Swing] benchmark stale session=%s", benchmark_session)
+        return dict(asof="n/a", rows=[], trades=[], regime="unknown",
+                    scanned=0, total=len(syms), secs=round(time.time() - t0, 1),
+                    quality="STALE_BENCHMARK")
     rows, trades, asofs, scanned = [], [], [], 0
     for s in syms:
         df = hist.get(s)
@@ -357,8 +371,9 @@ def _scan():
             logger.info(f"[Swing] skip {s}: {why}")
             continue
         last = A["idx"][-1]
-        if (pd.Timestamp.now().normalize() - last).days > 6:
-            logger.info(f"[Swing] skip {s}: stale data (last bar {last.date()})")
+        if pd.Timestamp(last).date() != benchmark_session:
+            logger.info("[Swing] skip %s: candle session %s differs from benchmark %s",
+                        s, pd.Timestamp(last).date(), benchmark_session)
             continue
         scanned += 1
         asofs.append(last)
@@ -382,12 +397,19 @@ def _scan():
         except Exception as e:
             logger.warning(f"[Swing] backtest {s}: {e}")
 
+    coverage = scanned / len(syms) if syms else 0.0
+    quality = "READY" if coverage >= 0.70 else "INSUFFICIENT_COVERAGE"
+    if quality != "READY":
+        # Partial universe results must not leak apparent high-ranked picks.
+        rows = []
+        trades = []
     data = dict(asof=(max(asofs).strftime("%d-%b-%Y") if asofs else "n/a"), rows=rows, trades=trades,
                 regime=_regime(nifty) if nifty is not None and not nifty.empty else "unknown",
-                scanned=scanned, total=len(syms), secs=round(time.time() - t0, 1))
+                scanned=scanned, total=len(syms), secs=round(time.time() - t0, 1),
+                quality=quality)
     logger.info(f"[Swing] scanned {scanned}/{len(syms)}, signals {len(rows)}, backtest trades {len(trades)} "
                 f"in {data['secs']} sec (regime {data['regime']})")
-    if scanned >= int(len(syms) * 0.7):
+    if quality == "READY":
         cached_set(_ckey(), data, CACHE_TTL)
     return data
 
@@ -457,8 +479,11 @@ def get_swing_trades(mode="conservative"):
     mode = mode if mode in THRESHOLDS else "conservative"
     thr = dict(THRESHOLDS[mode])
     data = _load()
-    if not data["scanned"]:
-        return "❌ Market data unavailable right now. Try again in a minute."
+    if data.get("quality") != "READY":
+        return ("🛑 Swing ranking withheld: independently aligned completed-session "
+                f"candles cover only {data.get('scanned', 0)}/{data.get('total', 0)} "
+                "configured companies, or the Nifty benchmark is unavailable. "
+                "No trade has been recommended.")
 
     reg = data["regime"]
     if reg == "bear":
