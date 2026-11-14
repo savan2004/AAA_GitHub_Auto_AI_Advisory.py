@@ -1,5 +1,8 @@
 """Run real Stocks Buzz session/coverage functions without external providers."""
 import ast
+import os
+import sys
+import types
 import threading
 import time
 import unittest
@@ -22,7 +25,7 @@ def load_functions(*names, globals_=None):
     if set(names) != set(found):
         raise AssertionError("Stocks Buzz source function missing")
     ns = {"pd": pd, "np": np, "datetime": datetime, "time": time,
-          "IST": IST, "MIN_SCAN_COVERAGE": .8,
+          "IST": IST, "MIN_SCAN_COVERAGE": .8, "os": os,
           "Optional": Optional, "Callable": Callable}
     ns.update(globals_ or {})
     exec(compile(ast.Module(body=[found[name] for name in names],
@@ -85,6 +88,33 @@ class SessionSafety(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ranking withheld"):
             ns["run_scan"]()
         analyze.assert_not_called()
+
+    def test_after_close_secondary_recovers_only_verified_symbol_history(self):
+        universe = {"symbols": ["A", "B", "C", "D", "E"], "source": "Official"}
+        good = series()
+        primary = {"A": good, "B": good, "C": good}
+        secondary = types.SimpleNamespace(
+            fetch_tej_history=lambda sym, session: good if sym == "D" else None)
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: universe,
+            "bulk_history": lambda *_a, **_k: primary,
+            "index_history": lambda *_a: good,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": lambda *_a, **_kw: None,
+            "market_regime": lambda *_a: {"text": "Nifty sample"},
+            "logger": Mock(), "_state": {"result": None, "ts": 0.},
+            "_state_lock": threading.Lock(),
+        })
+        with patch.dict(os.environ, {
+            "MSK_BUZZ_ALLOW_SECONDARY_EOD": "true",
+            "MSK_INDEX_DATABASE_URL": ""}), \
+             patch.dict(sys.modules, {"overnight_index_sources": secondary}):
+            result = ns["run_scan"]()
+        self.assertEqual(result["downloaded"], 4)
+        self.assertEqual(result["secondary_count"], 1)
+        self.assertEqual(result["coverage"], .8)
+        self.assertIn("verified raw NSE EOD", result["price_sources"])
+
 
 
 if __name__ == "__main__":
