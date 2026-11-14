@@ -169,7 +169,11 @@ class OvernightLedgerTests(unittest.TestCase):
                 })
             self.store.save_report(self.day,profile,"READY",stats,"SYNTHETIC READY")
         state=n.readiness_check(self.store,self.day)
-        self.assertTrue(state["ready"])
+        # A synthetic READY summary with no actual qualifying Smallcap pick
+        # must not satisfy the aggregate morning publication gate.
+        self.assertFalse(state["ready"])
+        self.assertEqual([row["ready"] for row in state["profiles"]],
+                         [True, True, False])
         self.assertEqual([row["expected"] for row in state["profiles"]],
                          [100,150,250])
         # Without any real records on the following session, a healthy DB
@@ -374,6 +378,27 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertIn("all 150 financially rule-qualified stocks currently show wait",body.lower())
         self.assertIn("No Top 5 issued",body)
         self.assertNotIn("Conditional entry",body)
+
+    def test_smallcap_complete_but_zero_candidates_is_not_ready(self):
+        universe=make_universe("aggressive",250)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"aggressive",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "fund_status":"VALIDATED","fundamental":evidence(),
+                "technical":technical(sym,signal="WAIT")
+            })
+        with patch.object(n,"get_index_universe",return_value=universe):
+            report=n.finalize_profile("aggressive",self.store,self.day)
+        self.assertEqual(report["state"],"NO_CANDIDATES")
+        self.assertEqual(report["stats"]["candidate_count"],0)
+        self.assertFalse(n.readiness_check(
+            self.store,self.day,("aggressive",))["ready"])
+        msg=n.load_prepared_report(
+            "aggressive",store=self.store,
+            now=datetime(2026,10,30,8,10,tzinfo=n.IST))
+        self.assertIn("No Top 5 issued",msg)
+        self.assertNotIn("1. TEST",msg)
 
     def test_current_complete_rule_gated_watchlist_and_risk_limit(self):
         universe=make_universe("aggressive",250)
