@@ -25,7 +25,7 @@ def load_functions(*names, globals_=None):
     if set(names) != set(found):
         raise AssertionError("Stocks Buzz source function missing")
     ns = {"pd": pd, "np": np, "datetime": datetime, "time": time,
-          "IST": IST, "MIN_SCAN_COVERAGE": .8, "os": os,
+          "IST": IST, "MIN_SCAN_COVERAGE": .8, "MIN_BARS": 130, "os": os,
           "Optional": Optional, "Callable": Callable}
     ns.update(globals_ or {})
     exec(compile(ast.Module(body=[found[name] for name in names],
