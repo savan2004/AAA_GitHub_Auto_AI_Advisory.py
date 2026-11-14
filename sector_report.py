@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 OUTPUT_DIR = rg.OUTPUT_DIR
 CACHE_TTL = 30 * 60
-_cache: Dict = {"ts": 0.0, "path": None, "summary": None}
+_cache: Dict = {"ts": 0.0, "path": None, "summary": None, "session": None}
 _gen_lock = threading.Lock()
 
 
@@ -917,9 +917,19 @@ def _prune_old_files(max_age_s: int = 2 * 3600):
 
 
 def generate_sector_report_pdf(progress_cb=None) -> Tuple[bool, str, List[str]]:
-    with _gen_lock:                       # one build at a time; repeats within 30 min reuse the file
-        if _cache["path"] and os.path.exists(_cache["path"]) and time.time() - _cache["ts"] < CACHE_TTL:
-            return True, _cache["path"], _cache["summary"]
+    with _gen_lock:  # one report build at a time
+        # Completed NSE daily bars are immutable within a session. Do not
+        # download ~250 constituents again merely because 30 minutes passed.
+        # Reuse only a readable PDF generated for the expected completed
+        # session; an old-session/partial PDF must never be sent as current.
+        current_session = _last_completed_session()
+        cached_path = _cache.get("path")
+        if (cached_path and _cache.get("session") == current_session and
+                isinstance(_cache.get("summary"), list) and
+                os.path.isfile(cached_path) and
+                os.path.getsize(cached_path) >= 1024):
+            logger.info("SECTOR_REPORT_SESSION_CACHE_HIT session=%s", current_session)
+            return True, cached_path, _cache["summary"]
         _prune_old_files()
         try:
             hist = collect(progress_cb)
@@ -927,7 +937,9 @@ def generate_sector_report_pdf(progress_cb=None) -> Tuple[bool, str, List[str]]:
             out = os.path.join(OUTPUT_DIR, f"Index_Sectoral_Update_{datetime.now(IST).strftime('%Y%m%d_%H%M')}.pdf")
             build_pdf(R, out)
             summ = summary_lines(R)
-            _cache.update(ts=time.time(), path=out, summary=summ)
+            observed_session = datetime.strptime(R["asof"], "%d-%b-%Y").date()
+            _cache.update(ts=time.time(), path=out, summary=summ,
+                          session=observed_session)
             return True, out, summ
         except ValueError as e:
             return False, str(e), []
