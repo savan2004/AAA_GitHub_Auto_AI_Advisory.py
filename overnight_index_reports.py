@@ -560,6 +560,11 @@ def readiness_check(store, session=None, profiles=PROFILES):
             "candidate_count" not in stats or
             (type(stats["candidate_count"]) is int and
              0<=stats["candidate_count"]<=min(5,ledger_validated)))
+        # Reject legacy READY snapshots with no Smallcap recommendations too.
+        if profile=="aggressive":
+            valid_candidates=valid_candidates and (
+                type(stats.get("candidate_count")) is int and
+                stats["candidate_count"]>0)
         ready=bool(row and row.get("state")=="READY" and
                    row.get("day")==str(day) and valid_reviews and
                    valid_prices and valid_hash and valid_ledger and
