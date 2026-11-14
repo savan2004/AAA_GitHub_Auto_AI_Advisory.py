@@ -184,3 +184,70 @@ class ReportCalculations(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SectorCompletedSessionCache(unittest.TestCase):
+    """Exercise the real generator code with isolated file and provider fakes."""
+
+    def test_same_session_pdf_reused_even_after_old_ttl(self):
+        import os
+        import tempfile
+        import threading
+        import time
+        from datetime import date
+        from unittest.mock import Mock
+
+        with tempfile.TemporaryDirectory() as folder:
+            pdf = os.path.join(folder, "sector.pdf")
+            with open(pdf, "wb") as out:
+                out.write(b"%PDF-" + b"x" * 2048)
+            previous = {"path": pdf, "ts": 1.0,
+                        "session": date(2026, 11, 13), "summary": ["market"]}
+            collect = Mock(side_effect=AssertionError("repeated slow download"))
+            ns = load_functions("generate_sector_report_pdf", globals_={
+                "_gen_lock": threading.Lock(), "_cache": previous,
+                "_last_completed_session": lambda: date(2026, 11, 13),
+                "_prune_old_files": Mock(), "collect": collect,
+                "os": os, "time": time, "CACHE_TTL": 1800,
+                "logger": logging.getLogger(__name__),
+            })
+            self.assertEqual(ns["generate_sector_report_pdf"](),
+                             (True, pdf, ["market"]))
+            collect.assert_not_called()
+
+    def test_old_session_pdf_is_never_reused(self):
+        import os
+        import tempfile
+        import threading
+        import time
+        from datetime import date
+        from unittest.mock import Mock
+
+        with tempfile.TemporaryDirectory() as folder:
+            prior = os.path.join(folder, "prior.pdf")
+            with open(prior, "wb") as out:
+                out.write(b"%PDF-" + b"x" * 2048)
+            cache = {"path": prior, "ts": time.time(),
+                     "session": date(2026, 11, 12), "summary": ["stale"]}
+            source = Mock(return_value={"^NSEI": object()})
+            outpath = os.path.join(folder, "new.pdf")
+            def build(_report, dest):
+                with open(dest, "wb") as stream:
+                    stream.write(b"%PDF-" + b"y" * 2048)
+            ns = load_functions("generate_sector_report_pdf", globals_={
+                "_gen_lock": threading.Lock(), "_cache": cache,
+                "_last_completed_session": lambda: date(2026, 11, 13),
+                "_prune_old_files": Mock(), "collect": source,
+                "assemble": lambda _hist: {"asof": "13-Nov-2026"},
+                "build_pdf": build, "summary_lines": lambda _report: ["fresh"],
+                "OUTPUT_DIR": folder, "os": os, "time": time,
+                "datetime": datetime,
+                "IST": timezone(timedelta(hours=5, minutes=30)),
+                "CACHE_TTL": 1800, "logger": logging.getLogger(__name__),
+            })
+            ok, path, summary = ns["generate_sector_report_pdf"]()
+            self.assertTrue(ok)
+            self.assertNotEqual(path, prior)
+            self.assertEqual(summary, ["fresh"])
+            self.assertEqual(cache["session"], date(2026, 11, 13))
+            source.assert_called_once()
