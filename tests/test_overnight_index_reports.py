@@ -458,7 +458,7 @@ class OvernightLedgerTests(unittest.TestCase):
 
     def test_buttons_fail_closed_on_missing_prepared_report_not_old_scan(self):
         with patch.dict(os.environ,{"MSK_INDEX_PREPARED_ONLY":"1"}), \
-             patch.object(n,"load_prepared_report",return_value="⏳ Next EOD report is being prepared") as ready, \
+             patch("msk_daily_reports.render_latest_profile",return_value="⏳ Next EOD report is being prepared") as ready, \
              patch.object(live,"_build_index_top5") as heavy:
             answer=live.request_index_top5("moderate",42,lambda *a:None)
             self.assertIn("being prepared",answer)
