@@ -1,0 +1,43 @@
+name: MSK Daily On-Demand Investor Reports
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'msk_daily_reports.py'
+      - 'main.py'
+      - 'top5_technical_ratings.py'
+      - 'overnight_index_reports.py'
+      - 'tests/test_msk_daily_reports.py'
+      - 'tests/test_menu_end_to_end.py'
+      - 'tests/test_index_top5.py'
+      - '.github/workflows/msk-daily-on-demand.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'msk_daily_reports.py'
+      - 'main.py'
+      - 'top5_technical_ratings.py'
+      - 'overnight_index_reports.py'
+      - 'tests/test_msk_daily_reports.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  investor-report-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install offline test dependencies
+        run: python -m pip install 'numpy==1.26.4' 'pandas==2.2.2' 'requests==2.32.3' 'yfinance==0.2.61'
+      - name: Compile production modules
+        run: python -m py_compile msk_daily_reports.py main.py top5_technical_ratings.py overnight_index_reports.py
+      - name: Test report scores, risk gates and triggers
+        run: python -m unittest discover -s tests -p 'test_msk_daily_reports.py' -v
+      - name: Test all original Telegram buttons
+        run: python -m unittest discover -s tests -p 'test_menu_end_to_end.py' -v
+      - name: Test existing Top 5 paths
+        run: python -m unittest discover -s tests -p 'test_index_top5.py' -v
