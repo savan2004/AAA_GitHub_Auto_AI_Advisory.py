@@ -24,6 +24,15 @@ def capture_telegram_ack(kind, message_id, file_id=None, message_text=None):
         return
     if kind not in ("text", "photo", "document"):
         return
+    # Stocks Buzz sends a preliminary "scanning" notice before doing any work.
+    # Never accept that notice (or a progress update) as the finished result.
+    if probe["action"] == "StocksBuzz" and kind == "text":
+        if (not isinstance(message_text, str) or
+                "STOCKS BUZZ — Breakout Radar" not in message_text or
+                "Scanned" not in message_text or
+                "confirmed breakouts" not in message_text):
+            LOG.info("MSK_ACCEPTANCE_BUZZ_NONFINAL_RECEIPT message_id=%d", message_id)
+            return
     probe["receipts"].append((kind, message_id))
     if (kind in ("photo", "document") and
             isinstance(file_id, str) and file_id.strip()):
