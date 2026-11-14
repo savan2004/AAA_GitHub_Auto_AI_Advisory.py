@@ -930,6 +930,19 @@ def generate_sector_report_pdf(progress_cb=None) -> Tuple[bool, str, List[str]]:
                 os.path.getsize(cached_path) >= 1024):
             logger.info("SECTOR_REPORT_SESSION_CACHE_HIT session=%s", current_session)
             return True, cached_path, _cache["summary"]
+        # Render ephemeral disk loses PDFs after a restart. The research-only
+        # snapshot can serve the same completed NSE session without a
+        # 250-constituent cold network scan. Corrupt or stale rows fail closed.
+        try:
+            from sector_report_snapshot import load_verified_sector_report
+            restored = load_verified_sector_report(output_dir=OUTPUT_DIR)
+            if restored:
+                path, summary = restored
+                _cache.update(ts=time.time(), path=path, summary=summary,
+                              session=current_session)
+                return True, path, summary
+        except Exception as exc:
+            logger.warning("SECTOR_NEON_CACHE_MISS type=%s", type(exc).__name__)
         _prune_old_files()
         try:
             hist = collect(progress_cb)
