@@ -59,6 +59,10 @@ from investment_screener import evaluate_candidate, format_shortlist
 from investment_scan_runner import run_investment_scan
 from index_top5 import request_index_top5
 from analysis_quality import inspect_history, format_snapshot
+from msk_magazine_delivery import (
+    copy_approved_magazine, enabled as magazine_enabled,
+    MagazineManifestError, MagazineConfigurationError,
+)
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -859,6 +863,8 @@ def main_keyboard():
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report")
     kb.add("🏭 Sector Report")
+    if magazine_enabled():
+        kb.add("📘 Monthly Magazine")
     return kb
 
 
@@ -1639,6 +1645,36 @@ def sector_btn(m):
     if not _allow_heavy(m):
         return
     executor.submit(run_sector_report, m.chat.id)
+
+
+@bot.message_handler(commands=["magazine"])
+@bot.message_handler(func=lambda m: m.text == "📘 Monthly Magazine")
+def cmd_magazine(m):
+    """Copy one independently approved AiAutoUpdate magazine PDF on demand."""
+    if getattr(m.chat, "type", None) != "private":
+        return
+    if not _allow_heavy(m):
+        return
+    parts = (m.text or "").strip().split()
+    is_command = bool(parts) and parts[0].split("@", 1)[0].lower() == "/magazine"
+    if is_command and len(parts) > 2:
+        safe_send(m.chat.id, "📘 Usage: <code>/magazine</code> or <code>/magazine YYYY-MM</code>")
+        return
+    month = parts[1] if is_command and len(parts) == 2 else None
+    try:
+        outcome = copy_approved_magazine(bot, m.chat.id, month=month)
+    except (MagazineManifestError, MagazineConfigurationError) as exc:
+        logger.warning("[Magazine] invalid edition or configuration (%s)", type(exc).__name__)
+        safe_send(m.chat.id, "⚠️ The magazine is not available: approval or edition verification failed.")
+        return
+    except Exception as exc:
+        logger.warning("[Magazine] source PDF copy failed (%s)", type(exc).__name__)
+        safe_send(m.chat.id, "⚠️ The approved magazine is temporarily unavailable.")
+        return
+    if outcome == "disabled":
+        safe_send(m.chat.id, "📘 Monthly Magazine is being prepared. No approved edition is available yet.")
+    elif outcome == "unavailable":
+        safe_send(m.chat.id, "📘 No verified, approved magazine PDF is available for this edition.")
 
 
 @bot.message_handler(func=lambda m: m.text in ("📰 News", "🤖 AI"))
