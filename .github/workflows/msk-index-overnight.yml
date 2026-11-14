@@ -62,7 +62,8 @@ jobs:
       github.event.action == 'labeled' &&
       github.event.label.name == 'msk-index-real-collect' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/msk-equity-and-portfolio-p0-20261101'
+      (github.event.pull_request.head.ref == 'fix/msk-equity-and-portfolio-p0-20261101' ||
+       github.event.pull_request.head.ref == 'fix/msk-index-recover-20261113')
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     permissions:
