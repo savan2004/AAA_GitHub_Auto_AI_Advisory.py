@@ -400,7 +400,7 @@ class OvernightLedgerTests(unittest.TestCase):
         msg=n.load_prepared_report(
             "aggressive",store=self.store,
             now=datetime(2026,10,30,8,10,tzinfo=n.IST))
-        self.assertIn("No Top 5 issued",msg)
+        self.assertIn("SCREENING COMPLETE — NO QUALIFYING SETUP TODAY",msg)
         self.assertNotIn("1. TEST",msg)
 
     def test_current_complete_rule_gated_watchlist_and_risk_limit(self):
@@ -443,8 +443,8 @@ class OvernightLedgerTests(unittest.TestCase):
             ready=n.finalize_profile("conservative",self.store,self.day)
         self.assertEqual(ready["state"],"PARTIAL")
         self.assertEqual(ready["stats"]["price_fresh"],0)
-        self.assertIn("100/100",ready["text"])
-        self.assertIn("WITHHELD",ready["text"])
+        self.assertIn("SCREENING COMPLETE — NO QUALIFYING SETUP TODAY",ready["text"])
+        self.assertIn("Data as of",ready["text"])
         self.assertIn("not ready",n.load_prepared_report("conservative",store=self.store,
               now=datetime(2026,11,12,10,tzinfo=n.IST)).lower())
 
