@@ -113,7 +113,7 @@ class MagazineCopyTests(unittest.TestCase):
             class FrozenDateTime(datetime):
                 @classmethod
                 def now(cls, tz=None):
-                    return datetime(2026, 11, 3, 3, 30, tzinfo=timezone.utc)
+                    return cls(2026, 11, 3, 3, 30, tzinfo=timezone.utc)
 
             with patch("msk_magazine_delivery.datetime", FrozenDateTime):
                 with self.assertRaisesRegex(MagazineManifestError, "in the future"):
