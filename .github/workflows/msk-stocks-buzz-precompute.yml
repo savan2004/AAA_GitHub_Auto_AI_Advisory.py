@@ -31,7 +31,9 @@ jobs:
       - run: python -m py_compile stocks_buzz_snapshot.py stocks_buzz.py tests/test_stocks_buzz_snapshot.py
       - run: python -m unittest discover -s tests -p 'test_stocks_buzz_snapshot.py' -v
   actual-completed-session-scan:
-    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Market-data provider failures must not block a tested code-only Render release.
+    # They still fail the actual scheduled research job, never force-pass data.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: snapshot-contract
     runs-on: ubuntu-24.04
     timeout-minutes: 35
