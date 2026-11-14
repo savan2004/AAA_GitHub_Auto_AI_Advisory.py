@@ -37,6 +37,7 @@ jobs:
     timeout-minutes: 35
     env:
       MSK_INDEX_DATABASE_URL: ${{ secrets.MSK_INDEX_DATABASE_URL }}
+      MSK_BUZZ_ALLOW_SECONDARY_EOD: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
