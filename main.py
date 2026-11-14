@@ -58,6 +58,7 @@ from conservative_screener import (
 from investment_screener import evaluate_candidate, format_shortlist
 from investment_scan_runner import run_investment_scan
 from index_top5 import request_index_top5
+from msk_daily_reports import parse_request as parse_daily_report_request, render_latest_profile
 from analysis_quality import inspect_history, format_snapshot
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
@@ -1067,14 +1068,53 @@ def run_report(chat_id, query):
         safe_send(chat_id, f"❌ Error generating report: {e}")
 
 
+def deliver_daily_reports(chat_id, profiles):
+    """Rebuild every requested segment and send in strict Large/Mid/Small order."""
+    for profile in profiles:
+        try:
+            message = render_latest_profile(profile)
+            receipt = safe_send(chat_id, message)
+            if receipt is None:
+                logger.warning("MSK_DAILY_REPORT_SEND_UNCONFIRMED segment=%s", profile)
+        except Exception as exc:
+            logger.warning("MSK_DAILY_REPORT_WITHHELD segment=%s reason=%s",
+                           profile, type(exc).__name__)
+            # Never invent actionable prices in a missing-data scenario.
+            safe_send(chat_id,
+                      "⛔ STATUS: SCREENING COMPLETE — NO QUALIFYING SETUP TODAY\\n"
+                      "Latest completed-session data is not accessible. "
+                      "No prices or BUY calls can be confirmed.")
+
+
+@bot.message_handler(commands=["top5", "top_5", "fullreport", "all", "lc", "mc", "sc"])
+def cmd_daily_report(m):
+    profiles = parse_daily_report_request(getattr(m, "text", None))
+    if not profiles or not _allow_heavy(m):
+        return
+    executor.submit(deliver_daily_reports, m.chat.id, profiles)
+
+
+@bot.message_handler(
+    # Existing emoji buttons keep their direct scan handler; both paths
+    # still invoke deliver_daily_reports() with exactly the same formatter.
+    func=lambda m: not str(getattr(m, "text", "")).startswith(("🏦", "⚖️", "🚀")) and
+                   bool(parse_daily_report_request(getattr(m, "text", None))),
+    content_types=["text"],
+)
+def plain_daily_report(m):
+    profiles = parse_daily_report_request(getattr(m, "text", None))
+    if not profiles or not _allow_heavy(m):
+        return
+    executor.submit(deliver_daily_reports, m.chat.id, profiles)
+
+
 @bot.message_handler(commands=["report"])
 def cmd_report(m):
     if not _allow_heavy(m):
         return
     parts = m.text.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
-        safe_send(m.chat.id,
-                   "📄 Usage: <code>/report SYMBOL</code>\ne.g. <code>/report DLF</code>")
+        executor.submit(deliver_daily_reports, m.chat.id, ("conservative",))
         return
 
     raw_q = parts[1].strip()
@@ -1397,8 +1437,8 @@ def scan_btn(m):
     }
     profile = profiles[m.text]
     try:
-        response = request_index_top5(profile, m.chat.id, safe_send)
-        safe_send(m.chat.id, response)
+        # The same fresh re-rendering path is used by buttons and typed commands.
+        executor.submit(deliver_daily_reports, m.chat.id, (profile,))
     except Exception as exc:
         logger.warning("MSK index Top5 submission unavailable (%s)", type(exc).__name__)
         safe_send(m.chat.id, "⚠️ Index scan unavailable. Please retry later.")

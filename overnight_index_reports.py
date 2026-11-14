@@ -464,7 +464,11 @@ def finalize_profile(profile, store, session=None):
     session=_session(session)
     universe=get_index_universe(profile)
     records=store.rows(session,profile)
-    state,stats,body=render_snapshot(profile,universe,records,session)
+    state,stats,_internal=render_snapshot(profile,universe,records,session)
+    # Scheduled report and on-demand report use the SAME investor presentation.
+    # Internal pipeline status stays in Neon state/stats, never in client text.
+    from msk_daily_reports import format_report
+    body=format_report(profile,records,stats,session)
     store.save_report(session,profile,state,stats,body)
     return dict(profile=profile,state=state,stats=stats,text=body)
 

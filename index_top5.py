@@ -231,8 +231,10 @@ def request_index_top5(profile, chat_id, send):
     if profile not in INDEXES:
         return "❌ Unknown index profile."
     if os.getenv("MSK_INDEX_PREPARED_ONLY", "1") != "0":
-        from overnight_index_reports import load_prepared_report
-        return load_prepared_report(profile)
+        # Acceptance/owner buttons must see the SAME investor report as clients.
+        # Each request rebuilds rankings from the latest dated company ledger.
+        from msk_daily_reports import render_latest_profile
+        return render_latest_profile(profile)
     with _LOCK:
         cached = _RESULTS.get(profile)
         if cached and time.monotonic() - cached[0] < _RESULT_TTL:

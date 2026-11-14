@@ -1,3 +1,4 @@
+import os
 """MSK index Top-5 regression — offline only, no real NSE/Telegram orders."""
 import ast
 from concurrent.futures import ThreadPoolExecutor
@@ -116,7 +117,7 @@ class Top5ScoringTests(unittest.TestCase):
         self.assertIn('"🏦 Conservative": "conservative"', source)
         self.assertIn('"⚖️ Moderate": "moderate"', source)
         self.assertIn('"🚀 Aggressive": "aggressive"', source)
-        self.assertIn('request_index_top5(profile, m.chat.id, safe_send)', source)
+        self.assertIn('executor.submit(deliver_daily_reports, m.chat.id, (profile,))', source)
 
 
 class ResultDeliveryTests(unittest.TestCase):
@@ -128,7 +129,10 @@ class ResultDeliveryTests(unittest.TestCase):
             started.set()
             self.assertTrue(release.wait(timeout=2))
             return "📊 synthetic cached result"
-        with ThreadPoolExecutor(max_workers=1) as pool, patch.object(
+        # This suite explicitly exercises the opt-in legacy background path;
+        # normal bot commands now read the durable five-stock report.
+        with patch.dict(os.environ, {"MSK_INDEX_PREPARED_ONLY": "0"}), \
+             ThreadPoolExecutor(max_workers=1) as pool, patch.object(
                 top5, "_POOL", pool), patch.object(top5, "_PENDING", {}), patch.object(
                 top5, "_WAITERS", {}), patch.object(top5, "_RESULTS", {}), patch.object(
                 top5, "_build_index_top5", side_effect=calculate):

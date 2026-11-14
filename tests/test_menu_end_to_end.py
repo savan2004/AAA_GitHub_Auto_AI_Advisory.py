@@ -13,6 +13,7 @@ import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
+from msk_daily_reports import parse_request as parse_daily_report_request
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "main.py").read_text(encoding="utf-8")
@@ -74,6 +75,7 @@ def matching_handlers(label):
                                      "<handler-predicate>", "eval"), {
                                          "is_member_message": lambda m: False,
                                          "extract_stock_request": lambda text: None,
+                                         "parse_daily_report_request": parse_daily_report_request,
                                      })
             if predicate(message):
                 names.append(node.name)
@@ -125,6 +127,7 @@ def isolated_environment():
         "get_chart_generator": lambda: FakeGenerator(),
         "build_scan": lambda profile: "Mock research basket: " + profile,
         "request_index_top5": lambda profile, chat, send: "Mock full-index prepared research: " + profile,
+        "render_latest_profile": lambda profile: "Mock full-index prepared research: " + profile,
         "_require_private_portfolio": lambda m: True,
         "build_breadth": lambda: "Mock breadth snapshot (offline fixture)",
         "get_swing_trades": lambda mode: "Mock swing scan: " + mode,
@@ -133,6 +136,7 @@ def isolated_environment():
         "run_buzz": lambda cid: send(cid, "Mock Stocks Buzz"),
         "run_sector_report": lambda cid: send(cid, "Mock sector PDF acknowledgement"),
         "logger": logging.getLogger("msk-button-test"),
+        "parse_daily_report_request": parse_daily_report_request,
         "datetime": datetime,
         "threading": SimpleNamespace(Thread=NoStartThread),
         "time": SimpleNamespace(sleep=lambda seconds: None),
@@ -142,6 +146,7 @@ def isolated_environment():
     names = {
         "cmd_portfolio", "chart_button", "port_btn",
         "scan_btn", "breadth_btn", "swing_btn", "analysis_btn", "report_btn",
+        "deliver_daily_reports", "plain_daily_report",
         "buzz_btn", "sector_btn",
     }
     for node in TREE.body:
