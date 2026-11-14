@@ -32,7 +32,7 @@ import time
 import html
 import logging
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
@@ -48,6 +48,7 @@ MIN_TRADED_VALUE = 2e7          # ₹2 Cr average daily traded value
 MIN_BARS = 130
 MAX_AGE = 2                     # breakout may be up to 2 sessions old
 CACHE_TTL = 30 * 60
+MIN_SCAN_COVERAGE = 0.80  # Never claim a 1000-stock ranking from a tiny partial sample
 
 IST = timezone(timedelta(hours=5, minutes=30))
 _state: Dict = {"result": None, "ts": 0.0}
@@ -300,10 +301,37 @@ def market_regime(nifty_df: Optional[pd.DataFrame]) -> dict:
 # ══════════════════════════════════════════════════════════════════════════
 # Scan orchestration
 # ══════════════════════════════════════════════════════════════════════════
+def _last_completed_session(now=None):
+    """Completed NSE weekday session, conservatively ignoring unknown holidays."""
+    now = (now or datetime.now(IST)).astimezone(IST)
+    today = pd.Timestamp(now.date())
+    if now.weekday() < 5 and (now.hour, now.minute) >= (16, 0):
+        return today.date()
+    return (today - pd.offsets.BDay(1)).date()
+
+
+def _completed_session_frame(frame, session):
+    """Drop unfinished bars; reject stale/misdated provider histories."""
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    try:
+        days = [pd.Timestamp(x).date() for x in frame.index]
+        clean = frame.loc[[d <= session for d in days]].sort_index()
+        if (clean.empty or not clean.index.is_unique or
+                pd.Timestamp(clean.index[-1]).date() != session):
+            return None
+        return clean
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+
+
 def get_cached() -> Optional[dict]:
     with _state_lock:
-        if _state["result"] and time.time() - _state["ts"] < CACHE_TTL:
-            return _state["result"]
+        result = _state["result"]
+        # Completed candles do not age inside the same NSE session.
+        if (result and result.get("data_session") == _last_completed_session() and
+                result.get("coverage", 0) >= MIN_SCAN_COVERAGE):
+            return result
     return None
 
 
@@ -313,9 +341,19 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
     symbols: List[str] = uni["symbols"]
     delivery: Dict[str, float] = uni.get("delivery", {}) or {}
 
-    hist = bulk_history(symbols, "1y", chunk_size=100, progress_cb=progress_cb)
-    nifty = index_history("^NSEI", "1y")
-    nifty_close = nifty["Close"] if nifty is not None and not nifty.empty else None
+    completed = _last_completed_session()
+    downloaded = bulk_history(symbols, "1y", chunk_size=100, progress_cb=progress_cb)
+    nifty = _completed_session_frame(index_history("^NSEI", "1y"), completed)
+    if nifty is None or len(nifty) < 65:
+        raise ValueError("Nifty benchmark has no verified completed-session candles")
+    nifty_close = nifty["Close"]
+    hist = {sym: clean for sym, df in downloaded.items()
+            if (clean := _completed_session_frame(df, completed)) is not None}
+    coverage = len(hist) / len(symbols) if symbols else 0.0
+    if coverage < MIN_SCAN_COVERAGE:
+        raise ValueError(
+            f"Current NSE session {completed}: only {len(hist)}/{len(symbols)} "
+            "valid stock histories; ranking withheld")
 
     breakouts, watch, liquid, extended = [], [], 0, 0
     for sym, df in hist.items():
@@ -339,6 +377,7 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
 
     result = {
         "ts": datetime.now(IST), "elapsed": time.time() - t0,
+        "data_session": completed, "coverage": coverage,
         "universe_size": len(symbols), "downloaded": len(hist), "liquid": liquid,
         "source": uni.get("source", "?"), "note": uni.get("note"), "degraded": uni.get("degraded", False),
         "breakouts": breakouts, "watch": watch, "extended": extended,
@@ -396,7 +435,8 @@ def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
     ts = result["ts"].strftime("%d-%b-%Y %H:%M") + " IST"
     head = [
         "🔥 <b>STOCKS BUZZ — Breakout Radar</b>",
-        f"📅 {ts}",
+        f"📅 Generated {ts}",
+        f"📈 NSE completed candle session: {result['data_session']}",
         sep,
         f"🔎 Scanned <b>{result['downloaded']}</b> of {result['universe_size']} stocks "
         f"→ <b>{result['liquid']}</b> passed liquidity filter",
