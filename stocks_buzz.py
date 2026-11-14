@@ -50,6 +50,7 @@ MIN_BARS = 130
 MAX_AGE = 2                     # breakout may be up to 2 sessions old
 CACHE_TTL = 30 * 60
 MIN_SCAN_COVERAGE = 0.80  # Never claim a 1000-stock ranking from a tiny partial sample
+MIN_UNIVERSE_FOR_TOP1000 = 800
 
 IST = timezone(timedelta(hours=5, minutes=30))
 _state: Dict = {"result": None, "ts": 0.0}
@@ -354,6 +355,8 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
     uni = get_universe()
     symbols: List[str] = uni["symbols"]
     delivery: Dict[str, float] = uni.get("delivery", {}) or {}
+    if len(symbols) < MIN_UNIVERSE_FOR_TOP1000 or uni.get("degraded"):
+        raise ValueError("Stock universe degraded: not enough NSE companies for a Top-1000 scan")
 
     completed = _last_completed_session()
     downloaded = bulk_history(symbols, "1y", chunk_size=100, progress_cb=progress_cb)
