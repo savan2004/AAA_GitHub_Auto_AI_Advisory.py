@@ -8,10 +8,11 @@ from __future__ import annotations
 import html
 import math
 import re
-from datetime import date, datetime
-from typing import Mapping
+from datetime import date, datetime, timedelta, timezone
 
-from index_constituents import IST
+# Keep command routing dependency-free: the original menu smoke suite runs
+# without third-party networking packages installed.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 NAMES = {
     "conservative": ("LARGE CAP", "Nifty 100", 8.0),
