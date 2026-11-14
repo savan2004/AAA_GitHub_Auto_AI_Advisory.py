@@ -32,6 +32,7 @@ import time
 import html
 import logging
 import threading
+import os
 from datetime import datetime, timezone, timedelta, date
 from typing import Callable, Dict, List, Optional
 
@@ -362,7 +363,28 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
     nifty_close = nifty["Close"]
     hist = {sym: clean for sym, df in downloaded.items()
             if (clean := _completed_session_frame(df, completed)) is not None}
+    secondary_count = 0
     coverage = len(hist) / len(symbols) if symbols else 0.0
+    # Only the scheduled after-close research worker may make hundreds of
+    # slower keyless fallback requests. Telegram button calls stay bounded.
+    # Every fallback requires matching NSE symbol, exchange and completed
+    # session; no quote is inferred or substituted.
+    if (coverage < MIN_SCAN_COVERAGE and
+            os.getenv("MSK_BUZZ_ALLOW_SECONDARY_EOD", "").lower() == "true"):
+        from concurrent.futures import ThreadPoolExecutor
+        from overnight_index_sources import fetch_tej_history
+        missing = [sym for sym in symbols if sym not in hist]
+        def fetch_verified(sym):
+            frame = fetch_tej_history(sym, completed)
+            return sym, _completed_session_frame(frame, completed)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for sym, frame in pool.map(fetch_verified, missing):
+                if frame is not None:
+                    hist[sym] = frame
+                    secondary_count += 1
+        coverage = len(hist) / len(symbols) if symbols else 0.0
+        logger.info("MSK_BUZZ_SECONDARY_EOD session=%s recovered=%d total=%d",
+                    completed, secondary_count, len(symbols))
     if coverage < MIN_SCAN_COVERAGE:
         raise ValueError(
             f"Current NSE session {completed}: only {len(hist)}/{len(symbols)} "
@@ -393,6 +415,9 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
         "data_session": completed, "coverage": coverage,
         "universe_size": len(symbols), "downloaded": len(hist), "liquid": liquid,
         "source": uni.get("source", "?"), "note": uni.get("note"), "degraded": uni.get("degraded", False),
+        "secondary_count": secondary_count,
+        "price_sources": ("Yahoo EOD + TejHQ verified raw NSE EOD" if secondary_count
+                          else "Yahoo EOD"),
         "breakouts": breakouts, "watch": watch, "extended": extended,
         "regime": market_regime(nifty),
     }
@@ -465,6 +490,7 @@ def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
         + (f" · 🚫 {result['extended']} extended (skipped — don't chase)" if result.get("extended") else ""),
         f"🧭 {_e(result['regime']['text'])}",
         f"📚 Universe: {_e(result['source'])}",
+        f"📊 EOD candle sources: {_e(result.get('price_sources', 'not recorded'))}",
     ]
     if result.get("note"):
         head.append(f"⚠️ {_e(result['note'])}")
