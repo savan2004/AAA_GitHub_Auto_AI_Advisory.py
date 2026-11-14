@@ -39,7 +39,7 @@ def _verified(payload, expected=None):
     if payload.get("data_session") != session:
         raise ValueError("Buzz scan is not the completed NSE session")
     size, covered = payload.get("universe_size"), payload.get("downloaded")
-    if (type(size) is not int or size < 100 or
+    if (type(size) is not int or size < 800 or payload.get("degraded") or
             type(covered) is not int or covered > size or
             covered < math.ceil(size * MIN_COVERAGE)):
         raise ValueError("Buzz scan has incomplete index coverage")
