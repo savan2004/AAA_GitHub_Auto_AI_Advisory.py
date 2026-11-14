@@ -448,23 +448,66 @@ def format_breadth(r):
             f"5-session participation {direction}: {change:+.1f} percentage points "
             f"(same {r['trend_count']} stocks; first vs last session).")
 
-    lines.extend(["", "<b>3. What this means for investors</b>", action,
-                  "<b>Existing holdings:</b> Review position concentration and "
-                  "your planned risk limits; a breadth reading is not a sell signal."])
+    # The portfolio decision is a risk posture, not a guessed next-session
+    # direction. Explicit observations and confirmation conditions make it
+    # useful without making unsupported BUY/SELL predictions.
+    falling_20 = ma20['pct'] is not None and ma20['pct'] < 50
+    fading_week = r.get('trend_delta') is not None and r['trend_delta'] <= -10
+    recovering_week = r.get('trend_delta') is not None and r['trend_delta'] >= 10
+    if weak_day and short_trend_positive and fading_week:
+        posture = ("🟠 <b>CAUTIOUS | daily pressure rising, trend still supported</b>")
+        reason = ("Today's selling and a 5-session fall in participation "
+                  "warn against chasing gains; strong 20-day positioning "
+                  "is a cushion, not a guarantee.")
+    elif weak_day and falling_20:
+        posture = "🔴 <b>DEFENSIVE WATCH | weak daily and short-term breadth</b>"
+        reason = ("Daily selling and fewer than half of measured shares above "
+                  "their 20-day average point to broader weakness.")
+    elif strong_day and short_trend_positive and recovering_week:
+        posture = "🟢 <b>IMPROVING | breadth confirmation forming</b>"
+        reason = ("Both the daily breadth and five-session participation "
+                  "are improving; individual stock quality still matters.")
+    else:
+        posture = "🟡 <b>SELECTIVE | mixed confirmation</b>"
+        reason = ("Broad conditions are not decisive enough to support "
+                  "a blanket buy or sell call.")
 
+    lines.extend([
+        "", "<b>3. Investor decision desk</b>", posture,
+        html.escape(reason),
+        action,
+        "<b>Existing holdings:</b> Review concentration and planned risk "
+        "limits. A market breadth reading alone is not a SELL signal.",
+        "",
+        "<b>4. What to watch next session</b>",
+        "✅ <b>Improving breadth:</b> More than half of covered stocks "
+        "advance, and participation improves over several sessions.",
+        "⚠️ <b>Further deterioration:</b> Less than half of eligible stocks "
+        "remain above the 20-day average alongside weak daily breadth.",
+        "⏸️ <b>No confirmation:</b> Keep the market-wide signal neutral; "
+        "do not infer the direction of tomorrow's Nifty.",
+    ])
+
+    # A 5-share industry sample is not a defensible investor opportunity
+    # ranking. Show only the groups with at least 15 validated constituents;
+    # if none meet the standard, do not pretend there was a sector conclusion.
     eligible_sectors = [(name, data) for name, data in r.get('sectors', {}).items()
-                        if data.get('count', 0) >= 5]
+                        if data.get('count', 0) >= 15]
     ranked = sorted(eligible_sectors,
-                    key=lambda pair: pair[1]['adv_pct'], reverse=True)
-    chosen = ranked[:3] + [item for item in ranked[-3:] if item not in ranked[:3]]
+                    key=lambda pair: (-pair[1]['adv_pct'], str(pair[0])))
+    chosen = ranked[:2] + [item for item in ranked[-2:] if item not in ranked[:2]]
     if chosen:
-        lines.extend(["", "<b>4. Industry snapshot — daily participation only</b>"])
+        lines.extend(["", "<b>5. Industry participation (sample ≥15)</b>"])
         for name, data in chosen:
             rate = data['adv_pct']
             n = data['count']
-            mark = "⚠️" if n < 15 else "•"
-            lines.append(f"{mark} {html.escape(str(name))}: {rate:.0f}% rising ({n} covered)")
-        lines.append("Small groups can swing sharply; this is NOT a sector buy/sell ranking.")
+            lines.append(f"• {html.escape(str(name))}: {rate:.0f}% rising "
+                         f"({n} measured)")
+        lines.append("Industry figures show only one-day participation; "
+                     "confirm earnings and stock charts separately.")
+    else:
+        lines.extend(["", "<b>5. Industry participation</b>",
+                      "Insufficient industry sample sizes for a useful comparison."])
 
     lines.extend([
         "",
