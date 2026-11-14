@@ -116,7 +116,7 @@ class Top5ScoringTests(unittest.TestCase):
         self.assertIn('"🏦 Conservative": "conservative"', source)
         self.assertIn('"⚖️ Moderate": "moderate"', source)
         self.assertIn('"🚀 Aggressive": "aggressive"', source)
-        self.assertIn('request_index_top5(profile, m.chat.id, safe_send)', source)
+        self.assertIn('executor.submit(deliver_daily_reports, m.chat.id, (profile,))', source)
 
 
 class ResultDeliveryTests(unittest.TestCase):
