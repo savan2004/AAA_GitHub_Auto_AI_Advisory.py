@@ -383,7 +383,11 @@ def render_snapshot(profile, universe, records, session):
         f"📈 Fresh daily-chart analysis: <b>{complete}/{total}</b> ({quote_coverage:.1%})",
         f"🧾 Rule-complete evidence: <b>{verified}/{total}</b> | Provisional {provisional}",
         "📑 Issuer filing independently audited: <b>NOT CLAIMED</b>",
-        f"🧭 Report status: <b>{state}</b>",
+        # Distinguish completed research collection from an actionable entry.
+        # Internal READY means verified *processing*, not a BUY recommendation.
+        f"🧭 Data review: <b>{'COMPLETE' if publishable else 'INCOMPLETE'}</b>",
+        f"🎯 Entry setups: <b>{len(selected)}/5 CONFIRMED</b>" if selected else
+        "🎯 Entry setups: <b>0/5 — NO ENTRY CONFIRMED</b>",
         "━━━━━━━━━━━━━━━━━━━━",
     ]
     if not publishable:
