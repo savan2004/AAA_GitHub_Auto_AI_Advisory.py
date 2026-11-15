@@ -1,6 +1,6 @@
 """On-demand Nifty / Bank Nifty intraday decision aid.
 
-Never publishes a trade using the prior session, unfinished 5-minute bars,
+Never publishes a trade using the prior session, unfinished 15-minute bars,
 unconfirmed exchange data, nonexistent index volume or simulated prices.
 Yahoo charts are best-effort public market data; delayed/missing data => NO TRADE.
 The volume and VWAP confirmation uses a corresponding NSE-listed ETF, not
@@ -24,7 +24,10 @@ MARKETS = (
     ("BANK NIFTY", "^NSEBANK", "BANKBEES.NS"),
 )
 _MIN_ADX = 20
-_MAX_BAR_AGE_MIN = 12
+_CANDLE_MIN = 15
+_MIN_HISTORY_BARS = 150
+_LOOKBACK_BARS = 200
+_MAX_BAR_AGE_MIN = 20
 _MAX_RISK_PCT = 0.9
 _FEED_TIMEOUT = 6
 
@@ -52,10 +55,10 @@ def market_session_open(now):
     """NSE regular weekday window; holiday/stale feeds fail separately."""
     now = _as_ist(now)
     minutes = now.hour * 60 + now.minute
-    return now.weekday() < 5 and 9 * 60 + 40 <= minutes <= 15 * 60 + 15
+    return now.weekday() < 5 and 9 * 60 + 46 <= minutes <= 15 * 60 + 15
 
 
-def _fetch_yahoo_5m(symbol, now):
+def _fetch_yahoo_15m(symbol, now):
     """Fetch directly, without the daily-price disk cache.
 
     Every candle carries its actual exchange timestamp. A weekend or
@@ -64,7 +67,7 @@ def _fetch_yahoo_5m(symbol, now):
     url = "https://query1.finance.yahoo.com/v8/finance/chart/" + quote(symbol, safe="")
     response = requests.get(
         url,
-        params={"range": "5d", "interval": "5m", "includePrePost": "false"},
+        params={"range": "30d", "interval": "15m", "includePrePost": "false"},
         headers={"Accept": "application/json", "User-Agent": "MSKBot/6.3 market-data verification"},
         timeout=_FEED_TIMEOUT,
     )
@@ -97,7 +100,9 @@ def _fetch_yahoo_5m(symbol, now):
         if not isinstance(ts, (int, float)) or any(x is None for x in vals):
             continue
         at = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
-        if not (9 * 60 + 15 <= at.hour * 60 + at.minute <= 15 * 60 + 30):
+        minute = at.hour * 60 + at.minute
+        if not (9 * 60 + 15 <= minute <= 15 * 60 + 15
+                and at.minute in (0, 15, 30, 45)):
             continue
         op, hi, lo, cl, vol = vals
         if (min(op, hi, lo, cl) <= 0 or vol < 0 or hi < max(op, cl)
@@ -112,7 +117,7 @@ def _fetch_yahoo_5m(symbol, now):
 
 
 def _completed(frame, now):
-    """Exclude partial/future candles and validate truly completed 5m times."""
+    """Exclude partial/future candles and validate completed 15-minute bars."""
     if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
         return pd.DataFrame()
     required = ("Open", "High", "Low", "Close", "Volume")
@@ -131,21 +136,22 @@ def _completed(frame, now):
         x[col] = pd.to_numeric(x[col], errors="coerce")
     x = x.dropna(subset=required)
     # Exchange timestamp is candle START; allow 60s publication delay.
-    x = x[x.index + pd.Timedelta(minutes=6) <= now]
+    x = x[x.index + pd.Timedelta(minutes=_CANDLE_MIN + 1) <= now]
     x = x[(x["Close"] > 0) & (x["High"] >= x[["Open", "Close", "Low"]].max(axis=1))
           & (x["Low"] <= x[["Open", "Close", "High"]].min(axis=1))
           & (x["Volume"] >= 0)]
     x = x[(x.index.hour * 60 + x.index.minute >= 555)
-          & (x.index.hour * 60 + x.index.minute <= 930)]
+          & (x.index.hour * 60 + x.index.minute <= 915)
+          & (x.index.minute % _CANDLE_MIN == 0)]
     return x
 
 
 def _indicators(closes):
-    """5-minute EMA/RSI/ATR/ADX calculated on completed price candles."""
+    """15-minute EMA/RSI/ATR/ADX calculated on 150–200 closed bars."""
     high = closes["High"].astype(float)
     low = closes["Low"].astype(float)
     close = closes["Close"].astype(float)
-    if len(close) < 65:
+    if not _MIN_HISTORY_BARS <= len(close) <= _LOOKBACK_BARS:
         return None
     ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean()
     ema50 = close.ewm(span=50, adjust=False, min_periods=50).mean()
@@ -180,31 +186,36 @@ def evaluate_instrument(name, spot, etf, now):
     now = _as_ist(now)
     if not market_session_open(now):
         return {"name": name, "status": "CLOSED",
-                "reason": "Market closed or outside 09:40–15:15 IST signal window."}
-    price = _completed(spot, now)
-    volume = _completed(etf, now)
-    if len(price) < 65 or len(volume) < 30:
+                "reason": "Market closed or outside 09:46–15:15 IST signal window."}
+    # Bound every indicator and volume reference to exactly the latest 200
+    # real, timestamp-verified completed bars; never fabricate older prices.
+    price = _completed(spot, now).tail(_LOOKBACK_BARS)
+    volume = _completed(etf, now).tail(_LOOKBACK_BARS)
+    if len(price) < _MIN_HISTORY_BARS or len(volume) < _MIN_HISTORY_BARS:
         return {"name": name, "status": "NO TRADE",
-                "reason": "Not enough verified completed 5-minute price/ETF candles."}
+                "reason": f"Need 150–200 verified completed 15-minute candles; "
+                          f"received spot {len(price)}, ETF {len(volume)}."}
     today = price[price.index.date == now.date()]
     etf_today = volume[volume.index.date == now.date()]
-    if len(today) < 4 or len(etf_today) < 4:
+    if len(today) < 2 or len(etf_today) < 2:
         return {"name": name, "status": "NO TRADE",
                 "reason": "Current NSE session not fully available; no old-session signals."}
     price_at, etf_at = today.index[-1], etf_today.index[-1]
-    price_age = (now - (price_at + timedelta(minutes=5))).total_seconds() / 60
-    etf_age = (now - (etf_at + timedelta(minutes=5))).total_seconds() / 60
-    if (price_age < 0 or etf_age < 0 or
+    price_age = (now - (price_at + timedelta(minutes=_CANDLE_MIN))).total_seconds() / 60
+    etf_age = (now - (etf_at + timedelta(minutes=_CANDLE_MIN))).total_seconds() / 60
+    if (price_age < 1 or etf_age < 1 or
             price_age > _MAX_BAR_AGE_MIN or etf_age > _MAX_BAR_AGE_MIN or
-            abs((price_at - etf_at).total_seconds()) > 600):
+            price_at != etf_at):
         return {"name": name, "status": "NO TRADE",
-                "reason": "Latest spot/ETF candles delayed or misaligned (>12 minutes)."}
-    opening = today[(today.index.hour == 9) &
-                    (today.index.minute.isin((15, 20, 25)))]
-    if len(opening) != 3 or not all(opening.index.minute == [15, 20, 25]):
+                "reason": "Latest completed 15-minute spot/ETF candles delayed "
+                          "or not aligned (20-minute freshness cap)."}
+    # Opening range is the real first 09:15–09:30 15-minute candle.
+    opening = today[(today.index.hour == 9) & (today.index.minute == 15)]
+    if len(opening) != 1:
         return {"name": name, "status": "NO TRADE",
-                "reason": "Opening 15-minute range incomplete or unverified."}
-    if any(etf_today["Volume"].tail(20) <= 0):
+                "reason": "Opening 09:15–09:30 15-minute candle missing."}
+    if (etf_today["Volume"].iloc[-1] <= 0
+            or (volume["Volume"].tail(21) <= 0).any()):
         return {"name": name, "status": "NO TRADE",
                 "reason": "Missing real ETF trading volume for VWAP confirmation."}
     ind = _indicators(price)
@@ -271,8 +282,10 @@ def evaluate_instrument(name, spot, etf, now):
             "risk_pct": risk_pct, "score": score, "adx": ind["adx"],
             "rsi": ind["rsi"], "volume_multiple": relvol,
             "asof": price_at.strftime("%d %b %H:%M IST"),
-            "source": "Yahoo 5m spot; NSE ETF volume proxy; completed bars",
-            "reason": "ORB + EMA20/50 + ADX + RSI + ETF VWAP and volume aligned."}
+            "bars_used": len(price),
+            "source": "Yahoo 15m spot; NSE-listed ETF VWAP/volume proxy; completed bars",
+            "reason": "15m opening range + EMA20/50 + ADX + RSI + "
+                      "ETF VWAP/volume aligned."}
 
 
 def format_intraday(now, decisions):
@@ -280,7 +293,7 @@ def format_intraday(now, decisions):
     lines = [
         "⚡ <b>MSK INTRADAY TRADE | NIFTY &amp; BANK NIFTY</b>",
         f"📅 {now.strftime('%d %b %Y')} | {now.strftime('%H:%M')} IST",
-        "⏱️ 5-minute completed candles | 09:40–15:15 IST",
+        "⏱️ 15-minute completed candles | 150–200 bars | 09:46–15:15 IST",
         "",
     ]
     if not market_session_open(now):
@@ -301,6 +314,7 @@ def format_intraday(now, decisions):
                     f"Setup quality: {item['score']}/10 (NOT win-rate accuracy)",
                     f"ADX: {item['adx']:.1f} | RSI: {item['rsi']:.1f} | "
                     f"ETF volume: {item['volume_multiple']:.2f}×",
+                    f"Lookback: {item.get('bars_used', 'n/a')} verified 15m candles",
                     f"Data: {html.escape(item['asof'])} | "
                     f"{html.escape(item['source'])}",
                     html.escape(item["reason"]),
@@ -331,7 +345,7 @@ def build_intraday_trade_report(*, now=None, fetcher=None):
     now = _as_ist(now)
     if not market_session_open(now):
         return format_intraday(now, [])
-    provider = fetcher or _fetch_yahoo_5m
+    provider = fetcher or _fetch_yahoo_15m
     results = []
     for name, spot_sym, etf_sym in MARKETS:
         try:
