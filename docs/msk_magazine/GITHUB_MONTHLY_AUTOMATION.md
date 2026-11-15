@@ -6,7 +6,7 @@
 - First expected monthly draft after default-branch merge: **7 December 2026**.
 - PDF result: MSK_YYYY-MM_EDITORIAL_DRAFT.pdf with exact 16 A4 pages and locked Design 3 index.
 - GitHub run artifact includes the PDF, 16 per-page JSON evidence/review files, release_gate.json and original downloaded source files.
-- GitHub artifact expiry: 90 days. Copy to a controlled archive for permanent retention.
+- GitHub artifact expiry: 90 days. Additionally each actual scheduled/manual run creates a uniquely named **UNPUBLISHED GitHub draft release** containing the PDF, release gate and source/page evidence archive. Draft release assets remain available in GitHub until explicitly deleted or repository policy changes. These are NOT public magazines or approved releases.
 - Workflow schedules do NOT run from a draft branch. Do not call this live until merged to default branch.
 
 ## Source verification
@@ -35,3 +35,7 @@ The renderer accepts --approved-logo path/to/asset.png. Until original owner-app
 There is **no Telegram call, no public post, no live bot integration, and no automatic release** in this workflow. It ALWAYS sets publication_allowed=false and editorial_approved=false.
 
 Tracked by MSK GitHub issue #96 and PR #159. Never edit AiAutoUpdate or another project.
+
+## Durable archive safety
+
+The workflow uses contents:write only in the monthly draft job. A GitHub Actions run with a unique run ID creates a private/unpublished draft release; it never publishes the release, never overwrites a previous draft, and never sends Telegram messages. A draft release is **not** owner editorial approval. Workflow publication still has no code path. If GitHub policy or permission blocks draft creation, the job fails visibly after producing the Actions artifact; never report archive success without a draft release record.
