@@ -55,6 +55,8 @@ jobs:
     needs: offline-regression
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    permissions:
+      contents: write  # only for GitHub draft release archival, never public publish
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -109,6 +111,26 @@ jobs:
           path: magazine_artifacts/${{ steps.schedule.outputs.issue }}/
           if-no-files-found: error
           retention-days: 90
+      - name: Archive each run in a durable PRIVATE GitHub draft release
+        if: steps.schedule.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ steps.schedule.outputs.issue }}
+        run: |
+          set -euo pipefail
+          ROOT="magazine_artifacts/$ISSUE"
+          test -f "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
+          test -f "$ROOT/release_gate.json"
+          tar -czf "$ROOT/MSK_${ISSUE}_source_and_page_evidence.tar.gz" -C "$ROOT" sources release_gate.json page_*.json
+          TAG="msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}"
+          gh release create "$TAG" \
+            "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf" \
+            "$ROOT/release_gate.json" \
+            "$ROOT/MSK_${ISSUE}_source_and_page_evidence.tar.gz" \
+            --draft \
+            --title "MSK Magazine $ISSUE | UNAPPROVED editorial draft | run $GITHUB_RUN_ID" \
+            --notes "Unapproved 16-page Design 3 editorial draft; financial data may be missing. Human source, logo, visual and publication approval are REQUIRED. No Telegram release."
+          echo "Created private draft release: $TAG" >> "$GITHUB_STEP_SUMMARY"
       - name: Report missing publication evidence
         if: steps.schedule.outputs.due == 'true'
         env:
