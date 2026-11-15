@@ -21,6 +21,7 @@ MENU = {
     "🚀 Aggressive": "aggressive",
     "🎯 Swing (Safe)": "swing_safe",
     "🚀 Swing (Agr)": "swing_aggressive",
+    "⚡ Intraday Trade": "intraday_trade",
     "💼 Portfolio": "portfolio",
     "📈 Chart": "chart",
     "📄 Report": "research_pdf",
