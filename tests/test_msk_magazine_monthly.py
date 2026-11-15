@@ -49,6 +49,12 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertIn("GITHUB_RUN_ID", workflow)
         self.assertNotIn("gh release publish", workflow)
         self.assertNotIn("sendDocument", workflow)
+        # Durable archives must not trust a file merely because it exists.
+        self.assertIn('gate.get("publication_allowed") is not False', workflow)
+        self.assertIn('gate.get("editorial_approved") is not False', workflow)
+        self.assertIn('gate.get("page_count") != 16', workflow)
+        self.assertIn('gate.get("pdf_sha256")', workflow)
+        self.assertIn('len(list(root.glob("page_*.json"))) != 16', workflow)
 
     def test_first_mondays(self):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
