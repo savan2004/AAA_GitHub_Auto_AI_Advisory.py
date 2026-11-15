@@ -31,7 +31,7 @@ def candles(*, symbol="spot", current=True, volume=True):
     else:
         hi, low = 0.15, 0.15
     x = pd.DataFrame({
-        "Open": [c - 0.5 for c in closes],
+        "Open": [c - (0.5 if symbol == "spot" else 0.05) for c in closes],
         "High": [c + hi for c in closes],
         "Low": [c - low for c in closes],
         "Close": closes,
