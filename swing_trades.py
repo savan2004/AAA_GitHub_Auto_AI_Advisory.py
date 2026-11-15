@@ -627,8 +627,8 @@ def _format_swing_watchlist(mode, data, thr):
                   "Educational only; not personalized investment advice.",
                   "━━━━━━━━━━━━━━━━━━━━"])
     message = "\n".join(lines)
-    if len(message) > 3800:
-        raise ValueError("swing_message_exceeds_telegram_limit")
+    if len(message) > 3400:
+        raise ValueError("swing_message_exceeds_safe_single_send_limit")
     return message
 
 
