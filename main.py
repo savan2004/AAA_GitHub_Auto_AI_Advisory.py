@@ -46,6 +46,7 @@ from ai_engine import (
     test_ai_providers,
 )
 from swing_trades import get_swing_trades
+from msk_intraday_trade import build_intraday_trade_report
 from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
@@ -858,7 +859,7 @@ def main_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     kb.add("🔍 Analysis", "🩺 Market Health", "🔥 Stocks Buzz")
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
-    kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
+    kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "⚡ Intraday Trade")
     kb.add("📈 Chart", "📄 Report")
     kb.add("🏭 Sector Report")
     return kb
@@ -966,7 +967,9 @@ def cmd_start(m):
     state.clear(m.chat.id)
     safe_send(m.chat.id,
               "👋 <b>MSK Bot</b>\n\nType any stock name or symbol for analysis.\n"
-              "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"              "🏦 Large / ⚖️ Mid / 🚀 Small Cap Top 5: NSE index-based bullish shortlists.\n"
+              "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
+              "⚡ <b>Intraday Trade</b> checks Nifty and Bank Nifty 5-minute "
+              "setups; no trade if feeds are stale or NSE is closed.\n"              "🏦 Large / ⚖️ Mid / 🚀 Small Cap Top 5: NSE index-based bullish shortlists.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
               "Use menu buttons below.\n"
@@ -978,7 +981,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIntraday Nifty/Bank Nifty: tap ⚡ Intraday Trade or <code>/intraday</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>")
 
 
 def run_report(chat_id, query):
@@ -1417,7 +1420,11 @@ def back_menu(m):
 
 @bot.message_handler(func=lambda m: m.text == "💼 Portfolio")
 def port_btn(m):
-    cmd_portfolio(m)
+    # A cached Telegram keyboard can still send an old button label.
+    # Do not touch broken or unrecovered customer portfolio storage.
+    safe_send(m.chat.id, "⚠️ Portfolio is temporarily hidden while recovery "
+              "is being verified. No holdings were changed by this request. "
+              "Use /start to open the updated menu.")
 
 
 @bot.message_handler(func=lambda m: m.text in [
@@ -1497,6 +1504,31 @@ def swing_btn(m):
             logger.error(f"Swing err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
 
+    executor.submit(_run)
+
+
+@bot.message_handler(commands=["intraday"])
+@bot.message_handler(func=lambda m: m.text == "⚡ Intraday Trade")
+def intraday_btn(m):
+    """Only an explicit command or button click starts a new intraday scan."""
+    if not _allow_heavy(m):
+        return
+    if getattr(m.chat, "type", "private") != "private":
+        safe_send(m.chat.id, "⚠️ Intraday reports are available in private bot chat.")
+        return
+
+    def _run(chat_id=m.chat.id):
+        try:
+            report = build_intraday_trade_report()
+            if not isinstance(report, str) or not report.strip():
+                raise ValueError("intraday_report_empty")
+            safe_send(chat_id, report)
+        except Exception as exc:
+            logger.warning("INTRADAY_BUTTON_FAILED kind=%s", type(exc).__name__)
+            safe_send(chat_id, "⛔ NO TRADE: Verified intraday data could not "
+                      "be processed. No setup issued.")
+
+    # No scheduled job, startup action, timer or unsolicited message.
     executor.submit(_run)
 
 
