@@ -60,6 +60,32 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
 
+    def test_recurring_monthly_schedule_has_no_end_year(self):
+        # Regression: all 12 months remain schedulable across many future years.
+        # This checks the scheduling logic, not an external GitHub uptime guarantee.
+        from zoneinfo import ZoneInfo
+        ist = ZoneInfo("Asia/Kolkata")
+        seen = set()
+        for year in range(2027, 2037):
+            for month in range(1, 13):
+                day = first_monday(year, month)
+                scheduled = datetime(year, month, day.day, 8, 0, tzinfo=ist)
+                self.assertTrue(is_monthly_due(scheduled))
+                issue = issue_for(scheduled)
+                self.assertEqual(issue, f"{year:04d}-{month:02d}")
+                self.assertNotIn(issue, seen)
+                seen.add(issue)
+        self.assertEqual(len(seen), 120)
+
+    def test_monthly_workflow_uses_recurring_schedule_and_unique_archives(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/msk-magazine-monthly.yml").read_text()
+        self.assertIn('cron: "30 2 * * 1"', workflow)
+        self.assertIn("is_monthly_due(now)", workflow)
+        self.assertIn("msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}", workflow)
+        self.assertIn("--draft", workflow)
+        self.assertNotIn("gh release publish", workflow)
+
     def test_first_monday_utc_to_ist(self):
         self.assertTrue(is_monthly_due(datetime(2026, 12, 7, 2, 30, tzinfo=timezone.utc)))
         self.assertEqual(issue_for(datetime(2026, 12, 7, 2, 30, tzinfo=timezone.utc)), "2026-12")
