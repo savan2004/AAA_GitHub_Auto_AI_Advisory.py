@@ -121,7 +121,7 @@ jobs:
           ROOT="magazine_artifacts/$ISSUE"
           test -f "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
           test -f "$ROOT/release_gate.json"
-          tar -czf "$ROOT/MSK_${ISSUE}_source_and_page_evidence.tar.gz" -C "$ROOT" sources release_gate.json page_*.json
+          (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources release_gate.json page_*.json)
           TAG="msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}"
           gh release create "$TAG" \
             "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf" \
