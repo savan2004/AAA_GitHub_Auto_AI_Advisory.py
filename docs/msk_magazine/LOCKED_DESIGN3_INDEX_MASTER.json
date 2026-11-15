@@ -1,0 +1,123 @@
+{
+  "id": "MSK_MAGAZINE_DESIGN3_MASTER",
+  "version": "1.0",
+  "approval": "VISUAL DESIGN ONLY; financial content not publication-approved",
+  "page_count": 16,
+  "page_size": "A4 portrait",
+  "cover": "Design C/Final Design 3: original MSK rising-chart logo and diagonal financial growth cover",
+  "brand": "MSK AI BOT | Analysis | AI Intelligence | Market Insights",
+  "colors": {
+    "white": "#FFFFFF",
+    "navy": "#132B46",
+    "teal": "#007D84"
+  },
+  "reference_sha256": "b9150ad0666eaadda2ef1fa8a4415de14bf10b5eeb5a62f69ff5cd93b07e8dca",
+  "reference_issue": "2026-11",
+  "research_page_balance_target": "50% analysis, 30% charts/infographics, 20% insight/data",
+  "locked_index": [
+    {
+      "page": 1,
+      "title": "Monthly Market Outlook",
+      "layout": "cover-design-c"
+    },
+    {
+      "page": 2,
+      "title": "Editor's Note & Index",
+      "layout": "index-designed"
+    },
+    {
+      "page": 3,
+      "title": "Executive Market Outlook",
+      "layout": "bar-summary"
+    },
+    {
+      "page": 4,
+      "title": "Global & Indian Economy",
+      "layout": "bar-macro"
+    },
+    {
+      "page": 5,
+      "title": "Nifty 50 Technical Outlook",
+      "layout": "line-benchmark"
+    },
+    {
+      "page": 6,
+      "title": "Bank Nifty & Major Indices",
+      "layout": "comparison"
+    },
+    {
+      "page": 7,
+      "title": "Market Breadth & Institutional Flows",
+      "layout": "flow-line"
+    },
+    {
+      "page": 8,
+      "title": "Sector Performance & Rotation",
+      "layout": "sector-bars"
+    },
+    {
+      "page": 9,
+      "title": "Large-Cap Research",
+      "layout": "donut-research"
+    },
+    {
+      "page": 10,
+      "title": "Mid-Cap Research",
+      "layout": "cap-research"
+    },
+    {
+      "page": 11,
+      "title": "Small-Cap Research",
+      "layout": "cap-research"
+    },
+    {
+      "page": 12,
+      "title": "Fundamental Research Spotlight",
+      "layout": "fundamental-callouts"
+    },
+    {
+      "page": 13,
+      "title": "Advanced Strategy Lab",
+      "layout": "strategy-diagram"
+    },
+    {
+      "page": 14,
+      "title": "Events & Policy Calendar",
+      "layout": "event-timeline"
+    },
+    {
+      "page": 15,
+      "title": "Next-Month Strategy & Risk",
+      "layout": "scenario-matrix"
+    },
+    {
+      "page": 16,
+      "title": "Research Methodology & Disclosures",
+      "layout": "methodology-source-registry"
+    }
+  ],
+  "rules": {
+    "do_not_change": [
+      "MSK logo",
+      "page count",
+      "page titles",
+      "page order",
+      "color palette",
+      "approved cover composition",
+      "index design",
+      "page numbering"
+    ],
+    "update_each_issue": [
+      "month and issue label",
+      "editor's note",
+      "dated research",
+      "company financials when verified",
+      "data charts",
+      "strategy lab theme",
+      "event calendar",
+      "source register"
+    ],
+    "no_old_data_reuse": true,
+    "publish_gate": "source+content+visual+owner approval required"
+  }
+}
