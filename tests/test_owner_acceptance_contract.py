@@ -58,7 +58,7 @@ class LiveEvidenceGate(unittest.TestCase):
     def test_only_owner_breadth_capture_logs_actual_public_market_reply(self):
         from unittest.mock import patch
         from msk_live_acceptance import _PROBE, capture_telegram_ack
-        text = "📊 MARKET PARTICIPATION\\nCoverage: 497/501 (99.2%)"
+        text = "📊 MSK MARKET HEALTH | NIFTY 500\\nCoverage: 497/501 (99.2%)"
         probe = {"action": "Breadth", "receipts": [], "files": {}, "closed": False}
         token = _PROBE.set(probe)
         try:

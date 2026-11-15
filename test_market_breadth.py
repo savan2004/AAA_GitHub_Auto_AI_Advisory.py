@@ -36,15 +36,94 @@ class InvestorFriendlyBreadthTests(unittest.TestCase):
             'fetched': '13-Nov 22:25 IST',
         }
         msg = format_breadth(r)
-        self.assertIn('Weak trading day; short-term trend not yet broadly broken', msg)
-        self.assertIn('335/497 stocks fell (67.4%)', msg)
-        self.assertIn('161/497 stocks rose (32.4%)', msg)
-        self.assertIn('Above 20-day average: 81.9%', msg)
-        self.assertIn('5-session participation weakened: -11.5 percentage points', msg)
-        self.assertIn('Small groups can swing sharply', msg)
-        self.assertIn('NOT a sector buy/sell ranking', msg)
-        self.assertNotIn('confirmed downtrend', msg)
+        self.assertIn('CAUTIOUS — daily selling; short-term trend holding', msg)
+        self.assertIn('Falling: 335/497 (67.4%)', msg)
+        self.assertIn('Rising: 161/497 (32.4%)', msg)
+        self.assertIn('20-day: 81.9% above average (497 stocks)', msg)
+        self.assertIn('5-session participation: -11.5 percentage points', msg)
+        self.assertIn('Capital Goods: 51.0% rising (69)', msg)
+        self.assertIn('Metals &amp; Mining: 5.0% rising (20)', msg)
+        self.assertNotIn('Textiles: 60.0%', msg)
+        self.assertNotIn('Telecommunication: 54.0%', msg)
+        self.assertIn('One-day industry breadth, not an entry or sector BUY signal.', msg)
+        self.assertIn('a lasting downtrend is NOT confirmed', msg)
         self.assertLess(len(msg), 3500)
+
+    def test_golden_market_health_499_stock_verified_session(self):
+        """13-Nov-2026 actual saved NSE breadth: no false sector leadership."""
+        snapshot = {
+            'session': '2026-11-13', 'requested': 501,
+            'valid': 499, 'coverage': 99.6, 'stale': False,
+            'advances': 162, 'declines': 336, 'unchanged': 1,
+            'benchmark_change': -0.61,
+            'ma20': {'pct': 82.0, 'count': 499},
+            'ma50': {'pct': 58.7, 'count': 499},
+            'ma200': {'pct': 50.6, 'count': 492},
+            'trend_delta': -11.6, 'trend_count': 499,
+            'highs': 17, 'lows': 1, 'high_low_count': 481,
+            'sectors': {
+                'Textiles': {'count': 5, 'adv_pct': 60.0},
+                'Telecommunication': {'count': 11, 'adv_pct': 54.5},
+                'Capital Goods': {'count': 69, 'adv_pct': 50.7},
+                'Consumer Services': {'count': 23, 'adv_pct': 43.5},
+                'Power': {'count': 19, 'adv_pct': 21.1},
+                'Metals & Mining': {'count': 20, 'adv_pct': 5.0},
+                'Financial Services': {'count': 98, 'adv_pct': 25.5},
+            },
+            'source': 'Nifty 500 constituent CSV (current membership)',
+            'fetched': '14-Nov 23:33 IST',
+            'trend_context': 'Weak daily participation alone does not establish a persistent downtrend.',
+        }
+        output = format_breadth(snapshot)
+        required = (
+            '📊 <b>MSK MARKET HEALTH | NIFTY 500</b>',
+            'CAUTIOUS — daily selling; short-term trend holding',
+            'Falling: 336/499 (67.3%)',
+            'Rising: 162/499 (32.5%)',
+            'Nifty 50: -0.61%',
+            '20-day: 82.0% above average (499 stocks)',
+            '50-day: 58.7% above average (499 stocks)',
+            '200-day: 50.6% above average (492 stocks)',
+            '5-session participation: -11.6 percentage points (same 499 stocks)',
+            '252-session closing highs/lows: 17/1 (481 stocks)',
+            'Capital Goods: 50.7% rising (69)',
+            'Consumer Services: 43.5% rising (23)',
+            'Power: 21.1% rising (19)',
+            'Metals &amp; Mining: 5.0% rising (20)',
+            'Banking/financial sector context: 25.5% rising (98 covered)',
+            '50%+ stocks advancing',
+            'another &lt;40% advancing session',
+            'Coverage: 499/501 (99.6%)',
+            '14-Nov 23:33 IST',
+        )
+        for text in required:
+            self.assertIn(text, output)
+        self.assertNotIn('Textiles:', output)
+        self.assertNotIn('Telecommunication:', output)
+        self.assertNotIn('a persistent downtrend.\n⚠️', output)
+        self.assertEqual(output.count('Capital Goods: 50.7%'), 1)
+        self.assertLess(len(output), 2700)
+
+    def test_report_has_no_sector_invention_for_small_samples(self):
+        case = {
+            'session': '2026-11-13', 'requested': 500, 'valid': 450,
+            'coverage': 90, 'advances': 300, 'declines': 140,
+            'unchanged': 10, 'benchmark_change': 0.5,
+            'ma20': {'pct': 36, 'count': 450},
+            'ma50': {'pct': 38, 'count': 450},
+            'ma200': {'pct': None, 'count': 0},
+            'sectors': {'Tiny': {'count': 5, 'adv_pct': 100}},
+            'source': '<data source>', 'fetched': '<fetch>',
+        }
+        report = format_breadth(case)
+        self.assertIn('No industry has 15+ covered stocks', report)
+        self.assertIn('Source: &lt;data source&gt;', report)
+        self.assertIn('Fetched: &lt;fetch&gt;', report)
+        self.assertIn('not available', report)
+        self.assertIn('REBOUND WATCH', report)
+        self.assertIn('weak underlying trend', report)
+        self.assertNotIn('Tiny:', report)
+        self.assertNotIn('<data source>', report)
 
     def test_warming_and_missing_data_do_not_make_recommendations(self):
         self.assertIn('preparing', format_breadth({'state': 'warming'}))
