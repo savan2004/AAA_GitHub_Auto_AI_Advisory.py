@@ -2056,7 +2056,11 @@ if __name__ == "__main__":
                              args=(bot.send_message, _usage_stop),
                              name="msk-owner-daily", daemon=True).start()
         logger.info("Webhook registered at %s%s", WEBHOOK_URL, WEBHOOK_PATH)
-        if os.getenv("MSK_LIVE_ACCEPTANCE_RUN_ID"):
+        # A leftover test run ID must NEVER send Swing (or other) Telegram
+        # reports by itself on an ordinary production startup/deployment.
+        # A separate explicit QA-enable switch is required for one-off tests.
+        if (os.getenv("MSK_LIVE_ACCEPTANCE_AUTORUN", "").strip() == "1"
+                and os.getenv("MSK_LIVE_ACCEPTANCE_RUN_ID", "").strip()):
             from msk_live_acceptance import run_once as run_owner_acceptance
             threading.Thread(target=run_owner_acceptance, args=(globals(),),
                              name="msk-owner-acceptance", daemon=True).start()

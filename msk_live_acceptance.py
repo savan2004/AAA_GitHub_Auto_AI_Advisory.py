@@ -1,6 +1,7 @@
 """Single-run, owner-only live integration acceptance for the deployed MSK Bot.
 
-Disabled unless MSK_LIVE_ACCEPTANCE_RUN_ID is explicitly configured.
+Disabled unless both MSK_LIVE_ACCEPTANCE_AUTORUN=1 and a unique
+MSK_LIVE_ACCEPTANCE_RUN_ID are explicitly configured.
 Never runs against customer chats or changes portfolio holdings.  The separate
 MSK portfolio PostgreSQL database is used only for a one-time run claim.
 """
@@ -324,7 +325,10 @@ def _save_action(run_id, label, *, status, message_id=None, file_id=None,
 
 
 def run_once(ctx):
-    """Exercise all 12 production features and four inline paths as owner."""
+    """Owner QA is OFF by default; only explicit two-part enable can send."""
+    if os.getenv("MSK_LIVE_ACCEPTANCE_AUTORUN", "").strip() != "1":
+        LOG.info("MSK_ACCEPTANCE_DISABLED reason=autorun_not_explicitly_enabled")
+        return
     run_id = os.getenv("MSK_LIVE_ACCEPTANCE_RUN_ID", "").strip()
     if not re.fullmatch(r"[A-Za-z0-9._-]{6,100}", run_id):
         LOG.error("MSK_ACCEPTANCE_NOT_STARTED reason=invalid_run_id")

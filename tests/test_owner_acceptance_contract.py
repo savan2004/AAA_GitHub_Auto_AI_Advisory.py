@@ -14,6 +14,25 @@ class OwnerAcceptanceContract(unittest.TestCase):
         self.assertIn('ON CONFLICT DO NOTHING RETURNING run_id', code)
         self.assertIn('PORTFOLIO_DATABASE_URL', code)
 
+    def test_unset_autorun_prevents_unsolicited_owner_telegram_sends(self):
+        import os
+        from unittest.mock import patch
+        from msk_live_acceptance import run_once
+
+        # A stale run ID alone MUST NOT trigger any user-facing report.
+        with patch.dict(os.environ, {
+                "MSK_LIVE_ACCEPTANCE_RUN_ID": "old-swing-safe-run-id",
+                "MSK_LIVE_ACCEPTANCE_AUTORUN": ""}, clear=False):
+            with patch("msk_live_acceptance.time.sleep") as pause:
+                run_once({})  # lacks owner access: test fails if it proceeds
+                pause.assert_not_called()
+
+        # Both startup launcher and worker require explicit opt-in.
+        main = (ROOT / "main.py").read_text(encoding="utf-8")
+        worker = (ROOT / "msk_live_acceptance.py").read_text(encoding="utf-8")
+        self.assertIn('os.getenv("MSK_LIVE_ACCEPTANCE_AUTORUN", "").strip() == "1"', main)
+        self.assertIn('os.getenv("MSK_LIVE_ACCEPTANCE_AUTORUN", "").strip() != "1"', worker)
+
     def test_16_actions_and_pdf_checks(self):
         tree = ast.parse((ROOT / "msk_live_acceptance.py").read_text(encoding="utf-8"))
         run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_run_actions")
