@@ -33,7 +33,9 @@ def _source_chat(env):
     return source
 
 def _check_manifest(data, month, source_chat, *, now=None):
-    # Use an aware instant by default; a date-only check accepts approvals\n    # entered later today before they actually occurred.\n    now = datetime.now(timezone.utc) if now is None else now
+    # Use an aware instant by default; a date-only check accepts approvals
+    # entered later today before they actually occurred.
+    now = datetime.now(timezone.utc) if now is None else now
     if not isinstance(data, dict) or data.get("approved") is not True:
         raise MagazineManifestError("Magazine is not approved")
     if data.get("issue") != month or data.get("source_project") != "AiAutoUpdate":
