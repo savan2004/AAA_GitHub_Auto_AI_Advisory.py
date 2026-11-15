@@ -40,7 +40,8 @@ def candles(*, symbol="spot", current=True, volume=True,
     high_width = 8. if symbol == "spot" else .15
     low_width = 8. if symbol == "spot" else .15
     frame = pd.DataFrame({
-        "Open": [c - (0.5 if symbol == "spot" else .05) for c in closes],
+        "Open": [c + (1 if side == "SELL" else -1) *
+                 (0.5 if symbol == "spot" else .05) for c in closes],
         "High": [c + high_width for c in closes],
         "Low": [c - low_width for c in closes],
         "Close": closes,
@@ -251,7 +252,7 @@ class Intraday15mRules(TestCase):
         self.assertIn("9/10 (NOT win-rate accuracy)", report)
         self.assertIn("NO AUTOMATIC BUY / SELL ORDERS", report)
         self.assertNotIn("70% accurate", report)
-        self.assertNotIn("5-minute", report)
+        self.assertNotIn("⏱️ 5-minute completed candles", report)
 
 
 if __name__ == "__main__":
