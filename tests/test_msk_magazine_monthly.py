@@ -73,6 +73,22 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertEqual(rows[3][0]["value"], "25144.30")
         self.assertEqual(rows[3][0]["source_file"], "market.txt")
 
+    def test_same_date_conflicting_official_figures_are_withheld(self):
+        raw = b"Table Nifty 50: 25,144.30 points. Commentary Nifty 50: 25,144.45 points."
+        (self.source_root / "market.txt").write_bytes(raw)
+        original = copy.deepcopy(self.row)
+        original["source_sha256"] = hashlib.sha256(raw).hexdigest()
+        original["source_excerpt"] = "Table Nifty 50: 25,144.30 points."
+        second = copy.deepcopy(original)
+        second["value"] = "25144.45"
+        second["source_excerpt"] = "Commentary Nifty 50: 25,144.45 points."
+        by_page, errors = validate_evidence(
+            {"issue": "2026-11", "observations": [original, second]},
+            "2026-11", self.source_root, date(2026, 11, 16)
+        )
+        self.assertFalse(by_page[3])
+        self.assertTrue(any("conflicting published numbers" in e for e in errors))
+
     def test_wrong_source_hash_fails(self):
         row = copy.deepcopy(self.row)
         row["source_sha256"] = "a" * 64
