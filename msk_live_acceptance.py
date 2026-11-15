@@ -47,6 +47,18 @@ def capture_telegram_ack(kind, message_id, file_id=None, message_text=None):
             "MSK TOTAL MARKET HEALTH | INDIA" in message_text):
         LOG.info("MSK_ACCEPTANCE_BREADTH_RETURNED_TEXT message_id=%d text=%r",
                  message_id, message_text)
+    # Only verified-owner swing acceptance may log public stock ideas.
+    # Match the finished report header, not a preliminary "scanning" notice.
+    if (probe["action"] in ("SwingSafe", "SwingAggressive")
+            and kind == "text" and isinstance(message_text, str)
+            and 0 < len(message_text) <= 3400
+            and "MSK SWING TRADE | " in message_text):
+        expected = ("SAFE" if probe["action"] == "SwingSafe"
+                    else "AGGRESSIVE")
+        if f"MSK SWING TRADE | {expected}" in message_text:
+            LOG.info("MSK_ACCEPTANCE_SWING_RETURNED_TEXT action=%s "
+                     "message_id=%d text=%r",
+                     probe["action"], message_id, message_text)
     # Public issuer research is logged only for the *verified owner* single
     # Large Cap acceptance probe, not for ordinary customer messages.
     if (probe["action"] == "LargeCapTop5" and kind == "text" and
@@ -386,8 +398,17 @@ def _run_actions(ctx, uid, run_id):
         result = ctx["get_swing_trades"](mode=mode)
         if not isinstance(result, str) or not result.strip():
             raise ValueError("Swing result empty")
-        for start in range(0, len(result), 3400):
-            emit(result[start:start + 3400])
+        if ("ranking withheld" in result.lower()
+                or "NO QUALIFYING SETUP TODAY" in result):
+            active = _PROBE.get()
+            if active is not None:
+                active["blocked"] = True
+            LOG.warning("MSK_ACCEPTANCE_SWING_DATA_WITHHELD mode=%s", mode)
+        # Both final investor reports fit into one Telegram text message.
+        # Avoid cutting HTML formatting across 3400-byte chunks.
+        if len(result) > 3400:
+            raise ValueError("Swing result exceeds safe single-message limit")
+        emit(result)
 
     class BotProxy:
         def __init__(self, original):
