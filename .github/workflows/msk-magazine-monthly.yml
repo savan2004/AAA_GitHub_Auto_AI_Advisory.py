@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install PDF-only open-source dependencies
-        run: python -m pip install reportlab==4.2.5 "pypdf>=5,<7" requests==2.32.3
+        run: python -m pip install reportlab==4.2.5 "pypdf>=5,<7" requests==2.32.3 chardet==5.2.0
       - name: Run financial, schedule, document and release-gate tests
         run: python -m unittest discover -s tests -p 'test_msk_magazine_monthly.py' -v
       - name: Run NSE archive downloader and integrated PDF regression tests
@@ -55,13 +55,15 @@ jobs:
     needs: offline-regression
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    permissions:
+      contents: write  # only for GitHub draft release archival, never public publish
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Install PDF engine
-        run: python -m pip install reportlab==4.2.5 "pypdf>=5,<7" requests==2.32.3
+        run: python -m pip install reportlab==4.2.5 "pypdf>=5,<7" requests==2.32.3 chardet==5.2.0
       - name: Resolve IST month and first Monday gate
         id: schedule
         env:
@@ -109,6 +111,26 @@ jobs:
           path: magazine_artifacts/${{ steps.schedule.outputs.issue }}/
           if-no-files-found: error
           retention-days: 90
+      - name: Archive each run in a durable PRIVATE GitHub draft release
+        if: steps.schedule.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ steps.schedule.outputs.issue }}
+        run: |
+          set -euo pipefail
+          ROOT="magazine_artifacts/$ISSUE"
+          test -f "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
+          test -f "$ROOT/release_gate.json"
+          (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources release_gate.json page_*.json)
+          TAG="msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}"
+          gh release create "$TAG" \
+            "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf" \
+            "$ROOT/release_gate.json" \
+            "$ROOT/MSK_${ISSUE}_source_and_page_evidence.tar.gz" \
+            --draft \
+            --title "MSK Magazine $ISSUE | UNAPPROVED editorial draft | run $GITHUB_RUN_ID" \
+            --notes "Unapproved 16-page Design 3 editorial draft; financial data may be missing. Human source, logo, visual and publication approval are REQUIRED. No Telegram release."
+          echo "Created private draft release: $TAG" >> "$GITHUB_STEP_SUMMARY"
       - name: Report missing publication evidence
         if: steps.schedule.outputs.due == 'true'
         env:

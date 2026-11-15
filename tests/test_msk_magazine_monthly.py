@@ -39,6 +39,17 @@ class MagazineMonthlyTests(unittest.TestCase):
             "2026-11", self.source_root, date(2026, 11, 16)
         )
 
+    def test_github_archives_monthly_pdf_as_unpublished_draft_only(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/msk-magazine-monthly.yml").read_text()
+        self.assertIn('cron: "30 2 * * 1"', workflow)
+        self.assertIn("gh release create", workflow)
+        self.assertIn("--draft", workflow)
+        self.assertIn("contents: write", workflow)
+        self.assertIn("GITHUB_RUN_ID", workflow)
+        self.assertNotIn("gh release publish", workflow)
+        self.assertNotIn("sendDocument", workflow)
+
     def test_first_mondays(self):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
