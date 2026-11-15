@@ -1,0 +1,38 @@
+name: MSK Total Market Health Tests
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'msk_market_health.py'
+      - 'main.py'
+      - 'msk_usage.py'
+      - 'msk_live_acceptance.py'
+      - 'tests/test_msk_market_health.py'
+      - 'tests/test_owner_acceptance_contract.py'
+      - '.github/workflows/msk-total-market-health.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'msk_market_health.py'
+      - 'main.py'
+      - 'msk_usage.py'
+      - 'msk_live_acceptance.py'
+      - 'tests/test_msk_market_health.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dated-market-factors:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile production handlers
+        run: python -m py_compile msk_market_health.py main.py msk_usage.py msk_live_acceptance.py
+      - name: Verify FII/DII, futures, PCR, macro and stale-data protections
+        run: python -m unittest discover -s tests -p 'test_msk_market_health.py' -v
+      - name: Check Telegram acceptance contract
+        run: python -m unittest discover -s tests -p 'test_owner_acceptance_contract.py' -v
