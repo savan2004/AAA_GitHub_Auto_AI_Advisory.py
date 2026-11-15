@@ -442,7 +442,7 @@ def format_market_health(breadth, factors):
     if brent:
         move = (_number(brent.get("change_5d")))
         week = f" | 5 sessions: {move:+.1f}%" if move is not None else ""
-        lines.append(f"Brent futures: \${brent['price']:.2f}/bbl "
+        lines.append(f"Brent futures: ${brent['price']:.2f}/bbl "
                      f"({brent['session']}){week}.")
         lines.append("Higher sustained oil prices can pressure India’s import costs.")
     else:
