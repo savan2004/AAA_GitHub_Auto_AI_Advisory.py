@@ -527,6 +527,7 @@ def format_breadth(r):
         f"✅ Coverage: {int(valid)}/{int(r.get('requested') or valid)} "
         f"({pct(r.get('coverage'))})",
         f"🕒 Fetched: {html.escape(str(r.get('fetched', 'not recorded')))}",
+        f"Source: {html.escape(str(r.get('source', 'not provided')))}.",
         "Adjusted daily closes; current index members. Educational market context.",
     ])
     context = str(r.get("trend_context") or "")
