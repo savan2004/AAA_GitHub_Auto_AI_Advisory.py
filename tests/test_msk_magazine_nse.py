@@ -74,7 +74,7 @@ class NseCollectorTests(unittest.TestCase):
         pack = json.loads((self.folder / "source_pack.json").read_text())
         points, failures = validate_evidence(pack, "2026-12", self.folder,
                                              date(2026, 12, 7))
-        self.assertEqual(sum(len(v) for v in points.values()), 8)
+        self.assertEqual(sum(len(v) for v in points.values()), 8, failures)
         self.assertFalse(failures)
 
     def test_collected_pack_renders_draft_without_publishing(self):
@@ -86,7 +86,7 @@ class NseCollectorTests(unittest.TestCase):
             source_root=self.folder,
             scheduled=True, now=datetime(2026, 12, 7, 2, 30, tzinfo=timezone.utc),
         )
-        self.assertEqual(result["source_consistency_rows"], 8)
+        self.assertEqual(result["source_consistency_rows"], 8, result["source_failures"])
         self.assertTrue(result["mechanical_pdf_checks"]["passed"])
         self.assertFalse(result["publication_allowed"])
 
