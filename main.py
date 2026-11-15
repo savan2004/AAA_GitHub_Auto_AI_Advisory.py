@@ -762,10 +762,11 @@ def build_scan(profile):
             _SCAN_GATE.release()
 
 
-# ── Build Market Breadth ─────────────────────────────────────────────────────
+# ── Build Market Health (flows, derivatives, macro + validated breadth) ────────
 def build_breadth():
-    from market_breadth import get_breadth, format_breadth
-    return format_breadth(get_breadth())
+    # Preserve the callable for owner-only acceptance and old menu messages.
+    from msk_market_health import build_market_health
+    return build_market_health()
 
 
 # ── Build Portfolio Card ─────────────────────────────────────────────────────
@@ -855,7 +856,7 @@ def build_portfolio_card(uid):
 # ── Keyboards ────────────────────────────────────────────────────────────────
 def main_keyboard():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    kb.add("🔍 Analysis", "📊 Breadth", "🔥 Stocks Buzz")
+    kb.add("🔍 Analysis", "🩺 Market Health", "🔥 Stocks Buzz")
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "💼 Portfolio")
     kb.add("📈 Chart", "📄 Report")
@@ -1446,11 +1447,11 @@ def scan_btn(m):
 
 
 
-@bot.message_handler(func=lambda m: m.text == "📊 Breadth")
+@bot.message_handler(func=lambda m: m.text in ("📊 Breadth", "🩺 Market Health"))
 def breadth_btn(m):
     if not _allow_heavy(m):
         return
-    safe_send(m.chat.id, "⏳ Fetching…")
+    safe_send(m.chat.id, "⏳ Preparing market health…")
 
     def _run(chat_id=m.chat.id):
         try:
