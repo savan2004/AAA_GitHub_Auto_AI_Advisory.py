@@ -171,6 +171,20 @@ def validate_evidence(pack: dict, issue: str, source_root: Path,
             })
         except (MagazineError, OSError, ValueError, TypeError, KeyError) as exc:
             failures.append(f"Observation {i}: {exc}")
+    # Independent official tables sometimes contradict their commentary.
+    # Do not select one of two contradictory claims or silently rank it.
+    for page, claims in list(by_page.items()):
+        seen = {}
+        for row in claims:
+            key = (row["label"].casefold(), row["unit"].casefold(), row["observed_on"])
+            seen.setdefault(key, set()).add(row["value"])
+        conflicts = {key for key, values in seen.items() if len(values) > 1}
+        if conflicts:
+            failures.append(f"Page {page}: conflicting published numbers for " +
+                            ", ".join(sorted(key[0] for key in conflicts)))
+            by_page[page] = [row for row in claims if
+                             (row["label"].casefold(), row["unit"].casefold(),
+                              row["observed_on"]) not in conflicts]
     return by_page, failures
 
 
