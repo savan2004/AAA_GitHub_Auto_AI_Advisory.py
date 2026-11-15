@@ -354,7 +354,7 @@ def assess_public_readiness(result: dict) -> dict:
         ),
         "magazine_button_telegram_delivery": (
             result.get("telegram_delivery_verified") is True
-            and isinstance(result.get("telegram_message_id"), int)
+            and type(result.get("telegram_message_id")) is int
             and result["telegram_message_id"] > 0
         ),
         "final_publication_approval": (
