@@ -489,15 +489,17 @@ def format_breadth(r):
                 eligible.append((str(name), int(count), rate))
     eligible.sort(key=lambda row: (-row[2], row[0]))
     if eligible:
-        top = eligible[:2]
-        bottom = sorted(eligible, key=lambda row: (row[2], row[0]))[:2]
+        top = eligible[:min(2, max(1, len(eligible) // 2))]
+        remaining = [row for row in eligible if row not in top]
+        bottom = sorted(remaining, key=lambda row: (row[2], row[0]))[:2]
         lines.extend(["", "🏭 <b>INDUSTRY PARTICIPATION</b>",
                       "<b>Relatively resilient (not buy calls)</b>"])
         for name, count, rate in top:
             lines.append(f"• {html.escape(name)}: {rate:.1f}% rising ({count})")
-        lines.append("<b>Most pressured</b>")
-        for name, count, rate in bottom:
-            lines.append(f"• {html.escape(name)}: {rate:.1f}% rising ({count})")
+        if bottom:
+            lines.append("<b>Most pressured</b>")
+            for name, count, rate in bottom:
+                lines.append(f"• {html.escape(name)}: {rate:.1f}% rising ({count})")
         financials = next((item for item in eligible
                            if item[0] == "Financial Services"), None)
         if financials and financials not in top and financials not in bottom:
@@ -505,6 +507,9 @@ def format_breadth(r):
                 f"Banking/financial sector context: "
                 f"{financials[2]:.1f}% rising ({financials[1]} covered).")
         lines.append("One-day industry breadth, not an entry or sector BUY signal.")
+    else:
+        lines.extend(["", "🏭 <b>INDUSTRY PARTICIPATION</b>",
+                      "No industry has 15+ covered stocks; comparison withheld."])
 
     lines.extend([
         "",
@@ -524,8 +529,10 @@ def format_breadth(r):
         f"🕒 Fetched: {html.escape(str(r.get('fetched', 'not recorded')))}",
         "Adjusted daily closes; current index members. Educational market context.",
     ])
-    if r.get("trend_context"):
-        lines.append("⚠️ " + html.escape(str(r["trend_context"])))
+    context = str(r.get("trend_context") or "")
+    if context and not (weak_day and short_breadth_ok and
+                        context.startswith("Weak daily participation alone")):
+        lines.append("⚠️ " + html.escape(context))
     report = "\n".join(lines)
     # Telegram messages have a 4096-character post-HTML cap; do not silently
     # trim the conclusion or suppress the last sector when the text expands.
