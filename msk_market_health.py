@@ -302,15 +302,31 @@ def parse_commodity_history(dataframe, session, *, ticker="BZ=F"):
         return None
 
 
+def _fetch_yahoo_series(ticker, session):
+    import yfinance as yf
+    # Non-index symbols are never routed through the .NS equity suffix mapper.
+    frame = yf.Ticker(ticker).history(period="1mo", interval="1d",
+                                     auto_adjust=False, timeout=5)
+    return parse_commodity_history(frame, session, ticker=ticker)
+
+
 def fetch_brent(session):
     try:
-        import yfinance as yf
-        frame = yf.Ticker("BZ=F").history(period="1mo", interval="1d",
-                                         auto_adjust=False, timeout=5)
-        return parse_commodity_history(frame, session)
+        return _fetch_yahoo_series("BZ=F", session)
     except Exception as exc:
         LOG.warning("MSK_HEALTH_BRENT_UNAVAILABLE reason=%s", type(exc).__name__)
         return None
+
+
+def fetch_usdinr(session):
+    try:
+        result = _fetch_yahoo_series("INR=X", session)
+        if result and 20 < result["price"] < 200:
+            result["source"] = "Yahoo Finance USD/INR (INR=X)"
+            return result
+    except Exception as exc:
+        LOG.warning("MSK_HEALTH_FX_UNAVAILABLE reason=%s", type(exc).__name__)
+    return None
 
 
 def get_factors(session):
@@ -328,6 +344,7 @@ def get_factors(session):
         "pcr": _POOL.submit(fetch_option_pcr, session),
         "rates": _POOL.submit(fetch_policy_rates, session),
         "brent": _POOL.submit(fetch_brent, session),
+        "fx": _POOL.submit(fetch_usdinr, session),
     }
     done, pending = wait(jobs.values(), timeout=9)
     values = {"session": session.isoformat()}
@@ -430,6 +447,14 @@ def format_market_health(breadth, factors):
         lines.append("Higher sustained oil prices can pressure India’s import costs.")
     else:
         lines.append("Brent crude futures: Recent dated quote unavailable.")
+    fx = factors.get("fx")
+    if fx:
+        move = _number(fx.get("change_5d"))
+        week = f" | 5 sessions: {move:+.1f}%" if move is not None else ""
+        lines.append(f"USD/INR: ₹{fx['price']:.2f}/USD ({fx['session']}){week}.")
+        lines.append("Rising USD/INR generally signals a weaker rupee.")
+    else:
+        lines.append("USD/INR: Recent dated quote unavailable.")
 
     lines.extend(["", "📊 <b>DOMESTIC PARTICIPATION</b>"])
     if benchmark is not None:
