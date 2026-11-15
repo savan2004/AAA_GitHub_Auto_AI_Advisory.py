@@ -14,6 +14,7 @@ DB_ENV = "MSK_ANALYTICS_DATABASE_URL"
 MAX_NAME = 80
 MENU = {
     "📊 Breadth": "market_breadth",
+    "🩺 Market Health": "market_breadth",
     "🔥 Stocks Buzz": "stocks_buzz",
     "🏦 Conservative": "conservative",
     "⚖️ Moderate": "moderate",
