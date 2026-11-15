@@ -205,8 +205,15 @@ def parse_option_pcr(payload, session, expiry):
 def fetch_option_pcr(session):
     """Use public NSE endpoints only if directly available; 401/403 = unavailable.
 
-    This is the index-options OI ratio, *not* FII long/short futures ratio.
+    During Indian cash-market hours the PCR can be newer than last complete
+    *daily breadth*, so label its own intraday observation date.
     """
+    now = datetime.now(IST)
+    obs_day = session
+    if (now.weekday() < 5 and
+            (9, 15) <= (now.hour, now.minute) <= (15, 30) and
+            now.date() > session):
+        obs_day = now.date()
     try:
         info = _read_json(
             NSE_ROOT + "/api/option-chain-contract-info?symbol=NIFTY",
@@ -217,14 +224,14 @@ def fetch_option_pcr(session):
                    (info.get("records") or {}).get("expiryDates") or
                    (info.get("data") or {}).get("expiryDates") or [])
         valid_expiries = sorted(((_nse_day(s), s) for s in options
-                                 if _nse_day(s) is not None and _nse_day(s) >= session))
+                                 if _nse_day(s) is not None and _nse_day(s) >= obs_day))
         if not valid_expiries:
             return None
         expiry = valid_expiries[0][1]
         url = NSE_ROOT + "/api/option-chain-v3?" + urlencode(
             {"type": "Indices", "symbol": "NIFTY", "expiry": expiry})
         return parse_option_pcr(_read_json(url, referer=NSE_ROOT + "/option-chain"),
-                                session, expiry)
+                                obs_day, expiry)
     except Exception as exc:
         LOG.warning("MSK_HEALTH_PCR_UNAVAILABLE reason=%s", type(exc).__name__)
         return None
@@ -419,9 +426,12 @@ def format_market_health(breadth, factors):
     else:
         lines.append("FII index-futures positioning: Unavailable.")
     pcr = factors.get("pcr")
-    if pcr and pcr.get("session") == day.isoformat():
+    pcr_day = _nse_day(pcr.get("session")) if isinstance(pcr, dict) else None
+    if (pcr_day is not None and day <= pcr_day <= day + timedelta(days=5)
+            and pcr.get("pcr") is not None):
         lines.append(f"Nifty OI PCR: {pcr['pcr']:.2f} "
-                     f"(expiry {html.escape(pcr['expiry'])}; "
+                     f"(as of {pcr_day.isoformat()}, "
+                     f"expiry {html.escape(pcr['expiry'])}; "
                      f"{pcr['strikes']} paired strikes)")
         lines.append("PCR = put OI / call OI; not a directional guarantee.")
     else:
