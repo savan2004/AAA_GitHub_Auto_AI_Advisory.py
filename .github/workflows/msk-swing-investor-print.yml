@@ -1,0 +1,40 @@
+name: MSK Swing Safe Aggressive Investor Print
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'swing_trades.py'
+      - 'main.py'
+      - 'msk_live_acceptance.py'
+      - 'tests/test_swing_investor_print.py'
+      - 'tests/test_swing_accuracy_gates.py'
+      - 'tests/test_owner_acceptance_contract.py'
+      - '.github/workflows/msk-swing-investor-print.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'swing_trades.py'
+      - 'msk_live_acceptance.py'
+      - 'tests/test_swing_investor_print.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  investor-swing-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimal existing test dependencies
+        run: python -m pip install 'pandas==2.2.2' 'numpy==1.26.4'
+      - name: Compile swing report and live acceptance
+        run: python -m py_compile swing_trades.py msk_live_acceptance.py main.py
+      - name: Validate Safe and Aggressive Telegram price logic
+        run: python -m unittest discover -s tests -p 'test_swing_investor_print.py' -v
+      - name: Validate benchmark and candle quality gates
+        run: python -m unittest discover -s tests -p 'test_swing_accuracy_gates.py' -v
+      - name: Validate owner Telegram acceptance contract
+        run: python -m unittest discover -s tests -p 'test_owner_acceptance_contract.py' -v

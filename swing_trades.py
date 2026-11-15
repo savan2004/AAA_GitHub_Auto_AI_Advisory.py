@@ -474,54 +474,176 @@ def _pick(rows, side, thr, limit):
     return out
 
 
+def _verified_swing_row(p):
+    """Only return levels for a fully checked, directional completed-bar idea."""
+    try:
+        import math
+        if p.get("side") not in ("LONG", "SHORT"):
+            return None
+        score = int(p["score"])
+        if not 0 <= score <= 10 or not isinstance(p.get("sym"), str):
+            return None
+        sym = p["sym"].strip()
+        if not sym or len(sym) > 25:
+            return None
+        c, sl, t1, t2, atr, volx = (
+            float(p[k]) for k in ("ltp", "sl", "t1", "t2", "atr", "volx"))
+        if (not all(math.isfinite(x) for x in (c, sl, t1, t2, atr, volx))
+                or min(c, sl, t1, t2, atr) <= 0 or volx < 0):
+            return None
+        sgn = 1 if p["side"] == "LONG" else -1
+        if not ((c - sl) * sgn > 0 and (t1 - c) * sgn > 0
+                and (t2 - t1) * sgn > 0):
+            return None
+        risk = abs(c - sl)
+        rr1 = abs(t1 - c) / risk
+        rr2 = abs(t2 - c) / risk
+        if rr1 + 0.02 < MIN_RR1 or rr2 <= rr1:
+            return None
+        # Missing actual observed volume or technical factors must not
+        # turn an invented idea into an investor-facing watchlist card.
+        parts = p.get("parts")
+        if not isinstance(parts, dict) or not all(
+                k in parts for k in ("trend", "weekly", "mom", "adx", "vol")):
+            return None
+        return dict(p, sym=sym, risk_pct=100 * risk / c,
+                    rr1_calc=rr1, rr2_calc=rr2)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _swing_watch_candidates(data, thr):
+    """At most five real qualified technical setups; never pad with examples."""
+    rows = data.get("rows") or []
+    longs = _pick(rows, "LONG", thr["LONG"], MAX_LONG)
+    shorts = _pick(rows, "SHORT", thr["SHORT"], MAX_SHORT)
+    ranked = sorted(longs + shorts,
+                    key=lambda r: (-r["score"], -r["rr1"], r["sym"]))
+    picks, used_symbols, per_sector = [], set(), Counter()
+    for candidate in ranked:
+        row = _verified_swing_row(candidate)
+        if row is None or row["sym"] in used_symbols:
+            continue
+        sector = str(row.get("sector") or "Unclassified")
+        if per_sector[sector] >= MAX_PER_SECTOR:
+            continue
+        per_sector[sector] += 1
+        used_symbols.add(row["sym"])
+        picks.append(row)
+        if len(picks) == 5:
+            break
+    return picks
+
+
+def _swing_reason(p, max_stop):
+    """One simple reason based on the actual technical decision, not a forecast."""
+    reasons = [f"{p['setup']} on completed daily candle"]
+    volx = float(p["volx"])
+    if volx < 1.3:
+        reasons.append("fresh volume confirmation required")
+    else:
+        reasons.append(f"observed volume {volx:.1f}×")
+    if p["risk_pct"] > max_stop:
+        reasons.append(f"stop risk {p['risk_pct']:.1f}% exceeds {max_stop:.0f}% limit")
+    else:
+        reasons.append("next-session trigger not confirmed")
+    return "; ".join(reasons) + "."
+
+
+def _format_swing_watchlist(mode, data, thr):
+    """One investor-ready Telegram message for Safe or Aggressive swing scans.
+
+    Price zones and targets are derived from the LAST COMPLETED candle. They
+    are observation levels, not a confirmed next-session BUY/SELL order.
+    """
+    safe = mode == "conservative"
+    label = "SAFE" if safe else "AGGRESSIVE"
+    icon = "🛡️" if safe else "🚀"
+    max_stop = 4.0 if safe else 7.0
+    account_risk = 1.0 if safe else 0.5
+    picks = _swing_watch_candidates(data, thr)
+    title = "SWING WATCHLIST" if safe else "MOMENTUM WATCHLIST"
+    lines = [
+        f"{icon} <b>MSK SWING TRADE | {label}</b>",
+        f"📅 As of {esc(data['asof'])} close (completed daily candle)",
+        f"📊 {'Conservative' if safe else 'Higher Momentum'} | Hold 2–10 sessions",
+        "",
+        f"🎯 <b>TOP 5 {title} | {len(picks)}/5 qualified</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+    if not picks:
+        lines.extend(["",
+                      "⛔ <b>NO QUALIFYING SETUP TODAY</b>",
+                      f"Need LONG score ≥{thr['LONG']}/10 or "
+                      f"SHORT ≥{thr['SHORT']}/10 with valid price history, "
+                      "liquidity, trend, R:R and stop levels.",
+                      "No sample prices have been substituted."])
+    for i, p in enumerate(picks, 1):
+        c, sl, t1, t2, atr = (
+            float(p[k]) for k in ("ltp", "sl", "t1", "t2", "atr"))
+        low = max(0.01, c - 0.25 * atr)
+        high = c + 0.25 * atr
+        risk = p["risk_pct"]
+        lines.extend([
+            "",
+            f"<b>{i}. {esc(p['sym'])} | Score {p['score']}/10</b>",
+            f"Sector: {esc(p.get('sector') or 'Unclassified')} | "
+            f"Direction: {p['side']}",
+            f"Entry watch zone: ₹{low:,.2f}–₹{high:,.2f}",
+            f"SL: ₹{sl:,.2f} | T1: ₹{t1:,.2f} | T2: ₹{t2:,.2f}",
+            f"R:R = 1:{p['rr1_calc']:.1f} / 1:{p['rr2_calc']:.1f} "
+            "(at reference close)",
+            f"Stop risk: {risk:.1f}% | 🟡 <b>Status: WAIT</b>",
+            f"Reason: {esc(_swing_reason(p, max_stop))}",
+        ])
+        if p["side"] == "SHORT":
+            lines.append("⚠️ Short requires eligible F&O instrument; "
+                         "not an equity-delivery short.")
+
+    regime = {"bull": "🟢 Nifty trend upward",
+              "bear": "🔴 Nifty trend downward",
+              "neutral": "🟡 Nifty trend mixed",
+              "unknown": "⚪ Nifty trend not confirmed"}.get(
+                  data.get("regime"), "⚪ Nifty trend not confirmed")
+    lines.extend(["", "━━━━━━━━━━━━━━━━━━━━",
+                  "🧠 <b>MARKET CONTEXT</b>",
+                  regime,
+                  "Market breadth and risk must support each individual setup.",
+                  f"Risk per trade: planned loss ≤{account_risk:g}% "
+                  "of capital if stop hits.",
+                  "",
+                  "✅ <b>ACTION SUMMARY</b>"])
+    if picks:
+        lines.append("Watch completed-candle levels; confirm the next-session "
+                     "direction and volume before entry.")
+        lines.append(f"Skip any setup with stop distance above "
+                     f"{max_stop:.0f}% or unsuitable sector exposure.")
+    else:
+        lines.append("No entry. Re-run after more confirmed liquid setups appear.")
+    lines.extend(["",
+                  f"⛔ <b>VERDICT: {len(picks)} RESEARCH SETUPS | "
+                  "NO ACTIVE TRADE</b>",
+                  f"📍 Last completed candle: {esc(data['asof'])}. "
+                  "Educational only; not personalized investment advice.",
+                  "━━━━━━━━━━━━━━━━━━━━"])
+    message = "\n".join(lines)
+    if len(message) > 3400:
+        raise ValueError("swing_message_exceeds_safe_single_send_limit")
+    return message
+
+
 def get_swing_trades(mode="conservative"):
-    """Returns ONE string; blocks are separated by blank lines so main.py can split safely."""
+    """Create actual, dated investor cards from validated scanned data only."""
     mode = mode if mode in THRESHOLDS else "conservative"
-    thr = dict(THRESHOLDS[mode])
     data = _load()
     if data.get("quality") != "READY":
         return ("🛑 Swing ranking withheld: independently aligned completed-session "
                 f"candles cover only {data.get('scanned', 0)}/{data.get('total', 0)} "
                 "configured companies, or the Nifty benchmark is unavailable. "
                 "No trade has been recommended.")
-
-    reg = data["regime"]
-    if reg == "bear":
+    thr = dict(THRESHOLDS[mode])
+    if data.get("regime") == "bear":
         thr["LONG"] += 1
-    elif reg == "bull":
+    elif data.get("regime") == "bull":
         thr["SHORT"] += 1
-    reg_txt = {"bull": "🟢 Nifty uptrend (shorts need +1 score)",
-               "bear": "🔴 Nifty downtrend (longs need +1 score)",
-               "neutral": "🟡 Nifty neutral", "unknown": "⚪ Nifty regime unknown"}[reg]
-
-    rows = data["rows"]
-    longs = _pick(rows, "LONG", thr["LONG"], MAX_LONG)
-    shorts = _pick(rows, "SHORT", thr["SHORT"], MAX_SHORT)
-
-    head = (f"📈 <b>Swing Trades — {mode.title()}</b>\n"
-            f"📅 Last completed candle {data['asof']} · scanned {data['scanned']}/{data['total']} · "
-            f"hold ≤{HOLD_BARS} sessions\n{reg_txt}"
-            + ("\n⏱ Market is open: signals use the last COMPLETED daily candle (today's is still forming)." if _session_open() else ""))
-    bt = (f"🧪 <b>Same rules, last ~6M (backtest)</b>\n{_bt_line(data['trades'], 'LONG', thr['LONG'])}\n"
-          f"{_bt_line(data['trades'], 'SHORT', thr['SHORT'])}\n"
-          f"<i>Entry next open, stop-first if both touched, no costs. Past results don't guarantee future.</i>")
-    foot = "⚠️ Educational only. Not SEBI-registered advice. Size so a stop-out costs ≤1% of capital."
-
-    blocks = [head, bt]
-    if longs:
-        blocks.append("🟢 <b>LONG SETUPS</b>")
-        blocks += [_card(p) for p in longs]
-    if shorts:
-        blocks.append("🔴 <b>SHORT SETUPS</b>")
-        blocks += [_card(p) for p in shorts]
-    if not longs and not shorts:
-        near = sorted(rows, key=lambda r: (-r["score"], r["sym"]))[:6]
-        w = ["⚠️ <b>No setup met the threshold today.</b>",
-             f"Need LONG ≥{thr['LONG']} / SHORT ≥{thr['SHORT']}. Closest:"]
-        for r in near:
-            w.append(f"• <b>{esc(r['sym'])}</b> {r['side']} {r['score']}/10 · {r['setup']} · ₹{r['ltp']:,.2f}")
-        if not near:
-            w.append("• none passed the liquidity / trend / R:R gates")
-        blocks.append("\n".join(w))
-    blocks.append(foot)
-    return "\n\n".join(blocks)
+    return _format_swing_watchlist(mode, data, thr)
