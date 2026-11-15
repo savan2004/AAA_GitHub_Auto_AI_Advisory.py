@@ -6,6 +6,7 @@ NEVER calls Telegram, places trades, approves, or publishes an edition.
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -160,8 +161,17 @@ def validate_evidence(pack: dict, issue: str, source_root: Path,
             excerpt_norm = " ".join(excerpt.split()).casefold()
             if excerpt_norm not in original:
                 raise MagazineError("Quoted excerpt not found in source bytes")
-            # Compare numbers with punctuation normalised, not substring-only.
-            numeric_tokens = re.findall(r"(?<!\w)[+-]?\d[\d,]*(?:\.\d+)?(?!\w)", excerpt)
+            # CSV commas separate fields; they are NOT thousands separators.
+            # Use parsed CSV cells for CSV sources, otherwise strictly grouped
+            # numeral tokens such as 25,144.30 or 25144.30.
+            numeric_pattern = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+            if path.suffix.lower() == ".csv":
+                fields = next(csv.reader([excerpt]))
+                numeric_tokens = [field.strip() for field in fields
+                                  if re.fullmatch(numeric_pattern, field.strip())]
+            else:
+                numeric_tokens = re.findall(
+                    rf"(?<!\w){numeric_pattern}(?!\w)", excerpt)
             if value not in {_number(token) for token in numeric_tokens}:
                 raise MagazineError("Claimed value is not in the cited source excerpt")
             by_page.setdefault(page, []).append({
