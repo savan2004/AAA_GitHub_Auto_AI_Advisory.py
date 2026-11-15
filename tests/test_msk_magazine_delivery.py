@@ -3,6 +3,7 @@ import json
 import hashlib
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
@@ -100,6 +101,25 @@ class MagazineCopyTests(unittest.TestCase):
             save(root, "2026-11", record)
             self.assertEqual(copy_approved_magazine(
                 bot, 123, month="2026-11", env=ENV, root=root, now=now), "sent")
+
+    def test_default_clock_rejects_future_approval_same_day(self):
+        """Without an explicit clock, future approval must not be accepted."""
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as root:
+            record = approved()
+            record["approval_timestamp"] = "2026-11-03T18:00:00+05:30"
+            save(root, "2026-11", record)
+
+            class FrozenDateTime(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return cls(2026, 11, 3, 3, 30, tzinfo=timezone.utc)
+
+            with patch("msk_magazine_delivery.datetime", FrozenDateTime):
+                with self.assertRaisesRegex(MagazineManifestError, "in the future"):
+                    copy_approved_magazine(
+                        bot, 123, month="2026-11", env=ENV, root=root)
+            self.assertEqual(bot.copies, [])
 
     def test_naive_verification_clock_rejected(self):
         bot = FakeBot()
