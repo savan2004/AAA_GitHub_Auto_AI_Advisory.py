@@ -130,6 +130,7 @@ def isolated_environment():
         "render_latest_profile": lambda profile: "Mock full-index prepared research: " + profile,
         "_require_private_portfolio": lambda m: True,
         "build_breadth": lambda: "Mock breadth snapshot (offline fixture)",
+        "build_intraday_trade_report": lambda: "Mock intraday: NSE CLOSED — NO TRADE",
         "get_swing_trades": lambda mode: "Mock swing scan: " + mode,
         "build_portfolio_card": lambda uid: "Mock portfolio: no real holdings",
         "test_ai_providers": lambda: {"_status": "MOCK/OFFLINE"},
@@ -145,7 +146,7 @@ def isolated_environment():
     # Runtime delegation is real: port_btn -> cmd_portfolio, stat_btn -> cmd_status.
     names = {
         "cmd_portfolio", "chart_button", "port_btn",
-        "scan_btn", "breadth_btn", "swing_btn", "analysis_btn", "report_btn",
+        "scan_btn", "breadth_btn", "swing_btn", "intraday_btn", "analysis_btn", "report_btn",
         "deliver_daily_reports", "plain_daily_report",
         "buzz_btn", "sector_btn",
     }
@@ -162,6 +163,8 @@ class MainMenuAcceptanceTests(unittest.TestCase):
     def test_every_main_menu_button_reaches_one_direct_handler(self):
         labels = actual_menu_labels()
         self.assertGreaterEqual(len(labels), 12)
+        self.assertIn("⚡ Intraday Trade", labels)
+        self.assertNotIn("💼 Portfolio", labels)
         self.assertEqual(len(labels), len(set(labels)))
         for label in labels:
             with self.subTest(button=label):
@@ -183,6 +186,28 @@ class MainMenuAcceptanceTests(unittest.TestCase):
                 self.assertTrue(all(chat_id == CHAT for chat_id, _ in output))
                 self.assertTrue(any(len(msg.strip()) > 5 for _, msg in output))
                 self.assertFalse(any("Traceback" in msg for _, msg in output))
+
+    def test_legacy_portfolio_button_is_retired_without_touching_storage(self):
+        self.assertNotIn("💼 Portfolio", actual_menu_labels())
+        self.assertEqual(matching_handlers("💼 Portfolio"), ["port_btn"])
+        ns, output, _ = isolated_environment()
+        ns["port_btn"](SimpleNamespace(text="💼 Portfolio",
+            chat=SimpleNamespace(id=CHAT), from_user=SimpleNamespace(id=SENDER)))
+        self.assertIn("temporarily hidden", output[0][1])
+        self.assertNotIn("Mock portfolio:", output[0][1])
+
+    def test_new_intraday_button_is_on_demand_only(self):
+        self.assertEqual(matching_handlers("⚡ Intraday Trade"), ["intraday_btn"])
+        ns, output, _ = isolated_environment()
+        self.assertEqual(output, [])
+        ns["intraday_btn"](SimpleNamespace(text="⚡ Intraday Trade",
+            chat=SimpleNamespace(id=CHAT, type="private"),
+            from_user=SimpleNamespace(id=SENDER)))
+        self.assertEqual(len(output), 1)
+        self.assertIn("NSE CLOSED", output[0][1])
+        self.assertIn("NO TRADE", output[0][1])
+        self.assertEqual(len([x for x in actual_menu_labels()
+                              if x == "⚡ Intraday Trade"]), 1)
 
     def test_model_portfolio_buttons_keep_separate_risk_profiles(self):
         for label, profile in (

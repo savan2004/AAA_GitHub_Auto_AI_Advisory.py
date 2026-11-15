@@ -1,0 +1,39 @@
+name: MSK Intraday Menu and Market Data Safety
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'msk_intraday_trade.py'
+      - 'main.py'
+      - 'msk_usage.py'
+      - 'tests/test_msk_intraday_trade.py'
+      - 'tests/test_menu_end_to_end.py'
+      - '.github/workflows/msk-intraday-menu.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'msk_intraday_trade.py'
+      - 'main.py'
+      - 'msk_usage.py'
+      - 'tests/test_msk_intraday_trade.py'
+      - 'tests/test_menu_end_to_end.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  safe-on-demand-intraday:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install offline test dependencies
+        run: python -m pip install 'numpy==1.26.4' 'pandas==2.2.2' 'requests==2.32.3' 'yfinance==0.2.61'
+      - name: Compile real bot modules
+        run: python -m py_compile msk_intraday_trade.py main.py msk_usage.py
+      - name: Validate intraday freshness, ORB, ETF volume, stops and closed market
+        run: python -m unittest discover -s tests -p 'test_msk_intraday_trade.py' -v
+      - name: Verify every main Telegram button, including Intraday and hidden Portfolio
+        run: python -m unittest discover -s tests -p 'test_menu_end_to_end.py' -v
