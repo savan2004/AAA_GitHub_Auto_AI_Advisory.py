@@ -520,7 +520,7 @@ def format_breadth(r):
         "",
         "🔎 <b>NEXT-SESSION CONFIRMATION</b>",
         "🟢 Improvement: 50%+ stocks advancing AND five-session breadth improving.",
-        "🔴 Caution: another <40% advancing session alongside "
+        "🔴 Caution: another &lt;40% advancing session alongside "
         "falling 20-day participation.",
         "These are observation triggers, not next-day forecasts.",
         "",
