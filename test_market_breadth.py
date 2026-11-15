@@ -107,7 +107,7 @@ class InvestorFriendlyBreadthTests(unittest.TestCase):
     def test_report_has_no_sector_invention_for_small_samples(self):
         case = {
             'session': '2026-11-13', 'requested': 500, 'valid': 450,
-            'coverage': 90, 'advances': 250, 'declines': 190,
+            'coverage': 90, 'advances': 300, 'declines': 140,
             'unchanged': 10, 'benchmark_change': 0.5,
             'ma20': {'pct': 36, 'count': 450},
             'ma50': {'pct': 38, 'count': 450},
