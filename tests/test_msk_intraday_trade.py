@@ -235,6 +235,55 @@ class Intraday15mRules(TestCase):
             with self.assertRaisesRegex(ValueError, "exchange_time"):
                 _fetch_yahoo_15m("^NSEI", TRADING)
 
+
+    def test_query1_http_error_retries_query2_with_verified_candles(self):
+        import requests
+        stamp = int(datetime(2026, 11, 16, 9, 15, tzinfo=IST).timestamp())
+        blob = {"chart": {"result": [{
+            "meta": {"exchangeTimezoneName": "Asia/Kolkata"},
+            "timestamp": [stamp],
+            "indicators": {"quote": [{
+                "open": [25000], "high": [25010], "low": [24990],
+                "close": [25005], "volume": [0],
+            }]},
+        }]}}
+        failure = Mock()
+        failure.raise_for_status.side_effect = requests.HTTPError("429")
+        success = Mock(content=b"{}", status_code=200)
+        success.json.return_value = blob
+        with patch("msk_intraday_trade.requests.get",
+                   side_effect=[failure, success]) as get:
+            result = _fetch_yahoo_15m("^NSEI", TRADING)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(get.call_count, 2)
+        self.assertIn("query1.finance.yahoo.com", get.call_args_list[0].args[0])
+        self.assertIn("query2.finance.yahoo.com", get.call_args_list[1].args[0])
+
+    def test_both_yahoo_mirrors_fail_closed_without_fabricated_prices(self):
+        import requests
+        with patch("msk_intraday_trade.requests.get",
+                   side_effect=requests.HTTPError("429")) as get:
+            with self.assertRaisesRegex(RuntimeError, "mirrors_unavailable"):
+                _fetch_yahoo_15m("^NSEBANK", TRADING)
+        self.assertEqual(get.call_count, 2)
+
+    def test_bad_exchange_timezone_does_not_fall_back_to_unsafe_prices(self):
+        stamp = int(datetime(2026, 11, 16, 9, 15, tzinfo=IST).timestamp())
+        response = Mock(content=b"{}")
+        response.json.return_value = {"chart": {"result": [{
+            "meta": {"exchangeTimezoneName": "UTC"},
+            "timestamp": [stamp],
+            "indicators": {"quote": [{
+                "open": [25000], "high": [25010], "low": [24990],
+                "close": [25005], "volume": [0],
+            }]},
+        }]}}
+        with patch("msk_intraday_trade.requests.get",
+                   return_value=response) as get:
+            with self.assertRaisesRegex(ValueError, "exchange_time"):
+                _fetch_yahoo_15m("^NSEI", TRADING)
+        self.assertEqual(get.call_count, 1)
+
     def test_quality_score_never_claims_measured_accuracy(self):
         test_card = {
             "name": "NIFTY 50", "status": "WATCH", "direction": "BUY",

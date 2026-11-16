@@ -64,17 +64,30 @@ def _fetch_yahoo_15m(symbol, now):
     Every candle carries its actual exchange timestamp. A weekend or
     Yahoo-delayed response never becomes a 'LIVE' trading signal.
     """
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/" + quote(symbol, safe="")
-    response = requests.get(
-        url,
-        params={"range": "30d", "interval": "15m", "includePrePost": "false"},
-        headers={"Accept": "application/json", "User-Agent": "MSKBot/6.3 market-data verification"},
-        timeout=_FEED_TIMEOUT,
-    )
-    response.raise_for_status()
-    if len(response.content) > 3_000_000:
-        raise ValueError("intraday_payload_oversized")
-    body = response.json()
+    # Yahoo's query1 and query2 are mirrors, not independent market sources.
+    # A 429/5xx/network failure on query1 may recover through query2, but
+    # never bypass timestamp, session, completeness or candle checks below.
+    params = {"range": "30d", "interval": "15m", "includePrePost": "false"}
+    headers = {"Accept": "application/json",
+               "User-Agent": "Mozilla/5.0 (compatible; MSKBot/6.3; market-data verification)"}
+    body = None
+    failures = []
+    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        url = "https://" + host + "/v8/finance/chart/" + quote(symbol, safe="")
+        try:
+            response = requests.get(url, params=params, headers=headers,
+                                    timeout=_FEED_TIMEOUT)
+            response.raise_for_status()
+            if len(response.content) > 3_000_000:
+                raise ValueError("intraday_payload_oversized")
+            body = response.json()
+            break
+        except (requests.RequestException, ValueError) as exc:
+            failures.append(type(exc).__name__)
+            LOG.warning("INTRADAY_FEED_RETRY symbol=%s host=%s kind=%s",
+                        symbol, host, type(exc).__name__)
+    if body is None:
+        raise RuntimeError("intraday_yahoo_mirrors_unavailable: " + ",".join(failures))
     chart = body.get("chart") if isinstance(body, dict) else None
     nodes = chart.get("result") if isinstance(chart, dict) else None
     if not isinstance(nodes, list) or len(nodes) != 1 or not isinstance(nodes[0], dict):
