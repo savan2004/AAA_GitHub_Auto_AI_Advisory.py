@@ -9,7 +9,7 @@ import time
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -28,7 +28,7 @@ def load_functions(*names, globals_=None):
     ns = {"pd": pd, "np": np, "datetime": datetime, "time": time,
           "IST": IST, "MIN_SCAN_COVERAGE": .8, "MIN_BARS": 130,
           "MIN_UNIVERSE_FOR_TOP1000": 5, "os": os,
-          "Optional": Optional, "Callable": Callable}
+          "Optional": Optional, "Callable": Callable, "List": List}
     ns.update(globals_ or {})
     exec(compile(ast.Module(body=[found[name] for name in names],
                             type_ignores=[]), "stocks_buzz.py", "exec"), ns)
