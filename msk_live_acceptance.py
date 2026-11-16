@@ -34,6 +34,12 @@ def capture_telegram_ack(kind, message_id, file_id=None, message_text=None):
                 "confirmed breakouts" not in message_text):
             LOG.info("MSK_ACCEPTANCE_BUZZ_NONFINAL_RECEIPT message_id=%d", message_id)
             return
+    # Owner-only test: capture public-market header returned by Telegram.
+    # Do not persist chat text, usernames, or private data.
+    if probe["action"] == "StocksBuzz" and kind == "text":
+        report_header = message_text.split("━━━━━━━━", 1)[0].strip()
+        LOG.info("MSK_ACCEPTANCE_BUZZ_RETURNED_HEADER message_id=%d header=%r",
+                 message_id, report_header[:700])
     probe["receipts"].append((kind, message_id))
     if (kind in ("photo", "document") and
             isinstance(file_id, str) and file_id.strip()):
@@ -467,7 +473,8 @@ def _run_actions(ctx, uid, run_id):
     actions = [
         ("Analysis", stock_search),
         ("Breadth", lambda: emit(ctx["build_breadth"]())),
-        ("StocksBuzz", lambda: ctx["run_buzz"](uid)),
+        ("StocksBuzz", lambda: ctx["run_buzz"](
+            uid, force_refresh=os.getenv("MSK_ACCEPTANCE_FORCE_BUZZ_SCAN", "") == "1")),
         ("LargeCapTop5", lambda: index("conservative")),
         ("MidCapTop5", lambda: index("moderate")),
         ("SmallCapTop5", lambda: index("aggressive")),
