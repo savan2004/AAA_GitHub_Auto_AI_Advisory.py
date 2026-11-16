@@ -249,7 +249,7 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
                 "age": k, "vol_ratio": brk["vol_ratio"], "clv": clv,
                 "score": round(score, 1), "reasons": reasons, "flags": flags,
                 "entry": ltp, "sl": sl, "risk_pct": risk / ltp * 100,
-                "t1": ltp + 1.5 * risk, "t2": ltp + 3.0 * risk,
+                "t1": ltp + 3.0 * risk, "t2": ltp + 4.0 * risk,
             })
         return base
 
@@ -283,7 +283,7 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
             "dist": near["dist"], "score": round(_clamp(w, 0, 100), 1),
             "reasons": reasons, "entry": trigger, "sl": sl,
             "risk_pct": risk / trigger * 100,
-            "t1": trigger + 1.5 * risk, "t2": trigger + 3.0 * risk,
+            "t1": trigger + 3.0 * risk, "t2": trigger + 4.0 * risk,
         })
     return base
 
