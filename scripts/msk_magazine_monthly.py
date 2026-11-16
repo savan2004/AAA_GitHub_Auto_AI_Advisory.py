@@ -334,11 +334,18 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     # Check before creating any output; require explicit manual recovery
     # rather than silently overwriting even an incomplete prior attempt.
     if dest.exists():
-        raise MagazineError(
-            f"Issue directory already exists: {dest}; refusing to overwrite "
-            "existing draft, page evidence, or release ledger"
-        )
-    dest.mkdir(parents=True, exist_ok=False)
+        # The NSE downloader runs first and creates <issue>/sources.
+        # Permit only that preflight directory, never an existing draft.
+        if (not dest.is_dir() or
+                {p.name for p in dest.iterdir()} != {"sources"} or
+                not (dest / "sources").is_dir() or
+                (dest / "sources").is_symlink()):
+            raise MagazineError(
+                f"Issue directory already exists: {dest}; refusing to overwrite "
+                "existing draft, page evidence, or release ledger"
+            )
+    else:
+        dest.mkdir(parents=True, exist_ok=False)
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
