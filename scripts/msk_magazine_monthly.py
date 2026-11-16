@@ -330,7 +330,15 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         raise MagazineError("Scheduled creation restricted to first Monday in IST")
     master = load_master(master_path)
     dest = Path(output_dir) / issue
-    dest.mkdir(parents=True, exist_ok=True)
+    # A rerun must never replace an earlier edition or its evidence ledger.
+    # Check before creating any output; require explicit manual recovery
+    # rather than silently overwriting even an incomplete prior attempt.
+    if dest.exists():
+        raise MagazineError(
+            f"Issue directory already exists: {dest}; refusing to overwrite "
+            "existing draft, page evidence, or release ledger"
+        )
+    dest.mkdir(parents=True, exist_ok=False)
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
