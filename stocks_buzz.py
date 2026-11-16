@@ -236,6 +236,14 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
             if sl >= ltp - 0.5 * atr:
                 sl = ltp - 1.0 * atr
             risk = ltp - sl
+            # A high research score is not permission to publish a chase entry.
+            # Keep these observations in the extended/skipped count, not the
+            # actionable ranked list with entry/SL/targets.
+            if (risk / ltp > 0.08 or ext_pct > 8 or rsi > 80
+                    or k > 0 and ltp < brk["level"]):
+                base.update({"kind": "EXTENDED", "label": brk["label"],
+                             "score": round(score, 1)})
+                return base
             base.update({
                 "kind": "BREAKOUT", "label": brk["label"], "level": brk["level"],
                 "age": k, "vol_ratio": brk["vol_ratio"], "clv": clv,
