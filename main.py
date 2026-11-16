@@ -1591,7 +1591,13 @@ def run_buzz(chat_id):
     def _progress(done, total):
         if time.time() - last_ping[0] > 40:
             last_ping[0] = time.time()
-            safe_send(chat_id, f"⏳ Downloaded {done}/{total} stocks…")
+            with _buzz_lock:
+                targets = list(_buzz_waiters)
+            for cid in targets:
+                try:
+                    safe_send(cid, f"⏳ Stocks Buzz scan: downloaded {done}/{total} stocks…")
+                except Exception as exc:
+                    logger.warning("Buzz progress delivery chat=%s: %s", cid, type(exc).__name__)
 
     try:
         result = stocks_buzz.run_scan(progress_cb=_progress)

@@ -1,6 +1,7 @@
 """Run real Stocks Buzz session/coverage functions without external providers."""
 import ast
 import os
+import math
 import sys
 import types
 import threading
@@ -8,7 +9,7 @@ import time
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -27,7 +28,7 @@ def load_functions(*names, globals_=None):
     ns = {"pd": pd, "np": np, "datetime": datetime, "time": time,
           "IST": IST, "MIN_SCAN_COVERAGE": .8, "MIN_BARS": 130,
           "MIN_UNIVERSE_FOR_TOP1000": 5, "os": os,
-          "Optional": Optional, "Callable": Callable}
+          "Optional": Optional, "Callable": Callable, "List": List}
     ns.update(globals_ or {})
     exec(compile(ast.Module(body=[found[name] for name in names],
                             type_ignores=[]), "stocks_buzz.py", "exec"), ns)
@@ -89,6 +90,52 @@ class SessionSafety(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ranking withheld"):
             ns["run_scan"]()
         analyze.assert_not_called()
+
+    def test_three_stock_trade_ready_gate_fixture(self):
+        """Synthetic candidates: clean, 12% stop, RSI 85 — NEVER market calls."""
+        ns = load_functions("_safe_float", "_trade_ready_block_reasons",
+                            "_partition_breakouts", globals_={
+            "math": math, "MAX_TRADE_RISK_PCT": 8.,
+            "MAX_EXTENSION_PCT": 10., "MIN_TRADED_VALUE": 2e7,
+        })
+        clean = dict(sym="CLEAN", kind="BREAKOUT", risk_pct=6.,
+                     rsi=63., ext_pct=5., vol_ratio=3., tv_cr=10.)
+        high_risk = dict(clean, sym="HIGH_RISK", risk_pct=12.)
+        hot_rsi = dict(clean, sym="HOT_RSI", rsi=85.)
+        confirmed, ready, extended = ns["_partition_breakouts"]({
+            "breakouts": [clean, high_risk, hot_rsi],
+        })
+        self.assertEqual([r["sym"] for r in confirmed],
+                         ["CLEAN", "HIGH_RISK", "HOT_RSI"])
+        self.assertEqual([r["sym"] for r in ready], ["CLEAN"])
+        self.assertEqual(extended, [])
+        self.assertIn("stop loss 12.0% > 8% limit",
+                      ns["_trade_ready_block_reasons"](high_risk))
+        self.assertIn("RSI 85 outside 50–75",
+                      ns["_trade_ready_block_reasons"](hot_rsi))
+
+    def test_old_snapshot_extension_cannot_appear_in_top_breakouts(self):
+        ns = load_functions("_safe_float", "_trade_ready_block_reasons",
+                            "_partition_breakouts", globals_={
+            "math": math, "MAX_TRADE_RISK_PCT": 8.,
+            "MAX_EXTENSION_PCT": 10., "MIN_TRADED_VALUE": 2e7,
+        })
+        clean = dict(sym="CLEAN", risk_pct=5., rsi=60.,
+                     ext_pct=2., vol_ratio=3., tv_cr=10.)
+        stretched = dict(clean, sym="EXTENDED", ext_pct=10.1)
+        confirmed, ready, extended = ns["_partition_breakouts"]({
+            "breakouts": [clean, stretched]})
+        self.assertEqual([r["sym"] for r in confirmed], ["CLEAN"])
+        self.assertEqual([r["sym"] for r in ready], ["CLEAN"])
+        self.assertEqual([r["sym"] for r in extended], ["EXTENDED"])
+
+    def test_freshness_uses_completed_trading_days_not_weekend_days(self):
+        ns = load_functions("_buzz_data_status", globals_={
+            "_last_completed_session": lambda now=None: date(2026, 11, 16)})
+        self.assertEqual(ns["_buzz_data_status"]({
+            "data_session": date(2026, 11, 13)}), ("FRESH", 1))
+        self.assertEqual(ns["_buzz_data_status"]({
+            "data_session": date(2026, 11, 12)}), ("STALE", 2))
 
     def test_after_close_secondary_recovers_only_verified_symbol_history(self):
         universe = {"symbols": ["A", "B", "C", "D", "E"], "source": "Official"}

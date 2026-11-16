@@ -33,6 +33,7 @@ import html
 import logging
 import threading
 import os
+import math
 from datetime import datetime, timezone, timedelta, date
 from typing import Callable, Dict, List, Optional
 
@@ -51,6 +52,8 @@ MAX_AGE = 2                     # breakout may be up to 2 sessions old
 CACHE_TTL = 30 * 60
 MIN_SCAN_COVERAGE = 0.80  # Never claim a 1000-stock ranking from a tiny partial sample
 MIN_UNIVERSE_FOR_TOP1000 = 800
+MAX_EXTENSION_PCT = 10.0
+MAX_TRADE_RISK_PCT = 8.0
 
 IST = timezone(timedelta(hours=5, minutes=30))
 _state: Dict = {"result": None, "ts": 0.0}
@@ -189,9 +192,8 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
 
         penalty = 0.0
         flags = []
-        if ext_pct > 12:
-            penalty += 8
-            flags.append(f"extended {ext_pct:.0f}% above EMA20")
+        if ext_pct > MAX_EXTENSION_PCT:
+            flags.append(f"extended {ext_pct:.0f}% above EMA20 — do not chase")
         elif ext_pct > 8:
             penalty += 4
             flags.append(f"stretched {ext_pct:.0f}% above EMA20")
@@ -224,12 +226,16 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
         if delivery_pct is not None and delivery_pct >= 60:
             reasons.append(f"delivery {delivery_pct:.0f}%")
 
-        # Blow-off moves are not "picks": too far from the base to define a sane stop.
-        too_hot = ext_pct > 15 or rsi > 85
-        if too_hot and brk["vol_ratio"] >= 1.2:
-            base.update({"kind": "EXTENDED", "label": brk["label"], "score": round(score, 1)})
-            return base
         passes = (brk["vol_ratio"] >= 1.2 and score >= 50)
+        # One classification threshold: over 10% above EMA20 is NEVER
+        # a ranked breakout or a trade-ready candidate.
+        if passes and ext_pct > MAX_EXTENSION_PCT:
+            base.update({
+                "kind": "EXTENDED", "label": brk["label"],
+                "score": round(score, 1), "vol_ratio": brk["vol_ratio"],
+                "reasons": reasons, "flags": flags,
+            })
+            return base
         if passes:
             swing_low = float(l.iloc[-5:].min())
             sl = max(ltp - 2.2 * atr, min(swing_low, brk["level"]) - 0.25 * atr)
@@ -394,6 +400,7 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
             "valid stock histories; ranking withheld")
 
     breakouts, watch, liquid, extended = [], [], 0, 0
+    extended_setups = []
     for sym, df in hist.items():
         try:
             r = analyze_stock(sym, df, nifty_close, delivery.get(sym))
@@ -409,9 +416,11 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
             watch.append(r)
         elif r["kind"] == "EXTENDED":
             extended += 1
+            extended_setups.append(r)
 
     breakouts.sort(key=lambda x: (x["score"], x["vol_ratio"]), reverse=True)
     watch.sort(key=lambda x: x["score"], reverse=True)
+    extended_setups.sort(key=lambda x: x["score"], reverse=True)
 
     result = {
         "ts": datetime.now(IST), "elapsed": time.time() - t0,
@@ -422,6 +431,7 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
         "price_sources": ("Yahoo EOD + TejHQ verified raw NSE EOD" if secondary_count
                           else "Yahoo EOD"),
         "breakouts": breakouts, "watch": watch, "extended": extended,
+        "extended_setups": extended_setups,
         "regime": market_regime(nifty),
     }
     with _state_lock:
@@ -450,47 +460,133 @@ def _stars(score: float) -> str:
     return "🔥🔥🔥" if score >= 80 else "🔥🔥" if score >= 65 else "🔥"
 
 
-def _breakout_card(i: int, r: dict) -> str:
+def _safe_float(value):
+    """Missing or non-finite risk inputs must fail closed."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _trade_ready_block_reasons(r: dict) -> List[str]:
+    """Independent, explainable gates; a score is never a trade permit."""
+    reasons = []
+    risk = _safe_float(r.get("risk_pct"))
+    rsi = _safe_float(r.get("rsi"))
+    extension = _safe_float(r.get("ext_pct"))
+    volume = _safe_float(r.get("vol_ratio"))
+    turnover = _safe_float(r.get("tv_cr"))
+    if risk is None or risk < 0:
+        reasons.append("stop loss risk unavailable")
+    elif risk > MAX_TRADE_RISK_PCT:
+        reasons.append(f"stop loss {risk:.1f}% > 8% limit")
+    if rsi is None or not 50 <= rsi <= 75:
+        reasons.append(f"RSI {rsi:.0f} outside 50–75" if rsi is not None else "RSI unavailable")
+    if extension is None or extension > MAX_EXTENSION_PCT:
+        reasons.append(f"EMA20 extension {extension:.1f}% > 10% limit"
+                       if extension is not None else "EMA20 extension unavailable")
+    if volume is None or volume < 2:
+        reasons.append(f"volume {volume:.1f}× < 2× limit"
+                       if volume is not None else "volume confirmation unavailable")
+    if turnover is None or turnover < MIN_TRADED_VALUE / 1e7:
+        reasons.append(f"turnover ₹{turnover:.1f} Cr < ₹2 Cr liquidity limit"
+                       if turnover is not None else "liquidity unavailable")
+    return reasons
+
+
+def _partition_breakouts(result: dict):
+    """Recheck even old Neon snapshots so previous rankings cannot bypass gates."""
+    confirmed = []
+    extended = list(result.get("extended_setups") or [])
+    for row in result.get("breakouts", []):
+        ext = _safe_float(row.get("ext_pct"))
+        if ext is not None and ext > MAX_EXTENSION_PCT:
+            extended.append(dict(row, kind="EXTENDED"))
+        else:
+            confirmed.append(row)
+    trade_ready = [row for row in confirmed if not _trade_ready_block_reasons(row)]
+    return confirmed, trade_ready, extended
+
+
+def _buzz_data_status(result: dict, now=None):
+    """Age in completed weekday sessions, not calendar days (weekend safe)."""
+    try:
+        day = pd.Timestamp(result["data_session"]).date()
+        expected = _last_completed_session(now)
+        if day > expected:
+            return "STALE", None
+        lag = max(0, len(pd.bdate_range(day, expected)) - 1)
+        return ("STALE" if lag > 1 else "FRESH"), lag
+    except (ValueError, TypeError, KeyError):
+        return "STALE", None
+
+
+def _breakout_card(i: int, r: dict, trade_ready: bool = False) -> str:
     icon = "🟢" if r["chg"] >= 0 else "🔴"
     lines = [
         f"<b>{i}. {_e(r['sym'])}</b>  ₹{r['ltp']:,.2f} {icon}{r['chg']:+.2f}%  "
         f"{_stars(r['score'])} <b>{r['score']:.0f}</b>/100",
-        f"   📌 " + " · ".join(r["reasons"][:4]),
+        "   📌 " + " · ".join(r["reasons"][:4]),
         f"   RSI {r['rsi']:.0f}  |  ATR {r['atr_pct']:.1f}%  |  Turnover ₹{r['tv_cr']:.0f} Cr/day",
-        f"   🎯 Entry ₹{r['entry']:,.2f}  SL ₹{r['sl']:,.2f} (-{r['risk_pct']:.1f}%)",
-        f"       T1 ₹{r['t1']:,.2f}  ·  T2 ₹{r['t2']:,.2f}",
     ]
-    if r["flags"]:
+    if trade_ready:
+        lines.extend([
+            f"   🎯 Reference Entry ₹{r['entry']:,.2f}  SL ₹{r['sl']:,.2f} (-{r['risk_pct']:.1f}%)",
+            f"       T1 ₹{r['t1']:,.2f} · T2 ₹{r['t2']:,.2f}",
+        ])
+    else:
+        blocked = _trade_ready_block_reasons(r)
+        lines.append("   ⛔ Blocked from trade-ready: " + "; ".join(blocked)
+                     if blocked else "   ✅ Meets risk gates; see separate trade-ready section")
+    if r.get("flags"):
         lines.append("   ⚠️ " + "; ".join(r["flags"][:2]))
     return "\n".join(lines)
 
 
+def _extended_card(i: int, r: dict) -> str:
+    return (f"<b>{i}. {_e(r['sym'])}</b>  ₹{r['ltp']:,.2f}  "
+            f"score {r['score']:.0f}/100 — {_safe_float(r.get('ext_pct')) or 0:.1f}% above EMA20\n"
+            "   🚫 Extended / Do Not Chase — no entry or targets issued")
+
 def _watch_card(i: int, r: dict) -> str:
     return (
-        f"<b>{i}. {_e(r['sym'])}</b>  ₹{r['ltp']:,.2f}  ({r['chg']:+.2f}%)  score {r['score']:.0f}\n"
+        f"<b>{i}. {_e(r['sym'])}</b>  ₹{r['ltp']:,.2f} ({r['chg']:+.2f}%) score {r['score']:.0f}\n"
         f"   👀 " + " · ".join(r["reasons"][:3]) + "\n"
-        f"   Trigger: close above ₹{r['entry']:,.2f}  |  SL ₹{r['sl']:,.2f}  |  T1 ₹{r['t1']:,.2f}"
+        f"   Research watch only — possible trigger above ₹{r['entry']:,.2f}; no trade signal"
     )
 
-
 def top_symbols(result: dict, n: int = 5) -> List[str]:
-    return [r["sym"] for r in result.get("breakouts", [])[:n]]
+    confirmed, ready, _ = _partition_breakouts(result)
+    return [r["sym"] for r in (ready or confirmed)[:n]]
 
 
 def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
-    """Returns a list of Telegram-HTML messages, each safely under the 4096 limit."""
+    """Honest, bounded research-only Telegram messages with status on every part."""
     sep = "━━━━━━━━━━━━━━━━━━━━"
-    ts = result["ts"].strftime("%d-%b-%Y %H:%M") + " IST"
+    ts = result["ts"].astimezone(IST).strftime("%d-%b-%Y %H:%M") + " IST"
+    scan_day = result["ts"].astimezone(IST).date()
+    status, lag = _buzz_data_status(result)
+    coverage = 100 * float(result.get("coverage") or (
+        result["downloaded"] / result["universe_size"]))
+    confirmed, ready, extended = _partition_breakouts(result)
+    extended_count = max(int(result.get("extended") or 0), len(extended))
     head = [
         "🔥 <b>STOCKS BUZZ — Breakout Radar</b>",
-        f"📅 Generated {ts}",
-        f"📈 NSE completed candle session: {result['data_session']}",
+        f"📅 Scan date: {scan_day} | Generated {ts}",
+        f"📈 Candle session: {result['data_session']}",
+        f"📊 Coverage: {coverage:.1f}% ({result['downloaded']}/{result['universe_size']})",
+        f"🕒 DATA STATUS: <b>{status}</b> (completed trading sessions behind: {lag if lag is not None else 'unknown'})",
+    ]
+    if status == "STALE":
+        head.append("⚠️ <b>STALE DATA — informational only, not a fresh signal</b>")
+    head += [
         sep,
-        f"🔎 Scanned <b>{result['downloaded']}</b> of {result['universe_size']} stocks "
-        f"→ <b>{result['liquid']}</b> passed liquidity filter",
-        f"🚀 <b>{len(result['breakouts'])}</b> confirmed breakouts · "
-        f"👀 {len(result['watch'])} near-breakout"
-        + (f" · 🚫 {result['extended']} extended (skipped — don't chase)" if result.get("extended") else ""),
+        f"🔎 <b>{result['liquid']}</b> passed liquidity filter",
+        f"🚀 <b>{len(confirmed)}</b> confirmed · "
+        f"✅ <b>{len(ready) if status == 'FRESH' else 0}</b> trade-ready by risk gates · "
+        f"👀 {len(result['watch'])} near-breakout · "
+        f"🚫 {extended_count} extended (do not chase)",
         f"🧭 {_e(result['regime']['text'])}",
         f"📚 Universe: {_e(result['source'])}",
         f"📊 EOD candle sources: {_e(result.get('price_sources', 'not recorded'))}",
@@ -498,39 +594,51 @@ def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
     if result.get("note"):
         head.append(f"⚠️ {_e(result['note'])}")
     if result.get("degraded"):
-        head.append(f"⚠️ Universe degraded: {_e(result['source'])}. "
-                    f"Add a full list in <code>universe_override.txt</code> for complete coverage.")
+        head.append("⚠️ Universe degraded — research only")
     head.append(sep)
-
     blocks: List[str] = ["\n".join(head)]
-    br = result["breakouts"][:top_n]
-    if br:
-        blocks.append("🚀 <b>TOP BREAKOUTS</b> (ranked by score)")
-        blocks += [_breakout_card(i, r) for i, r in enumerate(br, 1)]
+    if confirmed:
+        blocks.append("A) 🚀 <b>CONFIRMED BREAKOUTS — RESEARCH ONLY</b>")
+        blocks += [_breakout_card(i, r) for i, r in enumerate(confirmed[:top_n], 1)]
     else:
-        blocks.append("😴 No stock cleared the breakout + volume + trend bar right now. "
-                      "That is a valid answer — forcing picks in a quiet tape loses money.")
-
+        blocks.append("A) 😴 No confirmed non-extended breakouts passed the scan gates.")
+    blocks.append(sep + "\nB) ✅ <b>TRADE-READY BREAKOUTS — ALL FIVE RISK GATES</b>")
+    if status == "STALE":
+        blocks.append("⛔ No trade-ready calls on stale data. Latest completed candle required.")
+    elif ready:
+        blocks += [_breakout_card(i, r, trade_ready=True)
+                   for i, r in enumerate(ready[:top_n], 1)]
+    else:
+        blocks.append("⛔ None passed all five risk gates; no forced picks.")
+    if extended_count:
+        blocks.append(sep + "\n🚫 <b>EXTENDED / DO NOT CHASE</b>")
+        blocks += [_extended_card(i, r) for i, r in enumerate(extended[:5], 1)]
+        if not extended:
+            blocks.append(f"{extended_count} excluded in the older stored scan; names unavailable.")
     wl = result["watch"][:watch_n]
     if wl:
-        blocks.append(sep + "\n👀 <b>WATCHLIST — coiling just under resistance</b>")
+        blocks.append(sep + "\n👀 <b>WATCHLIST — RESEARCH ONLY</b>")
         blocks += [_watch_card(i, r) for i, r in enumerate(wl, 1)]
-
     blocks.append(
         sep + "\n"
-        "ℹ️ <i>Scores are rule-based heuristics (not backtested). Volume during market hours is "
-        "partial — re-run after 3:30 PM for confirmed closes. Use the stop-loss; breakouts fail "
-        "often.</i>\n⚠️ <i>Educational only. Not SEBI-registered advice.</i>"
+        "ℹ️ <i>Breakout scores are heuristic, not tested accuracy. Trade-ready means the "
+        "listed risk gates passed on the stated EOD session, not a live buy signal. "
+        "Verify current price, spread and risk before acting.</i>\n"
+        "⚠️ <i>Educational only. Not SEBI-registered advice.</i>"
     )
-
-    # pack blocks into messages ≤ 3800 chars
+    # Telegram HTML maximum 4096 chars; carry provenance into every part.
     msgs, cur = [], ""
-    for b in blocks:
-        if cur and len(cur) + len(b) + 2 > 3800:
+    for block in blocks:
+        if cur and len(cur) + len(block) + 2 > 3500:
             msgs.append(cur)
-            cur = b
+            cur = block
         else:
-            cur = f"{cur}\n\n{b}" if cur else b
+            cur = f"{cur}\n\n{block}" if cur else block
     if cur:
         msgs.append(cur)
-    return msgs
+    status_line = (f"🔥 <b>STOCKS BUZZ</b> | Scan {scan_day} | Candle "
+                   f"{result['data_session']} | Coverage {coverage:.1f}% | <b>{status}</b>")
+    if status == "STALE":
+        status_line += "\n⚠️ STALE DATA — informational only, not a fresh signal"
+    return [msg if i == 0 else status_line + "\n" + msg
+            for i, msg in enumerate(msgs)]
