@@ -2,6 +2,7 @@
 import ast
 import os
 import math
+import html
 import sys
 import types
 import threading
@@ -128,6 +129,41 @@ class SessionSafety(unittest.TestCase):
         self.assertEqual([r["sym"] for r in confirmed], ["CLEAN"])
         self.assertEqual([r["sym"] for r in ready], ["CLEAN"])
         self.assertEqual([r["sym"] for r in extended], ["EXTENDED"])
+
+    def test_telegram_header_and_risk_sections_are_rendered(self):
+        """Real formatter using synthetic fixture; owner receipt recognizes final text."""
+        names = ("_e", "_stars", "_safe_float", "_trade_ready_block_reasons",
+                 "_partition_breakouts", "_buzz_data_status", "_breakout_card",
+                 "_extended_card", "_watch_card", "format_buzz")
+        ns = load_functions(*names, globals_={
+            "math": math, "html": html, "MIN_TRADED_VALUE": 2e7,
+            "MAX_TRADE_RISK_PCT": 8., "MAX_EXTENSION_PCT": 10.,
+            "_last_completed_session": lambda now=None: date(2026, 11, 13),
+        })
+        row = dict(sym="CLEAN", kind="BREAKOUT", ltp=100., chg=2.,
+                   score=84., rsi=63., ext_pct=5., risk_pct=6.,
+                   vol_ratio=3., tv_cr=10., atr_pct=3., reasons=["breakout"],
+                   flags=[], entry=100., sl=94., t1=109., t2=118.)
+        scan = {
+            "ts": datetime(2026, 11, 14, 12, tzinfo=IST),
+            "data_session": date(2026, 11, 13), "coverage": .918,
+            "downloaded": 918, "universe_size": 1000, "liquid": 882,
+            "breakouts": [row], "watch": [], "extended": 0,
+            "regime": {"text": "Synthetic market regime"},
+            "source": "Synthetic test only",
+        }
+        fresh = ns["format_buzz"](scan)
+        self.assertIn("STOCKS BUZZ — Breakout Radar", fresh[0])
+        self.assertIn("Scanned", fresh[0])
+        self.assertIn("confirmed breakouts", fresh[0])
+        self.assertIn("DATA STATUS: <b>FRESH</b>", fresh[0])
+        self.assertIn("CONFIRMED BREAKOUTS", "\\n".join(fresh))
+        self.assertIn("TRADE-READY BREAKOUTS", "\\n".join(fresh))
+        self.assertIn("Reference Entry", "\\n".join(fresh))
+        ns["_last_completed_session"] = lambda now=None: date(2026, 11, 18)
+        stale = ns["format_buzz"](scan)
+        self.assertIn("DATA STATUS: <b>STALE</b>", stale[0])
+        self.assertIn("No trade-ready calls on stale data", "\\n".join(stale))
 
     def test_freshness_uses_completed_trading_days_not_weekend_days(self):
         ns = load_functions("_buzz_data_status", globals_={
