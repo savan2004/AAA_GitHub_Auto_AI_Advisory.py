@@ -158,6 +158,35 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(pdf.read_bytes()).hexdigest(), output["pdf_sha256"])
         self.assertEqual(len(list(pdf.parent.glob("page_*.json"))), 16)
 
+    def test_nse_preflight_sources_directory_allows_draft(self):
+        # The workflow downloader creates this before the PDF generator runs.
+        sources = self.root / "out" / "2026-12" / "sources"
+        sources.mkdir(parents=True)
+        (sources / "download.txt").write_text("original evidence")
+        result = generate("2026-12", self.root / "out",
+                          now=datetime(2026, 12, 7, tzinfo=timezone.utc))
+        self.assertFalse(result["publication_allowed"])
+        self.assertEqual((sources / "download.txt").read_text(), "original evidence")
+        self.assertTrue((sources.parent / result["draft_pdf"]).exists())
+
+    def test_existing_issue_draft_is_never_overwritten(self):
+        dest = self.root / "out" / "2026-12"
+        (dest / "sources").mkdir(parents=True)
+        (dest / "release_gate.json").write_text("preserve")
+        with self.assertRaises(MagazineError):
+            generate("2026-12", self.root / "out",
+                     now=datetime(2026, 12, 7, tzinfo=timezone.utc))
+        self.assertEqual((dest / "release_gate.json").read_text(), "preserve")
+
+    def test_unrelated_preexisting_issue_directory_is_rejected(self):
+        dest = self.root / "out" / "2026-12"
+        dest.mkdir(parents=True)
+        (dest / "other.txt").write_text("preserve")
+        with self.assertRaises(MagazineError):
+            generate("2026-12", self.root / "out",
+                     now=datetime(2026, 12, 7, tzinfo=timezone.utc))
+        self.assertEqual((dest / "other.txt").read_text(), "preserve")
+
     def test_schedule_not_first_monday_blocks_generation(self):
         with self.assertRaises(MagazineError):
             generate("2026-12", self.root / "out",
