@@ -1570,9 +1570,11 @@ def _deliver_buzz(chat_id, result):
         safe_send(chat_id, "👆 Tap a stock for Technical / Fundamental / Chart / full PDF report.")
 
 
-def run_buzz(chat_id):
+def run_buzz(chat_id, *, force_refresh=False):
     global _buzz_running
-    cached = stocks_buzz.get_cached()
+    # Explicit owner-only test can request a real scan; normal bot requests
+    # still use the verified completed-session Neon snapshot.
+    cached = None if force_refresh else stocks_buzz.get_cached()
     if cached:
         _deliver_buzz(chat_id, cached)
         return
