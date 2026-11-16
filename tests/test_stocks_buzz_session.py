@@ -160,6 +160,10 @@ class SessionSafety(unittest.TestCase):
         self.assertIn("CONFIRMED BREAKOUTS", "\\n".join(fresh))
         self.assertIn("TRADE-READY BREAKOUTS", "\\n".join(fresh))
         self.assertIn("Reference Entry", "\\n".join(fresh))
+        # Legacy snapshot: 2 previously excluded plus 1 newly >10% extended.
+        old_scan = dict(scan, breakouts=[dict(row, ext_pct=11., sym="OVER")],
+                        extended=2)
+        self.assertIn("3 extended", ns["format_buzz"](old_scan)[0])
         ns["_last_completed_session"] = lambda now=None: date(2026, 11, 18)
         stale = ns["format_buzz"](scan)
         self.assertIn("DATA STATUS: <b>STALE</b>", stale[0])

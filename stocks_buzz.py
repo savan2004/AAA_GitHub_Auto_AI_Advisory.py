@@ -570,7 +570,11 @@ def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
     coverage = 100 * float(result.get("coverage") or (
         result["downloaded"] / result["universe_size"]))
     confirmed, ready, extended = _partition_breakouts(result)
-    extended_count = max(int(result.get("extended") or 0), len(extended))
+    saved_extended = result.get("extended_setups") or []
+    # Older verified Neon scans already counted excluded names but lacked
+    # their details. Add newly reclassified >10% legacy ranked names.
+    extended_count = (max(int(result.get("extended") or 0), len(saved_extended))
+                      + max(0, len(extended) - len(saved_extended)))
     head = [
         "🔥 <b>STOCKS BUZZ — Breakout Radar</b>",
         f"📅 Scan date: {scan_day} | Generated {ts}",
