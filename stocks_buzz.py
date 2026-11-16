@@ -582,8 +582,9 @@ def format_buzz(result: dict, top_n: int = 10, watch_n: int = 5) -> List[str]:
         head.append("⚠️ <b>STALE DATA — informational only, not a fresh signal</b>")
     head += [
         sep,
-        f"🔎 <b>{result['liquid']}</b> passed liquidity filter",
-        f"🚀 <b>{len(confirmed)}</b> confirmed · "
+        f"🔎 Scanned <b>{result['downloaded']}</b> of {result['universe_size']} stocks "
+        f"→ <b>{result['liquid']}</b> passed liquidity filter",
+        f"🚀 <b>{len(confirmed)}</b> confirmed breakouts · "
         f"✅ <b>{len(ready) if status == 'FRESH' else 0}</b> trade-ready by risk gates · "
         f"👀 {len(result['watch'])} near-breakout · "
         f"🚫 {extended_count} extended (do not chase)",
