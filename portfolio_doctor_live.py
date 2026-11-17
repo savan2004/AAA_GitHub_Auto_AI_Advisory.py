@@ -184,6 +184,25 @@ def price_holdings(holdings, *, include_frames=False):
             failures[symbol] = exc.code
             stale_symbols.append(symbol)
 
+    price_sources = {sym: "Verified completed daily OHLCV (provider may vary)"
+                     for sym in symbols}
+    if stale_symbols:
+        # Source 2: NSE public EOD bhavcopy (known to publish even when Yahoo
+        # daily history lags). Append only after official prior-session OHLC
+        # agrees with the original full historical series.
+        try:
+            from portfolio_doctor_bhavcopy import recover_from_public_bhavcopy
+            official = recover_from_public_bhavcopy(frames, stale_symbols, now=now)
+            for sym, fresh in official.items():
+                frames[sym] = fresh
+                failures.pop(sym, None)
+                price_sources[sym] = (
+                    "NSE EOD bhavcopy + verified prior-session OHLCV history")
+        except Exception:
+            # Unavailable official files are not replaced with invented bars.
+            pass
+        stale_symbols = [sym for sym in stale_symbols if sym in failures]
+
     if stale_symbols:
         # All recovery is confined to a single disposable child process.
         # Bounded parallelism prevents five sequential 15+12s provider calls
@@ -197,6 +216,7 @@ def price_holdings(holdings, *, include_frames=False):
                 if recovered is not None:
                     frames[sym] = recovered
                     failures.pop(sym, None)
+                    price_sources[sym] = "Verified alternate daily OHLCV"
     if failures:
         code = ("STALE_PRICES" if "STALE_PRICES" in failures.values()
                 else "NO_PRICES")
@@ -219,6 +239,7 @@ def price_holdings(holdings, *, include_frames=False):
             invested = holding["qty"] * holding["buy"]
             value = holding["qty"] * close
             out.append({**holding, "close": close, "date": price_date.isoformat(),
+                        "price_source": price_sources[holding["symbol"]],
                         "invested": invested, "value": value, "pnl": value - invested,
                         "pnl_pct": 100.0 * (close / holding["buy"] - 1.0),
                         "ema20": _ema(values, 20), "ema50": _ema(values, 50),
@@ -279,6 +300,8 @@ def build_pdf_bytes(holdings):
             h["symbol"], h["qty"], h["buy"]), 10, True, 17)
         line("Last close Rs {:,.2f} ({}) | Value Rs {:,.2f}".format(
             h["close"], h["date"], h["value"]))
+        if h.get("price_source", "").startswith("NSE EOD"):
+            line("Source: NSE official daily file; historical OHLC cross-checked.", 8)
         line("P/L Rs {:+,.2f} ({:+.2f}%) | Portfolio weight {:.1f}%".format(
             h["pnl"], h["pnl_pct"], h["weight"]))
         trend = ("Above EMA20 and EMA50" if h["ema50"] and h["close"] > h["ema20"] > h["ema50"]
