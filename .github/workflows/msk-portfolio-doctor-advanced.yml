@@ -1,0 +1,30 @@
+name: MSK Doctor Advanced Evidence + Privacy Acceptance
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'portfolio_doctor_live.py'
+      - 'portfolio_doctor_advanced.py'
+      - 'portfolio_doctor_advanced_pdf.py'
+      - 'tests/test_portfolio_doctor_advanced.py'
+      - '.github/workflows/msk-portfolio-doctor-advanced.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  advanced-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install offline test dependencies
+        run: python -m pip install 'pandas==2.2.2' 'numpy==1.26.4' 'requests==2.32.3' 'reportlab==4.2.5' 'pypdf>=5,<7' 'openpyxl==3.1.5'
+      - name: Compile advanced modules and basic worker
+        run: python -m py_compile portfolio_doctor_advanced.py portfolio_doctor_advanced_pdf.py portfolio_doctor_live.py main.py
+      - name: Run deterministic financial, privacy and PDF tests
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_advanced.py' -v
+      - name: Run existing basic Doctor safeguards
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_safety.py' -v
