@@ -195,8 +195,8 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
         m = SimpleNamespace(chat=SimpleNamespace(id=101, type="private"),
                             from_user=SimpleNamespace(id=101), text=INPUT)
         raw = builder.builder_pdf_bytes(self.spec, self.data)
-        with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}), \\
-             patch.object(builder, "run_isolated_builder", return_value=raw):
+        with (patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}),
+              patch.object(builder, "run_isolated_builder", return_value=raw)):
             handler(m)
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0][0], 101)
