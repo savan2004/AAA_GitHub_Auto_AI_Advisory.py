@@ -129,6 +129,47 @@ def _fetch_yahoo_15m(symbol, now):
     return frame.set_index(pd.DatetimeIndex(frame.pop("ts")))
 
 
+
+def _fetch_yfinance_15m(symbol, now):
+    """Use the project's already-installed yfinance client as a separate
+    transport after both raw Yahoo HTTP endpoints fail. No price cache,
+    synthetic candles or previous-session substitution is permitted.
+    """
+    import yfinance as yf
+    ticker = yf.Ticker(symbol)
+    frame = ticker.history(period="30d", interval="15m",
+                           auto_adjust=False, prepost=False,
+                           raise_errors=True)
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        raise ValueError("intraday_yfinance_no_bars")
+    if not isinstance(frame.index, pd.DatetimeIndex) or frame.index.tz is None:
+        raise ValueError("intraday_yfinance_timezone_unverified")
+    if any(col not in frame.columns for col in
+           ("Open", "High", "Low", "Close", "Volume")):
+        raise ValueError("intraday_yfinance_ohlcv_missing")
+    frame = frame[["Open", "High", "Low", "Close", "Volume"]].copy()
+    frame.index = frame.index.tz_convert(IST)
+    # Apply exactly the same verified completed-bar rules as raw Yahoo.
+    validated = _completed(frame, now)
+    if validated.empty:
+        raise ValueError("intraday_yfinance_no_completed_bars")
+    return validated
+
+
+def _fetch_intraday_15m(symbol, now):
+    """Recover from raw Yahoo transport failures using existing yfinance.
+
+    Keep hard failures for malformed exchange data; never convert a bad
+    response into a trade-ready quote.
+    """
+    try:
+        return _fetch_yahoo_15m(symbol, now)
+    except (requests.RequestException, RuntimeError) as exc:
+        LOG.warning("INTRADAY_PROVIDER_FALLBACK symbol=%s kind=%s",
+                    symbol, type(exc).__name__)
+        return _fetch_yfinance_15m(symbol, now)
+
+
 def _completed(frame, now):
     """Exclude partial/future candles and validate completed 15-minute bars."""
     if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
@@ -358,7 +399,7 @@ def build_intraday_trade_report(*, now=None, fetcher=None):
     now = _as_ist(now)
     if not market_session_open(now):
         return format_intraday(now, [])
-    provider = fetcher or _fetch_yahoo_15m
+    provider = fetcher or _fetch_intraday_15m
     results = []
     for name, spot_sym, etf_sym in MARKETS:
         try:
