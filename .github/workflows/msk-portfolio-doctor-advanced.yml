@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths:
       - 'portfolio_doctor_live.py'
+      - 'portfolio_doctor_bhavcopy.py'
+      - 'tests/test_portfolio_doctor_bhavcopy.py'
       - 'portfolio_doctor_advanced.py'
       - 'portfolio_doctor_advanced_pdf.py'
       - 'portfolio_doctor_builder_private.py'
@@ -30,11 +32,13 @@ jobs:
       - name: Install offline test dependencies
         run: python -m pip install 'pandas==2.2.2' 'numpy==1.26.4' 'requests==2.32.3' 'reportlab==4.2.5' 'pypdf>=5,<7' 'openpyxl==3.1.5'
       - name: Compile advanced modules and basic worker
-        run: python -m py_compile portfolio_doctor_advanced.py portfolio_doctor_advanced_pdf.py portfolio_doctor_builder_private.py portfolio_doctor_live.py main.py
+        run: python -m py_compile portfolio_doctor_advanced.py portfolio_doctor_advanced_pdf.py portfolio_doctor_builder_private.py portfolio_doctor_live.py portfolio_doctor_bhavcopy.py main.py
       - name: Run deterministic financial, privacy and PDF tests
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_advanced.py' -v
       - name: Test optional builder input, prices, cash, PDF and delivery isolation
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_builder_private.py' -v
+      - name: Test strict official NSE bhavcopy overlap and no-storage safeguards
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_bhavcopy.py' -v
       - name: Test provider freshness recovery and complete-portfolio safety
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_stale_recovery.py' -v
       - name: Run real isolated Telegram handler simulations
