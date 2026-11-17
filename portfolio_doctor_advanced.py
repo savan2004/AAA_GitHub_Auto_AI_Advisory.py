@@ -210,7 +210,9 @@ def aligned_relative_return(stock_frame, bench_frame, sessions=21):
         joined = pd.concat(
             [stock_frame["Close"].rename("stock"), bench_frame["Close"].rename("benchmark")],
             axis=1, join="inner").dropna()
-        if len(joined) < sessions + 1 or not joined.index.is_monotonic_increasing:
+        if (len(joined) < sessions + 1 or not joined.index.is_monotonic_increasing or
+                joined.index[-1] != stock_frame.index[-1] or
+                joined.index[-1] != bench_frame.index[-1]):
             return None
         frame = joined.iloc[-sessions - 1:]
         if any(float(v) <= 0 for v in frame[["stock", "benchmark"]].to_numpy().flat):
@@ -284,7 +286,7 @@ def compare_replacements(holding, candidates, *, same_period_required=True):
 def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
                              liquidity_needed, stock_cap_pct, sector_cap_pct,
                              candidates, excluded=(), current_values=None,
-                             funding_mode="additional"):
+                             current_sectors=None, funding_mode="additional"):
     """Hypothetical whole-share allocation including cash. No trade or persistence.
 
     additional: current holdings are retained, capital added to current wealth.
@@ -293,7 +295,11 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
     if funding_mode not in ("additional", "rebalance") or risk_tolerance not in ("low", "medium", "high"):
         raise DoctorEvidenceError("invalid_builder_profile")
     budget = _d(capital)
-    if budget <= 0 or budget > Decimal("1e12") or not 1 <= int(horizon_months) <= 600:
+    try:
+        horizon = int(horizon_months)
+    except (ValueError, TypeError, OverflowError):
+        raise DoctorEvidenceError("invalid_builder_capital_or_horizon")
+    if budget <= 0 or budget > Decimal("1e12") or not 1 <= horizon <= 600:
         raise DoctorEvidenceError("invalid_builder_capital_or_horizon")
     need = _d(liquidity_needed)
     max_stock, max_sector = _d(stock_cap_pct), _d(sector_cap_pct)
@@ -302,7 +308,8 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
     prior = {str(k).upper(): _d(v) for k, v in (current_values or {}).items()}
     if any(v < 0 for v in prior.values()):
         raise DoctorEvidenceError("invalid_existing_holdings")
-    prior_total = sum(prior.values(), Decimal("0")) if funding_mode == "additional" else Decimal("0")
+    current_total = sum(prior.values(), Decimal("0"))
+    prior_total = current_total if funding_mode == "additional" else Decimal("0")
     full = budget + prior_total
     excluded = {str(x).upper() for x in excluded}
     seen = set()
@@ -341,12 +348,21 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
             raise DoctorEvidenceError("builder_stock_cap_exceeded")
         row["proposed_total_weight_pct"] = float(100 * after_value / full)
     if funding_mode == "additional" and prior:
-        # Unknown existing-sector data cannot be silently treated as safe.
-        raise DoctorEvidenceError("existing_sector_breakdown_required")
+        # Previous holdings are not assumed diversified without verified labels.
+        current_sectors = current_sectors or {}
+        if set(prior) - set(current_sectors):
+            raise DoctorEvidenceError("existing_sector_breakdown_required")
+        for sym, value in prior.items():
+            if 100 * value / full > max_stock + Decimal("0.00000001"):
+                raise DoctorEvidenceError("existing_stock_cap_exceeded")
+            sector = _normalize_sector(current_sectors[sym])
+            if sector == "Unknown / unclassified":
+                raise DoctorEvidenceError("existing_sector_breakdown_required")
+            sectors[sector] += value
     for value in sectors.values():
         if 100 * value / full > max_sector + Decimal("0.00000001"):
             raise DoctorEvidenceError("builder_sector_cap_exceeded")
-    current = {k: float(100 * v / prior_total) for k, v in prior.items()} if prior_total else {}
+    current = {k: float(100 * v / current_total) for k, v in prior.items()} if current_total else {}
     return {"mode": funding_mode, "current_weights": current,
             "proposed": rows, "cash": float(cash), "cash_weight_pct": float(100 * cash / full),
             "planned_new_capital": float(budget),
@@ -366,8 +382,12 @@ def assemble_review(recs, price_frames, *, fund_collector=None, ratio_collector=
     tech_by_symbol = []
     for row in recs:
         sym = row["symbol"]
-        sector = _normalize_sector((sector_lookup(sym) if sector_lookup else
-                                    __import__("nifty500_collector").get_stock_sector(sym)))
+        try:
+            sector_name = (sector_lookup(sym) if sector_lookup else
+                           __import__("nifty500_collector").get_stock_sector(sym))
+        except Exception:
+            sector_name = None
+        sector = _normalize_sector(sector_name)
         if advanced_fundamentals:
             fund = collect_fundamentals_no_holdings_cache(
                 sym, sector, collector=fund_collector, ratio_collector=ratio_collector)
