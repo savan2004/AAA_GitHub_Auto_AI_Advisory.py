@@ -22,6 +22,7 @@ CSV, .xlsx, or lines such as  RELIANCE 50 1250  /  RELIANCE, 50, 1250.
 
 import io
 import os
+import zipfile
 import re
 import csv
 import math
@@ -49,8 +50,8 @@ logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 MAX_ROWS = 200
-MAX_FILE_BYTES = 1_000_000
-MAX_ANALYZE = int(os.getenv("PORTFOLIO_MAX_STOCKS", "10"))
+MAX_FILE_BYTES = 5 * 1024 * 1024
+MAX_ANALYZE = min(5, max(1, int(os.getenv("PORTFOLIO_MAX_STOCKS", "5"))))
 MAX_WEIGHT = float(os.getenv("PORTFOLIO_MAX_WEIGHT", "15"))
 SECTOR_LIMIT = 35.0
 
@@ -141,6 +142,8 @@ def parse_rows(rows: List[List], resolver=None) -> Tuple[List[dict], List[str]]:
             break
     if header_at is None:                                     # no header → positional Symbol, Qty, Price
         col = {"symbol": 0, "qty": 1, "price": 2}
+    if header_at is None and any(any(_norm_header(c) in (_SYMBOL_H | _QTY_H | _PRICE_H) for c in r) for r in rows[:6]):
+        return [], ["Missing required columns: Symbol, Qty, Buy Price."]
     if None in col.values():
         missing = [k for k, v in col.items() if v is None]
         return [], [f"Could not find the {', '.join(missing)} column. Expected headers like: Symbol, Qty, Buy Price."]
@@ -187,17 +190,24 @@ def parse_text(text: str, resolver=None) -> Tuple[List[dict], List[str]]:
 
 def parse_file(name: str, data: bytes, resolver=None) -> Tuple[List[dict], List[str]]:
     if len(data) > MAX_FILE_BYTES:
-        return [], ["File is too large (limit 1 MB)."]
+        return [], ["File is too large (limit 5 MB)."]
     low = (name or "").lower()
     try:
-        if low.endswith((".xlsx", ".xlsm")):
+        if low.endswith(".xlsx"):
+            # Check central-directory sizes before openpyxl expands XML/shared strings.
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                members = archive.infolist()
+                if (len(members) > 250 or
+                    sum(m.file_size for m in members) > 20 * 1024 * 1024 or
+                    any(m.file_size > 10 * 1024 * 1024 for m in members)):
+                    return [], ["Workbook is too large when expanded."]
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
             ws = wb.worksheets[0]
-            rows = [[("" if c is None else c) for c in r] for r in ws.iter_rows(values_only=True)]
+            rows = [[("" if c is None else c) for c in r] for r in ws.iter_rows(max_row=MAX_ROWS + 12, max_col=32, values_only=True)]
             return parse_rows(rows, resolver)
-        if low.endswith(".xls"):
-            return [], ["Old .xls files are not supported — please save as .xlsx or .csv."]
+        if not low.endswith(".csv"):
+            return [], ["Only .csv and .xlsx files are supported."]
         text = None
         for enc in ("utf-8-sig", "utf-16", "latin-1"):
             try:
@@ -229,8 +239,25 @@ def _price_all(holdings: List[dict]) -> Tuple[List[dict], Dict[str, pd.DataFrame
     recs = []
     for h in holdings:
         df = hist.get(h["symbol"])
-        ltp = float(df["Close"].iloc[-1]) if df is not None and len(df) else None
-        rec = dict(h, name=h["symbol"], ltp=ltp, priced=ltp is not None, R=None, error=None, sector="Not analysed")
+        ltp = None
+        price_as_of = None
+        freshness = "Unavailable"
+        if df is not None and len(df):
+            try:
+                last = df["Close"].dropna()
+                if not last.empty:
+                    candidate = float(last.iloc[-1])
+                    stamp = pd.Timestamp(last.index[-1])
+                    stamp = stamp.tz_localize("Asia/Kolkata") if stamp.tzinfo is None else stamp.tz_convert("Asia/Kolkata")
+                    price_as_of = stamp.strftime("%d-%b-%Y")
+                    age_days = (datetime.now(IST).date() - stamp.date()).days
+                    if math.isfinite(candidate) and candidate > 0 and 0 <= age_days <= 3:
+                        ltp, freshness = candidate, "Fresh"
+                    else:
+                        freshness = "Stale"
+            except (ValueError, TypeError, OverflowError):
+                freshness = "Unavailable"
+        rec = dict(h, name=h["symbol"], ltp=ltp, price_as_of=price_as_of, freshness=freshness, priced=ltp is not None, R=None, error=None, sector="Not analysed")
         rec["invested"] = h["qty"] * h["buy"]
         rec["value"] = h["qty"] * ltp if ltp is not None else None
         recs.append(rec)
@@ -452,6 +479,7 @@ def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str]) -
                                 ("TOPPADDING", (0, 0), (-1, 0), 11), ("BOTTOMPADDING", (0, 0), (-1, 0), 0),
                                 ("TOPPADDING", (0, 1), (-1, 1), 2), ("BOTTOMPADDING", (0, 2), (-1, 2), 12),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 13), ("RIGHTPADDING", (0, 0), (-1, -1), 13)]))
+    notes = list(notes) + [f"{r['symbol']}: Price as of {r.get('price_as_of') or 'unavailable'}; {r.get('freshness', 'Unavailable')}" for r in recs]
     story += [banner, Spacer(1, 3), rg.P(f"Prepared by: <b>Senior Market Analyst Desk</b>, {BRAND} (automated research engine)  ·  {now}  ·  Prices as of last close", "small"), Spacer(1, 8)]
 
     wsc = (sum(r["R"]["sc"]["composite"] * r["value"] for r in scored) / sum(r["value"] for r in scored)) if scored else None
@@ -550,7 +578,7 @@ def run_job(holdings: List[dict], out_dir: str, client: str = "", progress: Opti
     """→ {'summary': path, 'stocks': [(sym, path)], 'notes': [...], 'recs': [...]}"""
     say = progress or (lambda m: None)
     os.makedirs(out_dir, exist_ok=True)
-    max_analyze = max_analyze or MAX_ANALYZE
+    max_analyze = min(5, max(1, max_analyze or MAX_ANALYZE))
     notes: List[str] = []
 
     say(f"📊 Pricing {len(holdings)} holdings…")
