@@ -324,6 +324,10 @@ def run_isolated_memory(filename, payload, timeout=150):
         raise PortfolioDoctorError("BAD_INPUT")
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Existing config.py explicitly permits public read-only market research.
+    # The worker never needs Telegram credentials; keep them out of its env.
+    env["MSK_RESEARCH_ONLY"] = "1"
+    env.pop("TELEGRAM_TOKEN", None)
     command = [sys.executable, os.path.abspath(__file__), "--worker", filename]
     try:
         child = subprocess.run(command, input=payload, stdout=subprocess.PIPE,
