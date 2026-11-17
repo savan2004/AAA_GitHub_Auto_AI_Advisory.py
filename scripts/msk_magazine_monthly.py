@@ -349,8 +349,13 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
-        source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
-        by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
+        if not Path(source_pack).is_file():
+            # Keep a visibly unapproved draft even when the source handoff
+            # is absent; never imply that any market figure was checked.
+            by_page, failures = {}, [f"Source evidence pack unavailable: {source_pack}"]
+        else:
+            source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
+            by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
     else:
         by_page, failures = {}, ["No independently retrieved financial source pack supplied"]
     pdf_file = dest / f"MSK_{issue}_EDITORIAL_DRAFT.pdf"
