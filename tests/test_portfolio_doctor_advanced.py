@@ -258,6 +258,37 @@ class PDFAndPrivacyTests(unittest.TestCase):
                 "opinions": [a.evaluate_opinion(f[i], tech[i], recs[i]["weight"]) for i in range(2)],
                 "replacements": {"status": "NO SUITABLE REPLACEMENT FOUND"}, "builder": None}
 
+    def test_completed_session_gate_never_uses_unfinished_daily_candle(self):
+        from datetime import datetime
+        from portfolio_doctor_live import verified_completed_daily_frame
+        dates = pd.bdate_range(end="2026-11-17", periods=40)
+        frame = pd.DataFrame({"Close": [float(i + 100) for i in range(40)]},
+                             index=dates)
+        before = datetime(2026, 11, 17, 15, 0, tzinfo=basic.IST)
+        after = datetime(2026, 11, 17, 16, 30, tzinfo=basic.IST)
+        self.assertEqual(verified_completed_daily_frame(frame, now=before).index[-1].date(),
+                         date(2026, 11, 16))
+        self.assertEqual(verified_completed_daily_frame(frame, now=after).index[-1].date(),
+                         date(2026, 11, 17))
+        with self.assertRaises(basic.PortfolioDoctorError) as err:
+            verified_completed_daily_frame(frame.iloc[:-1], now=after)
+        self.assertEqual(err.exception.code, "STALE_PRICES")
+
+    def test_worker_pdf_acceptance_is_flag_scoped(self):
+        review_pdf = render_advanced_pdf(self.create_review())
+        from types import SimpleNamespace
+        with patch.object(basic.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout=review_pdf, stderr=b"")):
+            with patch.dict(basic.os.environ,
+                            {"MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED": "1"}):
+                self.assertEqual(basic.run_isolated_memory("typed.csv", b"SAMPLEA 7 120"),
+                                 review_pdf)
+            with patch.dict(basic.os.environ,
+                            {"MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED": "0"}):
+                with self.assertRaises(basic.PortfolioDoctorError) as error:
+                    basic.run_isolated_memory("typed.csv", b"SAMPLEA 7 120")
+                self.assertEqual(error.exception.code, "PDF_FAILED")
+
     def test_pdf_pages_text_sources_totals_no_truncation(self):
         pdf_bytes = render_advanced_pdf(self.create_review())
         self.assertTrue(pdf_bytes.startswith(b"%PDF-"))
