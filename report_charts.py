@@ -8,6 +8,7 @@ just removes that figure from the PDF instead of killing the whole report.
 import os
 import logging
 import tempfile
+import uuid
 from typing import List, Optional
 
 import numpy as np
@@ -35,9 +36,9 @@ plt.rcParams.update({
 
 
 def _tmp(name: str) -> str:
-    d = os.path.join(tempfile.gettempdir(), "aaa_report_charts")
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, name)
+    d = os.getenv("MSK_REPORT_CHART_DIR") or os.path.join(tempfile.gettempdir(), "aaa_report_charts")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    return os.path.join(d, f"{uuid.uuid4().hex}_{os.path.basename(name)}")
 
 
 def _save(fig, name) -> str:

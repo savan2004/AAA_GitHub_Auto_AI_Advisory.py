@@ -861,7 +861,7 @@ def main_keyboard():
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "⚡ Intraday Trade")
     kb.add("📈 Chart", "📄 Report")
-    kb.add("🏭 Sector Report")
+    kb.add("🏭 Sector Report", "🩺 Portfolio Doctor")
     kb.add("🆕 New Version")
     return kb
 
@@ -1415,6 +1415,124 @@ def cmd_portfolio(m):
         except Exception as e:
             logger.error(f"Portfolio err: {e}", exc_info=True)
             safe_send(chat_id, f"❌ Error: {e}")
+
+    executor.submit(_run)
+
+
+# Portfolio Doctor private acceptance handler. Disabled by default and never
+# reads or writes legacy customer portfolio storage.
+_portfolio_doctor_lock = threading.Lock()
+_portfolio_doctor_running = set()
+_portfolio_doctor_waiting = set()
+
+
+def _doctor_allowed(m):
+    uid = getattr(getattr(m, "from_user", None), "id", None)
+    owner = os.getenv("MSK_PORTFOLIO_DOCTOR_TEST_USER_ID", "").strip()
+    private_user = (getattr(getattr(m, "chat", None), "type", None) == "private"
+                    and type(uid) is int and uid > 0 and uid == m.chat.id)
+    owner_test = (os.getenv("MSK_PORTFOLIO_DOCTOR_TEST_ENABLED", "") == "1"
+                  and owner.isdecimal() and str(uid) == owner)
+    customer_access = os.getenv("MSK_PORTFOLIO_DOCTOR_ENABLED", "") == "1"
+    return private_user and (customer_access or owner_test)
+
+
+@bot.message_handler(commands=["doctor", "portfolio_doctor"])
+@bot.message_handler(func=lambda m: m.text == "🩺 Portfolio Doctor")
+def portfolio_doctor_start(m):
+    """Customer-facing stateless report, never accesses saved Portfolio holdings."""
+    if not _doctor_allowed(m):
+        safe_send(m.chat.id, "🩺 Portfolio Doctor is available in private chat only, when enabled.")
+        return
+    with _portfolio_doctor_lock:
+        if m.chat.id in _portfolio_doctor_running:
+            safe_send(m.chat.id, "A Portfolio Doctor report is already running.")
+            return
+        _portfolio_doctor_waiting.add(m.chat.id)
+    safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\\n"
+              "Upload a CSV or XLSX file with <b>Symbol, Qty, Buy Price</b> "
+              "(maximum 5 stocks / 5 MB). Only a private educational PDF is generated. "
+              "No holdings are saved or changed. Reports need verified recent prices.")
+
+@bot.message_handler(commands=["portfolio_doctor_test"])
+def portfolio_doctor_test(m):
+    """Legacy owner test command; public customers use /doctor or menu."""
+    if not _doctor_allowed(m):
+        safe_send(m.chat.id, "Portfolio Doctor is not available.")
+        return
+    with _portfolio_doctor_lock:
+        _portfolio_doctor_waiting.add(m.chat.id)
+    safe_send(m.chat.id, "Private test: upload a CSV or XLSX with Symbol, Qty, Buy Price (maximum 5 MB; 5 stocks).")
+
+
+@bot.message_handler(content_types=["document"])
+def portfolio_doctor_document(m):
+    if not _doctor_allowed(m):
+        return
+    uid = m.chat.id
+    with _portfolio_doctor_lock:
+        if uid not in _portfolio_doctor_waiting:
+            return
+        if uid in _portfolio_doctor_running:
+            safe_send(uid, "A Portfolio Doctor report is already running.")
+            return
+        _portfolio_doctor_waiting.discard(uid)
+        _portfolio_doctor_running.add(uid)
+
+    def _run():
+        import tempfile
+        import uuid
+        from portfolio_doctor_runner import MAX_BYTES, run_isolated
+        from portfolio_doctor_ledger import PortfolioDoctorLedger
+        ledger = None
+        report_id = None
+        try:
+            doc = m.document
+            name = (doc.file_name or "").lower()
+            if not name.endswith((".csv", ".xlsx")) or (doc.file_size or 0) > MAX_BYTES:
+                safe_send(uid, "Only CSV/XLSX files up to 5 MB are supported.")
+                return
+            with tempfile.TemporaryDirectory(prefix="msk_doctor_") as folder:
+                file_info = bot.get_file(doc.file_id)
+                if file_info.file_size and file_info.file_size > MAX_BYTES:
+                    safe_send(uid, "File exceeds the 5 MB limit.")
+                    return
+                payload = bot.download_file(file_info.file_path)
+                if not payload or len(payload) > MAX_BYTES:
+                    safe_send(uid, "File is empty or exceeds the 5 MB limit.")
+                    return
+                ledger = PortfolioDoctorLedger.from_env()
+                report_id = uuid.uuid4().hex
+                if not ledger.reserve(report_id, uid, payload):
+                    safe_send(uid, "This private file was already submitted today. No duplicate PDF will be sent.")
+                    return
+                safe_send(uid, "Processing your private portfolio report (up to 5 stocks).")
+                summary = run_isolated(name, payload, folder, timeout=150)
+                ledger.mark_ready(report_id)
+                # Persist SENDING before calling Telegram. An uncertain send is never retried.
+                ledger.mark_sending(report_id)
+                with summary.open("rb") as handle:
+                    receipt = bot.send_document(uid, handle, caption="MSK Portfolio Doctor | Private educational report")
+                message_id = getattr(receipt, "message_id", None)
+                delivered_doc = getattr(receipt, "document", None)
+                file_id = getattr(delivered_doc, "file_id", None)
+                if not isinstance(message_id, int) or message_id <= 0 or not file_id:
+                    raise RuntimeError("Telegram PDF receipt missing message_id or file_id")
+                ledger.mark_sent(report_id, message_id, file_id)
+                logger.info("MSK_PORTFOLIO_DOCTOR_DELIVERY report_id=%s state=SENT message_id=%s file_id_present=true",
+                            report_id, message_id)
+        except Exception as exc:
+            logger.error("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT report_id=%s state=FAILED_OR_UNCERTAIN error_type=%s",
+                         report_id or "none", type(exc).__name__)
+            if ledger is not None and report_id is not None:
+                try:
+                    ledger.mark_failed(report_id)
+                except Exception:
+                    logger.error("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT report_id=%s ledger_failure=true", report_id)
+            safe_send(uid, "Portfolio Doctor report unavailable or incomplete. No saved holdings were changed.")
+        finally:
+            with _portfolio_doctor_lock:
+                _portfolio_doctor_running.discard(uid)
 
     executor.submit(_run)
 

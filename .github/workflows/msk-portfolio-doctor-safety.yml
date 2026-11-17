@@ -1,0 +1,28 @@
+name: MSK Portfolio Doctor Private Safety
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'portfolio_doctor_runner.py'
+      - 'portfolio_doctor_ledger.py'
+      - 'report_charts.py'
+      - 'portfolio_report.py'
+      - 'tests/test_portfolio_doctor_safety.py'
+      - '.github/workflows/msk-portfolio-doctor-safety.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  private-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile private worker
+        run: python -m py_compile portfolio_doctor_runner.py portfolio_doctor_ledger.py main.py portfolio_report.py report_charts.py
+      - name: Test real worker supervisor with isolated process mocks
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_safety.py' -v
