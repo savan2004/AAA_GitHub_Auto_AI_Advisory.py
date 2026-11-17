@@ -191,5 +191,26 @@ print("READ_ONLY_PASS")
             self.assertEqual(list(Path(folder).iterdir()), [])
 
 
+
+    def test_optional_research_deadline_cannot_be_swallowed(self):
+        import signal
+        import time
+        if not hasattr(signal, "setitimer"):
+            self.skipTest("Render and Linux CI enforce POSIX optional deadlines")
+        old_handler = signal.getsignal(signal.SIGALRM)
+        start = time.monotonic()
+        with self.assertRaises(doctor.OptionalReviewTimeout):
+            with doctor.optional_review_deadline(0.05):
+                try:
+                    time.sleep(2)
+                except Exception:
+                    self.fail("ordinary provider catch swallowed optional deadline")
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual(signal.getsignal(signal.SIGALRM), old_handler)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+        # The timer is gone; normal basic report calculations remain usable.
+        self.assertEqual(doctor._rsi(list(range(30))), 100)
+
+
 if __name__ == "__main__":
     unittest.main()

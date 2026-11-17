@@ -11,6 +11,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+from contextlib import contextmanager
 import zipfile
 from datetime import date, datetime, time as daytime, timedelta, timezone
 
@@ -496,11 +498,50 @@ def disable_worker_provider_disk_caches():
         raise PortfolioDoctorError("WORKER_FAILED") from None
 
 
+class OptionalReviewTimeout(BaseException):
+    """Escape optional provider code that catches ordinary exceptions."""
+
+
+@contextmanager
+def optional_review_deadline(seconds):
+    import signal
+    if seconds <= 0 or not hasattr(signal, "setitimer"):
+        raise OptionalReviewTimeout()
+    def expired(_signum, _frame):
+        raise OptionalReviewTimeout()
+    previous = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def build_optional_pdf(recs, frames, *, seconds=20):
+    with optional_review_deadline(seconds):
+        from portfolio_doctor_advanced import assemble_review
+        from portfolio_doctor_advanced_pdf import render_advanced_pdf
+        benchmark = None
+        try:
+            from market_data import index_history
+            benchmark = verified_completed_daily_frame(
+                index_history("^NSEI", "1y", retries=0, timeout=12))
+        except Exception:
+            benchmark = None
+        review = assemble_review(
+            recs, frames, benchmark=benchmark, advanced_fundamentals=(
+                os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_FUNDAMENTALS", "0") == "1"))
+        return render_advanced_pdf(review)
+
+
 def worker_main(filename):
     # Private worker only: suppress inherited library logs that could reveal
     # which stocks a customer currently owns. Parent logs safe error codes.
     import logging
     logging.disable(logging.CRITICAL)
+    worker_started = time.monotonic()
     try:
         enforce_worker_read_only()
         disable_worker_provider_disk_caches()
@@ -510,23 +551,11 @@ def worker_main(filename):
         if advanced:
             recs, frames = price_holdings(holdings, include_frames=True)
             try:
-                from portfolio_doctor_advanced import assemble_review
-                from portfolio_doctor_advanced_pdf import render_advanced_pdf
-                benchmark = None
-                try:
-                    from market_data import index_history
-                    benchmark = verified_completed_daily_frame(
-                        index_history("^NSEI", "1y", retries=0, timeout=12))
-                except Exception:
-                    # A benchmark gap does not invalidate completed holding closes.
-                    benchmark = None
-                review = assemble_review(
-                    recs, frames, benchmark=benchmark, advanced_fundamentals=(
-                        os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_FUNDAMENTALS", "0") == "1"))
-                result = render_advanced_pdf(review)
-            except Exception:
-                # The verified basic report must remain available when optional
-                # financial sources, charts or advanced layout fail.
+                # Reserve time for the basic PDF before the parent's hard kill.
+                budget = min(20, 120 - (time.monotonic() - worker_started))
+                result = build_optional_pdf(recs, frames, seconds=budget)
+            except (Exception, OptionalReviewTimeout):
+                # Optional research cannot consume the basic report's budget.
                 result = build_pdf_bytes(recs)
         else:
             recs = price_holdings(holdings)
