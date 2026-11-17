@@ -1424,6 +1424,8 @@ def cmd_portfolio(m):
 _portfolio_doctor_lock = threading.Lock()
 _portfolio_doctor_running = set()
 _portfolio_doctor_waiting = set()
+# Bound memory and provider demand without storing any client holdings.
+_portfolio_doctor_slots = threading.BoundedSemaphore(2)
 
 
 def _doctor_allowed(m):
@@ -1451,8 +1453,9 @@ def portfolio_doctor_start(m):
         _portfolio_doctor_waiting.add(m.chat.id)
     safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\n"
               "Upload CSV/XLSX or paste 1–5 lines as <code>DLF 50 480</code> "
-              "(maximum 5 stocks / 5 MB). Only a private educational PDF is generated. "
-              "No holdings are saved or changed. Reports need verified recent prices.")
+              "(maximum 5 stocks / 5 MB). A private educational PDF is sent only with "
+              "verified recent closing prices. MSK does not save your holdings or report. "
+              "Telegram retains chat messages and files under its own rules.")
 
 @bot.message_handler(commands=["portfolio_doctor_test"])
 def portfolio_doctor_test(m):
@@ -1466,30 +1469,29 @@ def portfolio_doctor_test(m):
 
 
 def portfolio_doctor_text(m):
-    """Parse up to five typed holdings via the same private PDF and ledger path."""
-    from portfolio_report import parse_text
+    """One-time typed positions, parsed without any holdings database."""
+    from portfolio_doctor_live import parse_holdings, PortfolioDoctorError
 
     raw = m.text or ""
-    lines = [line for line in raw.splitlines() if line.strip()]
-    if len(raw.encode("utf-8")) > 2048 or not 1 <= len(lines) <= 5:
+    rows = [line for line in raw.splitlines() if line.strip()]
+    if len(raw.encode("utf-8")) > 2048 or not 1 <= len(rows) <= 5:
         safe_send(m.chat.id, "Enter 1–5 lines: SYMBOL QTY BUY_PRICE, e.g. DLF 50 480; or upload CSV/XLSX.")
         return
-    holdings, issues = parse_text(raw)
-    if (not holdings or len(holdings) > 5 or
-            any("duplicate symbol" not in issue for issue in issues) or
-            any(not math.isfinite(h["qty"]) or not math.isfinite(h["buy"]) or
-                h["qty"] > 1e9 or h["buy"] > 1e9 for h in holdings)):
+    payload = raw.encode("utf-8")
+    try:
+        parse_holdings("typed_holdings.csv", payload)
+    except PortfolioDoctorError:
         safe_send(m.chat.id, "Invalid holdings. Use SYMBOL QTY BUY_PRICE on each line, e.g. SBIN 100 890.")
         return
-    payload = ("Symbol,Qty,Buy Price\n" + "".join(
-        f'{h["symbol"]},{h["qty"]},{h["buy"]}\n' for h in holdings)).encode("utf-8")
     portfolio_doctor_document(m, _typed_payload=payload)
 
 
 @bot.message_handler(content_types=["document"])
 def portfolio_doctor_document(m, _typed_payload=None):
+    """No database, saved holdings or persistent file: receive -> PDF -> delete."""
     if not _doctor_allowed(m):
         return
+    from portfolio_doctor_live import MAX_BYTES
     uid = m.chat.id
     with _portfolio_doctor_lock:
         if uid not in _portfolio_doctor_waiting:
@@ -1497,77 +1499,72 @@ def portfolio_doctor_document(m, _typed_payload=None):
         if uid in _portfolio_doctor_running:
             safe_send(uid, "A Portfolio Doctor report is already running.")
             return
+        if not _portfolio_doctor_slots.acquire(blocking=False):
+            safe_send(uid, "Portfolio Doctor is busy. Retry shortly; no holdings were saved.")
+            return
         _portfolio_doctor_waiting.discard(uid)
         _portfolio_doctor_running.add(uid)
 
     def _run():
-        import tempfile
-        import uuid
-        from portfolio_doctor_runner import MAX_BYTES, run_isolated
-        from portfolio_doctor_ledger import PortfolioDoctorLedger
-        ledger = None
-        report_id = None
+        import io
+        from portfolio_doctor_live import PortfolioDoctorError, run_isolated_memory
         try:
-            if _typed_payload is None:
+            if _typed_payload is not None:
+                name, payload = "typed_holdings.csv", _typed_payload
+            else:
                 doc = m.document
                 name = (doc.file_name or "").lower()
                 if not name.endswith((".csv", ".xlsx")) or (doc.file_size or 0) > MAX_BYTES:
-                    safe_send(uid, "Only CSV/XLSX files up to 5 MB are supported.")
+                    safe_send(uid, "Only CSV/XLSX up to 5 MB, with 1–5 holdings, are supported.")
                     return
+                file_info = bot.get_file(doc.file_id)
+                if file_info.file_size and file_info.file_size > MAX_BYTES:
+                    safe_send(uid, "File exceeds the 5 MB limit.")
+                    return
+                payload = bot.download_file(file_info.file_path)
+            if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_BYTES:
+                safe_send(uid, "Empty or oversized input. No report generated.")
+                return
+            safe_send(uid, "Checking recent market prices for your private, one-time report.")
+            # PDF and holdings travel through worker stdin/stdout, never a local file.
+            pdf_bytes = run_isolated_memory(name, payload, timeout=150)
+            document = io.BytesIO(pdf_bytes)
+            document.name = "MSK_Portfolio_Doctor.pdf"
+            receipt = bot.send_document(
+                uid, document, caption="MSK Portfolio Doctor | Private on-demand educational PDF")
+            message_id = getattr(receipt, "message_id", None)
+            sent = getattr(receipt, "document", None)
+            if not isinstance(message_id, int) or message_id <= 0 or not getattr(sent, "file_id", None):
+                raise PortfolioDoctorError("WORKER_FAILED")
+            # Proof of delivery without retaining symbol, quantity, user, upload
+            # hash, file ID, or Telegram message ID in an MSK database/log.
+            logger.info("MSK_PORTFOLIO_DOCTOR_DELIVERY state=SENT receipt_verified=true")
+        except PortfolioDoctorError as exc:
+            logger.warning("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT error_code=%s", exc.code)
+            if exc.code == "BAD_INPUT":
+                safe_send(uid, "Invalid holdings. Send up to 5 rows: Symbol Qty Buy Price.")
+            elif exc.code in ("STALE_PRICES", "NO_PRICES"):
+                safe_send(uid, "Verified recent closing prices unavailable. No estimates or PDF issued. Please retry later.")
+            elif exc.code == "TIMEOUT":
+                safe_send(uid, "Portfolio Doctor timed out. No holdings were saved. Please retry later.")
             else:
-                name = "typed_holdings.csv"
-            with tempfile.TemporaryDirectory(prefix="msk_doctor_") as folder:
-                if _typed_payload is None:
-                    file_info = bot.get_file(doc.file_id)
-                    if file_info.file_size and file_info.file_size > MAX_BYTES:
-                        safe_send(uid, "File exceeds the 5 MB limit.")
-                        return
-                    payload = bot.download_file(file_info.file_path)
-                else:
-                    payload = _typed_payload
-                if not payload or len(payload) > MAX_BYTES:
-                    safe_send(uid, "File is empty or exceeds the 5 MB limit.")
-                    return
-                ledger = PortfolioDoctorLedger.from_env()
-                report_id = uuid.uuid4().hex
-                if not ledger.reserve(report_id, uid, payload):
-                    safe_send(uid, "This private file was already submitted today. No duplicate PDF will be sent.")
-                    return
-                safe_send(uid, "Processing your private portfolio report (up to 5 stocks).")
-                summary = run_isolated(name, payload, folder, timeout=150)
-                ledger.mark_ready(report_id)
-                # Persist SENDING before calling Telegram. An uncertain send is never retried.
-                ledger.mark_sending(report_id)
-                with summary.open("rb") as handle:
-                    receipt = bot.send_document(uid, handle, caption="MSK Portfolio Doctor | Private educational report")
-                message_id = getattr(receipt, "message_id", None)
-                delivered_doc = getattr(receipt, "document", None)
-                file_id = getattr(delivered_doc, "file_id", None)
-                if not isinstance(message_id, int) or message_id <= 0 or not file_id:
-                    raise RuntimeError("Telegram PDF receipt missing message_id or file_id")
-                ledger.mark_sent(report_id, message_id, file_id)
-                logger.info("MSK_PORTFOLIO_DOCTOR_DELIVERY report_id=%s state=SENT message_id=%s file_id_present=true",
-                            report_id, message_id)
+                safe_send(uid, "Portfolio Doctor could not generate a verified PDF. No holdings were saved.")
         except Exception as exc:
-            logger.error("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT report_id=%s state=FAILED_OR_UNCERTAIN error_type=%s error_code=%s",
-                         report_id or "none", type(exc).__name__, getattr(exc, "code", "UNCLASSIFIED"))
-            if ledger is not None and report_id is not None:
-                try:
-                    ledger.mark_failed(report_id)
-                except Exception:
-                    logger.error("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT report_id=%s ledger_failure=true", report_id)
-            error_code = getattr(exc, "code", "UNCLASSIFIED")
-            if error_code in ("NO_RECENT_PRICES", "STALE_OR_MISSING_PRICES"):
-                safe_send(uid, "⚠️ Recent verified prices are missing or stale. No Portfolio Doctor PDF was issued; saved holdings are unchanged.")
-            elif error_code == "TIMEOUT":
-                safe_send(uid, "⚠️ Portfolio Doctor timed out. No PDF was issued; saved holdings are unchanged.")
-            else:
-                safe_send(uid, "Portfolio Doctor report unavailable or incomplete. No saved holdings were changed.")
+            logger.error("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT error_type=%s",
+                         type(exc).__name__)
+            safe_send(uid, "Portfolio Doctor temporarily unavailable. No client holdings were saved.")
         finally:
             with _portfolio_doctor_lock:
                 _portfolio_doctor_running.discard(uid)
+            _portfolio_doctor_slots.release()
 
-    executor.submit(_run)
+    try:
+        executor.submit(_run)
+    except Exception:
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_running.discard(uid)
+        _portfolio_doctor_slots.release()
+        safe_send(uid, "Unable to start Portfolio Doctor. No holdings were saved.")
 
 
 # ── Button Handlers ──────────────────────────────────────────────────────────
