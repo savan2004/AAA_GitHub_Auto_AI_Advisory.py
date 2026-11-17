@@ -116,7 +116,7 @@ def _rsi(values):
     return 100.0 - 100.0 / (1.0 + gains / losses)
 
 
-def price_holdings(holdings):
+def price_holdings(holdings, *, include_frames=False):
     """Use verified OHLC only, not an assumed live quote or fabricated tick."""
     from market_data import bulk_history
     symbols = [h["symbol"] for h in holdings]
@@ -156,7 +156,7 @@ def price_holdings(holdings):
         raise PortfolioDoctorError("NO_PRICES")
     for h in out:
         h["weight"] = 100.0 * h["value"] / total
-    return out
+    return (out, frames) if include_frames else out
 
 
 def build_pdf_bytes(holdings):
@@ -189,7 +189,7 @@ def build_pdf_bytes(holdings):
     now = datetime.now(IST).strftime("%d %b %Y %H:%M IST")
     line("MSK | PORTFOLIO DOCTOR", 17, True, 27)
     line("Private on-demand educational report | " + now, 10, False, 21)
-    line("Source: latest verified completed NSE daily OHLC. NOT a live tick quote.", 9)
+    line("Source: dated daily OHLCV via Yahoo/provider fallback. NOT a live quote.", 9)
     line("This service does not save holdings or PDFs in an MSK database.", 9, False, 20)
     divider()
     line("PORTFOLIO SUMMARY", 11, True, 22)
@@ -284,8 +284,23 @@ def worker_main(filename):
     try:
         raw = sys.stdin.buffer.read(MAX_BYTES + 1)
         holdings = parse_holdings(filename, raw)
-        recs = price_holdings(holdings)
-        result = build_pdf_bytes(recs)
+        advanced = os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED", "0") == "1"
+        if advanced:
+            recs, frames = price_holdings(holdings, include_frames=True)
+            try:
+                from portfolio_doctor_advanced import assemble_review
+                from portfolio_doctor_advanced_pdf import render_advanced_pdf
+                review = assemble_review(
+                    recs, frames, advanced_fundamentals=(
+                        os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_FUNDAMENTALS", "0") == "1"))
+                result = render_advanced_pdf(review)
+            except Exception:
+                # The verified basic report must remain available when optional
+                # financial sources, charts or advanced layout fail.
+                result = build_pdf_bytes(recs)
+        else:
+            recs = price_holdings(holdings)
+            result = build_pdf_bytes(recs)
         sys.stdout.buffer.write(result)
     except PortfolioDoctorError as exc:
         sys.stderr.write("\nMSK_DOCTOR_CODE=" + exc.code + "\n")
