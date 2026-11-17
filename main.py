@@ -1556,7 +1556,13 @@ def portfolio_doctor_document(m, _typed_payload=None):
                     ledger.mark_failed(report_id)
                 except Exception:
                     logger.error("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT report_id=%s ledger_failure=true", report_id)
-            safe_send(uid, "Portfolio Doctor report unavailable or incomplete. No saved holdings were changed.")
+            error_code = getattr(exc, "code", "UNCLASSIFIED")
+            if error_code in ("NO_RECENT_PRICES", "STALE_OR_MISSING_PRICES"):
+                safe_send(uid, "⚠️ Recent verified prices are missing or stale. No Portfolio Doctor PDF was issued; saved holdings are unchanged.")
+            elif error_code == "TIMEOUT":
+                safe_send(uid, "⚠️ Portfolio Doctor timed out. No PDF was issued; saved holdings are unchanged.")
+            else:
+                safe_send(uid, "Portfolio Doctor report unavailable or incomplete. No saved holdings were changed.")
         finally:
             with _portfolio_doctor_lock:
                 _portfolio_doctor_running.discard(uid)
