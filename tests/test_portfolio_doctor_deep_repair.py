@@ -212,5 +212,55 @@ print("READ_ONLY_PASS")
         self.assertEqual(doctor._rsi(list(range(30))), 100)
 
 
+
+    def test_real_worker_optional_timeout_delivers_basic_pdf(self):
+        import os
+        import subprocess
+        code = """import io, os, sys, time
+from types import SimpleNamespace
+import portfolio_doctor_live as doctor
+row = {"symbol": "SAMPLEA", "qty": 2, "buy": 100, "close": 110,
+       "date": "2026-11-17", "invested": 200, "value": 220,
+       "pnl": 20, "pnl_pct": 10, "weight": 100, "ema20": 106,
+       "ema50": 101, "rsi14": 58, "high20": 118, "low20": 95}
+doctor.price_holdings = lambda *a, **kw: ([row], {})
+doctor.disable_worker_provider_disk_caches = lambda: None
+def slow_optional(*a, **kw):
+    with doctor.optional_review_deadline(0.05):
+        time.sleep(5)
+doctor.build_optional_pdf = slow_optional
+os.environ["MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED"] = "1"
+result = io.BytesIO()
+sys.stdin = SimpleNamespace(buffer=io.BytesIO(b"SAMPLEA 2 100"))
+sys.stdout = SimpleNamespace(buffer=result)
+doctor.worker_main("synthetic.csv")
+from pypdf import PdfReader
+pdf = PdfReader(io.BytesIO(result.getvalue()))
+text = "".join(page.extract_text() or "" for page in pdf.pages)
+assert "SAMPLEA" in text and "Rs 200.00" in text and "Rs 220.00" in text
+sys.stdout = sys.__stdout__
+print("OPTIONAL_TIMEOUT_BASIC_PDF_PASS")
+"""
+        result = subprocess.run([sys.executable, "-B", "-c", code],
+                                capture_output=True, text=True, timeout=15,
+                                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OPTIONAL_TIMEOUT_BASIC_PDF_PASS", result.stdout)
+
+    def test_actual_parent_deadline_kills_worker_and_next_request_recovers(self):
+        import importlib.util
+        import time
+        if importlib.util.find_spec("yfinance") is None:
+            self.skipTest("real dependency worker runs in advanced CI")
+        start = time.monotonic()
+        with self.assertRaises(doctor.PortfolioDoctorError) as first:
+            doctor.run_isolated_memory("synthetic.csv", b"SAMPLEA 2 100", timeout=0.01)
+        self.assertEqual(first.exception.code, "TIMEOUT")
+        self.assertLess(time.monotonic() - start, 5)
+        with self.assertRaises(doctor.PortfolioDoctorError) as second:
+            doctor.run_isolated_memory("synthetic.csv", b"INVALID_INPUT", timeout=15)
+        self.assertEqual(second.exception.code, "BAD_INPUT")
+
+
 if __name__ == "__main__":
     unittest.main()
