@@ -17,7 +17,9 @@ DEFAULT_TIMEOUT = 150
 
 
 class PortfolioDoctorError(RuntimeError):
-    pass
+    def __init__(self, message, code="UNKNOWN"):
+        super().__init__(message)
+        self.code = code
 
 
 class PortfolioDoctorTimeout(PortfolioDoctorError):
@@ -74,7 +76,17 @@ def run_isolated(filename, payload, workspace, timeout=DEFAULT_TIMEOUT):
         process.wait()
         raise PortfolioDoctorTimeout("Private report exceeded hard deadline") from exc
     if status != 0 or not result.is_file():
-        raise PortfolioDoctorError("Private analysis failed or incomplete")
+        code = "WORKER_FAILED"
+        if result.is_file():
+            try:
+                failure = json.loads(result.read_text(encoding="utf-8"))
+                allowed = {"INPUT_INVALID", "NO_RECENT_PRICES", "STALE_OR_MISSING_PRICES",
+                           "PDF_INVALID", "ANALYSIS_FAILED", "WORKER_FAILED"}
+                if failure.get("status") == "FAILED" and failure.get("code") in allowed:
+                    code = failure["code"]
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+        raise PortfolioDoctorError("Private analysis failed or incomplete", code=code)
     try:
         result_data = json.loads(result.read_text(encoding="utf-8"))
         if result_data.get("status") != "READY":
@@ -92,7 +104,7 @@ def _worker(upload, result, workspace, filename):
     holdings, issues = parse_file(filename, Path(upload).read_bytes())
     if (not holdings or len(holdings) > MAX_STOCKS or
             any("duplicate symbol" not in issue for issue in issues)):
-        raise PortfolioDoctorError("Portfolio upload is invalid")
+        raise PortfolioDoctorError("Portfolio upload is invalid", code="INPUT_INVALID")
     output = run_job(holdings, str(root), max_analyze=MAX_STOCKS, use_ai=False)
     recs = output.get("recs", [])
     # A private portfolio summary is useful with fresh, verified prices even
@@ -100,8 +112,13 @@ def _worker(upload, result, workspace, filename):
     # own disclosures flag any unscored positions; never fake a technical score.
     if (len(recs) != len(holdings) or
             any(not r.get("priced") or r.get("freshness") != "Fresh" for r in recs)):
-        raise PortfolioDoctorError("Incomplete, stale or unverified market report")
-    pdf = _pdf_in_workspace(output["summary"], root)
+        raise PortfolioDoctorError("Incomplete, stale or unverified market report",
+                                   code="STALE_OR_MISSING_PRICES")
+    try:
+        pdf = _pdf_in_workspace(output["summary"], root)
+    except (KeyError, OSError, PortfolioDoctorError) as exc:
+        raise PortfolioDoctorError("Private summary PDF validation failed",
+                                   code="PDF_INVALID") from exc
     Path(result).write_text(json.dumps({"status": "READY", "summary": str(pdf)}),
                             encoding="utf-8")
 
@@ -111,5 +128,18 @@ if __name__ == "__main__":
         sys.exit(2)
     try:
         _worker(*sys.argv[2:])
-    except Exception:
+    except Exception as exc:
+        # Only bounded, non-private error codes reach the parent. Never emit
+        # symbols, quantities, purchase prices, raw exception text or PDF paths.
+        code = "ANALYSIS_FAILED"
+        if isinstance(exc, PortfolioDoctorError):
+            code = exc.code if exc.code != "UNKNOWN" else "ANALYSIS_FAILED"
+        elif isinstance(exc, ValueError) and str(exc).startswith(
+                "None of the symbols returned price data."):
+            code = "NO_RECENT_PRICES"
+        try:
+            Path(sys.argv[3]).write_text(json.dumps({"status": "FAILED", "code": code}),
+                                         encoding="utf-8")
+        except OSError:
+            pass
         sys.exit(1)
