@@ -250,12 +250,14 @@ class TextParserTickerTests(unittest.TestCase):
         import ast
         import copy
         import re
+        from typing import Tuple, List
         main = Path(__file__).resolve().parents[1]
         source = (main / "portfolio_report.py").read_text(encoding="utf-8")
         node = next(n for n in ast.parse(source).body
                     if isinstance(n, ast.FunctionDef) and n.name == "parse_text")
         node = copy.deepcopy(node)
-        ns = {"re": re, "parse_rows": lambda rows, resolver=None: (rows, [])}
+        ns = {"re": re, "Tuple": Tuple, "List": List,
+              "parse_rows": lambda rows, resolver=None: (rows, [])}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
                      "<text-parser>", "exec"), ns)
         rows, issues = ns["parse_text"]("AXISBANK 10 1000\nEXIDEIND 20 480\nSBIN 50x890")
