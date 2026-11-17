@@ -85,5 +85,30 @@ class DeepRepairTests(unittest.TestCase):
         self.assertEqual(calls["max_fallbacks"],0)
 
 
+    def test_advanced_report_preserves_verified_basic_indicators(self):
+        import pandas as pd
+        import portfolio_doctor_advanced as advanced
+        row = {"symbol": "SAMPLEA", "qty": 2, "buy": 100, "close": 110,
+               "date": "2026-11-17", "invested": 200, "value": 220,
+               "pnl": 20, "pnl_pct": 10, "weight": 100,
+               "ema20": 106.25, "ema50": 101.75, "rsi14": 66.2496185536,
+               "high20": 118, "low20": 95}
+        frame = pd.DataFrame({"Close": [110.0] * 65},
+                             index=pd.bdate_range(end="2026-11-17", periods=65))
+        # The optional research calculator may use a different RSI convention.
+        research = SimpleNamespace(compute_technicals=lambda *_: {
+            "trend": "UPTREND", "rsi": 12, "ema20": 1, "ema50": 2,
+            "vol_ratio": 1.2})
+        with patch.dict(sys.modules, {"research_engine": research}):
+            review = advanced.assemble_review(
+                [row], {"SAMPLEA": frame}, sector_lookup=lambda _: "IT",
+                advanced_fundamentals=False)
+        tech = review["technicals"][0]
+        for metric in ("rsi14", "ema20", "ema50"):
+            self.assertEqual(tech[metric], row[metric])
+        self.assertEqual(tech["trend"], "UPTREND")
+        self.assertEqual(tech["volume_ratio"], 1.2)
+
+
 if __name__ == "__main__":
     unittest.main()

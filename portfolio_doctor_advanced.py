@@ -506,8 +506,9 @@ def assemble_review(recs, price_frames, *, fund_collector=None, ratio_collector=
         if frame is not None and len(frame) >= 60:
             try:
                 t = compute_technicals(frame, None)
-                tech.update(trend=t.get("trend"), rsi14=t.get("rsi"),
-                            ema20=t.get("ema20"), ema50=t.get("ema50"),
+                # Keep the verified basic Wilder RSI/EMA calculations as the
+                # single source of truth in both PDF modes.
+                tech.update(trend=t.get("trend"),
                             support=(t.get("supports") or [{"price": None}])[0].get("price"),
                             resistance=(t.get("resistances") or [{"price": None}])[0].get("price"),
                             volume_ratio=t.get("vol_ratio"),
