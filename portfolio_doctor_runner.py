@@ -97,9 +97,9 @@ def run_isolated(filename, payload, workspace, timeout=DEFAULT_TIMEOUT):
 
 
 def _worker(upload, result, workspace, filename):
-    import tempfile
     root = Path(workspace).resolve(strict=True)
-    tempfile.tempdir = str(root / "tmp")
+    # The parent subprocess environment already sets TMPDIR/TEMP/TMP to the
+    # private workspace. Do not mutate process-global tempfile.tempdir.
     from portfolio_report import parse_file, run_job
     holdings, issues = parse_file(filename, Path(upload).read_bytes())
     if (not holdings or len(holdings) > MAX_STOCKS or
