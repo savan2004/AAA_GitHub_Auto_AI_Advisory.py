@@ -50,6 +50,17 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertNotIn("gh release publish", workflow)
         self.assertNotIn("sendDocument", workflow)
 
+    def test_nse_download_failure_does_not_block_unapproved_draft(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/msk-magazine-monthly.yml").read_text()
+        self.assertIn('mkdir -p "$SOURCE_DIR"', workflow)
+        self.assertIn('if python scripts/msk_magazine_nse.py', workflow)
+        self.assertIn('DOWNLOAD_FAILED.txt', workflow)
+        self.assertIn('rm -f "$SOURCE_DIR/source_pack.json"', workflow)
+        self.assertIn('Continue only with an UNAPPROVED, data-withheld draft', workflow)
+        self.assertIn('Create a 16-page UNAPPROVED monthly draft only', workflow)
+        self.assertNotIn('continue-on-error: true', workflow)
+
     def test_first_mondays(self):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
