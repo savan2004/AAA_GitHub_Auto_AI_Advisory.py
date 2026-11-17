@@ -88,7 +88,16 @@ jobs:
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
-          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "magazine_artifacts/$ISSUE/sources"
+          set -uo pipefail
+          SOURCE_DIR="magazine_artifacts/$ISSUE/sources"
+          mkdir -p "$SOURCE_DIR"
+          if python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "$SOURCE_DIR"; then
+            echo "NSE source download completed; evidence still requires validation." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "NSE source download FAILED. Continue only with an UNAPPROVED, data-withheld draft." >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' 'NSE source download failed; no source data verified.' > "$SOURCE_DIR/DOWNLOAD_FAILED.txt"
+            rm -f "$SOURCE_DIR/source_pack.json"
+          fi
       - name: Create a 16-page UNAPPROVED monthly draft only
         if: steps.schedule.outputs.due == 'true'
         env:
