@@ -1423,7 +1423,8 @@ def cmd_portfolio(m):
 # reads or writes legacy customer portfolio storage.
 _portfolio_doctor_lock = threading.Lock()
 _portfolio_doctor_running = set()
-_portfolio_doctor_waiting = set()
+# Pending state contains only user IDs and expires after three minutes.
+_portfolio_doctor_waiting = {}
 # Bound memory and provider demand without storing any client holdings.
 _portfolio_doctor_slots = threading.BoundedSemaphore(2)
 
@@ -1450,7 +1451,7 @@ def portfolio_doctor_start(m):
         if m.chat.id in _portfolio_doctor_running:
             safe_send(m.chat.id, "A Portfolio Doctor report is already running.")
             return
-        _portfolio_doctor_waiting.add(m.chat.id)
+        _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 180
     safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\n"
               "Upload CSV/XLSX or paste 1–5 lines as <code>INFY 2 1000</code> "
               "(maximum 5 stocks / 5 MB). A private educational PDF is sent only with "
@@ -1464,7 +1465,7 @@ def portfolio_doctor_test(m):
         safe_send(m.chat.id, "Portfolio Doctor is not available.")
         return
     with _portfolio_doctor_lock:
-        _portfolio_doctor_waiting.add(m.chat.id)
+        _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 180
     safe_send(m.chat.id, "Private test: upload a CSV or XLSX with Symbol, Qty, Buy Price (maximum 5 MB; 5 stocks).")
 
 
@@ -1475,13 +1476,17 @@ def portfolio_doctor_text(m):
     raw = m.text or ""
     rows = [line for line in raw.splitlines() if line.strip()]
     if len(raw.encode("utf-8")) > 2048 or not 1 <= len(rows) <= 5:
-        safe_send(m.chat.id, "Enter 1–5 lines: SYMBOL QTY BUY_PRICE, e.g. INFY 2 1000; or upload CSV/XLSX.")
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_waiting.pop(m.chat.id, None)
+        safe_send(m.chat.id, "Invalid request. Select Portfolio Doctor again, then enter 1–5 rows.")
         return
     payload = raw.encode("utf-8")
     try:
         parse_holdings("typed_holdings.csv", payload)
     except PortfolioDoctorError:
-        safe_send(m.chat.id, "Invalid holdings. Use SYMBOL QTY BUY_PRICE on each line, e.g. TCS 3 1200.")
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_waiting.pop(m.chat.id, None)
+        safe_send(m.chat.id, "Invalid holdings. Select Portfolio Doctor again to retry.")
         return
     portfolio_doctor_document(m, _typed_payload=payload)
 
@@ -1494,7 +1499,9 @@ def portfolio_doctor_document(m, _typed_payload=None):
     from portfolio_doctor_live import MAX_BYTES
     uid = m.chat.id
     with _portfolio_doctor_lock:
-        if uid not in _portfolio_doctor_waiting:
+        expiry = _portfolio_doctor_waiting.get(uid, 0)
+        if expiry <= time.monotonic():
+            _portfolio_doctor_waiting.pop(uid, None)
             return
         if uid in _portfolio_doctor_running:
             safe_send(uid, "A Portfolio Doctor report is already running.")
@@ -1502,7 +1509,7 @@ def portfolio_doctor_document(m, _typed_payload=None):
         if not _portfolio_doctor_slots.acquire(blocking=False):
             safe_send(uid, "Portfolio Doctor is busy. Retry shortly; no holdings were saved.")
             return
-        _portfolio_doctor_waiting.discard(uid)
+        _portfolio_doctor_waiting.pop(uid, None)
         _portfolio_doctor_running.add(uid)
 
     def _run():
@@ -1990,9 +1997,16 @@ def handle_text(m):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
         return
 
-    # A pending Doctor request owns the next text input; never send holdings to stock search.
+    # Never route private holdings or repeated inputs to public stock search.
     with _portfolio_doctor_lock:
-        doctor_waiting = uid in _portfolio_doctor_waiting
+        doctor_running = uid in _portfolio_doctor_running
+        deadline = _portfolio_doctor_waiting.get(uid, 0)
+        doctor_waiting = deadline > time.monotonic()
+        if not doctor_waiting:
+            _portfolio_doctor_waiting.pop(uid, None)
+    if _doctor_allowed(m) and doctor_running:
+        safe_send(uid, "A private Portfolio Doctor report is already running.")
+        return
     if doctor_waiting and _doctor_allowed(m):
         portfolio_doctor_text(m)
         return
