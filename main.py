@@ -1549,8 +1549,8 @@ def portfolio_doctor_document(m, _typed_payload=None):
                 logger.info("MSK_PORTFOLIO_DOCTOR_DELIVERY report_id=%s state=SENT message_id=%s file_id_present=true",
                             report_id, message_id)
         except Exception as exc:
-            logger.error("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT report_id=%s state=FAILED_OR_UNCERTAIN error_type=%s",
-                         report_id or "none", type(exc).__name__)
+            logger.error("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT report_id=%s state=FAILED_OR_UNCERTAIN error_type=%s error_code=%s",
+                         report_id or "none", type(exc).__name__, getattr(exc, "code", "UNCLASSIFIED"))
             if ledger is not None and report_id is not None:
                 try:
                     ledger.mark_failed(report_id)
