@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as daytime, timedelta, timezone
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_STOCKS = 5
@@ -137,19 +137,64 @@ def _rsi(values):
     return 100.0 - 100.0 / (1.0 + gains / losses)
 
 
+# Reviewed 18-Nov-2026 against NSE CMTR71775 and the official holiday page.
+# Election closure on 15-Jan is included. Unknown years fail closed.
+# https://nsearchives.nseindia.com/content/circulars/CMTR71775.pdf
+# https://www.nseindia.com/resources/exchange-communication-holidays
+_NSE_HOLIDAYS_2026 = frozenset(date.fromisoformat(value) for value in (
+    "2026-01-15", "2026-01-26", "2026-03-03", "2026-03-26",
+    "2026-03-31", "2026-04-03", "2026-04-14", "2026-05-01",
+    "2026-05-28", "2026-06-26", "2026-09-14", "2026-10-02",
+    "2026-10-20", "2026-11-10", "2026-11-24", "2026-12-25",
+))
+# NSE CMTR76941: special Sunday, post-close ends 16:00; buffer to 16:30.
+# https://nsearchives.nseindia.com/content/circulars/CMTR76941.pdf
+_NSE_SPECIAL_2026 = {date(2026, 11, 8): daytime(16, 30)}
+
+
+def doctor_trading_session(day):
+    if day.year != 2026:
+        raise PortfolioDoctorError("STALE_PRICES")
+    return day in _NSE_SPECIAL_2026 or (
+        day.weekday() < 5 and day not in _NSE_HOLIDAYS_2026)
+
+
+def previous_doctor_session(day):
+    day -= timedelta(days=1)
+    for _ in range(14):
+        if doctor_trading_session(day):
+            return day
+        day -= timedelta(days=1)
+    raise PortfolioDoctorError("STALE_PRICES")
+
+
+def expected_doctor_session(now=None):
+    stamp = now or datetime.now(IST)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=IST)
+    stamp = stamp.astimezone(IST)
+    day = stamp.date()
+    if (doctor_trading_session(day) and
+            stamp.time() >= _NSE_SPECIAL_2026.get(day, daytime(16))):
+        return day
+    return previous_doctor_session(day)
+
+
 def verified_completed_daily_frame(frame, *, now=None):
-    """Only the latest completed NSE weekday session; holidays fail closed."""
+    """Require the latest completed session from the reviewed NSE calendar."""
     if frame is None or getattr(frame, "empty", True):
         raise PortfolioDoctorError("NO_PRICES")
-    from market_breadth import completed_prices, expected_completed_session
+    from market_breadth import completed_prices
+    expected = expected_doctor_session(now)
     clean = completed_prices(frame, now=now)
+    clean = clean.loc[clean.index.date <= expected]
     if clean.empty or "Close" not in clean or not clean.index.is_monotonic_increasing:
         raise PortfolioDoctorError("NO_PRICES")
     try:
         last_date = clean.index[-1].date()
     except (TypeError, IndexError, AttributeError):
         raise PortfolioDoctorError("NO_PRICES")
-    if last_date != expected_completed_session(now):
+    if last_date != expected:
         raise PortfolioDoctorError("STALE_PRICES")
     return clean
 
@@ -254,7 +299,7 @@ def price_holdings(holdings, *, include_frames=False):
             last_at = valid.index[-1]
             price_date = last_at.date()
             age = (today - price_date).days
-            if not (0 <= age <= 3):
+            if age < 0:
                 raise PortfolioDoctorError("STALE_PRICES")
             close = values[-1]
             invested = holding["qty"] * holding["buy"]

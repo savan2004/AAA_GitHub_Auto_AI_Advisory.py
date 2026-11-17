@@ -136,5 +136,27 @@ class DeepRepairTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "WORKER_FAILED")
 
 
+
+    def test_exchange_holidays_special_session_and_year_expiry(self):
+        from datetime import date
+        cases = [
+            ((2026, 11, 24, 18, 0), date(2026, 11, 23)),
+            ((2026, 11, 25, 10, 0), date(2026, 11, 23)),
+            ((2026, 4, 6, 10, 0), date(2026, 4, 2)),
+            ((2026, 11, 8, 16, 0), date(2026, 11, 6)),
+            ((2026, 11, 8, 16, 30), date(2026, 11, 8)),
+            ((2026, 11, 9, 10, 0), date(2026, 11, 8)),
+            ((2026, 1, 15, 18, 0), date(2026, 1, 14)),
+        ]
+        for stamp, expected in cases:
+            with self.subTest(stamp=stamp):
+                self.assertEqual(doctor.expected_doctor_session(
+                    datetime(*stamp, tzinfo=doctor.IST)), expected)
+        with self.assertRaises(doctor.PortfolioDoctorError):
+            doctor.expected_doctor_session(datetime(2027, 1, 4, 18, tzinfo=doctor.IST))
+        self.assertEqual(doctor.previous_doctor_session(date(2026,11,11)),
+                         date(2026,11,9))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -46,7 +46,13 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
     """
     from universe import _BHAV_URL, _UA
     import requests
-    if not isinstance(day, date) or day.weekday() >= 5:
+    from portfolio_doctor_live import doctor_trading_session
+    if not isinstance(day, date):
+        return {}
+    try:
+        if not doctor_trading_session(day):
+            return {}
+    except Exception:
         return {}
     symbols = {str(sym).strip().upper() for sym in (wanted or [])}
     if not symbols or len(symbols) > 5:
@@ -157,10 +163,10 @@ def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_da
 
 def recover_from_public_bhavcopy(primary_frames, symbols, *, now):
     """Fetch 2 exchange files ONCE for 1–5 symbols; do not cache or persist."""
-    from market_breadth import expected_completed_session
-    expected = expected_completed_session(now)
-    previous = previous_weekday(expected)
-    # Do not attempt during an exchange holiday: missing expected file fails.
+    from portfolio_doctor_live import expected_doctor_session, previous_doctor_session
+    expected = expected_doctor_session(now)
+    previous = previous_doctor_session(expected)
+    # Expected/prior dates skip reviewed exchange holidays, include special sessions.
     current_rows = fetch_nse_bhavcopy_rows(expected, symbols)
     if not current_rows:
         return {}
