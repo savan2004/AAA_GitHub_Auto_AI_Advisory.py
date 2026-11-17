@@ -396,6 +396,9 @@ def build_pdf_bytes(holdings):
     line("LIMITS & DISCLAIMER", 9, True)
     line("Last close is not a tradeable live price. Prices can change after the last session.", 8)
     line("Indicators are calculated from historical closes, not audited fundamentals.", 8)
+    line("Cost and P/L use your entered current share count and average purchase cost.", 8)
+    line("Use broker-adjusted quantities/costs after splits or bonuses; these are not inferred.", 8)
+    line("Telegram processes your messages and PDF under its own storage policies.", 8)
     line("No BUY/SELL signal, guaranteed return or order is provided.", 8)
     line("Educational information only. Not SEBI-registered investment advice.", 8)
     pdf.showPage()
@@ -417,7 +420,8 @@ def run_isolated_memory(filename, payload, timeout=150):
     # The worker never needs Telegram credentials; keep them out of its env.
     env["MSK_RESEARCH_ONLY"] = "1"
     env.pop("TELEGRAM_TOKEN", None)
-    command = [sys.executable, os.path.abspath(__file__), "--worker", filename]
+    worker_name = "input.xlsx" if str(filename).lower().endswith(".xlsx") else "input.csv"
+    command = [sys.executable, os.path.abspath(__file__), "--worker", worker_name]
     try:
         child = subprocess.run(command, input=payload, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, timeout=timeout,
