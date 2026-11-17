@@ -205,7 +205,7 @@ def _ratio_values_from_html(html, scope):
     for name, val in blocks:
         key = unescape(re.sub(r"<[^>]+>", "", name)).strip().lower()
         raw = unescape(re.sub(r"<[^>]+>", "", val)).strip().replace(",", "")
-        match = re.search(r"(?<![0-9])[-+]?[0-9]+(?:\\.[0-9]+)?", raw)
+        match = re.search(r"(?<![0-9])[-+]?[0-9]+(?:\.[0-9]+)?", raw)
         if match is None:
             continue
         value = _finite(match.group(0))
