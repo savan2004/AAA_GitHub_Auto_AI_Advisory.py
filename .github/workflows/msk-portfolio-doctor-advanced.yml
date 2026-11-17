@@ -8,6 +8,7 @@ on:
       - 'portfolio_doctor_advanced_pdf.py'
       - 'portfolio_doctor_builder_private.py'
       - 'tests/test_portfolio_doctor_builder_private.py'
+      - 'scripts/msk_doctor_public_provider_probe.py'
       - 'tests/test_portfolio_doctor_advanced.py'
       - 'tests/test_portfolio_doctor_private_integration.py'
       - 'main.py'
@@ -36,3 +37,17 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_private_integration.py' -v
       - name: Run existing basic Doctor safeguards
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_safety.py' -v
+
+  public-provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install public issuer read dependencies
+        run: python -m pip install 'requests==2.32.3'
+      - name: Probe public issuer data without customer input
+        run: PYTHONPATH=. python scripts/msk_doctor_public_provider_probe.py
