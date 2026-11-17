@@ -36,6 +36,11 @@ class DoctorRecoveryTests(unittest.TestCase):
         self.now = Clock.now(doctor.IST)
         self.old = frame("2026-11-16")
         self.new = frame("2026-11-17")
+        self.bhavcopy_mock = patch(
+            "portfolio_doctor_bhavcopy.recover_from_public_bhavcopy",
+            return_value={})
+        self.bhavcopy_mock.start()
+        self.addCleanup(self.bhavcopy_mock.stop)
 
     def test_recover_only_completed_daily_from_alternate_provider(self):
         calls = []
@@ -85,6 +90,21 @@ class DoctorRecoveryTests(unittest.TestCase):
         self.assertAlmostEqual(result[0]["value"], result[0]["close"] * 7)
         self.assertAlmostEqual(result[0]["pnl"], result[0]["value"] - 7 * 120)
         self.assertEqual(result[0]["weight"], 100.0)
+
+    def test_verified_public_bhavcopy_repairs_primary_without_alt_provider(self):
+        fake = SimpleNamespace(bulk_history=lambda *_a, **_kw: {"SAMPLEA": self.old})
+        with patch.dict(sys.modules, {"market_data": fake}), \
+             patch("portfolio_doctor_bhavcopy.recover_from_public_bhavcopy",
+                   return_value={"SAMPLEA": self.new}) as official, \
+             patch.object(doctor, "recover_fresh_daily_for_doctor",
+                          side_effect=AssertionError("official fresh is enough")), \
+             patch.object(doctor, "datetime", Clock):
+            output = doctor.price_holdings(
+                [{"symbol": "SAMPLEA", "qty": 2, "buy": 100}])
+        official.assert_called_once()
+        self.assertEqual(output[0]["date"], "2026-11-17")
+        self.assertTrue(output[0]["price_source"].startswith("NSE EOD"))
+        self.assertEqual(output[0]["weight"], 100.0)
 
     def test_fresh_primary_does_not_call_alternates(self):
         fake = SimpleNamespace(bulk_history=lambda *_a, **_kw: {"SAMPLEA": self.new})
