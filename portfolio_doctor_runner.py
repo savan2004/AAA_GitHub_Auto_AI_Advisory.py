@@ -74,7 +74,7 @@ def run_isolated(filename, payload, workspace, timeout=DEFAULT_TIMEOUT):
         else:
             process.kill()
         process.wait()
-        raise PortfolioDoctorTimeout("Private report exceeded hard deadline") from exc
+        raise PortfolioDoctorTimeout("Private report exceeded hard deadline", code="TIMEOUT") from exc
     if status != 0 or not result.is_file():
         code = "WORKER_FAILED"
         if result.is_file():
