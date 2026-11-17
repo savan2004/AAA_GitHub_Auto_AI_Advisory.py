@@ -118,9 +118,9 @@ def _rsi(values):
 
 def verified_completed_daily_frame(frame, *, now=None):
     """Only the latest completed NSE weekday session; holidays fail closed."""
-    from market_breadth import completed_prices, expected_completed_session
     if frame is None or getattr(frame, "empty", True):
         raise PortfolioDoctorError("NO_PRICES")
+    from market_breadth import completed_prices, expected_completed_session
     clean = completed_prices(frame, now=now)
     if clean.empty or "Close" not in clean or not clean.index.is_monotonic_increasing:
         raise PortfolioDoctorError("NO_PRICES")
