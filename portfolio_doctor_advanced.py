@@ -5,7 +5,8 @@ parsers can return unavailable; never fill missing financial fields with guesses
 Actions are withheld without independent compliance approval.
 """
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, date, timezone
+import re
 from decimal import Decimal, ROUND_FLOOR, InvalidOperation
 import math
 
@@ -89,14 +90,15 @@ def sector_allocations(recs, resolve=None):
     return result
 
 
-def _dated_annual_rows(rows):
+def _dated_annual_rows(rows, *, as_of=None):
     from research_data import period_end
+    as_of = as_of or datetime.now(timezone.utc).date()
     result = []
     for item in rows or []:
         if not isinstance(item, dict):
             continue
         parsed = period_end(str(item.get("label") or ""))
-        if parsed is not None and parsed <= datetime.utcnow().date():
+        if parsed is not None and parsed <= as_of:
             result.append((parsed, item))
     result.sort(key=lambda pair: pair[0])
     dates = [day for day, _ in result]
@@ -117,11 +119,15 @@ def normalize_fundamentals(symbol, sector, extras, ratio_values=None, *, today=N
     """Dated annual/quarterly evidence; no inferred consolidation or TTM basis."""
     from research_data import freshness
     from industry import classify
-    from datetime import date
-    today = today or date.today()
+    today = today or datetime.now(timezone.utc).date()
     extras = extras or {}
     ratios = ratio_values or {}
-    annual = _dated_annual_rows(extras.get("years"))
+    evidence_scope = extras.get("_statement_scope") if extras.get("_statement_scope") in ("consolidated", "standalone") else "unverified"
+    if evidence_scope != "unverified" and ratios.get("_screener_scope") != evidence_scope:
+        ratios = {}  # Ratios from another scope must not be mixed with statements.
+    fetched_at = extras.get("_retrieved_utc") if extras.get("_source") == "Screener.in" else None
+    statement_source = "Screener.in (secondary)" if extras.get("_source") == "Screener.in" else "Unverified secondary financial data"
+    annual = _dated_annual_rows(extras.get("years"), as_of=today)
     annual = [(day, row) for day, row in annual if day <= today]
     quarter_status = freshness(extras.get("quarters") or [], today=today)
     kind = classify(sector_label=_normalize_sector(sector),
@@ -137,8 +143,9 @@ def normalize_fundamentals(symbol, sector, extras, ratio_values=None, *, today=N
             three_y = (old, days / 365.25)
     def metric(value, period, basis="FY", unit=""):
         val = _finite(value)
-        return {"value": val, "source": "Screener.in (secondary)",
-                "period": period, "basis": basis, "scope": "unverified", "unit": unit}
+        return {"value": val, "source": statement_source if val is not None else "Unavailable",
+                "period": period, "basis": basis, "scope": evidence_scope,
+                "retrieved_utc": fetched_at, "unit": unit}
     metrics = {
         "revenue": metric(p.get("revenue"), latest_year, unit="INR Cr"),
         "net_profit": metric(p.get("net_profit"), latest_year, unit="INR Cr"),
@@ -176,28 +183,91 @@ def normalize_fundamentals(symbol, sector, extras, ratio_values=None, *, today=N
             "freshness": quarter_status.get("status", "MISSING"),
             "annual_period": latest_year,
             "quarter_period": str(quarter_status.get("latest") or "unavailable"),
-            "scope": "unverified", "issuer_filing_verified": False,
+            "scope": evidence_scope, "source": statement_source,
+            "retrieved_utc": fetched_at, "issuer_filing_verified": False,
             "available": available, "required": len(applicable), "metrics": metrics,
-            "basis_warning": "Secondary figures; consolidated/standalone not proven. Do not use for decisive opinions."}
+            "basis_warning": "Issuer filings not authenticated; vendor ratios have undated periods. No decisive opinions."}
+
+
+def _ratio_values_from_html(html, scope):
+    """Reuse Screener ratio format but read it from the *same* statement page."""
+    from fundamentals import _parse_num
+    from html import unescape
+    fields = {}
+    # Bound extraction to the top-ratios section so another occurrence of ROE
+    # elsewhere in the document cannot be mislabelled as a current ratio.
+    section = re.search(r'<ul[^>]*id=["\']top-ratios["\'][^>]*>(.*?)</ul>',
+                        html, flags=re.I | re.S)
+    if section is None:
+        return {"_screener_scope": scope}
+    blocks = re.findall(
+        r'<li[^>]*>.*?<span[^>]*class=["\'][^"\']*name[^"\']*["\'][^>]*>(.*?)</span>'
+        r'.*?<span[^>]*>(.*?)</span>', section.group(1), re.I | re.S)
+    for name, val in blocks:
+        key = unescape(re.sub(r"<[^>]+>", "", name)).strip().lower()
+        value = _parse_num(unescape(re.sub(r"<[^>]+>", "", val)))
+        if value is None or not math.isfinite(value):
+            continue
+        if key in ("roe", "return on equity") and -1000 < value < 1000:
+            fields["roe"] = value
+        elif key in ("stock p/e", "pe", "p/e") and 0 < value < 500:
+            fields["pe"] = value
+        elif key in ("price to book", "p/b") and 0 < value < 100:
+            fields["pb"] = value
+    fields["_screener_scope"] = scope
+    return fields
+
+
+def _screener_same_page_evidence(symbol, *, get=None):
+    """One bounded public issuer-page fetch, no shared cache or customer details."""
+    import requests
+    from research_data import (
+        _HEADERS, parse_years, parse_quarters, detect_layout,
+    )
+    if not re.fullmatch(r"[A-Z0-9&-]{2,20}", str(symbol).upper()):
+        return {}, {}
+    get = get or requests.get
+    for scope, suffix in (("consolidated", "/consolidated/"),
+                          ("standalone", "/")):
+        url = "https://www.screener.in/company/" + symbol.upper() + suffix
+        try:
+            resp = get(url, headers=_HEADERS, timeout=9)
+            if not getattr(resp, "ok", False) or "data-table" not in resp.text:
+                continue
+            annual = parse_years(resp.text)
+            quarterly = parse_quarters(resp.text)
+            if not (annual or quarterly):
+                continue
+            evidence = {
+                "years": annual, "quarters": quarterly,
+                "layout": detect_layout(resp.text),
+                "_source": "Screener.in", "_statement_scope": scope,
+                "_retrieved_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            return evidence, _ratio_values_from_html(resp.text, scope)
+        except (requests.RequestException, ValueError, TypeError, KeyError):
+            continue
+    return {}, {}
 
 
 def collect_fundamentals_no_holdings_cache(symbol, sector, collector=None, ratio_collector=None):
-    """Public issuer data fetched only inside the disposable process.
+    """Disposable worker fetch; same-page fundamentals cannot mix reporting bases.
 
-    research_data's cache is process-local and dies with the Doctor worker.
-    Do not call get_fundamentals/get_info: their shared DataEngine may write
-    a persistent disk cache. Network errors mean missing, not synthetic values.
+    In a live request, the statement tables and key ratios are extracted from
+    the same public HTML response. No shared issuer/holdings cache is touched.
+    Injected collectors are for isolated unit tests only.
     """
-    from research_data import get_screener_extras
-    from fundamentals import _fetch_screener
-    try:
-        extras = (collector or get_screener_extras)(symbol) or {}
-    except Exception:
-        extras = {}
-    try:
-        ratios = (ratio_collector or _fetch_screener)(symbol) or {}
-    except Exception:
-        ratios = {}
+    if collector is None and ratio_collector is None:
+        extras, ratios = _screener_same_page_evidence(symbol)
+    else:
+        try:
+            extras = (collector(symbol) if collector else {}) or {}
+        except Exception:
+            extras = {}
+        try:
+            ratios = (ratio_collector(symbol) if ratio_collector else {}) or {}
+        except Exception:
+            ratios = {}
     return normalize_fundamentals(symbol, sector, extras, ratios)
 
 
