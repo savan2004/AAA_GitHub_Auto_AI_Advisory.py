@@ -51,6 +51,13 @@ def main():
             PUBLIC_DEMO_SYMBOL, now=now,
             fetchers=tuple((lambda name=name, fetch=fetch: observed(name, fetch))
                            for name, fetch in providers))
+    if df is None:
+        from portfolio_doctor_bhavcopy import recover_from_public_bhavcopy
+        official = recover_from_public_bhavcopy(
+            {PUBLIC_DEMO_SYMBOL: primary}, [PUBLIC_DEMO_SYMBOL], now=now)
+        df = official.get(PUBLIC_DEMO_SYMBOL)
+        if df is not None:
+            source = "verified-nse-bhavcopy"
     got = str(df.index[-1].date()) if df is not None and len(df) else "UNAVAILABLE"
     print("MSK_DOCTOR_PUBLIC_EOD_PROBE expected={} got={} path={} complete={}".format(
         expected, got, source, got == str(expected)))
