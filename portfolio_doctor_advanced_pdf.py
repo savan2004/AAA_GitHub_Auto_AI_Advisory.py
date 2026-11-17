@@ -142,7 +142,7 @@ def render_advanced_pdf(review):
             fund["annual_period"], fund["quarter_period"], fund["freshness"]), 8)
         line("Source: {} | Statement scope: {}".format(
             safe(fund.get("source") or "Unavailable", 55),
-            safe(fund.get("scope") or "unverified", 20)), 8)
+            safe(str(fund.get("scope") or "unverified").upper(), 20)), 8)
         line("Retrieved UTC: {} | Issuer filing authentication: NO".format(
             safe(fund.get("retrieved_utc") or "NOT VERIFIED", 32)), 8)
         line("Vendor ratios: source page only; ratio reporting period not supplied.", 8)
