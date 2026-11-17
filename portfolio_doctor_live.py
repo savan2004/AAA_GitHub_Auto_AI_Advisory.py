@@ -456,6 +456,28 @@ def run_isolated_memory(filename, payload, timeout=150):
 
 
 
+def enforce_worker_read_only():
+    """Deny Python filesystem writes, database opens and child processes.
+
+    Installed only in the short-lived worker before private input is read.
+    Network reads remain necessary for public providers. This is a guard on
+    audited Python APIs, not an operating-system sandbox.
+    """
+    write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+    denied = frozenset(("sqlite3.connect", "os.mkdir", "os.remove", "os.rename",
+                        "os.rmdir", "os.truncate", "os.link", "os.symlink",
+                        "subprocess.Popen", "os.system"))
+    def audit(event, args):
+        if event in denied:
+            raise PermissionError("DOCTOR_READ_ONLY")
+        if event == "open":
+            _, mode, flags = args
+            if ((isinstance(mode, str) and any(c in mode for c in "wax+")) or
+                    (isinstance(flags, int) and flags & write_flags)):
+                raise PermissionError("DOCTOR_READ_ONLY")
+    sys.addaudithook(audit)
+
+
 def disable_worker_provider_disk_caches():
     """Only in the disposable worker, before reading private request input.
 
@@ -480,6 +502,7 @@ def worker_main(filename):
     import logging
     logging.disable(logging.CRITICAL)
     try:
+        enforce_worker_read_only()
         disable_worker_provider_disk_caches()
         raw = sys.stdin.buffer.read(MAX_BYTES + 1)
         holdings = parse_holdings(filename, raw)

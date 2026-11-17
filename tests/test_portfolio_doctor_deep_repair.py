@@ -158,5 +158,38 @@ class DeepRepairTests(unittest.TestCase):
                          date(2026,11,9))
 
 
+
+    def test_actual_child_blocks_file_and_sqlite_persistence(self):
+        import os
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        code = """import os, sqlite3, sys
+import portfolio_doctor_live as doctor
+doctor.enforce_worker_read_only()
+for operation in (
+    lambda: open(sys.argv[1], "w"),
+    lambda: os.open(sys.argv[1], os.O_CREAT | os.O_WRONLY),
+    lambda: sqlite3.connect(sys.argv[1]),
+):
+    try:
+        operation()
+    except PermissionError as error:
+        assert str(error) == "DOCTOR_READ_ONLY"
+    else:
+        raise AssertionError("write unexpectedly allowed")
+assert not os.path.exists(sys.argv[1])
+print("READ_ONLY_PASS")
+"""
+        with tempfile.TemporaryDirectory() as folder:
+            target = str(Path(folder) / "synthetic.csv")
+            result = subprocess.run([sys.executable, "-B", "-c", code, target],
+                                    capture_output=True, text=True, timeout=15,
+                                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("READ_ONLY_PASS", result.stdout)
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()
