@@ -1507,6 +1507,7 @@ def portfolio_doctor_document(m, _typed_payload=None):
             safe_send(uid, "A Portfolio Doctor report is already running.")
             return
         if not _portfolio_doctor_slots.acquire(blocking=False):
+            _portfolio_doctor_waiting.pop(uid, None)
             safe_send(uid, "Portfolio Doctor is busy. Retry shortly; no holdings were saved.")
             return
         _portfolio_doctor_waiting.pop(uid, None)
