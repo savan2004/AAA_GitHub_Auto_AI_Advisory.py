@@ -232,7 +232,7 @@ def price_holdings(holdings, *, include_frames=False):
     if not total or not math.isfinite(total):
         raise PortfolioDoctorError("NO_PRICES")
     for h in out:
-        h["weight"] = 100.0 * h["value"] / total
+        h["weight"] = 100.0 if len(out) == 1 else 100.0 * h["value"] / total
     return (out, frames) if include_frames else out
 
 
