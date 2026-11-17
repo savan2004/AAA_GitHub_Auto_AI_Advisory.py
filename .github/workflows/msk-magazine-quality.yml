@@ -1,0 +1,23 @@
+name: MSK Magazine Editorial Quality Gate
+on:
+  pull_request:
+    paths:
+      - "msk_magazine_quality.py"
+      - "tests/test_msk_magazine_quality.py"
+      - ".github/workflows/msk-magazine-quality.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  editorial-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile and test magazine editorial rejection rules
+        run: |
+          python -m py_compile msk_magazine_quality.py tests/test_msk_magazine_quality.py
+          python -m unittest discover -s tests -p 'test_msk_magazine_quality.py' -v

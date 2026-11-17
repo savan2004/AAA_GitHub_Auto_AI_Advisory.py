@@ -1,0 +1,41 @@
+{
+  "status": "PARTIAL_PUBLIC_SNAPSHOT",
+  "release_approved": false,
+  "issue": "2026-11",
+  "coverage": {
+    "universe_verified": false,
+    "constituents_checked": 0
+  },
+  "observations": [
+    {
+      "indicator": "NIFTY_50_CLOSE_2026_11_06",
+      "value": "25030.35",
+      "unit": "index_points",
+      "observed_on": "2026-11-06",
+      "checked_at": "2026-11-09T03:00:18.356Z",
+      "source_url": "https://www.nseindia.com/",
+      "source_note": "NSE publisher homepage only; historical 06-Nov close not independently reproducible from this URL. Editorial verification pending.",
+      "source_verified": false
+    },
+    {
+      "indicator": "RBI_REPO_RATE_NOV_2026",
+      "value": "5.50",
+      "unit": "percent",
+      "observed_on": "2026-11-05",
+      "checked_at": "2026-11-09T03:00:18.356Z",
+      "source_url": "https://rbi.org.in/Home.aspx",
+      "source_note": "RBI official page current rates; observation date used as conservative page data date, not rate effective date; source page dynamic and historical effective date unverified",
+      "source_verified": false
+    },
+    {
+      "indicator": "NIFTY_50_CLOSE_2026_11_05",
+      "value": "24536.60",
+      "unit": "index_points",
+      "observed_on": "2026-11-05",
+      "checked_at": "2026-11-09T03:00:18.356Z",
+      "source_url": "https://rbi.org.in/Home.aspx",
+      "source_note": "RBI Capital Market section marks Nifty 50 as on November 05 2026; historical row not independently preserved",
+      "source_verified": false
+    }
+  ]
+}
