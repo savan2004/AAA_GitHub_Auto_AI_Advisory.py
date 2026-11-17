@@ -107,7 +107,7 @@ def render_advanced_pdf(review):
     # PAGE 1 / dashboard; basic customer figures are unchanged.
     start_page("01 / PORTFOLIO DASHBOARD",
                datetime.now(ist).strftime("Generated %d %b %Y %H:%M IST"))
-    line("Source: dated daily market history via Yahoo / bounded provider fallbacks.", 8)
+    line("Source: completed daily history; NSE EOD repair requires prior-day OHLC agreement.", 8)
     line("Provider provenance is not individually certified; no live trade quote.", 8)
     gap()
     subhead("TOTAL INVESTMENT")
@@ -126,6 +126,8 @@ def render_advanced_pdf(review):
         line("Invested {} | Value {} | P/L {} ({:+.2f}%) | Weight {:.1f}%".format(
             money(r["invested"]), money(r["value"]), money(r["pnl"]),
             r["pnl_pct"], r["weight"]), 8)
+        if r.get("price_source", "").startswith("NSE EOD"):
+            line("Close: NSE official bhavcopy; previous day cross-checked with history.", 8)
         separator()
     gap()
     line("This is a mark-to-last-close view. Cost basis is customer supplied.", 8, color=grey)
@@ -257,7 +259,7 @@ def render_advanced_pdf(review):
                "Missing and noncomparable evidence is visible, not invented.")
     subhead("MARKET DATA")
     line("Daily OHLCV: market_data.bulk_history, primary Yahoo/yfinance with", 9)
-    line("bounded provider fallbacks. Specific successful provider not retained.", 9)
+    line("bounded provider fallbacks. Official NSE EOD rescue is labelled per holding.", 9)
     line("Last available close is NOT guaranteed to be live or official NSE settlement.", 9)
     line("Historical series and customer buy averages need corporate-action verification.", 9)
     gap(11)

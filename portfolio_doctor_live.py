@@ -133,6 +133,38 @@ def verified_completed_daily_frame(frame, *, now=None):
     return clean
 
 
+def recover_fresh_daily_for_doctor(symbol, *, now=None, fetchers=None):
+    """Repair a stale primary quote using independent full OHLCV histories.
+
+    Only inside the disposable, log-suppressed Doctor worker. Each alternate
+    series must independently pass the completed-session and >=20-close gates.
+    Never splice prices, synthesize a candle, or use a quote as daily OHLCV.
+    Explicitly avoid Stooq because corporate-action adjustment may differ.
+    """
+    from market_data import _clean_frame
+    if fetchers is None:
+        # Use existing provider clients; not their persistent get_hist() cache.
+        from data_engine import _nse_hist, _yahoo_v8_hist
+        from market_data import to_yahoo
+        fetchers = (
+            lambda: _nse_hist(symbol),
+            lambda: _yahoo_v8_hist(to_yahoo(symbol), period="1y"),
+        )
+    for fetch in fetchers:
+        try:
+            frame = _clean_frame(fetch())
+            if frame is None:
+                continue
+            fresh = verified_completed_daily_frame(frame, now=now)
+            closes = fresh["Close"].dropna()
+            if len(closes) >= 20:
+                return fresh
+        except Exception:
+            # No provider exception, ticker, prices or holdings in MSK logs.
+            continue
+    return None
+
+
 def price_holdings(holdings, *, include_frames=False):
     """Use verified OHLC only, not an assumed live quote or fabricated tick."""
     from market_data import bulk_history
@@ -141,10 +173,58 @@ def price_holdings(holdings, *, include_frames=False):
                           max_fallbacks=5, download_timeout=12)
     now = datetime.now(IST)
     today = now.date()
+    # The shared bulk provider retries only MISSING tickers. It treats a valid
+    # but OLD Yahoo frame as success; the Doctor must retry those stale frames.
+    failures = {}
+    stale_symbols = []
+    for symbol in symbols:
+        try:
+            frames[symbol] = verified_completed_daily_frame(frames.get(symbol), now=now)
+        except PortfolioDoctorError as exc:
+            failures[symbol] = exc.code
+            stale_symbols.append(symbol)
+
+    price_sources = {sym: "Verified completed daily OHLCV (provider may vary)"
+                     for sym in symbols}
+    if stale_symbols:
+        # Source 2: NSE public EOD bhavcopy (known to publish even when Yahoo
+        # daily history lags). Append only after official prior-session OHLC
+        # agrees with the original full historical series.
+        try:
+            from portfolio_doctor_bhavcopy import recover_from_public_bhavcopy
+            official = recover_from_public_bhavcopy(frames, stale_symbols, now=now)
+            for sym, fresh in official.items():
+                frames[sym] = fresh
+                failures.pop(sym, None)
+                price_sources[sym] = (
+                    "NSE EOD bhavcopy + verified prior-session OHLCV history")
+        except Exception:
+            # Unavailable official files are not replaced with invented bars.
+            pass
+        stale_symbols = [sym for sym in stale_symbols if sym in failures]
+
+    if stale_symbols:
+        # All recovery is confined to a single disposable child process.
+        # Bounded parallelism prevents five sequential 15+12s provider calls
+        # from using up the entire 150-second report deadline.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(3, len(stale_symbols))) as pool:
+            futures = [(sym, pool.submit(recover_fresh_daily_for_doctor, sym, now=now))
+                       for sym in stale_symbols]
+            for sym, fut in futures:
+                recovered = fut.result()
+                if recovered is not None:
+                    frames[sym] = recovered
+                    failures.pop(sym, None)
+                    price_sources[sym] = "Verified alternate daily OHLCV"
+    if failures:
+        code = ("STALE_PRICES" if "STALE_PRICES" in failures.values()
+                else "NO_PRICES")
+        raise PortfolioDoctorError(code)
+
     out = []
     for holding in holdings:
-        frame = verified_completed_daily_frame(frames.get(holding["symbol"]), now=now)
-        frames[holding["symbol"]] = frame
+        frame = frames[holding["symbol"]]
         try:
             valid = frame["Close"].dropna()
             values = [float(v) for v in valid.tolist()]
@@ -159,6 +239,7 @@ def price_holdings(holdings, *, include_frames=False):
             invested = holding["qty"] * holding["buy"]
             value = holding["qty"] * close
             out.append({**holding, "close": close, "date": price_date.isoformat(),
+                        "price_source": price_sources[holding["symbol"]],
                         "invested": invested, "value": value, "pnl": value - invested,
                         "pnl_pct": 100.0 * (close / holding["buy"] - 1.0),
                         "ema20": _ema(values, 20), "ema50": _ema(values, 50),
@@ -172,7 +253,7 @@ def price_holdings(holdings, *, include_frames=False):
     if not total or not math.isfinite(total):
         raise PortfolioDoctorError("NO_PRICES")
     for h in out:
-        h["weight"] = 100.0 * h["value"] / total
+        h["weight"] = 100.0 if len(out) == 1 else 100.0 * h["value"] / total
     return (out, frames) if include_frames else out
 
 
@@ -219,6 +300,8 @@ def build_pdf_bytes(holdings):
             h["symbol"], h["qty"], h["buy"]), 10, True, 17)
         line("Last close Rs {:,.2f} ({}) | Value Rs {:,.2f}".format(
             h["close"], h["date"], h["value"]))
+        if h.get("price_source", "").startswith("NSE EOD"):
+            line("Source: NSE official daily file; historical OHLC cross-checked.", 8)
         line("P/L Rs {:+,.2f} ({:+.2f}%) | Portfolio weight {:.1f}%".format(
             h["pnl"], h["pnl_pct"], h["weight"]))
         trend = ("Above EMA20 and EMA50" if h["ema50"] and h["close"] > h["ema20"] > h["ema50"]
@@ -264,6 +347,10 @@ def run_isolated_memory(filename, payload, timeout=150):
         raise PortfolioDoctorError("BAD_INPUT")
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Existing config.py explicitly permits public read-only market research.
+    # The worker never needs Telegram credentials; keep them out of its env.
+    env["MSK_RESEARCH_ONLY"] = "1"
+    env.pop("TELEGRAM_TOKEN", None)
     command = [sys.executable, os.path.abspath(__file__), "--worker", filename]
     try:
         child = subprocess.run(command, input=payload, stdout=subprocess.PIPE,
@@ -299,6 +386,10 @@ def run_isolated_memory(filename, payload, timeout=150):
 
 
 def worker_main(filename):
+    # Private worker only: suppress inherited library logs that could reveal
+    # which stocks a customer currently owns. Parent logs safe error codes.
+    import logging
+    logging.disable(logging.CRITICAL)
     try:
         raw = sys.stdin.buffer.read(MAX_BYTES + 1)
         holdings = parse_holdings(filename, raw)
