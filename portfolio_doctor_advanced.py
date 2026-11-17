@@ -384,8 +384,8 @@ def assemble_review(recs, price_frames, *, fund_collector=None, ratio_collector=
                 t = compute_technicals(frame, None)
                 tech.update(trend=t.get("trend"), rsi14=t.get("rsi"),
                             ema20=t.get("ema20"), ema50=t.get("ema50"),
-                            support=(t.get("support") or [None])[0],
-                            resistance=(t.get("resistance") or [None])[0],
+                            support=(t.get("supports") or [{"price": None}])[0].get("price"),
+                            resistance=(t.get("resistances") or [{"price": None}])[0].get("price"),
                             volume_ratio=t.get("vol_ratio"),
                             relative_1m=aligned_relative_return(frame, benchmark))
             except (ValueError, IndexError, KeyError, TypeError, OverflowError):
