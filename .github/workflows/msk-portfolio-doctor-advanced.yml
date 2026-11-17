@@ -7,6 +7,8 @@ on:
       - 'portfolio_doctor_advanced.py'
       - 'portfolio_doctor_advanced_pdf.py'
       - 'tests/test_portfolio_doctor_advanced.py'
+      - 'tests/test_portfolio_doctor_private_integration.py'
+      - 'main.py'
       - '.github/workflows/msk-portfolio-doctor-advanced.yml'
   workflow_dispatch:
 permissions:
@@ -26,5 +28,7 @@ jobs:
         run: python -m py_compile portfolio_doctor_advanced.py portfolio_doctor_advanced_pdf.py portfolio_doctor_live.py main.py
       - name: Run deterministic financial, privacy and PDF tests
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_advanced.py' -v
+      - name: Run real isolated Telegram handler simulations
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_private_integration.py' -v
       - name: Run existing basic Doctor safeguards
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_safety.py' -v
