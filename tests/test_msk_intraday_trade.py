@@ -284,6 +284,45 @@ class Intraday15mRules(TestCase):
                 _fetch_yahoo_15m("^NSEI", TRADING)
         self.assertEqual(get.call_count, 1)
 
+    def test_old_yfinance_transport_recovers_raw_http_failure(self):
+        from msk_intraday_trade import _fetch_intraday_15m
+        source = candles()
+        with patch("msk_intraday_trade._fetch_yahoo_15m",
+                   side_effect=RuntimeError("intraday_yahoo_mirrors_unavailable")):
+            with patch("msk_intraday_trade._fetch_yfinance_15m",
+                       return_value=source) as fallback:
+                result = _fetch_intraday_15m("^NSEI", TRADING)
+        self.assertEqual(len(result), len(source))
+        fallback.assert_called_once_with("^NSEI", TRADING)
+
+    def test_malformed_raw_exchange_data_never_falls_back(self):
+        from msk_intraday_trade import _fetch_intraday_15m
+        with patch("msk_intraday_trade._fetch_yahoo_15m",
+                   side_effect=ValueError("intraday_exchange_time_unverified")):
+            with patch("msk_intraday_trade._fetch_yfinance_15m") as fallback:
+                with self.assertRaisesRegex(ValueError, "exchange_time"):
+                    _fetch_intraday_15m("^NSEI", TRADING)
+        fallback.assert_not_called()
+
+    def test_old_yfinance_transport_rejects_unverified_timezone(self):
+        from msk_intraday_trade import _fetch_yfinance_15m
+        source = candles()
+        source.index = source.index.tz_localize(None)
+        with patch("yfinance.Ticker") as ticker:
+            ticker.return_value.history.return_value = source
+            with self.assertRaisesRegex(ValueError, "timezone_unverified"):
+                _fetch_yfinance_15m("^NSEI", TRADING)
+
+    def test_old_yfinance_transport_rejects_stale_history(self):
+        from msk_intraday_trade import _fetch_yfinance_15m
+        source = candles(current=False)
+        with patch("yfinance.Ticker") as ticker:
+            ticker.return_value.history.return_value = source
+            recovered = _fetch_yfinance_15m("^NSEI", TRADING)
+        result = evaluate_instrument("NIFTY", recovered,
+                                     candles(symbol="etf"), TRADING)
+        self.assertEqual(result["status"], "NO TRADE")
+
     def test_quality_score_never_claims_measured_accuracy(self):
         test_card = {
             "name": "NIFTY 50", "status": "WATCH", "direction": "BUY",
