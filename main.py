@@ -861,7 +861,7 @@ def main_keyboard():
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "⚡ Intraday Trade")
     kb.add("📈 Chart", "📄 Report")
-    kb.add("🏭 Sector Report")\n    kb.add("🏠 Main Menu")
+    kb.add("🏭 Sector Report")\n    kb.add("🆕 New Version")
     return kb
 
 
@@ -979,14 +979,10 @@ def cmd_start(m):
 
 
 @bot.message_handler(commands=["menu"])
-@bot.message_handler(func=lambda m: (m.text or "").strip() == "🏠 Main Menu")
+@bot.message_handler(func=lambda m: (m.text or "").strip() == "🆕 New Version")
 def cmd_menu(m):
-    """Restore the persistent keyboard without requiring /start."""
-    state.clear(m.chat.id)
-    safe_send(m.chat.id,
-              "🏠 <b>MSK Main Menu</b>\nChoose a button below. "
-              "Intraday Trade uses completed 15-minute candles.",
-              reply_markup=main_keyboard())
+    """New Version button performs the same action as /start."""
+    return cmd_start(m)
 
 
 @bot.message_handler(commands=["help"])
