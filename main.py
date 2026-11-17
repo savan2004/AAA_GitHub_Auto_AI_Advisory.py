@@ -1449,7 +1449,7 @@ def portfolio_doctor_start(m):
             safe_send(m.chat.id, "A Portfolio Doctor report is already running.")
             return
         _portfolio_doctor_waiting.add(m.chat.id)
-    safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\\n"
+    safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\n"
               "Upload CSV/XLSX or paste 1–5 lines as <code>DLF 50 480</code> "
               "(maximum 5 stocks / 5 MB). Only a private educational PDF is generated. "
               "No holdings are saved or changed. Reports need verified recent prices.")
