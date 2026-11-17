@@ -105,7 +105,8 @@ def _worker(upload, result, workspace, filename):
     if (not holdings or len(holdings) > MAX_STOCKS or
             any("duplicate symbol" not in issue for issue in issues)):
         raise PortfolioDoctorError("Portfolio upload is invalid", code="INPUT_INVALID")
-    output = run_job(holdings, str(root), max_analyze=MAX_STOCKS, use_ai=False)
+    output = run_job(holdings, str(root), max_analyze=MAX_STOCKS,
+                     use_ai=False, generate_stock_pdfs=False)
     recs = output.get("recs", [])
     # A private portfolio summary is useful with fresh, verified prices even
     # when optional per-stock research PDFs cannot be generated. The summary's
