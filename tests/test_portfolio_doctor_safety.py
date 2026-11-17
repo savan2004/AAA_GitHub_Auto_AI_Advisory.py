@@ -47,6 +47,7 @@ class MarketDataTests(unittest.TestCase):
     def test_missing_prices_are_not_fabricated(self):
         fake = SimpleNamespace(bulk_history=lambda *_args, **_kwargs: {})
         with patch.dict(sys.modules, {"market_data": fake}), \
+             patch("portfolio_doctor_bhavcopy.recover_from_public_bhavcopy", return_value={}), \
              patch.object(doctor, "recover_fresh_daily_for_doctor", return_value=None):
             with self.assertRaises(doctor.PortfolioDoctorError) as err:
                 doctor.price_holdings([{"symbol": "SAMPLEA", "qty": 7, "buy": 120}])
@@ -61,6 +62,7 @@ class MarketDataTests(unittest.TestCase):
         fake = SimpleNamespace(bulk_history=lambda *_args, **_kwargs: {
             "SAMPLEA": pd.DataFrame({"Close": close})})
         with patch.dict(sys.modules, {"market_data": fake}), \
+             patch("portfolio_doctor_bhavcopy.recover_from_public_bhavcopy", return_value={}), \
              patch.object(doctor, "recover_fresh_daily_for_doctor", return_value=None):
             with self.assertRaises(doctor.PortfolioDoctorError) as err:
                 doctor.price_holdings([{"symbol": "SAMPLEA", "qty": 50, "buy": 480}])
