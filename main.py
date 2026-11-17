@@ -984,7 +984,7 @@ def cmd_menu(m):
     """Restore the persistent keyboard without requiring /start."""
     state.clear(m.chat.id)
     safe_send(m.chat.id,
-              "🏠 <b>MSK Main Menu</b>\\nChoose a button below. "
+              "🏠 <b>MSK Main Menu</b>\nChoose a button below. "
               "Intraday Trade uses completed 15-minute candles.",
               reply_markup=main_keyboard())
 
