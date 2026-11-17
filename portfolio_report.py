@@ -183,7 +183,10 @@ def parse_text(text: str, resolver=None) -> Tuple[List[dict], List[str]]:
         if re.search(r"[,\t;|]", line):
             cells = [c.strip() for c in re.split(r"[,\t;|]", line)]
         else:
-            cells = [c for c in re.split(r"\s*[@xX×]\s*|\s+", line) if c]
+            # Do not split the letter X inside tickers such as AXISBANK.
+            # Standalone "x" or "@" is a separator; 50x890 also works.
+            cells = [c for c in re.split(r"\s+|(?<=\d)[@xX×](?=\d)", line)
+                     if c and c not in ("@", "x", "X", "×")]
         rows.append(cells)
     return parse_rows(rows, resolver)
 
