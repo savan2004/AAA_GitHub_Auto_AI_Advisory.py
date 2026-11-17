@@ -3,6 +3,7 @@
 All fixtures are synthetic. No customer symbols, accounts or live requests.
 """
 import logging
+import os
 import sys
 import unittest
 from datetime import datetime
@@ -117,6 +118,18 @@ class DoctorRecoveryTests(unittest.TestCase):
             with self.assertRaises(doctor.PortfolioDoctorError) as e:
                 doctor.price_holdings([{"symbol": "SAMPLEA", "qty": 2, "buy": 100}])
         self.assertEqual(e.exception.code, "NO_PRICES")
+
+    def test_child_drops_telegram_token_and_uses_read_only_market_mode(self):
+        with patch.dict(os.environ, {"TELEGRAM_TOKEN": "never-send-to-worker"}), \
+             patch.object(doctor.subprocess, "run", return_value=SimpleNamespace(
+                 returncode=1, stderr=b"MSK_DOCTOR_CODE=NO_PRICES\n",
+                 stdout=b"")) as subprocess_run:
+            with self.assertRaises(doctor.PortfolioDoctorError):
+                doctor.run_isolated_memory("typed_holdings.csv", b"SAMPLEA 1 100")
+        child_env = subprocess_run.call_args.kwargs["env"]
+        self.assertEqual(child_env["MSK_RESEARCH_ONLY"], "1")
+        self.assertNotIn("TELEGRAM_TOKEN", child_env)
+        self.assertEqual(child_env["PYTHONDONTWRITEBYTECODE"], "1")
 
     def test_privacy_safe_worker_does_not_enable_logging(self):
         from pathlib import Path
