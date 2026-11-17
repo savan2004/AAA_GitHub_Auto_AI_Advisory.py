@@ -116,18 +116,35 @@ def _rsi(values):
     return 100.0 - 100.0 / (1.0 + gains / losses)
 
 
+def verified_completed_daily_frame(frame, *, now=None):
+    """Only the latest completed NSE weekday session; holidays fail closed."""
+    from market_breadth import completed_prices, expected_completed_session
+    if frame is None or getattr(frame, "empty", True):
+        raise PortfolioDoctorError("NO_PRICES")
+    clean = completed_prices(frame, now=now)
+    if clean.empty or "Close" not in clean or not clean.index.is_monotonic_increasing:
+        raise PortfolioDoctorError("NO_PRICES")
+    try:
+        last_date = clean.index[-1].date()
+    except (TypeError, IndexError, AttributeError):
+        raise PortfolioDoctorError("NO_PRICES")
+    if last_date != expected_completed_session(now):
+        raise PortfolioDoctorError("STALE_PRICES")
+    return clean
+
+
 def price_holdings(holdings, *, include_frames=False):
     """Use verified OHLC only, not an assumed live quote or fabricated tick."""
     from market_data import bulk_history
     symbols = [h["symbol"] for h in holdings]
     frames = bulk_history(symbols, "1y", chunk_size=5, retries=0,
                           max_fallbacks=5, download_timeout=12)
-    today = datetime.now(IST).date()
+    now = datetime.now(IST)
+    today = now.date()
     out = []
     for holding in holdings:
-        frame = frames.get(holding["symbol"])
-        if frame is None or frame.empty or "Close" not in frame:
-            raise PortfolioDoctorError("NO_PRICES")
+        frame = verified_completed_daily_frame(frames.get(holding["symbol"]), now=now)
+        frames[holding["symbol"]] = frame
         try:
             valid = frame["Close"].dropna()
             values = [float(v) for v in valid.tolist()]
@@ -290,8 +307,16 @@ def worker_main(filename):
             try:
                 from portfolio_doctor_advanced import assemble_review
                 from portfolio_doctor_advanced_pdf import render_advanced_pdf
+                benchmark = None
+                try:
+                    from market_data import index_history
+                    benchmark = verified_completed_daily_frame(
+                        index_history("^NSEI", "1y", retries=0, timeout=12))
+                except Exception:
+                    # A benchmark gap does not invalidate completed holding closes.
+                    benchmark = None
                 review = assemble_review(
-                    recs, frames, advanced_fundamentals=(
+                    recs, frames, benchmark=benchmark, advanced_fundamentals=(
                         os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_FUNDAMENTALS", "0") == "1"))
                 result = render_advanced_pdf(review)
             except Exception:
