@@ -1450,7 +1450,7 @@ def portfolio_doctor_start(m):
             return
         _portfolio_doctor_waiting.add(m.chat.id)
     safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\\n"
-              "Upload a CSV or XLSX file with <b>Symbol, Qty, Buy Price</b> "
+              "Upload CSV/XLSX or paste 1–5 lines as <code>DLF 50 480</code> "
               "(maximum 5 stocks / 5 MB). Only a private educational PDF is generated. "
               "No holdings are saved or changed. Reports need verified recent prices.")
 
@@ -1465,8 +1465,29 @@ def portfolio_doctor_test(m):
     safe_send(m.chat.id, "Private test: upload a CSV or XLSX with Symbol, Qty, Buy Price (maximum 5 MB; 5 stocks).")
 
 
+def portfolio_doctor_text(m):
+    """Parse up to five typed holdings via the same private PDF and ledger path."""
+    from portfolio_report import parse_text
+
+    raw = m.text or ""
+    lines = [line for line in raw.splitlines() if line.strip()]
+    if len(raw.encode("utf-8")) > 2048 or not 1 <= len(lines) <= 5:
+        safe_send(m.chat.id, "Enter 1–5 lines: SYMBOL QTY BUY_PRICE, e.g. DLF 50 480; or upload CSV/XLSX.")
+        return
+    holdings, issues = parse_text(raw)
+    if (not holdings or len(holdings) > 5 or
+            any("duplicate symbol" not in issue for issue in issues) or
+            any(not math.isfinite(h["qty"]) or not math.isfinite(h["buy"]) or
+                h["qty"] > 1e9 or h["buy"] > 1e9 for h in holdings)):
+        safe_send(m.chat.id, "Invalid holdings. Use SYMBOL QTY BUY_PRICE on each line, e.g. SBIN 100 890.")
+        return
+    payload = ("Symbol,Qty,Buy Price\n" + "".join(
+        f'{h["symbol"]},{h["qty"]},{h["buy"]}\n' for h in holdings)).encode("utf-8")
+    portfolio_doctor_document(m, _typed_payload=payload)
+
+
 @bot.message_handler(content_types=["document"])
-def portfolio_doctor_document(m):
+def portfolio_doctor_document(m, _typed_payload=None):
     if not _doctor_allowed(m):
         return
     uid = m.chat.id
@@ -1487,17 +1508,23 @@ def portfolio_doctor_document(m):
         ledger = None
         report_id = None
         try:
-            doc = m.document
-            name = (doc.file_name or "").lower()
-            if not name.endswith((".csv", ".xlsx")) or (doc.file_size or 0) > MAX_BYTES:
-                safe_send(uid, "Only CSV/XLSX files up to 5 MB are supported.")
-                return
-            with tempfile.TemporaryDirectory(prefix="msk_doctor_") as folder:
-                file_info = bot.get_file(doc.file_id)
-                if file_info.file_size and file_info.file_size > MAX_BYTES:
-                    safe_send(uid, "File exceeds the 5 MB limit.")
+            if _typed_payload is None:
+                doc = m.document
+                name = (doc.file_name or "").lower()
+                if not name.endswith((".csv", ".xlsx")) or (doc.file_size or 0) > MAX_BYTES:
+                    safe_send(uid, "Only CSV/XLSX files up to 5 MB are supported.")
                     return
-                payload = bot.download_file(file_info.file_path)
+            else:
+                name = "typed_holdings.csv"
+            with tempfile.TemporaryDirectory(prefix="msk_doctor_") as folder:
+                if _typed_payload is None:
+                    file_info = bot.get_file(doc.file_id)
+                    if file_info.file_size and file_info.file_size > MAX_BYTES:
+                        safe_send(uid, "File exceeds the 5 MB limit.")
+                        return
+                    payload = bot.download_file(file_info.file_path)
+                else:
+                    payload = _typed_payload
                 if not payload or len(payload) > MAX_BYTES:
                     safe_send(uid, "File is empty or exceeds the 5 MB limit.")
                     return
@@ -1958,6 +1985,13 @@ def handle_text(m):
 
     if not API_RATE_LIMITER.is_allowed(uid):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
+        return
+
+    # A pending Doctor request owns the next text input; never send holdings to stock search.
+    with _portfolio_doctor_lock:
+        doctor_waiting = uid in _portfolio_doctor_waiting
+    if doctor_waiting and _doctor_allowed(m):
+        portfolio_doctor_text(m)
         return
 
     if state.get(uid) == "analysis":
