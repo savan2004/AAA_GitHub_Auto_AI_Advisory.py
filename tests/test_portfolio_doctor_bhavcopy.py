@@ -33,7 +33,7 @@ def csv_bytes(day=TUESDAY, *, include=True, bad_day=False, mismatch=False):
                          "160" if mismatch else ("100" if day == MONDAY else "103"),
                          "99" if day == MONDAY else "100",
                          "10000", "100", "50"])
-    for i in range(550):
+    for i in range(1250):
         writer.writerow([f"DUMMY{i:05d}", "EQ", daystr,
                          "101", "103", "99", "100", "100", "5000", "100", "50"])
     return stream.getvalue().encode("utf-8")
