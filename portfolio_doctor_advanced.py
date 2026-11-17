@@ -191,7 +191,6 @@ def normalize_fundamentals(symbol, sector, extras, ratio_values=None, *, today=N
 
 def _ratio_values_from_html(html, scope):
     """Reuse Screener ratio format but read it from the *same* statement page."""
-    from fundamentals import _parse_num
     from html import unescape
     fields = {}
     # Bound extraction to the top-ratios section so another occurrence of ROE
@@ -205,8 +204,12 @@ def _ratio_values_from_html(html, scope):
         r'.*?<span[^>]*>(.*?)</span>', section.group(1), re.I | re.S)
     for name, val in blocks:
         key = unescape(re.sub(r"<[^>]+>", "", name)).strip().lower()
-        value = _parse_num(unescape(re.sub(r"<[^>]+>", "", val)))
-        if value is None or not math.isfinite(value):
+        raw = unescape(re.sub(r"<[^>]+>", "", val)).strip().replace(",", "")
+        match = re.search(r"(?<![0-9])[-+]?[0-9]+(?:\\.[0-9]+)?", raw)
+        if match is None:
+            continue
+        value = _finite(match.group(0))
+        if value is None:
             continue
         if key in ("roe", "return on equity") and -1000 < value < 1000:
             fields["roe"] = value
