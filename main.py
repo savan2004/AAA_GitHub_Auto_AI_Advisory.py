@@ -1575,6 +1575,78 @@ def portfolio_doctor_document(m, _typed_payload=None):
         safe_send(uid, "Unable to start Portfolio Doctor. No holdings were saved.")
 
 
+# Portfolio Doctor's optional new-capital builder is independent of saved holdings.
+# It uses a single private message and a disposable in-memory worker.
+@bot.message_handler(commands=["doctor_builder"])
+def portfolio_doctor_builder_command(m):
+    if not _doctor_allowed(m):
+        safe_send(m.chat.id, "Private Portfolio Doctor access is not enabled.")
+        return
+    if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "0") != "1":
+        safe_send(m.chat.id, "Optional Portfolio Builder is under accuracy review. Basic Portfolio Doctor remains available.")
+        return
+
+    uid = m.chat.id
+    payload = (m.text or "").encode("utf-8", "replace")
+    from portfolio_doctor_builder_private import BuilderError, parse_builder_request, run_isolated_builder
+    try:
+        parse_builder_request(payload)
+    except BuilderError:
+        safe_send(uid, "Send one private message in this format:\n"
+                  "<code>/doctor_builder\n"
+                  "CAPITAL=100000 HORIZON=36 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45\n"
+                  "INFY 25\nHDFCBANK 30\nTCS 15</code>\n"
+                  "The remaining amount stays as cash. Only 1–5 requested symbols; "
+                  "no trades or previous holdings are used.")
+        return
+    with _portfolio_doctor_lock:
+        if uid in _portfolio_doctor_running:
+            safe_send(uid, "Your Portfolio Doctor request is already being processed.")
+            return
+        if not _portfolio_doctor_slots.acquire(blocking=False):
+            safe_send(uid, "Portfolio Builder is busy. Please retry the one-message request.")
+            return
+        _portfolio_doctor_running.add(uid)
+
+    def _run():
+        import io
+        try:
+            pdf_bytes = run_isolated_builder(payload, timeout=120)
+            bio = io.BytesIO(pdf_bytes)
+            bio.name = "MSK_Optional_Portfolio_Builder.pdf"
+            receipt = bot.send_document(
+                uid, bio, caption="Hypothetical new-capital allocation only. No investment order.")
+            if (not isinstance(getattr(receipt, "message_id", None), int)
+                    or not getattr(getattr(receipt, "document", None), "file_id", None)):
+                raise BuilderError("WORKER_FAILED")
+            logger.info("MSK_PORTFOLIO_BUILDER_DELIVERY state=SENT receipt_verified=true")
+        except BuilderError as exc:
+            logger.warning("MSK_PORTFOLIO_BUILDER_HEALTH_ALERT code=%s", exc.code)
+            if exc.code in ("NO_PRICES", "STALE_PRICES"):
+                safe_send(uid, "A current completed-market close is missing or stale. No model generated.")
+            elif exc.code == "UNKNOWN_SECTOR":
+                safe_send(uid, "One stock's sector could not be verified. No model generated.")
+            elif exc.code in ("BAD_INPUT", "CONSTRAINTS"):
+                safe_send(uid, "Inputs or stock/sector/cash limits conflict. Review your one-message request.")
+            else:
+                safe_send(uid, "Portfolio Builder unavailable. No client portfolio was stored.")
+        except Exception as exc:
+            logger.error("MSK_PORTFOLIO_BUILDER_HEALTH_ALERT type=%s", type(exc).__name__)
+            safe_send(uid, "Unable to generate a verified builder PDF. No holdings saved.")
+        finally:
+            with _portfolio_doctor_lock:
+                _portfolio_doctor_running.discard(uid)
+            _portfolio_doctor_slots.release()
+
+    try:
+        executor.submit(_run)
+    except Exception:
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_running.discard(uid)
+        _portfolio_doctor_slots.release()
+        safe_send(uid, "Portfolio Builder could not start. No data saved.")
+
+
 # ── Button Handlers ──────────────────────────────────────────────────────────
 @bot.message_handler(func=lambda m: m.text == "🔙 Menu")
 def back_menu(m):
