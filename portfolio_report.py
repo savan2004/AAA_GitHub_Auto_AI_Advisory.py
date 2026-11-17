@@ -577,7 +577,8 @@ def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str]) -
 # JOB
 # ══════════════════════════════════════════════════════════════════════════
 def run_job(holdings: List[dict], out_dir: str, client: str = "", progress: Optional[Callable[[str], None]] = None,
-            max_analyze: Optional[int] = None, use_ai: bool = True) -> dict:
+            max_analyze: Optional[int] = None, use_ai: bool = True,
+            generate_stock_pdfs: bool = True) -> dict:
     """→ {'summary': path, 'stocks': [(sym, path)], 'notes': [...], 'recs': [...]}"""
     say = progress or (lambda m: None)
     os.makedirs(out_dir, exist_ok=True)
@@ -604,9 +605,12 @@ def run_job(holdings: List[dict], out_dir: str, client: str = "", progress: Opti
             R = rg.assemble(inputs, use_ai=use_ai,
                             holding={"qty": r["qty"], "buy": r["buy"], "weight_pct": r["weight_pct"], "max_weight": MAX_WEIGHT})
             r["R"], r["name"], r["sector"] = R, R["name"], (R["sector"] or "Other / unclassified")
-            p = os.path.join(out_dir, f"{r['symbol']}_Research_Report.pdf")
-            rg.build_pdf(R, p)
-            stocks.append((r["symbol"], p))
+            # Portfolio Doctor only sends a summary PDF. Avoid building
+            # unused 8-page per-stock PDFs in its bounded private worker.
+            if generate_stock_pdfs:
+                p = os.path.join(out_dir, f"{r['symbol']}_Research_Report.pdf")
+                rg.build_pdf(R, p)
+                stocks.append((r["symbol"], p))
         except Exception as e:
             r["error"] = str(e)[:120]
             logger.warning(f"[portfolio] analysis failed for {r['symbol']}: {type(e).__name__}")
