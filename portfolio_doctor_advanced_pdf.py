@@ -140,7 +140,12 @@ def render_advanced_pdf(review):
             "{}/{}".format(fund["available"], fund["required"])))
         line("FY: {} | Latest quarter: {} ({})".format(
             fund["annual_period"], fund["quarter_period"], fund["freshness"]), 8)
-        line("Source: Screener.in secondary data | Consolidated/standalone: UNVERIFIED", 8)
+        line("Source: {} | Statement scope: {}".format(
+            safe(fund.get("source") or "Unavailable", 55),
+            safe(str(fund.get("scope") or "unverified").upper(), 20)), 8)
+        line("Retrieved UTC: {} | Issuer filing authentication: NO".format(
+            safe(fund.get("retrieved_utc") or "NOT VERIFIED", 32)), 8)
+        line("Vendor ratios: source page only; ratio reporting period not supplied.", 8)
         m = fund["metrics"]
         a = [
             ("Sales FY", "revenue", "INR Cr"), ("Profit FY", "net_profit", "INR Cr"),
@@ -187,6 +192,11 @@ def render_advanced_pdf(review):
                 finite(rel["relative_pp"]), rel["end"]), 8)
         else:
             line("Nifty-relative performance: NOT VERIFIED on matching dates.", 8, color=grey)
+        cost_basis = tech.get("corporate_action_review") or {}
+        line("Split/bonus/cost-basis status: {} (not broker-verified).".format(
+            cost_basis.get("status") or "NOT VERIFIED"), 8, color=grey)
+        for warning in (cost_basis.get("warnings") or [])[1:]:
+            line(warning, 7.5, color=red)
         if _safe_float(tech.get("rsi14")) is not None and tech["rsi14"] > 70:
             line("High RSI is a momentum-risk observation; NOT an EXIT instruction.", 8, color=red)
         gap(7)
@@ -254,7 +264,8 @@ def render_advanced_pdf(review):
     subhead("FUNDAMENTALS")
     line("Financial tables/ratios: Screener.in secondary data where available.", 9)
     line("Annual FY and reported-quarter dates are shown; TTM is not silently FY.", 9)
-    line("Consolidated vs standalone and issuer-filing proof: NOT VERIFIED.", 9)
+    line("Statement-page scope displayed when a verified source URL was fetched.", 9)
+    line("Issuer filing authentication and corporate actions: NOT VERIFIED.", 9)
     line("No fixed interest cover/free cash flow/governance flags without evidence.", 9)
     line("Sector-specific interpretation applies; bank ROCE/debt gates are withheld.", 9)
     gap(11)

@@ -41,7 +41,7 @@ def _fund_fixture(lender=False, complete=False):
         {"label": "Mar 2026", "revenue": 144, "net_profit": 18, "opm": 13,
          "roce": 18, "borrowings": 24, "networth": 140, "ocf": 20},
     ]
-    return {"years": years, "quarters": [{"label": "Sep 2026",
+    return {"_source": "Screener.in", "years": years, "quarters": [{"label": "Sep 2026",
                                         "revenue": 36, "net_profit": 5}],
             "layout": "lender" if lender else "corporate"}
 
@@ -97,6 +97,59 @@ class FundamentalTests(unittest.TestCase):
         self.assertEqual(f["metrics"]["revenue"]["source"], "Screener.in (secondary)")
         self.assertEqual(f["metrics"]["revenue"]["basis"], "FY")
 
+    def test_statement_scope_matches_ratios_and_missing_vendor_basis(self):
+        extras = _fund_fixture()
+        extras["_statement_scope"] = "consolidated"
+        extras["_retrieved_utc"] = "2026-11-17T11:00:00Z"
+        matched = a.normalize_fundamentals(
+            "SAMPLEA", "Industrials", extras,
+            {"_screener_scope": "consolidated", "roe": 17, "pe": 20})
+        self.assertEqual(matched["scope"], "consolidated")
+        self.assertEqual(matched["metrics"]["roe"]["value"], 17)
+        self.assertEqual(matched["metrics"]["roe"]["period"], "not supplied")
+        self.assertEqual(matched["retrieved_utc"], "2026-11-17T11:00:00Z")
+        mismatched = a.normalize_fundamentals(
+            "SAMPLEA", "Industrials", extras,
+            {"_screener_scope": "standalone", "roe": 75, "pe": 200})
+        self.assertIsNone(mismatched["metrics"]["roe"]["value"])
+        self.assertIsNone(mismatched["metrics"]["pe"]["value"])
+
+    def test_fetch_statement_and_ratio_from_one_observed_page(self):
+        from types import SimpleNamespace
+        urls = []
+        html = ('<div class="data-table"></div>'
+                '<ul id="top-ratios">'
+                '<li><span class="name">ROE</span><span>17.5 %</span></li>'
+                '<li><span class="name">Stock P/E</span><span>24.0</span></li>'
+                '</ul>')
+        def fake_get(url, **kwargs):
+            urls.append(url)
+            self.assertEqual(kwargs["timeout"], 9)
+            return SimpleNamespace(ok=True, text=html)
+        with patch("research_data.parse_years", return_value=_fund_fixture()["years"]), \
+             patch("research_data.parse_quarters", return_value=_fund_fixture()["quarters"]), \
+             patch("research_data.detect_layout", return_value="corporate"):
+            extras, ratios = a._screener_same_page_evidence("SAMPLEA", get=fake_get)
+        self.assertEqual(len(urls), 1)
+        self.assertTrue(urls[0].endswith("/SAMPLEA/consolidated/"))
+        self.assertEqual(extras["_statement_scope"], "consolidated")
+        self.assertEqual(ratios["_screener_scope"], "consolidated")
+        self.assertEqual(ratios["roe"], 17.5)
+        self.assertEqual(ratios["pe"], 24)
+
+    def test_not_found_page_never_claims_a_reporting_scope(self):
+        from types import SimpleNamespace
+        with patch("research_data.parse_years", return_value=[]), \
+             patch("research_data.parse_quarters", return_value=[]):
+            extras, ratios = a._screener_same_page_evidence(
+                "SAMPLEA", get=lambda *_args, **_kw:
+                SimpleNamespace(ok=True, text="<div class='data-table'></div>"))
+        self.assertEqual(extras, {})
+        self.assertEqual(ratios, {})
+        unavailable = a.normalize_fundamentals("SAMPLEA", "Industrials", extras, ratios)
+        self.assertEqual(unavailable["scope"], "unverified")
+        self.assertEqual(unavailable["status"], "MISSING")
+
     def test_bank_does_not_apply_corporate_debt_roce_or_cash_flow(self):
         f = a.normalize_fundamentals("SAMPLEB", "Banking", _fund_fixture(lender=True), {
             "roe": 16, "pb": 1.8, "pe": 11})
@@ -136,6 +189,19 @@ class TechnicalAndCorporateActionTests(unittest.TestCase):
         older_index = pd.DataFrame({"Close": [200 + i for i in range(31)]},
                                    index=idx[:-1])
         self.assertIsNone(a.aligned_relative_return(frame, older_index, sessions=21))
+
+    def test_unusual_price_jumps_flag_only_broker_review(self):
+        idx = pd.bdate_range("2026-09-01", periods=4)
+        frame = pd.DataFrame({"Close": [100.0, 101.0, 48.0, 49.0]}, index=idx)
+        flagged = a.corporate_action_cost_basis_check(frame)
+        self.assertEqual(flagged["status"], "NOT VERIFIED")
+        self.assertFalse(flagged["cost_basis_verified"])
+        self.assertFalse(flagged["auto_restate_pnl"])
+        self.assertTrue(any("40%" in x for x in flagged["warnings"]))
+        normal = a.corporate_action_cost_basis_check(
+            pd.DataFrame({"Close": [100, 101, 100, 102]}, index=idx))
+        self.assertEqual(len(normal["warnings"]), 1)
+        self.assertFalse(normal["cost_basis_verified"])
 
     def test_corporate_actions_block_action_opinions(self):
         complete = {"status": "COMPLETE", "issuer_filing_verified": True,
@@ -214,6 +280,17 @@ class ReplacementAndBuilderTests(unittest.TestCase):
             self.make_builder(candidates=[
                 {"symbol": "SAMPLEA", "price": 100, "sector": "IT",
                  "target_weight_pct": 50, "fresh_price_verified": True}] * 2)
+
+    def test_builder_unknown_sectors_and_large_universes_rejected(self):
+        with self.assertRaises(a.DoctorEvidenceError):
+            self.make_builder(candidates=[
+                {"symbol": "SAMPLEC", "price": 100, "sector": None,
+                 "target_weight_pct": 20, "fresh_price_verified": True}])
+        with self.assertRaises(a.DoctorEvidenceError):
+            self.make_builder(candidates=[
+                {"symbol": "SAMPLE" + str(i), "price": 100, "sector": "IT",
+                 "target_weight_pct": 10, "fresh_price_verified": True}
+                for i in range(6)])
 
     def test_additional_capital_requires_existing_sector_classification(self):
         with self.assertRaises(a.DoctorEvidenceError):
@@ -296,6 +373,9 @@ class PDFAndPrivacyTests(unittest.TestCase):
         self.assertGreaterEqual(len(pages), 6)
         self.assertLessEqual(len(pages), 8)
         text = "\n".join(p.extract_text() or "" for p in pages)
+        self.assertIn("Statement scope", text)
+        self.assertIn("Issuer filing authentication", text)
+        self.assertIn("cost-basis", text)
         for required in ("PORTFOLIO DASHBOARD", "FUNDAMENTAL REVIEW", "TECHNICAL",
                          "SECTOR ALLOCATION", "HOLDING REVIEW", "DATA SOURCES",
                          "SAMPLEA", "SAMPLEB", "Rs 550.00", "UNVERIFIED",
