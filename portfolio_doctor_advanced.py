@@ -387,6 +387,8 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
     rows, sectors = [], defaultdict(Decimal)
     spending = Decimal("0")
     requested = list(candidates or [])
+    if len(requested) > 5:
+        raise DoctorEvidenceError("builder_too_many_candidates")
     for row in requested:
         sym = str(row.get("symbol") or "").upper()
         if (not sym or sym in seen or sym in excluded or
@@ -398,6 +400,8 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
             raise DoctorEvidenceError("invalid_builder_target")
         total_target += target
         sector = _normalize_sector(row.get("sector"))
+        if sector == "Unknown / unclassified":
+            raise DoctorEvidenceError("builder_candidate_sector_unverified")
         # Whole shares, never fractional quantity or silently borrowed capital.
         to_spend = (budget * target / 100)
         shares = int((to_spend / price).to_integral_value(rounding=ROUND_FLOOR))
@@ -439,7 +443,34 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
             "portfolio_value_after": float(full),
             "total_weights_pct": float(100 * ((spending + cash + prior_total) / full)),
             "uninvested_from_rounding_included": True,
-            "no_automatic_trades": True, "warnings": ["Hypothetical only; no order placed"]}
+            "no_automatic_trades": True, "horizon_months": horizon,
+            "risk_tolerance": risk_tolerance,
+            "requested_stock_cap_pct": float(max_stock),
+            "requested_sector_cap_pct": float(max_sector),
+            "liquidity_needed": float(need),
+            "warnings": ["Hypothetical user-specified weights, not a risk-optimised portfolio.",
+                         "No trades or orders placed."]}
+
+
+def corporate_action_cost_basis_check(frame, *, threshold=0.40):
+    """Flag possible split/bonus or major price jumps; never claim verification.
+
+    Even normal-looking history cannot confirm whether a customer's entered
+    average price and quantities were adjusted for corporate actions.
+    """
+    notices = ["Customer cost basis, share count, splits/bonuses and cash distributions "
+               "have not been checked against broker contract notes."]
+    if frame is not None and not frame.empty and "Close" in frame and len(frame) >= 2:
+        try:
+            closes = frame["Close"].astype(float)
+            changes = closes.pct_change().dropna()
+            if any(math.isfinite(float(x)) and abs(float(x)) >= threshold for x in changes):
+                notices.append("One or more daily closing-price jumps exceed 40%; "
+                               "check corporate actions and unusual market events.")
+        except (TypeError, ValueError, OverflowError):
+            notices.append("Historical series could not be checked for large jumps.")
+    return {"status": "NOT VERIFIED", "cost_basis_verified": False,
+            "warnings": notices, "auto_restate_pnl": False}
 
 
 def assemble_review(recs, price_frames, *, fund_collector=None, ratio_collector=None,
@@ -480,6 +511,7 @@ def assemble_review(recs, price_frames, *, fund_collector=None, ratio_collector=
                             relative_1m=aligned_relative_return(frame, benchmark))
             except (ValueError, IndexError, KeyError, TypeError, OverflowError):
                 pass
+        tech["corporate_action_review"] = corporate_action_cost_basis_check(frame)
         tech_by_symbol.append(tech)
     return {"totals": totals, "sectors": sectors, "holdings": recs,
             "fundamentals": fund_by_symbol, "technicals": tech_by_symbol,
