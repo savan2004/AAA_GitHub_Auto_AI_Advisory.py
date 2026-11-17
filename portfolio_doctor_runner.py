@@ -95,9 +95,11 @@ def _worker(upload, result, workspace, filename):
         raise PortfolioDoctorError("Portfolio upload is invalid")
     output = run_job(holdings, str(root), max_analyze=MAX_STOCKS, use_ai=False)
     recs = output.get("recs", [])
+    # A private portfolio summary is useful with fresh, verified prices even
+    # when optional per-stock research PDFs cannot be generated. The summary's
+    # own disclosures flag any unscored positions; never fake a technical score.
     if (len(recs) != len(holdings) or
-            any(not r.get("priced") or r.get("freshness") != "Fresh" for r in recs) or
-            len(output.get("stocks", [])) != len(holdings)):
+            any(not r.get("priced") or r.get("freshness") != "Fresh" for r in recs)):
         raise PortfolioDoctorError("Incomplete, stale or unverified market report")
     pdf = _pdf_in_workspace(output["summary"], root)
     Path(result).write_text(json.dumps({"status": "READY", "summary": str(pdf)}),
