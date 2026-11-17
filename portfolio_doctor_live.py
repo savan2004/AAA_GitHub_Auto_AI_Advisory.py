@@ -42,7 +42,23 @@ def parse_holdings(filename, payload):
             import openpyxl
             book = openpyxl.load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
             try:
-                rows = list(book.worksheets[0].iter_rows(max_row=8, max_col=16, values_only=True))
+                if len(book.worksheets) != 1:
+                    raise PortfolioDoctorError("BAD_INPUT")
+                sheet = book.worksheets[0]
+                # Read the actual XML, not untrusted/stale worksheet dimensions.
+                # ZIP expansion is already bounded above. Never truncate rows.
+                sheet.reset_dimensions()
+                rows = []
+                for row_number, row in enumerate(sheet.iter_rows(values_only=True), 1):
+                    if row_number > 10000 or len(row) > 64:
+                        raise PortfolioDoctorError("BAD_INPUT")
+                    cells = list(row)
+                    while cells and cells[-1] is None:
+                        cells.pop()
+                    if any(str(v if v is not None else "").strip() for v in cells):
+                        rows.append(cells)
+                        if len(rows) > MAX_STOCKS + 1:
+                            raise PortfolioDoctorError("BAD_INPUT")
             finally:
                 book.close()
         elif name.endswith(".csv"):
@@ -104,11 +120,16 @@ def _ema(values, period):
 
 
 def _rsi(values):
-    if len(values) < 16:
+    """Wilder RSI14: seed from 14 changes, then smooth every later change."""
+    period = 14
+    if len(values) < period + 1:
         return None
-    moves = [float(b) - float(a) for a, b in zip(values[-16:-1], values[-15:])]
-    gains = sum(max(v, 0.0) for v in moves) / len(moves)
-    losses = sum(max(-v, 0.0) for v in moves) / len(moves)
+    moves = [float(b) - float(a) for a, b in zip(values, values[1:])]
+    gains = sum(max(v, 0.0) for v in moves[:period]) / period
+    losses = sum(max(-v, 0.0) for v in moves[:period]) / period
+    for move in moves[period:]:
+        gains = (gains * (period - 1) + max(move, 0.0)) / period
+        losses = (losses * (period - 1) + max(-move, 0.0)) / period
     if gains == losses == 0:
         return 50.0
     if losses == 0:
@@ -170,7 +191,7 @@ def price_holdings(holdings, *, include_frames=False):
     from market_data import bulk_history
     symbols = [h["symbol"] for h in holdings]
     frames = bulk_history(symbols, "1y", chunk_size=5, retries=0,
-                          max_fallbacks=5, download_timeout=12)
+                          max_fallbacks=0, download_timeout=12)
     now = datetime.now(IST)
     today = now.date()
     # The shared bulk provider retries only MISSING tickers. It treats a valid
