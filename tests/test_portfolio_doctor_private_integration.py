@@ -33,7 +33,9 @@ def _message(uid, text=None):
 class FakeBot:
     def __init__(self):
         self.sent = []
-    def send_document(self, uid, handle, caption):
+    def send_document(self, uid, handle, caption, timeout=None, protect_content=None):
+        self.delivery_options = (timeout, protect_content)
+        self.last_handle = handle
         data = handle.read()
         self.sent.append((uid, data, caption))
         return SimpleNamespace(message_id=4201 + uid, document=SimpleNamespace(file_id="temporary-platform-file"))
@@ -68,6 +70,8 @@ class SessionTests(unittest.TestCase):
             fn(_message(101, "SAMPLEA 7 120"), _typed_payload=b"SAMPLEA 7 120")
         run.assert_called_once_with("typed_holdings.csv", b"SAMPLEA 7 120", timeout=150)
         self.assertEqual(len(bot.sent), 1)
+        self.assertEqual(bot.delivery_options, (30, True))
+        self.assertTrue(bot.last_handle.closed)
         self.assertEqual(bot.sent[0][0], 101)
         self.assertTrue(bot.sent[0][1].startswith(b"%PDF-"))
         self.assertEqual(env["_portfolio_doctor_running"], set())
@@ -143,6 +147,55 @@ class SessionTests(unittest.TestCase):
         handler(_message(102, text="SAMPLEB 8 230"))
         self.assertIn("already running", notices[-1][1])
         self.assertEqual(routed, [101])
+
+
+    def test_upload_delivery_uses_memory_and_closes_pdf(self):
+        env, bot, _ = self._env()
+        payload = b"SAMPLEA,7,120"
+        bot.get_file = lambda _: SimpleNamespace(file_size=len(payload), file_path="platform-upload")
+        bot.download_file = lambda _: payload
+        message = _message(101)
+        message.document = SimpleNamespace(file_name="private.csv", file_size=len(payload),
+                                           file_id="platform-file")
+        fn = _function("portfolio_doctor_document", env)
+        with patch.object(doctor, "run_isolated_memory",
+                          return_value=b"%PDF-" + b"_" * 3000) as run:
+            fn(message)
+        run.assert_called_once_with("private.csv", payload, timeout=150)
+        self.assertEqual(len(bot.sent), 1)
+        self.assertTrue(bot.last_handle.closed)
+        self.assertEqual(env["_portfolio_doctor_running"], set())
+
+    def test_invalid_delivery_receipt_does_not_retry_pdf(self):
+        env, bot, notices = self._env()
+        calls = []
+        def ambiguous(uid, handle, **options):
+            calls.append(handle)
+            return SimpleNamespace(message_id=None, document=None)
+        bot.send_document = ambiguous
+        fn = _function("portfolio_doctor_document", env)
+        with patch.object(doctor, "run_isolated_memory",
+                          return_value=b"%PDF-" + b"_" * 3000):
+            fn(_message(101), _typed_payload=b"SAMPLEA 7 120")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].closed)
+        self.assertEqual(env["_portfolio_doctor_running"], set())
+        self.assertEqual(env["_portfolio_doctor_waiting"], {})
+        self.assertTrue(notices)
+        self.assertNotIn("SAMPLEA", str(notices))
+
+    def test_executor_rejection_releases_capacity_and_request_state(self):
+        def rejected(fn):
+            raise RuntimeError("executor unavailable")
+        env, bot, notices = self._env(executor=SimpleNamespace(submit=rejected))
+        fn = _function("portfolio_doctor_document", env)
+        fn(_message(101), _typed_payload=b"SAMPLEA 7 120")
+        self.assertFalse(bot.sent)
+        self.assertEqual(env["_portfolio_doctor_running"], set())
+        self.assertEqual(env["_portfolio_doctor_waiting"], {})
+        self.assertTrue(env["_portfolio_doctor_slots"].acquire(blocking=False))
+        self.assertTrue(env["_portfolio_doctor_slots"].acquire(blocking=False))
+        self.assertFalse(env["_portfolio_doctor_slots"].acquire(blocking=False))
 
 
 if __name__ == "__main__":
