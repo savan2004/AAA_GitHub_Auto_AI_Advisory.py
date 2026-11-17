@@ -10,6 +10,7 @@ on:
       - 'tests/test_portfolio_doctor_builder_private.py'
       - 'scripts/msk_doctor_public_provider_probe.py'
       - 'tests/test_portfolio_doctor_advanced.py'
+      - 'tests/test_portfolio_doctor_stale_recovery.py'
       - 'tests/test_portfolio_doctor_private_integration.py'
       - 'main.py'
       - '.github/workflows/msk-portfolio-doctor-advanced.yml'
@@ -33,6 +34,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_advanced.py' -v
       - name: Test optional builder input, prices, cash, PDF and delivery isolation
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_builder_private.py' -v
+      - name: Test provider freshness recovery and complete-portfolio safety
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_stale_recovery.py' -v
       - name: Run real isolated Telegram handler simulations
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_private_integration.py' -v
       - name: Run existing basic Doctor safeguards
