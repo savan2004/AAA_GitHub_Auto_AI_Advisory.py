@@ -110,5 +110,31 @@ class DeepRepairTests(unittest.TestCase):
         self.assertEqual(tech["volume_ratio"], 1.2)
 
 
+
+    def test_actual_yfinance_caches_cannot_retain_requested_symbols(self):
+        try:
+            from yfinance import cache
+        except ImportError:
+            self.skipTest("dependency exercised in advanced CI job")
+        with patch.object(cache._TzCacheManager, "_tz_cache", None), \
+             patch.object(cache._CookieCacheManager, "_Cookie_cache", None), \
+             patch.object(cache._TzDBManager, "get_database",
+                          side_effect=AssertionError("disk timezone cache used")), \
+             patch.object(cache._CookieDBManager, "get_database",
+                          side_effect=AssertionError("disk cookie cache used")):
+            doctor.disable_worker_provider_disk_caches()
+            cache.get_tz_cache().store("SAMPLE_PRIVATE", "Asia/Kolkata")
+            cache.get_cookie_cache().store("basic", {"private": "value"})
+            self.assertIsNone(cache.get_tz_cache().lookup("SAMPLE_PRIVATE"))
+            self.assertIsNone(cache.get_cookie_cache().lookup("basic"))
+
+    def test_changed_provider_cache_interface_fails_closed(self):
+        fake = SimpleNamespace(cache=SimpleNamespace())
+        with patch.dict(sys.modules, {"yfinance": fake}):
+            with self.assertRaises(doctor.PortfolioDoctorError) as error:
+                doctor.disable_worker_provider_disk_caches()
+        self.assertEqual(error.exception.code, "WORKER_FAILED")
+
+
 if __name__ == "__main__":
     unittest.main()

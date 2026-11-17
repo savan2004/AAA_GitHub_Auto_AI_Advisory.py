@@ -406,12 +406,32 @@ def run_isolated_memory(filename, payload, timeout=150):
     return raw
 
 
+
+def disable_worker_provider_disk_caches():
+    """Only in the disposable worker, before reading private request input.
+
+    yfinance's default SQLite timezone cache records requested ticker symbols.
+    Dummy caches avoid opening those databases at all. Fail closed if the
+    installed dependency no longer exposes the audited no-cache interface.
+    """
+    try:
+        from yfinance import cache
+        cache._TzCacheManager._tz_cache = cache._TzCacheDummy()
+        cache._CookieCacheManager._Cookie_cache = cache._CookieCacheDummy()
+        if (cache.get_tz_cache().lookup("MSK_PRIVACY_CHECK") is not None or
+                cache.get_cookie_cache().lookup("basic") is not None):
+            raise RuntimeError("cache_not_disabled")
+    except Exception:
+        raise PortfolioDoctorError("WORKER_FAILED") from None
+
+
 def worker_main(filename):
     # Private worker only: suppress inherited library logs that could reveal
     # which stocks a customer currently owns. Parent logs safe error codes.
     import logging
     logging.disable(logging.CRITICAL)
     try:
+        disable_worker_provider_disk_caches()
         raw = sys.stdin.buffer.read(MAX_BYTES + 1)
         holdings = parse_holdings(filename, raw)
         advanced = os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED", "0") == "1"
