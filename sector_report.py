@@ -950,7 +950,7 @@ def generate_sector_report_pdf(progress_cb=None) -> Tuple[bool, str, List[str]]:
             # The direct Telegram path must enforce the same completed-session
             # and coverage gates as the durable research snapshot producer.
             from sector_report_snapshot import _check_metadata
-            _check_metadata(R)
+            _check_metadata(R, expected=current_session)
             out = os.path.join(OUTPUT_DIR, f"Index_Sectoral_Update_{datetime.now(IST).strftime('%Y%m%d_%H%M')}.pdf")
             build_pdf(R, out)
             summ = summary_lines(R)

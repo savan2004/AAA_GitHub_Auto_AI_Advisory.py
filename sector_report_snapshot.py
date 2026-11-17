@@ -46,8 +46,8 @@ def _check_file(path, *, session):
     return len(reader.pages), size
 
 
-def _check_metadata(report):
-    expected = _expected_session()
+def _check_metadata(report, *, expected=None):
+    expected = expected or _expected_session()
     if datetime.strptime(report["asof"], "%d-%b-%Y").date() != expected:
         raise ValueError("Sector analysis is stale; no snapshot released")
     covered, total = report.get("index_coverage", (0, 0))
