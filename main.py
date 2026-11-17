@@ -1452,7 +1452,7 @@ def portfolio_doctor_start(m):
             return
         _portfolio_doctor_waiting.add(m.chat.id)
     safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\n"
-              "Upload CSV/XLSX or paste 1–5 lines as <code>DLF 50 480</code> "
+              "Upload CSV/XLSX or paste 1–5 lines as <code>INFY 2 1000</code> "
               "(maximum 5 stocks / 5 MB). A private educational PDF is sent only with "
               "verified recent closing prices. MSK does not save your holdings or report. "
               "Telegram retains chat messages and files under its own rules.")
@@ -1475,13 +1475,13 @@ def portfolio_doctor_text(m):
     raw = m.text or ""
     rows = [line for line in raw.splitlines() if line.strip()]
     if len(raw.encode("utf-8")) > 2048 or not 1 <= len(rows) <= 5:
-        safe_send(m.chat.id, "Enter 1–5 lines: SYMBOL QTY BUY_PRICE, e.g. DLF 50 480; or upload CSV/XLSX.")
+        safe_send(m.chat.id, "Enter 1–5 lines: SYMBOL QTY BUY_PRICE, e.g. INFY 2 1000; or upload CSV/XLSX.")
         return
     payload = raw.encode("utf-8")
     try:
         parse_holdings("typed_holdings.csv", payload)
     except PortfolioDoctorError:
-        safe_send(m.chat.id, "Invalid holdings. Use SYMBOL QTY BUY_PRICE on each line, e.g. SBIN 100 890.")
+        safe_send(m.chat.id, "Invalid holdings. Use SYMBOL QTY BUY_PRICE on each line, e.g. TCS 3 1200.")
         return
     portfolio_doctor_document(m, _typed_payload=payload)
 
