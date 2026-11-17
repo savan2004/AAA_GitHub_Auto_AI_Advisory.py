@@ -131,7 +131,7 @@ def isolated_environment():
         "_require_private_portfolio": lambda m: True,
         "_doctor_allowed": lambda m: True,
         "_portfolio_doctor_lock": threading.Lock(),
-        "_portfolio_doctor_waiting": set(),
+        "_portfolio_doctor_waiting": {},
         "_portfolio_doctor_running": set(),
         "build_breadth": lambda: "Mock breadth snapshot (offline fixture)",
         "build_intraday_trade_report": lambda: "Mock intraday: NSE CLOSED — NO TRADE",
@@ -144,7 +144,7 @@ def isolated_environment():
         "parse_daily_report_request": parse_daily_report_request,
         "datetime": datetime,
         "threading": SimpleNamespace(Thread=NoStartThread),
-        "time": SimpleNamespace(sleep=lambda seconds: None),
+        "time": SimpleNamespace(sleep=lambda seconds: None, monotonic=lambda: 1000.0),
         "bot": SimpleNamespace(),
     }
     # Runtime delegation is real: port_btn -> cmd_portfolio, stat_btn -> cmd_status.

@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install offline report test dependencies
-        run: python -m pip install 'reportlab==4.2.5' 'pypdf>=5,<7' 'pandas==2.2.2' 'numpy==1.26.4' 'openpyxl==3.1.5'
+        run: python -m pip install 'reportlab==4.2.5' 'pypdf>=5,<7' 'pandas==2.2.2' 'numpy==1.26.4' 'openpyxl==3.1.5' 'requests==2.32.3'
       - name: Compile current live doctor, bot and legacy safety
         run: python -m py_compile portfolio_doctor_live.py portfolio_doctor_runner.py main.py
       - name: Test stateless private path (no market API or Telegram sends)

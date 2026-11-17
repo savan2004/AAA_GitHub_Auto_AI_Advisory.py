@@ -116,18 +116,35 @@ def _rsi(values):
     return 100.0 - 100.0 / (1.0 + gains / losses)
 
 
-def price_holdings(holdings):
+def verified_completed_daily_frame(frame, *, now=None):
+    """Only the latest completed NSE weekday session; holidays fail closed."""
+    if frame is None or getattr(frame, "empty", True):
+        raise PortfolioDoctorError("NO_PRICES")
+    from market_breadth import completed_prices, expected_completed_session
+    clean = completed_prices(frame, now=now)
+    if clean.empty or "Close" not in clean or not clean.index.is_monotonic_increasing:
+        raise PortfolioDoctorError("NO_PRICES")
+    try:
+        last_date = clean.index[-1].date()
+    except (TypeError, IndexError, AttributeError):
+        raise PortfolioDoctorError("NO_PRICES")
+    if last_date != expected_completed_session(now):
+        raise PortfolioDoctorError("STALE_PRICES")
+    return clean
+
+
+def price_holdings(holdings, *, include_frames=False):
     """Use verified OHLC only, not an assumed live quote or fabricated tick."""
     from market_data import bulk_history
     symbols = [h["symbol"] for h in holdings]
     frames = bulk_history(symbols, "1y", chunk_size=5, retries=0,
                           max_fallbacks=5, download_timeout=12)
-    today = datetime.now(IST).date()
+    now = datetime.now(IST)
+    today = now.date()
     out = []
     for holding in holdings:
-        frame = frames.get(holding["symbol"])
-        if frame is None or frame.empty or "Close" not in frame:
-            raise PortfolioDoctorError("NO_PRICES")
+        frame = verified_completed_daily_frame(frames.get(holding["symbol"]), now=now)
+        frames[holding["symbol"]] = frame
         try:
             valid = frame["Close"].dropna()
             values = [float(v) for v in valid.tolist()]
@@ -156,7 +173,7 @@ def price_holdings(holdings):
         raise PortfolioDoctorError("NO_PRICES")
     for h in out:
         h["weight"] = 100.0 * h["value"] / total
-    return out
+    return (out, frames) if include_frames else out
 
 
 def build_pdf_bytes(holdings):
@@ -189,7 +206,7 @@ def build_pdf_bytes(holdings):
     now = datetime.now(IST).strftime("%d %b %Y %H:%M IST")
     line("MSK | PORTFOLIO DOCTOR", 17, True, 27)
     line("Private on-demand educational report | " + now, 10, False, 21)
-    line("Source: latest verified completed NSE daily OHLC. NOT a live tick quote.", 9)
+    line("Source: dated daily OHLCV via Yahoo/provider fallback. NOT a live quote.", 9)
     line("This service does not save holdings or PDFs in an MSK database.", 9, False, 20)
     divider()
     line("PORTFOLIO SUMMARY", 11, True, 22)
@@ -271,7 +288,8 @@ def run_isolated_memory(filename, payload, timeout=150):
     try:
         from pypdf import PdfReader
         pdf = PdfReader(io.BytesIO(raw), strict=True)
-        if not 1 <= len(pdf.pages) <= 5:
+        max_pages = 10 if env.get("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED") == "1" else 5
+        if not 1 <= len(pdf.pages) <= max_pages:
             raise PortfolioDoctorError("PDF_FAILED")
     except PortfolioDoctorError:
         raise
@@ -284,8 +302,31 @@ def worker_main(filename):
     try:
         raw = sys.stdin.buffer.read(MAX_BYTES + 1)
         holdings = parse_holdings(filename, raw)
-        recs = price_holdings(holdings)
-        result = build_pdf_bytes(recs)
+        advanced = os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED", "0") == "1"
+        if advanced:
+            recs, frames = price_holdings(holdings, include_frames=True)
+            try:
+                from portfolio_doctor_advanced import assemble_review
+                from portfolio_doctor_advanced_pdf import render_advanced_pdf
+                benchmark = None
+                try:
+                    from market_data import index_history
+                    benchmark = verified_completed_daily_frame(
+                        index_history("^NSEI", "1y", retries=0, timeout=12))
+                except Exception:
+                    # A benchmark gap does not invalidate completed holding closes.
+                    benchmark = None
+                review = assemble_review(
+                    recs, frames, benchmark=benchmark, advanced_fundamentals=(
+                        os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_FUNDAMENTALS", "0") == "1"))
+                result = render_advanced_pdf(review)
+            except Exception:
+                # The verified basic report must remain available when optional
+                # financial sources, charts or advanced layout fail.
+                result = build_pdf_bytes(recs)
+        else:
+            recs = price_holdings(holdings)
+            result = build_pdf_bytes(recs)
         sys.stdout.buffer.write(result)
     except PortfolioDoctorError as exc:
         sys.stderr.write("\nMSK_DOCTOR_CODE=" + exc.code + "\n")
