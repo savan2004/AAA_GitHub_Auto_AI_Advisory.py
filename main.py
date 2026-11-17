@@ -861,7 +861,7 @@ def main_keyboard():
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "⚡ Intraday Trade")
     kb.add("📈 Chart", "📄 Report")
-    kb.add("🏭 Sector Report")
+    kb.add("🏭 Sector Report")\n    kb.add("🏠 Main Menu")
     return kb
 
 
@@ -968,13 +968,24 @@ def cmd_start(m):
     safe_send(m.chat.id,
               "👋 <b>MSK Bot</b>\n\nType any stock name or symbol for analysis.\n"
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
-              "⚡ <b>Intraday Trade</b> checks Nifty and Bank Nifty 5-minute "
+              "⚡ <b>Intraday Trade</b> checks Nifty and Bank Nifty 15-minute "
               "setups; no trade if feeds are stale or NSE is closed.\n"              "🏦 Large / ⚖️ Mid / 🚀 Small Cap Top 5: NSE index-based bullish shortlists.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
               "Use menu buttons below.\n"
               "🔒 Usage count records Telegram ID, public name, feature and time; not message text.",
 
+              reply_markup=main_keyboard())
+
+
+@bot.message_handler(commands=["menu"])
+@bot.message_handler(func=lambda m: (m.text or "").strip() == "🏠 Main Menu")
+def cmd_menu(m):
+    """Restore the persistent keyboard without requiring /start."""
+    state.clear(m.chat.id)
+    safe_send(m.chat.id,
+              "🏠 <b>MSK Main Menu</b>\\nChoose a button below. "
+              "Intraday Trade uses completed 15-minute candles.",
               reply_markup=main_keyboard())
 
 
