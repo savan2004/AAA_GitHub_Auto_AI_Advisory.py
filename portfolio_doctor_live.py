@@ -288,7 +288,8 @@ def run_isolated_memory(filename, payload, timeout=150):
     try:
         from pypdf import PdfReader
         pdf = PdfReader(io.BytesIO(raw), strict=True)
-        if not 1 <= len(pdf.pages) <= 5:
+        max_pages = 10 if env.get("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED") == "1" else 5
+        if not 1 <= len(pdf.pages) <= max_pages:
             raise PortfolioDoctorError("PDF_FAILED")
     except PortfolioDoctorError:
         raise
