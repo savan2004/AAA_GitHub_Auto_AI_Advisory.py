@@ -463,7 +463,8 @@ def _sev_hex(sev):
     return {0: rg.RED_H, 1: rg.AMBER_H, 2: rg.AMBER_H, 3: rg.GREEN_H}.get(sev, rg.GREY_H)
 
 
-def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str]) -> str:
+def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str],
+                      stock_reports_attached: bool = True) -> str:
     story: list = []
     W = rg.W
     now = datetime.now(IST).strftime("%d-%b-%Y %H:%M IST")
@@ -539,7 +540,10 @@ def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str]) -
             story += [Spacer(1, 6), KeepTogether([rg.P("Diversification check", "h2")] + [x for x in [rg.img(cc, W * 0.62)] if x])]
 
     # ── action plan ──
-    story += rg.section("Action Plan", "Rule-based verdicts, most urgent first — a full 8-page report for each stock is attached separately")
+    action_subtitle = ("Rule-based verdicts, most urgent first — separate 8-page research PDFs generated"
+                       if stock_reports_attached else
+                       "Rule-based verdicts from verified inputs only — no separate research PDFs attached")
+    story += rg.section("Action Plan", action_subtitle)
     acts = sorted([r for r in scored], key=lambda r: (r["R"]["holding"]["severity"], -r["weight_pct"]))
     if acts:
         data = [[Tp("Stock", "h"), Tp("Verdict", "h"), Tp("What to do", "h"), Tp("Stop", "hr"), Tp("Support", "hr"), Tp("Resistance", "hr")]]
@@ -624,5 +628,6 @@ def run_job(holdings: List[dict], out_dir: str, client: str = "", progress: Opti
     elif pm["covered"] < pm["of"]:
         notes.append(f"Portfolio risk metrics use {pm['covered']} of {pm['of']} priced holdings (the rest lack a full price history).")
     summary = os.path.join(out_dir, f"Portfolio_Health_{datetime.now(IST).strftime('%d%b%Y')}.pdf")
-    build_summary_pdf(recs, pm, sec, client, summary, notes)
+    build_summary_pdf(recs, pm, sec, client, summary, notes,
+                      stock_reports_attached=generate_stock_pdfs)
     return {"summary": summary, "stocks": stocks, "notes": notes, "recs": recs}
