@@ -1536,10 +1536,11 @@ def portfolio_doctor_document(m, _typed_payload=None):
             safe_send(uid, "Checking recent market prices for your private, one-time report.")
             # PDF and holdings travel through worker stdin/stdout, never a local file.
             pdf_bytes = run_isolated_memory(name, payload, timeout=150)
-            document = io.BytesIO(pdf_bytes)
-            document.name = "MSK_Portfolio_Doctor.pdf"
-            receipt = bot.send_document(
-                uid, document, caption="MSK Portfolio Doctor | Private on-demand educational PDF")
+            with io.BytesIO(pdf_bytes) as document:
+                document.name = "MSK_Portfolio_Doctor.pdf"
+                receipt = bot.send_document(
+                    uid, document, caption="MSK Portfolio Doctor | Private on-demand educational PDF",
+                    timeout=30, protect_content=True)
             message_id = getattr(receipt, "message_id", None)
             sent = getattr(receipt, "document", None)
             if not isinstance(message_id, int) or message_id <= 0 or not getattr(sent, "file_id", None):
