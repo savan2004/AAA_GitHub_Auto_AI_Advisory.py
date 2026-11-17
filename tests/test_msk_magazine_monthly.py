@@ -158,6 +158,19 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(pdf.read_bytes()).hexdigest(), output["pdf_sha256"])
         self.assertEqual(len(list(pdf.parent.glob("page_*.json"))), 16)
 
+    def test_missing_explicit_source_pack_keeps_draft_unapproved(self):
+        missing = self.root / "not-downloaded.json"
+        result = generate("2026-12", self.root / "out",
+                          source_pack=missing, source_root=self.source_root,
+                          now=datetime(2026, 12, 7, tzinfo=timezone.utc))
+        self.assertEqual(result["source_consistency_rows"], 0)
+        self.assertFalse(result["publication_allowed"])
+        self.assertTrue(any("Source evidence pack unavailable" in failure
+                            for failure in result["source_failures"]))
+        self.assertTrue((self.root / "out" / "2026-12" /
+                         result["draft_pdf"]).is_file())
+        self.assertEqual(len(list((self.root / "out" / "2026-12").glob("page_*.json"))), 16)
+
     def test_nse_preflight_sources_directory_allows_draft(self):
         # The workflow downloader creates this before the PDF generator runs.
         sources = self.root / "out" / "2026-12" / "sources"
