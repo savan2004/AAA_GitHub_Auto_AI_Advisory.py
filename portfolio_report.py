@@ -183,7 +183,10 @@ def parse_text(text: str, resolver=None) -> Tuple[List[dict], List[str]]:
         if re.search(r"[,\t;|]", line):
             cells = [c.strip() for c in re.split(r"[,\t;|]", line)]
         else:
-            cells = [c for c in re.split(r"\s*[@xX×]\s*|\s+", line) if c]
+            # Do not split the letter X inside tickers such as AXISBANK.
+            # Standalone "x" or "@" is a separator; 50x890 also works.
+            cells = [c for c in re.split(r"\s+|(?<=\d)[@xX×](?=\d)", line)
+                     if c and c not in ("@", "x", "X", "×")]
         rows.append(cells)
     return parse_rows(rows, resolver)
 
@@ -460,7 +463,8 @@ def _sev_hex(sev):
     return {0: rg.RED_H, 1: rg.AMBER_H, 2: rg.AMBER_H, 3: rg.GREEN_H}.get(sev, rg.GREY_H)
 
 
-def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str]) -> str:
+def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str],
+                      stock_reports_attached: bool = True) -> str:
     story: list = []
     W = rg.W
     now = datetime.now(IST).strftime("%d-%b-%Y %H:%M IST")
@@ -536,7 +540,10 @@ def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str]) -
             story += [Spacer(1, 6), KeepTogether([rg.P("Diversification check", "h2")] + [x for x in [rg.img(cc, W * 0.62)] if x])]
 
     # ── action plan ──
-    story += rg.section("Action Plan", "Rule-based verdicts, most urgent first — a full 8-page report for each stock is attached separately")
+    action_subtitle = ("Rule-based verdicts, most urgent first — separate 8-page research PDFs generated"
+                       if stock_reports_attached else
+                       "Rule-based verdicts from verified inputs only — no separate research PDFs attached")
+    story += rg.section("Action Plan", action_subtitle)
     acts = sorted([r for r in scored], key=lambda r: (r["R"]["holding"]["severity"], -r["weight_pct"]))
     if acts:
         data = [[Tp("Stock", "h"), Tp("Verdict", "h"), Tp("What to do", "h"), Tp("Stop", "hr"), Tp("Support", "hr"), Tp("Resistance", "hr")]]
@@ -574,7 +581,8 @@ def build_summary_pdf(recs, pm, sec, client: str, path: str, notes: List[str]) -
 # JOB
 # ══════════════════════════════════════════════════════════════════════════
 def run_job(holdings: List[dict], out_dir: str, client: str = "", progress: Optional[Callable[[str], None]] = None,
-            max_analyze: Optional[int] = None, use_ai: bool = True) -> dict:
+            max_analyze: Optional[int] = None, use_ai: bool = True,
+            generate_stock_pdfs: bool = True) -> dict:
     """→ {'summary': path, 'stocks': [(sym, path)], 'notes': [...], 'recs': [...]}"""
     say = progress or (lambda m: None)
     os.makedirs(out_dir, exist_ok=True)
@@ -601,9 +609,12 @@ def run_job(holdings: List[dict], out_dir: str, client: str = "", progress: Opti
             R = rg.assemble(inputs, use_ai=use_ai,
                             holding={"qty": r["qty"], "buy": r["buy"], "weight_pct": r["weight_pct"], "max_weight": MAX_WEIGHT})
             r["R"], r["name"], r["sector"] = R, R["name"], (R["sector"] or "Other / unclassified")
-            p = os.path.join(out_dir, f"{r['symbol']}_Research_Report.pdf")
-            rg.build_pdf(R, p)
-            stocks.append((r["symbol"], p))
+            # Portfolio Doctor only sends a summary PDF. Avoid building
+            # unused 8-page per-stock PDFs in its bounded private worker.
+            if generate_stock_pdfs:
+                p = os.path.join(out_dir, f"{r['symbol']}_Research_Report.pdf")
+                rg.build_pdf(R, p)
+                stocks.append((r["symbol"], p))
         except Exception as e:
             r["error"] = str(e)[:120]
             logger.warning(f"[portfolio] analysis failed for {r['symbol']}: {type(e).__name__}")
@@ -617,5 +628,6 @@ def run_job(holdings: List[dict], out_dir: str, client: str = "", progress: Opti
     elif pm["covered"] < pm["of"]:
         notes.append(f"Portfolio risk metrics use {pm['covered']} of {pm['of']} priced holdings (the rest lack a full price history).")
     summary = os.path.join(out_dir, f"Portfolio_Health_{datetime.now(IST).strftime('%d%b%Y')}.pdf")
-    build_summary_pdf(recs, pm, sec, client, summary, notes)
+    build_summary_pdf(recs, pm, sec, client, summary, notes,
+                      stock_reports_attached=generate_stock_pdfs)
     return {"summary": summary, "stocks": stocks, "notes": notes, "recs": recs}
