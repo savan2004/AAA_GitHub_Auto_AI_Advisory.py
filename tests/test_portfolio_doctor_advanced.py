@@ -133,6 +133,9 @@ class TechnicalAndCorporateActionTests(unittest.TestCase):
         empty_match = pd.DataFrame({"Close": [200 + i for i in range(32)]},
                                     index=pd.bdate_range("2020-01-01", periods=32))
         self.assertIsNone(a.aligned_relative_return(frame, empty_match, sessions=21))
+        older_index = pd.DataFrame({"Close": [200 + i for i in range(31)]},
+                                   index=idx[:-1])
+        self.assertIsNone(a.aligned_relative_return(frame, older_index, sessions=21))
 
     def test_corporate_actions_block_action_opinions(self):
         complete = {"status": "COMPLETE", "issuer_filing_verified": True,
@@ -212,10 +215,30 @@ class ReplacementAndBuilderTests(unittest.TestCase):
                 {"symbol": "SAMPLEA", "price": 100, "sector": "IT",
                  "target_weight_pct": 50, "fresh_price_verified": True}] * 2)
 
-    def test_additional_capital_needs_existing_sectors(self):
+    def test_additional_capital_requires_existing_sector_classification(self):
         with self.assertRaises(a.DoctorEvidenceError):
-            self.make_builder(current_values={"EXISTING": 1000},
+            self.make_builder(current_values={"OLD1": 200},
                               funding_mode="additional")
+
+    def test_additional_capital_includes_old_stock_sector_and_cash_weights(self):
+        result = self.make_builder(current_values={"OLD1": 200},
+                                   current_sectors={"OLD1": "IT"},
+                                   funding_mode="additional")
+        self.assertEqual(result["portfolio_value_after"], 1200)
+        self.assertEqual(result["current_weights"], {"OLD1": 100.0})
+        self.assertEqual(result["cash"], 101)
+        self.assertAlmostEqual(result["total_weights_pct"], 100.0)
+        self.assertTrue(result["no_automatic_trades"])
+
+    def test_existing_sector_cap_must_include_prior_holdings(self):
+        with self.assertRaises(a.DoctorEvidenceError):
+            self.make_builder(current_values={"OLD1": 700},
+                              current_sectors={"OLD1": "IT"},
+                              funding_mode="additional")
+
+    def test_malformed_horizon_rejected_safely(self):
+        with self.assertRaises(a.DoctorEvidenceError):
+            self.make_builder(horizon_months="not-number")
 
 
 class PDFAndPrivacyTests(unittest.TestCase):
