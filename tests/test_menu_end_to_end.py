@@ -145,7 +145,7 @@ def isolated_environment():
     }
     # Runtime delegation is real: port_btn -> cmd_portfolio, stat_btn -> cmd_status.
     names = {
-        "cmd_portfolio", "chart_button", "port_btn",
+        "cmd_start", "cmd_menu", "cmd_portfolio", "chart_button", "port_btn",
         "scan_btn", "breadth_btn", "swing_btn", "intraday_btn", "analysis_btn", "report_btn",
         "deliver_daily_reports", "plain_daily_report",
         "buzz_btn", "sector_btn",

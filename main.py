@@ -862,6 +862,7 @@ def main_keyboard():
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "⚡ Intraday Trade")
     kb.add("📈 Chart", "📄 Report")
     kb.add("🏭 Sector Report")
+    kb.add("🆕 New Version")
     return kb
 
 
@@ -968,7 +969,7 @@ def cmd_start(m):
     safe_send(m.chat.id,
               "👋 <b>MSK Bot</b>\n\nType any stock name or symbol for analysis.\n"
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
-              "⚡ <b>Intraday Trade</b> checks Nifty and Bank Nifty 5-minute "
+              "⚡ <b>Intraday Trade</b> checks Nifty and Bank Nifty 15-minute "
               "setups; no trade if feeds are stale or NSE is closed.\n"              "🏦 Large / ⚖️ Mid / 🚀 Small Cap Top 5: NSE index-based bullish shortlists.\n"
               "📄 <code>/report SYMBOL</code> builds an institutional-style research PDF.\n"
               "🏭 <b>Sector Report</b> = Index &amp; sectoral update PDF (rotation, breadth, Nifty levels).\n"
@@ -976,6 +977,13 @@ def cmd_start(m):
               "🔒 Usage count records Telegram ID, public name, feature and time; not message text.",
 
               reply_markup=main_keyboard())
+
+
+@bot.message_handler(commands=["menu"])
+@bot.message_handler(func=lambda m: (m.text or "").strip() == "🆕 New Version")
+def cmd_menu(m):
+    """New Version button performs the same action as /start."""
+    return cmd_start(m)
 
 
 @bot.message_handler(commands=["help"])
