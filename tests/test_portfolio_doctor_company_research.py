@@ -2,6 +2,10 @@
 import io
 import unittest
 from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import portfolio_doctor_live as doctor
 
 import pandas as pd
 from pypdf import PdfReader
@@ -66,6 +70,17 @@ class CompanyResearchAcceptance(unittest.TestCase):
         self.assertIn("Shareholding, news and peer valuation: NOT VERIFIED.", whole)
         self.assertNotIn("High-conviction constructive", whole)
         self.assertIn("Page 10 of 10", pages[-1].extract_text())
+
+    def test_parent_only_accepts_large_pdf_with_trailing_company_dossiers(self):
+        dossiers = prepare_company_pages(self.rows, self.frames, now=NOW)
+        risk = calculate_historical_risk(self.rows, self.frames, now=NOW)
+        full_pdf = build_pdf_bytes(self.rows, companies=dossiers, risk=risk)
+        mock_run = SimpleNamespace(returncode=0, stdout=full_pdf, stderr=b"")
+        with patch.object(doctor.subprocess, "run", return_value=mock_run), \
+             patch.dict(doctor.os.environ,
+                        {"MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED": "0"}):
+            self.assertEqual(doctor.run_isolated_memory(
+                "typed.csv", b"SAMPLEA 2 100"), full_pdf)
 
     def test_incomplete_or_wrong_ticker_history_is_not_presented_as_verified(self):
         source = self.rows[0]
