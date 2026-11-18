@@ -312,7 +312,9 @@ def price_holdings(holdings, *, include_frames=False):
                         **amounts,
                         "ema20": _ema(values, 20), "ema50": _ema(values, 50),
                         "rsi14": _rsi(values),
-                        "high20": max(values[-20:]), "low20": min(values[-20:])})
+                        "high20": max(values[-20:]), "low20": min(values[-20:]),
+                "return20": round(100 * (close / values[-21] - 1), 2)
+                if len(values) >= 21 else None})
         except PortfolioDoctorError:
             raise
         except (TypeError, ValueError, IndexError, OverflowError, AttributeError) as exc:
