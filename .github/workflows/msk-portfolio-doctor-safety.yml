@@ -9,6 +9,7 @@ on:
       - 'portfolio_doctor_calculations.py'
       - 'portfolio_doctor_report.py'
       - 'tests/test_portfolio_doctor_rewrite.py'
+      - 'tests/test_portfolio_doctor_sample_report.py'
       - 'tests/test_portfolio_doctor_cleanup.py'
       - 'tests/test_portfolio_doctor_deep_repair.py'
       - 'portfolio_doctor_bhavcopy.py'
@@ -44,6 +45,9 @@ jobs:
 
       - name: Test consolidated Doctor rewrite boundaries and full PDF content
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_rewrite.py' -v
+
+      - name: Test sample-inspired portfolio report and numbered holdings
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_sample_report.py' -v
 
       - name: Test retired-path removal, strict evidence and private session expiry
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_cleanup.py' -v
