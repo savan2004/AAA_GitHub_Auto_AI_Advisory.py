@@ -46,8 +46,8 @@ class RewriteInputTests(unittest.TestCase):
         self.assertEqual(parsed[0]["symbol"], "SAMPLEA")
         with self.assertRaises(doctor.PortfolioDoctorError):
             doctor.parse_holdings("input.csv", b"SAMPLEA 7 120\nNSE:SAMPLEA.NS 2 130")
-        with self.assertRaises(doctor.PortfolioDoctorError):
-            doctor.parse_holdings("input.csv", b"SAMPLEA.BO 7 120")
+        self.assertEqual(doctor.parse_holdings("input.csv", b"SAMPLEA.BO 7 120")[0],
+                         {"symbol": "SAMPLEA", "qty": 7., "buy": 120., "exchange": "BSE"})
 
     def test_malformed_private_rows_do_not_become_company_search(self):
         for text in ("SAMPLEA seven 120", "SAMPLEA 7 bad",
@@ -138,3 +138,83 @@ class RewritePDFTests(unittest.TestCase):
             page.extract_text(visitor_text=visit)
         self.assertEqual(overflow, [])
         self.assertLessEqual(len(pages), 5)
+
+
+class NumberedIndianSymbolTests(unittest.TestCase):
+    def test_both_requested_formats_have_identical_positions(self):
+        expected = [{"symbol": "SBIN", "qty": 100., "buy": 840.},
+                    {"symbol": "BHEL", "qty": 150., "buy": 150.}]
+        for text in ("SBIN 100 840\n\nBhel 150 150",
+                     "1. SBIN 100 840\n2. BHEL 150 150",
+                     "1) sbin 100 840\n2) bhel 150 150",
+                     "1. SBIN,100,840\n2. Bhel,150,150"):
+            with self.subTest(text=text):
+                self.assertEqual(doctor.parse_holdings("input.csv", text.encode()), expected)
+                self.assertTrue(doctor.looks_like_holdings_text(text))
+
+    def test_suffixes_numeric_bse_codes_and_invalid_rows(self):
+        self.assertEqual(doctor.parse_holdings("input.csv", b"500325 2 100")[0]["symbol"], "500325")
+        for raw in (b"BSE:SBIN 2 100", b"sbin.bo 2 100"):
+            self.assertEqual(doctor.parse_holdings("input.csv", raw)[0]["exchange"], "BSE")
+        self.assertEqual(doctor.parse_holdings("input.csv", b"sbin.ns 2 100")[0]["symbol"], "SBIN")
+        for raw in (b"1. SBIN 2 100\n2. sbin.NS 3 100",
+                    b"NSE:SBIN.BO 2 100", b"BSE:SBIN.NS 2 100",
+                    b"1. SBIN 100 nope", b"1. SBIN 100 840 extra"):
+            with self.subTest(raw=raw), self.assertRaises(doctor.PortfolioDoctorError):
+                doctor.parse_holdings("input.csv", raw)
+        for raw in ("1. SBIN 100 nope", "2. BHEL 150", '1. "SBIN",2,"100'):
+            self.assertTrue(doctor.looks_like_holdings_text(raw))
+        self.assertFalse(doctor.looks_like_holdings_text("3M India Limited"))
+
+    def _response(self, data):
+        return SimpleNamespace(json=lambda: data, raise_for_status=lambda: None)
+
+    def _chart(self, *, symbol="SAMPLEA.BO", currency="INR", exchange="BSE"):
+        stamps = pd.bdate_range(end="2026-11-17", periods=30, tz="Asia/Kolkata")
+        return {"chart": {"result": [{
+            "meta": {"symbol": symbol, "currency": currency,
+                     "exchangeName": exchange, "instrumentType": "EQUITY"},
+            "timestamp": [int(s.timestamp()) for s in stamps],
+            "indicators": {"quote": [{"open": [100.]*30, "high": [101.]*30,
+                "low": [99.]*30, "close": [100.]*30, "volume": [1000]*30}]}}]}}
+
+    def test_exact_bse_only_fallback_and_chart_identity(self):
+        quote = {"symbol": "SAMPLEA.BO", "exchange": "BSE", "quoteType": "EQUITY"}
+        now = datetime(2026, 11, 18, 9, tzinfo=doctor.IST)
+        calls = []
+        def get(url, **kw):
+            calls.append((url, kw["timeout"]))
+            return self._response({"quotes": [quote]} if "search" in url else self._chart())
+        result = doctor.bse_daily_for_doctor("SAMPLEA", now=now, get=get)
+        self.assertEqual(len(result), 30)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(timeout <= 8 for _, timeout in calls))
+        for overrides in ({"currency": "USD"}, {"symbol": "OTHER.BO"}, {"exchange": "NSI"}):
+            def bad_get(url, **kw):
+                return self._response(self._chart(**overrides))
+            self.assertIsNone(doctor.bse_daily_for_doctor(
+                "SAMPLEA", now=now, explicit=True, get=bad_get))
+
+    def test_bse_never_guesses_similar_stock_or_overrides_nse(self):
+        base = {"symbol": "SAMPLEA.BO", "exchange": "BSE", "quoteType": "EQUITY"}
+        for quotes in ([base, {"symbol": "SAMPLEA.NS"}], [base, base],
+                       [{**base, "symbol": "SIMILAR.BO"}], [], [{**base, "quoteType": "ETF"}]):
+            def get(url, **kw):
+                self.assertIn("search", url)
+                return self._response({"quotes": quotes})
+            self.assertIsNone(doctor.bse_daily_for_doctor("SAMPLEA", get=get))
+
+    def test_verified_bse_prices_reach_pdf_without_nse_recovery(self):
+        import portfolio_doctor_report
+        index = pd.bdate_range(end="2026-11-17", periods=30)
+        frame = pd.DataFrame({"Open":100., "High":101., "Low":99.,
+                              "Close":100., "Volume":1000}, index=index)
+        fake_market = SimpleNamespace(bulk_history=lambda *a, **kw: {})
+        with patch.dict(sys.modules, {"market_data": fake_market}), \
+             patch.object(doctor, "recover_fresh_daily_for_doctor", side_effect=AssertionError("NSE recovery")), \
+             patch.object(doctor, "bse_daily_for_doctor", return_value=frame) as bse:
+            rows = doctor.price_holdings([{"symbol":"SAMPLEA", "qty":2., "buy":90., "exchange":"BSE"}])
+        bse.assert_called_once()
+        self.assertIn("BSE:", rows[0]["price_source"])
+        self.assertEqual(rows[0]["value"], 200.)
+        self.assertTrue(portfolio_doctor_report.build_pdf_bytes(rows).startswith(b"%PDF-"))

@@ -1453,7 +1453,11 @@ def portfolio_doctor_start(m):
             return
         _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 180
     safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\n"
-              "Upload CSV/XLSX or paste 1–5 lines as <code>INFY 2 1000</code> "
+              "Upload CSV/XLSX or paste 1–5 rows: <code>SBIN 100 840</code> then "
+              "<code>BHEL 150 150</code> on a new line. Numbered rows such as "
+              "<code>1. SBIN 100 840</code> also work; upper/lower case is accepted. "
+              "Use Symbol Quantity AverageBuyPrice; .NS/.BO is optional. "
+              "NSE is preferred; BSE requires an exact verified match. "
               "(maximum 5 stocks / 5 MB). A private educational PDF is sent only with "
               "verified recent closing prices. MSK does not save your holdings or report. "
               "Telegram retains chat messages and files under its own rules.")

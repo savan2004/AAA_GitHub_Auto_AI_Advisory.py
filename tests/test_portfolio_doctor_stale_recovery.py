@@ -33,6 +33,9 @@ def frame(last="2026-11-17", *, base=100):
 
 class DoctorRecoveryTests(unittest.TestCase):
     def setUp(self):
+        bse = patch.object(doctor, "bse_daily_for_doctor", return_value=None)
+        bse.start()
+        self.addCleanup(bse.stop)
         self.now = Clock.now(doctor.IST)
         self.old = frame("2026-11-16")
         self.new = frame("2026-11-17")

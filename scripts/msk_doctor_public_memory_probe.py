@@ -50,6 +50,8 @@ def _run(case, folder):
     assert "Invested: Rs " + invested in text, "incorrect invested total"
 
     assert "Unrealised P/L" in text and "RSI14" in text, "missing financial content"
+    if b".BO" in payload:
+        assert "BSE: exact ticker" in text, "explicit BSE request lost exchange identity"
     money = lambda value: Decimal(value.replace(",", ""))
     expected = expected_doctor_session()
     official = fetch_nse_bhavcopy_rows(expected, symbols)
@@ -88,7 +90,11 @@ def main():
     one = (("INFY", "2", "1000"),)
     five = tuple((symbol, str(i), "1000") for i, symbol in enumerate(
         ("INFY", "TCS", "RELIANCE", "HDFCBANK", "ITC"), 1))
-    sequential = (_case(one), _case(five), _case(five, xlsx=True))
+    client = (("SBIN", "100", "840"), ("BHEL", "150", "150"))
+    numbered = ("synthetic.csv", b"1. sbin 100 840\n2. Bhel 150 150", client, ())
+    sequential = (_case(one), _case(five), _case(five, xlsx=True),
+                  _case(client), numbered,
+                  ("synthetic.csv", b"SBIN.BO 100 840", (client[0],), ()))
     concurrent = (
         _case(one, forbidden=("TCS",)),
         _case((("TCS", "3", "1000"),), forbidden=("INFY",)),

@@ -469,3 +469,12 @@ Newly confirmed repair points:
 Additional validation introduced: regression for every above defect; AST/reference checks for removed modules; actual public-data CSV and XLSX worker PDFs; two genuinely concurrent disposable workers with distinct synthetic holdings and cross-request leakage checks. Private live Telegram delivery remains unverified.
 
 Candidate status: implemented in this draft; new validation pending. The earlier 104-test PASS applies to the earlier candidate only.
+
+
+## 18-Nov-2026: numbered input and exact NSE/BSE selection
+
+Owner requested identical handling for `SBIN 100 840\nBhel 150 150` and numbered `1. SBIN 100 840\n2. BHEL 150 150`. List markers are removed before strict three-column parsing and private-input classification; case is normalized. Numeric BSE scrip codes are preserved. Optional `.NS`, `.BO`, `NSE:` and `BSE:` forms are supported; conflicting exchange markers and duplicate canonical symbols are rejected.
+
+NSE remains preferred. An absent NSE history may use BSE only after exact public provider search identifies one matching BSE equity and no exact NSE ticker; stale existing NSE histories are never silently replaced with BSE. Explicit BSE goes directly to BSE and bypasses NSE bhavcopy/recovery. BSE chart identity must match exact ticker, exchange and INR currency, with >=20 valid unique completed daily OHLCV bars. No fuzzy company-name guess or NSE/BSE history splicing. BSE reports use the basic renderer to avoid NSE-only optional research enrichment. The existing conservative expected-session gate still applies; unavailable/ambiguous evidence blocks the entire report.
+
+Validation added: both requested real public-stock input forms, case/list-marker parsing, invalid/duplicate input, BSE identity/currency guards, NSE priority, explicit BSE valuation/PDF. The real-worker probe includes SBIN/BHEL plain and numbered requests and an explicit SBIN.BO request. CI and deployment evidence will be recorded on the PR. Admin-only access configuration is not broadened.
