@@ -331,11 +331,11 @@ def price_holdings(holdings, *, include_frames=False):
     return (out, frames) if include_frames else out
 
 
-def build_pdf_bytes(holdings, *, peers=None, risk=None):
+def build_pdf_bytes(holdings, *, peers=None, risk=None, companies=None):
     """Compatibility entry point; rendering failures contain no holding data."""
     try:
         from portfolio_doctor_report import build_pdf_bytes as render
-        return render(holdings, peers=peers, risk=risk)
+        return render(holdings, peers=peers, risk=risk, companies=companies)
     except Exception:
         raise PortfolioDoctorError("PDF_FAILED") from None
 
@@ -389,9 +389,23 @@ def run_isolated_memory(filename, payload, timeout=150):
     try:
         from pypdf import PdfReader
         pdf = PdfReader(io.BytesIO(raw), strict=True)
-        max_pages = 10 if env.get("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED") == "1" else 5
-        if not 1 <= len(pdf.pages) <= max_pages:
+        # Different verified output contracts:
+        # - Basic Doctor: <=5 pages as before.
+        # - Full company appendix: 4/5 basic pages + 1..5 *trailing*
+        #   COMPANY RESEARCH pages, <=10 total.
+        # - Explicitly enabled advanced mode: its separate <=10-page gate.
+        count = len(pdf.pages)
+        if not 1 <= count <= 10:
             raise PortfolioDoctorError("PDF_FAILED")
+        if env.get("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED") != "1" and count > 5:
+            titles = [p.extract_text() or "" for p in pdf.pages]
+            dossiers = [i for i, body in enumerate(titles)
+                        if "COMPANY RESEARCH:" in body]
+            if (not dossiers or dossiers[0] not in (4, 5) or
+                    dossiers != list(range(dossiers[0], count)) or
+                    not 1 <= len(dossiers) <= 5 or
+                    any("MSK | PORTFOLIO DOCTOR" not in t for t in titles)):
+                raise PortfolioDoctorError("PDF_FAILED")
     except PortfolioDoctorError:
         raise
     except Exception as exc:
@@ -506,6 +520,36 @@ def _safe_historical_risk(recs, frames):
         return None
 
 
+def _safe_company_dossiers(recs, frames, peers, *, seconds=15):
+    """Research cards must never delay or block the verified portfolio PDF."""
+    from portfolio_doctor_company_research import prepare_company_pages
+    industries = (peers or {}).get("held_industries") or {}
+    collected = {}
+    started = time.monotonic()
+    if seconds >= 2:
+        for row in recs:
+            if row.get("exchange") == "BSE":
+                continue  # Public NSE issuer-page address may not match BSE.
+            remaining = seconds - (time.monotonic() - started)
+            if remaining < 2:
+                break
+            try:
+                from portfolio_doctor_advanced import collect_fundamentals_no_holdings_cache
+                with optional_review_deadline(min(3.0, remaining)):
+                    fund = collect_fundamentals_no_holdings_cache(
+                        row["symbol"], industries.get(row["symbol"], ""))
+                    if fund.get("status") == "PARTIAL":
+                        collected[row["symbol"]] = fund
+            except (Exception, OptionalReviewTimeout):
+                # Missing provider evidence means "not verified", not a guess.
+                continue
+    try:
+        return prepare_company_pages(recs, frames, fundamentals=collected,
+                                     industries=industries)
+    except Exception:
+        return None
+
+
 def worker_main(filename):
     # Private worker only: suppress inherited library logs that could reveal
     # which stocks a customer currently owns. Parent logs safe error codes.
@@ -537,7 +581,11 @@ def worker_main(filename):
             recs, frames = price_holdings(holdings, include_frames=True)
             risk = _safe_historical_risk(recs, frames)
             peers = _safe_peer_watchlist(recs)
-            result = build_pdf_bytes(recs, peers=peers, risk=risk)
+            # Reserve space in the hard worker deadline for PDF creation.
+            remaining = max(0, min(15, 120 - (time.monotonic() - worker_started)))
+            companies = _safe_company_dossiers(recs, frames, peers,
+                                                seconds=remaining)
+            result = build_pdf_bytes(recs, peers=peers, risk=risk, companies=companies)
         sys.stdout.buffer.write(result)
     except PortfolioDoctorError as exc:
         sys.stderr.write("\nMSK_DOCTOR_CODE=" + exc.code + "\n")
