@@ -1532,6 +1532,7 @@ def portfolio_doctor_text(m):
     except PortfolioDoctorError:
         with _portfolio_doctor_lock:
             _portfolio_doctor_waiting.pop(m.chat.id, None)
+            _portfolio_audit_mode.pop(m.chat.id, None)
         safe_send(m.chat.id, "Invalid holdings. Select Portfolio Doctor again to retry.")
         return
     portfolio_doctor_document(m, _typed_payload=payload)
@@ -1554,6 +1555,7 @@ def portfolio_doctor_document(m, _typed_payload=None):
             safe_send(uid, "A Portfolio Doctor report is already running.")
             return
         if not _portfolio_doctor_slots.acquire(blocking=False):
+            _portfolio_audit_mode.pop(uid, None)
             _portfolio_doctor_waiting.pop(uid, None)
             safe_send(uid, "Portfolio Doctor is busy. Retry shortly; no holdings were saved.")
             return
