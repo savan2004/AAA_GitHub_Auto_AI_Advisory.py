@@ -562,7 +562,11 @@ def _safe_company_dossiers(recs, frames, peers, *, seconds=15):
         return None
 
 
-def worker_main(filename, *, audit=False):
+def worker_main(filename):
+    # Preserve the original public worker signature for privacy/recovery
+    # regression checks. The disposable subprocess argv selects audit mode;
+    # normal /doctor calls continue down their existing branch.
+    audit = len(sys.argv) >= 2 and sys.argv[1] == "--audit-worker"
     # Private worker only: suppress inherited library logs that could reveal
     # which stocks a customer currently owns. Parent logs safe error codes.
     import logging
@@ -619,4 +623,4 @@ def worker_main(filename, *, audit=False):
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] not in ("--worker", "--audit-worker"):
         raise SystemExit(2)
-    worker_main(sys.argv[2], audit=sys.argv[1] == "--audit-worker")
+    worker_main(sys.argv[2])
