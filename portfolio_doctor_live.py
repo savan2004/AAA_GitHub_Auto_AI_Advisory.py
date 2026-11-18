@@ -326,11 +326,11 @@ def price_holdings(holdings, *, include_frames=False):
     return (out, frames) if include_frames else out
 
 
-def build_pdf_bytes(holdings):
+def build_pdf_bytes(holdings, *, peers=None):
     """Compatibility entry point; rendering failures contain no holding data."""
     try:
         from portfolio_doctor_report import build_pdf_bytes as render
-        return render(holdings)
+        return render(holdings, peers=peers)
     except Exception:
         raise PortfolioDoctorError("PDF_FAILED") from None
 
@@ -456,7 +456,7 @@ def optional_review_deadline(seconds):
         signal.signal(signal.SIGALRM, previous)
 
 
-def build_optional_pdf(recs, frames, *, seconds=20):
+def build_optional_pdf(recs, frames, *, seconds=20, peers=None):
     with optional_review_deadline(seconds):
         from portfolio_doctor_advanced import assemble_review
         from portfolio_doctor_advanced_pdf import render_advanced_pdf
@@ -470,7 +470,19 @@ def build_optional_pdf(recs, frames, *, seconds=20):
         review = assemble_review(
             recs, frames, benchmark=benchmark, advanced_fundamentals=(
                 os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_FUNDAMENTALS", "0") == "1"))
+        review["peer_watchlist"] = peers
         return render_advanced_pdf(review)
+
+
+def _safe_peer_watchlist(recs):
+    # An unavailable index roster or provider may never prevent a verified
+    # holdings-only PDF. The worker already suppresses all sensitive logs.
+    try:
+        from portfolio_doctor_peers import research_industry_peers
+        with optional_review_deadline(25):
+            return research_industry_peers(recs)
+    except (Exception, OptionalReviewTimeout):
+        return None
 
 
 def worker_main(filename):
@@ -487,19 +499,21 @@ def worker_main(filename):
         advanced = os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED", "0") == "1"
         if advanced and not any(h.get("exchange") == "BSE" for h in holdings):
             recs, frames = price_holdings(holdings, include_frames=True)
+            peers = _safe_peer_watchlist(recs)
             try:
                 # Reserve time for the basic PDF before the parent's hard kill.
                 budget = min(20, 120 - (time.monotonic() - worker_started))
                 if any(row["price_source"].startswith("BSE:") for row in recs):
-                    result = build_pdf_bytes(recs)
+                    result = build_pdf_bytes(recs, peers=peers)
                 else:
-                    result = build_optional_pdf(recs, frames, seconds=budget)
+                    result = build_optional_pdf(recs, frames, seconds=budget, peers=peers)
             except (Exception, OptionalReviewTimeout):
                 # Optional research cannot consume the basic report's budget.
-                result = build_pdf_bytes(recs)
+                result = build_pdf_bytes(recs, peers=peers)
         else:
             recs = price_holdings(holdings)
-            result = build_pdf_bytes(recs)
+            peers = _safe_peer_watchlist(recs)
+            result = build_pdf_bytes(recs, peers=peers)
         sys.stdout.buffer.write(result)
     except PortfolioDoctorError as exc:
         sys.stderr.write("\nMSK_DOCTOR_CODE=" + exc.code + "\n")

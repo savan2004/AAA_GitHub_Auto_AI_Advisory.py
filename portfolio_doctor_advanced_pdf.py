@@ -244,6 +244,24 @@ def render_advanced_pdf(review):
     line(replacement.get("status") or "NO SUITABLE REPLACEMENT FOUND", 9, True)
     line("No automatic swap; comparisons need verified issuer, valuation, liquidity,", 8)
     line("technical and sector data on comparable reporting periods.", 8)
+    gap(9)
+    subhead("NIFTY 500 SAME-INDUSTRY WATCHLIST")
+    peers = review.get("peer_watchlist") or {}
+    if peers.get("status") == "SCREENED":
+        line("Official index size {} | Industry pool {} | Screened {} | Fresh {} | Qualified {}".format(
+            peers["universe"], peers["pool"], peers["screened"],
+            peers["fresh"], peers["qualified"]), 8)
+        for candidate in peers.get("candidates", []):
+            line("{} | {} | Technical {}/100 | Close {} ({})".format(
+                candidate["symbol"], safe(candidate["industry"], 32),
+                finite(candidate["score"], 0), money(candidate["close"]),
+                safe(candidate["date"], 10)), 8)
+        if not peers.get("candidates"):
+            line("No verified candidate passed the existing moderate technical screen.", 8)
+    else:
+        line("No verified current index membership/industry-peer screen available.", 8)
+    line("Only a sampled peer screen; not a ranking of all Nifty 500 companies.", 8)
+    line("Historical technical strength is NOT verified quality or swap advice.", 8)
     gap(12)
     subhead("OPTIONAL PORTFOLIO BUILDER")
     if review.get("builder"):
