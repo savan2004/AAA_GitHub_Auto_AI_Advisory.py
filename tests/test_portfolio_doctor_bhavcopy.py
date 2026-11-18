@@ -98,7 +98,7 @@ class BhavcopySafeguards(unittest.TestCase):
         self.assertEqual(float(merged.iloc[-1]["Volume"]), 10000)
 
     def test_unfinished_current_day_candle_does_not_block_official_prior_overlap(self):
-        # Mid-session Yahoo chart can include Thursday even while Tuesday is
+        # Mid-session Yahoo chart can include Wednesday even while Tuesday is
         # the required completed session; it must never be used as report data.
         partial_today = pd.DataFrame({
             "Open": [105.0], "High": [106.0], "Low": [104.0],
