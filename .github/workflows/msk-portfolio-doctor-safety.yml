@@ -8,6 +8,8 @@ on:
       - 'portfolio_doctor_input.py'
       - 'portfolio_doctor_calculations.py'
       - 'portfolio_doctor_report.py'
+      - 'portfolio_doctor_visual.py'
+      - 'tests/test_portfolio_doctor_visual.py'
       - 'portfolio_doctor_peers.py'
       - 'tests/test_portfolio_doctor_peers.py'
       - 'tests/test_portfolio_doctor_rewrite.py'
@@ -33,7 +35,7 @@ jobs:
       - name: Install offline report test dependencies
         run: python -m pip install 'reportlab==4.2.5' 'pypdf>=5,<7' 'pandas==2.2.2' 'numpy==1.26.4' 'openpyxl==3.1.5' 'requests==2.32.3'
       - name: Compile current stateless Doctor and bot
-        run: python -m py_compile portfolio_doctor_live.py portfolio_doctor_input.py portfolio_doctor_calculations.py portfolio_doctor_report.py portfolio_doctor_peers.py portfolio_doctor_bhavcopy.py main.py
+        run: python -m py_compile portfolio_doctor_live.py portfolio_doctor_input.py portfolio_doctor_calculations.py portfolio_doctor_report.py portfolio_doctor_visual.py portfolio_doctor_peers.py portfolio_doctor_bhavcopy.py main.py
       - name: Test stateless private path (no market API or Telegram sends)
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_safety.py' -v
       - name: Test official exchange CSV and prior-day overlap
@@ -46,6 +48,9 @@ jobs:
 
       - name: Test consolidated Doctor rewrite boundaries and full PDF content
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_rewrite.py' -v
+
+      - name: Test redesigned four-page report and verified peers
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_visual.py' -v
 
       - name: Test official Nifty 500 peer screening and PDF evidence gates
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_peers.py' -v
