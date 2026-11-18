@@ -21,6 +21,15 @@ def _safe_float(value):
         return None
 
 
+def _ema_series(closes, period):
+    factor = 2 / (period + 1)
+    series, value = [], closes[0]
+    for close in closes:
+        value += factor * (close - value)
+        series.append(value)
+    return series
+
+
 def _macd_hist(closes):
     if len(closes) < 35:
         return None
@@ -161,6 +170,8 @@ def prepare_company_pages(holdings, frames, *, fundamentals=None,
                 year_close_high=max(tail),
                 year_close_low=min(tail),
                 chart=[round(x, 4) for x in closes_chart],
+                chart_ema20=[round(x, 4) for x in _ema_series(closes, 20)[-MAX_CHART_DAYS:]],
+                chart_ema50=[round(x, 4) for x in _ema_series(closes, 50)[-MAX_CHART_DAYS:]],
                 chart_dates=dates,
             )
         except Exception:
