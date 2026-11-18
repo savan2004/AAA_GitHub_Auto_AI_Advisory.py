@@ -389,11 +389,23 @@ def run_isolated_memory(filename, payload, timeout=150):
     try:
         from pypdf import PdfReader
         pdf = PdfReader(io.BytesIO(raw), strict=True)
-        # Default Doctor: 4 base pages + optional risk page + <=5 verified
-        # company dossiers. Advanced mode remains separately bounded to 10.
-        max_pages = 10
-        if not 1 <= len(pdf.pages) <= max_pages:
+        # Different verified output contracts:
+        # - Basic Doctor: <=5 pages as before.
+        # - Full company appendix: 4/5 basic pages + 1..5 *trailing*
+        #   COMPANY RESEARCH pages, <=10 total.
+        # - Explicitly enabled advanced mode: its separate <=10-page gate.
+        count = len(pdf.pages)
+        if not 1 <= count <= 10:
             raise PortfolioDoctorError("PDF_FAILED")
+        if env.get("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED") != "1" and count > 5:
+            titles = [p.extract_text() or "" for p in pdf.pages]
+            dossiers = [i for i, body in enumerate(titles)
+                        if "COMPANY RESEARCH:" in body]
+            if (not dossiers or dossiers[0] not in (4, 5) or
+                    dossiers != list(range(dossiers[0], count)) or
+                    not 1 <= len(dossiers) <= 5 or
+                    any("MSK | PORTFOLIO DOCTOR" not in t for t in titles)):
+                raise PortfolioDoctorError("PDF_FAILED")
     except PortfolioDoctorError:
         raise
     except Exception as exc:
