@@ -1236,6 +1236,26 @@ def handle_analysis_callback(call):
         safe_send(chat_id, f"📄 Preparing research report for <b>{sym}</b>…")
         executor.submit(run_report, chat_id, sym)
 
+    elif action == "doctorpdf":
+        # Offered ONLY on a privately delivered Doctor PDF. An explicit tap
+        # requests a separate full 8+ page public-company report; never
+        # schedule five heavy PDFs or reuse saved/private holdings.
+        if (getattr(getattr(call.message, "chat", None), "type", None) != "private"
+                or type(sender_id) is not int or sender_id != chat_id):
+            safe_send(chat_id, "Full portfolio-linked research buttons work only in private chat.")
+            return
+        try:
+            ticker, _ = resolve_symbol(sym)
+        except Exception:
+            ticker = None
+        # A Doctor holding may be a BSE-only stock; never resolve a bare
+        # callback to another exchange or an unverified security identity.
+        if not ticker or not ticker.upper().endswith(".NS"):
+            safe_send(chat_id, "NSE identity not confirmed for this full research report.")
+            return
+        safe_send(chat_id, f"📄 Preparing separate full research PDF for <b>{html.escape(sym)}</b>…")
+        executor.submit(run_report, chat_id, sym)
+
     elif action == "menu":
         safe_send(chat_id, f"What would you like to see for <b>{sym}</b>?",
                   reply_markup=analysis_choice_keyboard(sym))
@@ -1539,11 +1559,30 @@ def portfolio_doctor_document(m, _typed_payload=None):
             safe_send(uid, "Checking recent market prices for your private, one-time report.")
             # PDF and holdings travel through worker stdin/stdout, never a local file.
             pdf_bytes = run_isolated_memory(name, payload, timeout=150)
+            # A full 9-page company report is an existing separate product.
+            # Offer it only on explicit tap, rather than automatically building
+            # five slow PDFs inside the private/stateless Doctor worker.
+            research_markup = None
+            try:
+                from portfolio_doctor_research_links import full_research_choices
+                choices = full_research_choices(name, payload)
+                if choices:
+                    research_markup = types.InlineKeyboardMarkup(row_width=2)
+                    for symbol, callback_data in choices:
+                        research_markup.add(types.InlineKeyboardButton(
+                            "📘 Full research: " + symbol, callback_data=callback_data))
+            except Exception:
+                # Optional navigation cannot withhold an otherwise verified PDF.
+                research_markup = None
             with io.BytesIO(pdf_bytes) as document:
                 document.name = "MSK_Portfolio_Doctor.pdf"
                 receipt = bot.send_document(
-                    uid, document, caption="MSK Portfolio Doctor | Private on-demand educational PDF",
-                    timeout=30, protect_content=True)
+                    uid, document,
+                    caption=("MSK Portfolio Doctor | Private educational PDF. "
+                             "Tap a stock below for a separate full fundamental + "
+                             "technical research report (independent verification; "
+                             "not automatic advice)."),
+                    timeout=30, protect_content=True, reply_markup=research_markup)
             message_id = getattr(receipt, "message_id", None)
             sent = getattr(receipt, "document", None)
             if not isinstance(message_id, int) or message_id <= 0 or not getattr(sent, "file_id", None):
