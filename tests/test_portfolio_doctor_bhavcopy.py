@@ -97,6 +97,41 @@ class BhavcopySafeguards(unittest.TestCase):
         self.assertEqual(float(merged.iloc[-1]["Close"]), 103)
         self.assertEqual(float(merged.iloc[-1]["Volume"]), 10000)
 
+    def test_unfinished_current_day_candle_does_not_block_official_prior_overlap(self):
+        # Mid-session Yahoo chart can include Wednesday even while Tuesday is
+        # the required completed session; it must never be used as report data.
+        partial_today = pd.DataFrame({
+            "Open": [105.0], "High": [106.0], "Low": [104.0],
+            "Close": [105.0], "Volume": [1000.0],
+        }, index=[pd.Timestamp("2026-11-18")])
+        primary = pd.concat([price_frame(), partial_today])
+        stitched = nse.stitch_one_verified_day(
+            primary, prior=records(MONDAY), latest=records(TUESDAY),
+            previous_day=MONDAY, expected_day=TUESDAY,
+            now=datetime(2026, 11, 18, 14, 7, tzinfo=doctor.IST))
+        self.assertIsNotNone(stitched)
+        self.assertEqual(stitched.index[-1].date(), TUESDAY)
+        self.assertEqual(len(stitched), 81)
+        self.assertNotIn(date(2026, 11, 18), set(stitched.index.date))
+        self.assertEqual(float(stitched.iloc[-1]["Close"]), 103)
+
+    def test_recovery_wont_overwrite_existing_session_or_reorder_bad_history(self):
+        partial_today = pd.DataFrame({
+            "Open": [105.0], "High": [106.0], "Low": [104.0],
+            "Close": [105.0], "Volume": [1000.0],
+        }, index=[pd.Timestamp("2026-11-18")])
+        completed = pd.DataFrame({
+            "Open": [102.0], "High": [104.0], "Low": [101.0],
+            "Close": [103.0], "Volume": [10000.0],
+        }, index=[pd.Timestamp("2026-11-17")])
+        with_completed = pd.concat([price_frame(), completed, partial_today])
+        for bad in (with_completed, with_completed.iloc[::-1],
+                    pd.concat([price_frame(), partial_today, partial_today])):
+            with self.subTest(kind=len(bad)):
+                self.assertIsNone(nse.stitch_one_verified_day(
+                    bad, prior=records(MONDAY), latest=records(TUESDAY),
+                    previous_day=MONDAY, expected_day=TUESDAY, now=NOW))
+
     def test_reject_provider_disagreement_and_wrong_trading_session(self):
         prior = records(MONDAY)
         prior["Close"] = 150
