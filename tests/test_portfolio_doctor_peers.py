@@ -75,6 +75,9 @@ class Nifty500ResearchTests(unittest.TestCase):
         self.assertEqual([r["symbol"] for r in result["candidates"]], ["NTPC", "JSWENERGY"])
         self.assertNotIn("SJVN", checked)
         self.assertNotIn("POWERGRID", [r["symbol"] for r in result["candidates"]])
+        self.assertEqual([r["symbol"] for r in result["comparisons"]],
+                         ["NTPC", "JSWENERGY"])
+        self.assertTrue(all(r["date"] == "2026-11-17" for r in result["comparisons"]))
 
     def test_no_index_membership_means_no_fabricated_candidates_or_fetch(self):
         def prohibited(*a, **kw):
@@ -83,6 +86,7 @@ class Nifty500ResearchTests(unittest.TestCase):
             [{"symbol": "SJVN"}], members={}, history_fetcher=prohibited, now=NOW)
         self.assertEqual(result["status"], "UNAVAILABLE")
         self.assertFalse(result["candidates"])
+        self.assertFalse(result["comparisons"])
 
     def test_report_discloses_partial_screen_and_no_swap_signal(self):
         holding = {"symbol": "SJVN", "qty": 2, "buy": 40, "close": 55,
