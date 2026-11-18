@@ -21,13 +21,17 @@ RED = HexColor('#BD4040')
 WHITE = HexColor('#FFFFFF')
 
 
-def render_pdf(holdings, peers=None, risk=None, max_bytes=5 * 1024 * 1024):
+def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 1024 * 1024):
     """Use already validated records; never fetch market data or persist files."""
     peers = peers or {}
     risk = risk if isinstance(risk, dict) else None
     has_risk = bool(risk and risk.get("status") == "VERIFIED" and
                     len(risk.get("chart_portfolio") or []) >= 65)
-    total_pages = 5 if has_risk else 4
+    # Only currently submitted verified symbols may produce company pages.
+    held = {row["symbol"] for row in holdings}
+    companies = [row for row in (companies or []) if isinstance(row, dict)
+                 and row.get("symbol") in held][:5]
+    total_pages = (5 if has_risk else 4) + len(companies)
     out = io.BytesIO()
     pdf = canvas.Canvas(out, pagesize=A4, pageCompression=1)
     w, h = A4
@@ -150,6 +154,48 @@ def render_pdf(holdings, peers=None, risk=None, max_bytes=5 * 1024 * 1024):
             text_fit('Nifty 50 (same dates)', x1 - 150, top_y + 8,
                      150, 8, True, MUTED)
         y = bot_y - 35
+
+    def company_price_chart(details):
+        nonlocal y
+        dates = details.get('chart_dates') or []
+        rows = [(details.get('chart') or [], BLUE),
+                (details.get('chart_ema20') or [], HexColor('#CB8B22')),
+                (details.get('chart_ema50') or [], HexColor('#8066AE'))]
+        valid = [(series, color) for series, color in rows
+                 if len(series) == len(dates) and len(series) >= 2]
+        if not valid:
+            line('Chart unavailable: insufficient dated historical candles.', 8)
+            return
+        points = [float(v) for series, _ in valid for v in series]
+        low, high = min(points), max(points)
+        gap = max(0.01, (high-low)*.08)
+        low -= gap
+        high += gap
+        x0, x1 = left+48, right-10
+        ytop, ybottom = y-35, y-169
+        for gridline in range(4):
+            yy = ybottom + (ytop-ybottom)*gridline/3
+            pdf.setStrokeColor(BORDER)
+            pdf.setLineWidth(.55)
+            pdf.line(x0, yy, x1, yy)
+            text_fit('{:,.0f}'.format(low+(high-low)*gridline/3),
+                     left, yy-3, 43, 7, color=MUTED)
+        for values, color in valid:
+            pdf.setStrokeColor(color)
+            pdf.setLineWidth(1.45)
+            last = None
+            for j, v in enumerate(values):
+                pt = (x0+(x1-x0)*j/(len(values)-1),
+                      ybottom+(ytop-ybottom)*(float(v)-low)/(high-low))
+                if last:
+                    pdf.line(last[0],last[1],pt[0],pt[1])
+                last = pt
+        text_fit('Close', x0, ytop+10, 50, 8, True, BLUE)
+        text_fit('EMA20', x0+72, ytop+10, 60, 8, True, HexColor('#CB8B22'))
+        text_fit('EMA50', x0+157, ytop+10, 60, 8, True, HexColor('#8066AE'))
+        text_fit(dates[0], x0, ybottom-15, 96, 7, color=MUTED)
+        text_fit(dates[-1], x1-96, ybottom-15, 96, 7, color=MUTED)
+        y = ybottom-33
 
     invested = sum(row['invested'] for row in holdings)
     value = sum(row['value'] for row in holdings)
@@ -374,6 +420,60 @@ def render_pdf(holdings, peers=None, risk=None, max_bytes=5 * 1024 * 1024):
         line('These are risk estimates for fixed current quantities, not realised P/L.', 8)
         line('Past results are not a forecast. Corporate actions can affect comparability.', 8)
         line('No BUY / SELL, asset allocation or risk tolerance has been assumed.', 8)
+    # OPTIONAL COMPANY RESEARCH APPENDIX (one page for each held stock).
+    # Full 8+ page standalone equity reports are delivered only on explicit
+    # Telegram button tap, outside the private Doctor worker.
+    by_symbol = {row['symbol']: row for row in holdings}
+    for index, company in enumerate(companies):
+        symbol = company['symbol']
+        held_row = by_symbol[symbol]
+        new_page('{:02d} / COMPANY RESEARCH: {}'.format(
+            (5 if has_risk else 4)+index+1, symbol),
+            'Dated technical facts and limited secondary financial evidence; not a trade opinion.')
+        line('Exchange close {}: {} | Current portfolio weight {:.2f}%'.format(
+            company['date'], money(held_row['close']), held_row['weight']), 9, True)
+        line('Industry: {}'.format(company.get('industry') or 'Not verified'), 8)
+        if company.get('status') != 'VERIFIED':
+            subhead('TECHNICAL EVIDENCE UNAVAILABLE')
+            line('Not enough independently verified completed candles for analysis.', 9)
+        else:
+            subhead('PRICE, TREND AND RISK')
+            line('20-session return: {:+.1f}% | RSI14: {:.1f} | MACD histogram: {:+.3f}'.format(
+                company['return20'], company['rsi14'],
+                company['macd_hist'] if company['macd_hist'] is not None else 0.0), 8.5)
+            line('EMA20: {} | EMA50: {} | EMA200: {}'.format(
+                money(company['ema20']) if company['ema20'] is not None else 'N/A',
+                money(company['ema50']) if company['ema50'] is not None else 'N/A',
+                money(company['ema200']) if company['ema200'] is not None else 'N/A'), 8.5)
+            line('1Y close range: {} to {} | 60-day annualised vol: {:.1f}%'.format(
+                money(company['year_close_low']),
+                money(company['year_close_high']), company['annual_vol_pct']), 8.5)
+            atr = company.get('atr14_pct')
+            volume = company.get('volume_ratio')
+            line('ATR14: {} | Latest volume / previous 20-day mean: {}'.format(
+                '{:.2f}% of price'.format(atr) if atr is not None else 'Unavailable',
+                '{:.2f}x'.format(volume) if volume is not None else 'Unavailable'), 8.5)
+            subhead('VERIFIED DAILY CLOSE / EMA CHART')
+            company_price_chart(company)
+        subhead('FUNDAMENTAL AND VALUATION FACTS')
+        finance = company.get('financial') or {}
+        if finance.get('status') == 'SECONDARY':
+            line('Source: Screener.in (secondary); {} | FY: {}.'.format(
+                finance.get('scope', 'unknown'), finance.get('annual_period','unknown')), 8)
+            line('Retrieved UTC: {} | Issuer filing reconciliation: NO.'.format(
+                str(finance.get('retrieved_utc','unavailable'))[:24]), 8, color=RED)
+            for metric in (finance.get('metrics') or [])[:11]:
+                line('{}: {:,.2f} {} | Period: {}'.format(
+                    metric['label'], metric['value'], metric['unit'],
+                    metric['period']), 8, leading=13)
+        else:
+            line('Not verified: no usable dated comparable financial statement facts.', 8)
+            line('P/E, sales, profit, margins, cash flow and debt are not guessed.', 8)
+        subhead('IMPORTANT RESEARCH LIMITS')
+        line('Shareholding, news catalysts and peer valuation: NOT VERIFIED here.', 8)
+        line('Scores, buying zones, targets and personal trade calls: NOT GENERATED.', 8)
+        line('For the full separate 8+ page company report, tap the stock button', 8)
+        line('under the Portfolio Doctor PDF in Telegram. Validate issuer filings.', 8)
     footer()
     pdf.save()
     data = out.getvalue()
