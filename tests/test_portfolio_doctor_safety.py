@@ -44,6 +44,11 @@ class InputTests(unittest.TestCase):
 
 
 class MarketDataTests(unittest.TestCase):
+    def setUp(self):
+        bse = patch.object(doctor, "bse_daily_for_doctor", return_value=None)
+        bse.start()
+        self.addCleanup(bse.stop)
+
     def test_missing_prices_are_not_fabricated(self):
         fake = SimpleNamespace(bulk_history=lambda *_args, **_kwargs: {})
         with patch.dict(sys.modules, {"market_data": fake}), \

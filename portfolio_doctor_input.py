@@ -17,7 +17,13 @@ class InputRejected(ValueError):
     pass
 
 
+def _unnumber(line):
+    """Strip a list marker, never a numeric BSE scrip code."""
+    return re.sub(r"^\s*\d{1,3}[.)]\s+", "", line, count=1)
+
+
 def _cells(line):
+    line = _unnumber(line)
     if any(mark in line for mark in (",", ";", "\t")):
         mark = "," if "," in line else ";" if ";" in line else "\t"
         return next(csv.reader([line], delimiter=mark, strict=True))
@@ -34,13 +40,13 @@ def looks_like_holdings_text(text):
                 cells = _cells(line)
             except csv.Error:
                 # Malformed CSV is still private-looking, not a search query.
-                cells = [cell.strip('"') for cell in re.split(r"[,;\t ]+", line.strip())]
+                cells = [cell.strip('"') for cell in re.split(r"[,;\t ]+", _unnumber(line).strip())]
             if len(cells) < 2:
                 continue
             if " ".join(cell.upper() for cell in cells) in {
                     "NIFTY 50", "NIFTY 100", "NIFTY 200", "NIFTY 500", "SENSEX 30"}:
                 continue
-            symbol = cells[0].strip().upper().removeprefix("NSE:")
+            symbol = cells[0].strip().upper().removeprefix("NSE:").removeprefix("BSE:")
             symbol = symbol.removesuffix(".NS").removesuffix(".BO")
             if not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol):
                 continue
@@ -120,7 +126,7 @@ def _positive(value):
 
 
 def decode_holdings(filename, payload):
-    """Return exactly 1–5 unique canonical NSE symbols, quantities and costs."""
+    """Return exactly 1–5 unique canonical Indian symbols, quantities and costs."""
     if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_BYTES:
         raise InputRejected()
     name = str(filename or "").lower()
@@ -146,10 +152,19 @@ def decode_holdings(filename, payload):
         for row in rows:
             if len(row) != 3:
                 raise InputRejected()
-            symbol = str(row[0] or "").strip().upper().removeprefix("NSE:").removesuffix(".NS")
+            raw_symbol = str(row[0] or "").strip().upper()
+            bse = raw_symbol.startswith("BSE:") or raw_symbol.endswith(".BO")
+            if ((raw_symbol.startswith("NSE:") and raw_symbol.endswith(".BO")) or
+                    (raw_symbol.startswith("BSE:") and raw_symbol.endswith(".NS"))):
+                raise InputRejected()
+            symbol = raw_symbol.removeprefix("NSE:").removeprefix("BSE:")
+            symbol = symbol.removesuffix(".NS").removesuffix(".BO")
             if not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol) or symbol in seen:
                 raise InputRejected()
-            result.append({"symbol": symbol, "qty": _positive(row[1]), "buy": _positive(row[2])})
+            item = {"symbol": symbol, "qty": _positive(row[1]), "buy": _positive(row[2])}
+            if bse:
+                item["exchange"] = "BSE"
+            result.append(item)
             seen.add(symbol)
         return result
     except InputRejected:

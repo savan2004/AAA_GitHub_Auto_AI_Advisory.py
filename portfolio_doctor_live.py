@@ -147,11 +147,77 @@ def recover_fresh_daily_for_doctor(symbol, *, now=None, fetchers=None):
     return None
 
 
+def bse_daily_for_doctor(symbol, *, now=None, explicit=False, get=None):
+    """Exact BSE identity plus complete INR daily history; never fuzzy matching.
+
+    Bare symbols retain NSE priority. A failed NSE provider alone is not proof
+    of BSE identity: public search must return exactly the same BSE ticker and
+    no exact NSE listing. All requests are bounded and confined to the worker.
+    """
+    import requests
+    get = get or requests.get
+    ticker = symbol + ".BO"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        import pandas as pd
+        from market_data import _clean_frame
+        if not explicit:
+            response = get("https://query2.finance.yahoo.com/v1/finance/search",
+                           params={"q": symbol, "quotesCount": 20,
+                                   "newsCount": 0, "enableFuzzyQuery": "false"},
+                           headers=headers, timeout=6)
+            response.raise_for_status()
+            quotes = response.json().get("quotes", [])
+            if any(str(q.get("symbol", "")).upper() == symbol + ".NS"
+                   for q in quotes):
+                return None
+            matches = [q for q in quotes
+                       if str(q.get("symbol", "")).upper() == ticker
+                       and q.get("exchange") in ("BSE", "BOM")
+                       and q.get("quoteType") == "EQUITY"]
+            if len(matches) != 1:
+                return None
+        from urllib.parse import quote
+        response = get("https://query2.finance.yahoo.com/v8/finance/chart/" +
+                       quote(ticker, safe=""),
+                       params={"interval": "1d", "range": "1y",
+                               "includePrePost": "false"},
+                       headers=headers, timeout=8)
+        response.raise_for_status()
+        result = response.json()["chart"]["result"]
+        if len(result) != 1:
+            return None
+        data = result[0]
+        meta = data["meta"]
+        if (str(meta.get("symbol", "")).upper() != ticker or
+                meta.get("exchangeName") not in ("BSE", "BOM") or
+                meta.get("instrumentType") != "EQUITY" or
+                meta.get("currency") != "INR"):
+            return None
+        stamps = data["timestamp"]
+        quotes = data["indicators"]["quote"][0]
+        columns = {"Open": "open", "High": "high", "Low": "low",
+                   "Close": "close", "Volume": "volume"}
+        if not stamps or any(len(quotes[key]) != len(stamps) for key in columns.values()):
+            return None
+        index = pd.to_datetime(stamps, unit="s", utc=True).tz_convert(IST).normalize().tz_localize(None)
+        frame = pd.DataFrame({key: quotes[value] for key, value in columns.items()},
+                             index=index)
+        complete = verified_completed_daily_frame(frame, now=now)
+        clean = _clean_frame(complete)
+        if clean is None or len(clean) != len(complete) or len(clean) < 20:
+            return None
+        return clean
+    except Exception:
+        return None
+
+
 def price_holdings(holdings, *, include_frames=False):
     """Use verified OHLC only, not an assumed live quote or fabricated tick."""
     from market_data import bulk_history
     symbols = [h["symbol"] for h in holdings]
-    frames = bulk_history(symbols, "1y", chunk_size=5, retries=0,
+    nse_symbols = [h["symbol"] for h in holdings if h.get("exchange") != "BSE"]
+    frames = bulk_history(nse_symbols, "1y", chunk_size=5, retries=0,
                           max_fallbacks=0, download_timeout=12)
     now = datetime.now(IST)
     today = now.date()
@@ -174,7 +240,8 @@ def price_holdings(holdings, *, include_frames=False):
         # agrees with the original full historical series.
         try:
             from portfolio_doctor_bhavcopy import recover_from_public_bhavcopy
-            official = recover_from_public_bhavcopy(frames, stale_symbols, now=now)
+            official = recover_from_public_bhavcopy(
+                frames, [sym for sym in stale_symbols if sym in nse_symbols], now=now)
             for sym, fresh in official.items():
                 frames[sym] = fresh
                 failures.pop(sym, None)
@@ -185,6 +252,7 @@ def price_holdings(holdings, *, include_frames=False):
             pass
         stale_symbols = [sym for sym in stale_symbols if sym in failures]
 
+    stale_symbols = [sym for sym in stale_symbols if sym in nse_symbols]
     if stale_symbols:
         # All recovery is confined to a single disposable child process.
         # Bounded parallelism prevents five sequential 15+12s provider calls
@@ -199,6 +267,26 @@ def price_holdings(holdings, *, include_frames=False):
                     frames[sym] = recovered
                     failures.pop(sym, None)
                     price_sources[sym] = "Verified alternate daily OHLCV"
+    # Explicit BSE requests never enter NSE recovery. Bare-symbol BSE fallback
+    # requires exact provider identity and does not replace an existing NSE
+    # history merely because its latest candle is stale.
+    bse_candidates = [h for h in holdings if h["symbol"] in failures and
+                      (h.get("exchange") == "BSE" or
+                       (frames.get(h["symbol"]) is None or
+                        getattr(frames.get(h["symbol"]), "empty", True)))]
+    if bse_candidates:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(3, len(bse_candidates))) as pool:
+            pending = [(h, pool.submit(bse_daily_for_doctor, h["symbol"], now=now,
+                                      explicit=h.get("exchange") == "BSE"))
+                       for h in bse_candidates]
+            for holding, future in pending:
+                recovered = future.result()
+                if recovered is not None:
+                    sym = holding["symbol"]
+                    frames[sym] = recovered
+                    failures.pop(sym, None)
+                    price_sources[sym] = "BSE: exact ticker, INR completed daily OHLCV"
     if failures:
         code = ("STALE_PRICES" if "STALE_PRICES" in failures.values()
                 else "NO_PRICES")
@@ -397,12 +485,15 @@ def worker_main(filename):
         raw = sys.stdin.buffer.read(MAX_BYTES + 1)
         holdings = parse_holdings(filename, raw)
         advanced = os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED", "0") == "1"
-        if advanced:
+        if advanced and not any(h.get("exchange") == "BSE" for h in holdings):
             recs, frames = price_holdings(holdings, include_frames=True)
             try:
                 # Reserve time for the basic PDF before the parent's hard kill.
                 budget = min(20, 120 - (time.monotonic() - worker_started))
-                result = build_optional_pdf(recs, frames, seconds=budget)
+                if any(row["price_source"].startswith("BSE:") for row in recs):
+                    result = build_pdf_bytes(recs)
+                else:
+                    result = build_optional_pdf(recs, frames, seconds=budget)
             except (Exception, OptionalReviewTimeout):
                 # Optional research cannot consume the basic report's budget.
                 result = build_pdf_bytes(recs)

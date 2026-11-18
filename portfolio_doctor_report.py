@@ -111,7 +111,9 @@ def build_pdf_bytes(holdings):
             h["symbol"], h["qty"], h["buy"]), 10, True, 17)
         line("Last close Rs {:,.2f} ({}) | Value Rs {:,.2f}".format(
             h["close"], h["date"], h["value"]))
-        if h.get("price_source", "").startswith("NSE EOD"):
+        if h.get("price_source", "").startswith("BSE:"):
+            line("Source: BSE exact ticker; INR completed daily OHLCV.", 8)
+        elif h.get("price_source", "").startswith("NSE EOD"):
             line("Source: NSE official daily file; historical OHLC cross-checked.", 8)
         line("P/L Rs {:+,.2f} ({:+.2f}%) | Portfolio weight {:.1f}%".format(
             h["pnl"], h["pnl_pct"], h["weight"]))

@@ -50,6 +50,8 @@ def _run(case, folder):
     assert "Invested: Rs " + invested in text, "incorrect invested total"
 
     assert "Unrealised P/L" in text and "RSI14" in text, "missing financial content"
+    if b".BO" in payload:
+        assert "BSE: exact ticker" in text, "explicit BSE request lost exchange identity"
     money = lambda value: Decimal(value.replace(",", ""))
     expected = expected_doctor_session()
     official = fetch_nse_bhavcopy_rows(expected, symbols)
@@ -84,11 +86,38 @@ def _run(case, folder):
     return len(pages)
 
 
+def _bse_public_evidence(folder):
+    """Real fixed-public BSE request: validate a PDF or prove safe rejection.
+
+    The provider currently returns fewer than 20 SBIN.BO daily candles on some
+    endpoints. Do not pretend rejection is successful BSE report generation.
+    """
+    from portfolio_doctor_live import PortfolioDoctorError, bse_daily_for_doctor
+    public = bse_daily_for_doctor("SBIN", explicit=True)
+    case = ("synthetic.csv", b"SBIN.BO 100 840", (("SBIN", "100", "840"),), ())
+    if public is not None:
+        _run(case, folder)
+        print("MSK_DOCTOR_BSE_PUBLIC_REPORT PASS")
+        return
+    try:
+        run_isolated_memory(case[0], case[1], timeout=150)
+    except PortfolioDoctorError as error:
+        assert error.code in ("NO_PRICES", "STALE_PRICES"), "unexpected BSE worker failure"
+        assert not list(Path(folder).rglob("*")), "BSE request created cache"
+        print("MSK_DOCTOR_BSE_PUBLIC_REPORT NOT_AVAILABLE insufficient_verified_history")
+        print("MSK_DOCTOR_BSE_FAIL_CLOSED PASS no_fabricated_pdf cache_files=0")
+        return
+    raise AssertionError("BSE evidence differed between probe and worker; inspect before release")
+
+
 def main():
     one = (("INFY", "2", "1000"),)
     five = tuple((symbol, str(i), "1000") for i, symbol in enumerate(
         ("INFY", "TCS", "RELIANCE", "HDFCBANK", "ITC"), 1))
-    sequential = (_case(one), _case(five), _case(five, xlsx=True))
+    client = (("SBIN", "100", "840"), ("BHEL", "150", "150"))
+    numbered = ("synthetic.csv", b"1. sbin 100 840\n2. Bhel 150 150", client, ())
+    sequential = (_case(one), _case(five), _case(five, xlsx=True),
+                  _case(client), numbered)
     concurrent = (
         _case(one, forbidden=("TCS",)),
         _case((("TCS", "3", "1000"),), forbidden=("INFY",)),
@@ -102,6 +131,7 @@ def main():
         with patch.dict(os.environ, env):
             for case in sequential:
                 _run(case, folder)
+            _bse_public_evidence(folder)
             with ThreadPoolExecutor(max_workers=2) as pool:
                 pending = [pool.submit(_run, case, folder) for case in concurrent]
                 assert all(future.result() >= 1 for future in pending)
