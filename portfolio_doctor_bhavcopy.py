@@ -123,8 +123,21 @@ def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_da
         original = _clean_frame(primary)
         if original is None:
             return None
-        # Prior Yahoo is latest completed and has >=20 genuine OHLCV candles.
-        if original.index[-1].date() != previous_day or len(original) < 20:
+        # Before the exchange close, Yahoo can already include an unfinished
+        # current-day candle. That later candle must not prevent checking the
+        # previous COMPLETED session against the official NSE file. Keep the
+        # raw sequence strict: reject duplicate/out-of-order dates and never
+        # overwrite an expected-session candle already present in the feed.
+        if (not original.index.is_monotonic_increasing or
+                original.index.has_duplicates or
+                len(set(original.index.date)) != len(original)):
+            return None
+        if any(day == expected_day for day in original.index.date):
+            return None
+        original = original.loc[original.index.date <= previous_day]
+        # Only a genuine preceding-session OHLCV history may be extended by
+        # one official exchange candle. Never fill more than one missing day.
+        if original.empty or original.index[-1].date() != previous_day or len(original) < 20:
             return None
         hist = original.iloc[-1]
         for field in ("Open", "High", "Low", "Close"):
