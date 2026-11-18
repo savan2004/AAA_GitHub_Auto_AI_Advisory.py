@@ -358,14 +358,15 @@ def worker_environment(source=None):
     return result
 
 
-def run_isolated_memory(filename, payload, timeout=150):
+def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
     """No customer file/DB writes: stdin bytes -> killable process -> PDF bytes."""
     if not (isinstance(payload, bytes) and 0 < len(payload) <= MAX_BYTES and
             str(filename).lower().endswith((".csv", ".xlsx"))):
         raise PortfolioDoctorError("BAD_INPUT")
     env = worker_environment()
     worker_name = "input.xlsx" if str(filename).lower().endswith(".xlsx") else "input.csv"
-    command = [sys.executable, os.path.abspath(__file__), "--worker", worker_name]
+    command = [sys.executable, os.path.abspath(__file__),
+               "--audit-worker" if audit else "--worker", worker_name]
     try:
         child = subprocess.run(command, input=payload, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, timeout=timeout,
@@ -389,6 +390,17 @@ def run_isolated_memory(filename, payload, timeout=150):
     try:
         from pypdf import PdfReader
         pdf = PdfReader(io.BytesIO(raw), strict=True)
+        # Standalone Audit has a distinct exact 10-14 page structure gate.
+        if audit:
+            if not 10 <= len(pdf.pages) <= 14:
+                raise PortfolioDoctorError("PDF_FAILED")
+            bodies = [page.extract_text() or "" for page in pdf.pages]
+            if (any("MSK | PORTFOLIO AUDIT" not in b for b in bodies)
+                    or "PORTFOLIO DASHBOARD" not in bodies[0]
+                    or "SYNTHETIC DEMO" in " ".join(bodies)
+                    or not all(len(b) > 100 for b in bodies)):
+                raise PortfolioDoctorError("PDF_FAILED")
+            return raw
         # Different verified output contracts:
         # - Basic Doctor: <=5 pages as before.
         # - Full company appendix: 4/5 basic pages + 1..5 *trailing*
@@ -550,7 +562,7 @@ def _safe_company_dossiers(recs, frames, peers, *, seconds=15):
         return None
 
 
-def worker_main(filename):
+def worker_main(filename, *, audit=False):
     # Private worker only: suppress inherited library logs that could reveal
     # which stocks a customer currently owns. Parent logs safe error codes.
     import logging
@@ -562,7 +574,15 @@ def worker_main(filename):
         raw = sys.stdin.buffer.read(MAX_BYTES + 1)
         holdings = parse_holdings(filename, raw)
         advanced = os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED", "0") == "1"
-        if advanced and not any(h.get("exchange") == "BSE" for h in holdings):
+        if audit:
+            # The new report must never use SyntheticProvider or bypass the
+            # same fail-closed exchange-verified price gate as /doctor.
+            recs, frames = price_holdings(holdings, include_frames=True)
+            from portfolio_audit_bridge import build_verified_audit
+            remaining = max(1, min(58, 118 - (time.monotonic() - worker_started)))
+            result = build_verified_audit(holdings, recs, frames,
+                                          budget_seconds=remaining)
+        elif advanced and not any(h.get("exchange") == "BSE" for h in holdings):
             recs, frames = price_holdings(holdings, include_frames=True)
             peers = _safe_peer_watchlist(recs)
             try:
@@ -597,6 +617,6 @@ def worker_main(filename):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] != "--worker":
+    if len(sys.argv) != 3 or sys.argv[1] not in ("--worker", "--audit-worker"):
         raise SystemExit(2)
-    worker_main(sys.argv[2])
+    worker_main(sys.argv[2], audit=sys.argv[1] == "--audit-worker")

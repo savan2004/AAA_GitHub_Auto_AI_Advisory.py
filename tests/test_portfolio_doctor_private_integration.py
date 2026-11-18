@@ -67,6 +67,7 @@ class SessionTests(unittest.TestCase):
             "threading": threading, "time": time,
             "_portfolio_doctor_lock": threading.Lock(),
             "_portfolio_doctor_waiting": {uid: time.monotonic()+180 for uid in user_ids},
+            "_portfolio_audit_mode": {},
             "_portfolio_doctor_running": set(),
             "_portfolio_doctor_slots": threading.BoundedSemaphore(2),
             "_doctor_allowed": lambda m: True,

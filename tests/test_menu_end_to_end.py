@@ -132,6 +132,7 @@ def isolated_environment():
         "_doctor_allowed": lambda m: True,
         "_portfolio_doctor_lock": threading.Lock(),
         "_portfolio_doctor_waiting": {},
+        "_portfolio_audit_mode": {},
         "_portfolio_doctor_running": set(),
         "build_breadth": lambda: "Mock breadth snapshot (offline fixture)",
         "build_intraday_trade_report": lambda: "Mock intraday: NSE CLOSED — NO TRADE",
