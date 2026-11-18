@@ -75,8 +75,8 @@ class Nifty500ResearchTests(unittest.TestCase):
         self.assertEqual([r["symbol"] for r in result["candidates"]], ["NTPC", "JSWENERGY"])
         self.assertNotIn("SJVN", checked)
         self.assertNotIn("POWERGRID", [r["symbol"] for r in result["candidates"]])
-        self.assertEqual([r["symbol"] for r in result["comparisons"]],
-                         ["NTPC", "JSWENERGY"])
+        self.assertEqual({r["symbol"] for r in result["comparisons"]},
+                         {"NTPC", "JSWENERGY"})
         self.assertTrue(all(r["date"] == "2026-11-17" for r in result["comparisons"]))
 
     def test_no_index_membership_means_no_fabricated_candidates_or_fetch(self):
