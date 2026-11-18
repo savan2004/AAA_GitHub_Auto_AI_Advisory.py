@@ -331,11 +331,11 @@ def price_holdings(holdings, *, include_frames=False):
     return (out, frames) if include_frames else out
 
 
-def build_pdf_bytes(holdings, *, peers=None):
+def build_pdf_bytes(holdings, *, peers=None, risk=None):
     """Compatibility entry point; rendering failures contain no holding data."""
     try:
         from portfolio_doctor_report import build_pdf_bytes as render
-        return render(holdings, peers=peers)
+        return render(holdings, peers=peers, risk=risk)
     except Exception:
         raise PortfolioDoctorError("PDF_FAILED") from None
 
@@ -490,6 +490,22 @@ def _safe_peer_watchlist(recs):
         return None
 
 
+def _safe_historical_risk(recs, frames):
+    """Optional fully-covered history research; never block holdings PDF."""
+    try:
+        from portfolio_doctor_risk_history import calculate_historical_risk
+        with optional_review_deadline(14):
+            benchmark = None
+            try:
+                from market_data import index_history
+                benchmark = index_history("^NSEI", "1y", retries=0, timeout=10)
+            except Exception:
+                pass
+            return calculate_historical_risk(recs, frames, benchmark_frame=benchmark)
+    except (Exception, OptionalReviewTimeout):
+        return None
+
+
 def worker_main(filename):
     # Private worker only: suppress inherited library logs that could reveal
     # which stocks a customer currently owns. Parent logs safe error codes.
@@ -516,9 +532,12 @@ def worker_main(filename):
                 # Optional research cannot consume the basic report's budget.
                 result = build_pdf_bytes(recs, peers=peers)
         else:
-            recs = price_holdings(holdings)
+            # Keep the verified in-memory historical frames for the same
+            # limited private report. No new holdings database or cache.
+            recs, frames = price_holdings(holdings, include_frames=True)
+            risk = _safe_historical_risk(recs, frames)
             peers = _safe_peer_watchlist(recs)
-            result = build_pdf_bytes(recs, peers=peers)
+            result = build_pdf_bytes(recs, peers=peers, risk=risk)
         sys.stdout.buffer.write(result)
     except PortfolioDoctorError as exc:
         sys.stderr.write("\nMSK_DOCTOR_CODE=" + exc.code + "\n")
