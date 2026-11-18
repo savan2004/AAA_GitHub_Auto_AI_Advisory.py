@@ -76,8 +76,11 @@ def expected_doctor_session(now=None):
         stamp = stamp.replace(tzinfo=IST)
     stamp = stamp.astimezone(IST)
     day = stamp.date()
+    # NSE equity files are not guaranteed to be published by 16:00 IST.
+    # Use the last completed PRIOR session through the ordinary 17:00 EOD
+    # publication buffer; special sessions retain reviewed explicit cutoffs.
     if (doctor_trading_session(day) and
-            stamp.time() >= _NSE_SPECIAL_2026.get(day, daytime(16))):
+            stamp.time() >= _NSE_SPECIAL_2026.get(day, daytime(17))):
         return day
     return previous_doctor_session(day)
 
