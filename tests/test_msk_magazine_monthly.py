@@ -61,7 +61,16 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertIn('Create a 16-page UNAPPROVED monthly draft only', workflow)
         self.assertNotIn('continue-on-error: true', workflow)
 
-    def test_first_mondays(self):
+    def test_archive_requires_matching_pdf_checksum(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/msk-magazine-monthly.yml").read_text()
+        archive = workflow.split("      - name: Archive each run in a durable PRIVATE GitHub draft release", 1)[1]
+        self.assertIn('gate.get("pdf_sha256")', archive)
+        self.assertIn('hashlib.sha256(pdf.read_bytes()).hexdigest()', archive)
+        self.assertIn('Magazine PDF checksum mismatch or missing: archive blocked', archive)
+        self.assertLess(archive.index('Magazine PDF checksum mismatch or missing: archive blocked'),
+                        archive.index('gh release create'))
+
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
 
