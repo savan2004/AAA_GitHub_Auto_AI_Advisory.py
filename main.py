@@ -1474,8 +1474,7 @@ def portfolio_doctor_text(m):
     from portfolio_doctor_live import parse_holdings, PortfolioDoctorError
 
     raw = m.text or ""
-    rows = [line for line in raw.splitlines() if line.strip()]
-    if len(raw.encode("utf-8")) > 2048 or not 1 <= len(rows) <= 5:
+    if len(raw.encode("utf-8")) > 2048 or not raw.strip():
         with _portfolio_doctor_lock:
             _portfolio_doctor_waiting.pop(m.chat.id, None)
         safe_send(m.chat.id, "Invalid request. Select Portfolio Doctor again, then enter 1–5 rows.")
@@ -2078,11 +2077,19 @@ def handle_text(m):
         doctor_waiting = deadline > time.monotonic()
         if not doctor_waiting:
             _portfolio_doctor_waiting.pop(uid, None)
-    if _doctor_allowed(m) and doctor_running:
+    if doctor_running:
         safe_send(uid, "A private Portfolio Doctor report is already running.")
         return
-    if doctor_waiting and _doctor_allowed(m):
-        portfolio_doctor_text(m)
+    if deadline and not doctor_waiting:
+        safe_send(uid, "Portfolio Doctor session expired. Select Portfolio Doctor again.")
+        return
+    if doctor_waiting:
+        if _doctor_allowed(m):
+            portfolio_doctor_text(m)
+        else:
+            with _portfolio_doctor_lock:
+                _portfolio_doctor_waiting.pop(uid, None)
+            safe_send(uid, "Portfolio Doctor session is unavailable. No holdings were processed.")
         return
 
     # Expired/disabled Doctor requests must never become provider search queries.

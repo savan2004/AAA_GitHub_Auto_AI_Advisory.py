@@ -4,6 +4,11 @@ on:
     branches: [main]
     paths:
       - 'portfolio_doctor_live.py'
+      - 'portfolio_doctor_input.py'
+      - 'portfolio_doctor_calculations.py'
+      - 'portfolio_doctor_report.py'
+      - 'tests/test_portfolio_doctor_rewrite.py'
+      - 'tests/test_portfolio_doctor_cleanup.py'
       - 'tests/test_portfolio_doctor_deep_repair.py'
       - 'portfolio_doctor_bhavcopy.py'
       - 'tests/test_portfolio_doctor_bhavcopy.py'
@@ -50,6 +55,12 @@ jobs:
       - name: Test Doctor RSI accuracy and complete upload parsing
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_deep_repair.py' -v
 
+      - name: Test consolidated Doctor rewrite boundaries and full PDF content
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_rewrite.py' -v
+
+      - name: Test retired-path removal, strict evidence and private session expiry
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_cleanup.py' -v
+
   public-provider-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 4
@@ -77,5 +88,5 @@ jobs:
       - name: Verify completed EOD date for public INFY, using fallback on stale primary
         run: MSK_RESEARCH_ONLY=1 PYTHONPATH=. python scripts/msk_doctor_public_eod_probe.py
 
-      - name: Exercise real in-memory worker with public data and synthetic 1 and 5 holdings
+      - name: Exercise real CSV/XLSX PDFs and concurrent private workers with public data
         run: MSK_RESEARCH_ONLY=1 PYTHONPATH=. python scripts/msk_doctor_public_memory_probe.py

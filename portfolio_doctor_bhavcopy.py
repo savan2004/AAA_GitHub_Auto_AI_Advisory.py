@@ -9,7 +9,7 @@ All data is request-local memory and this file never creates logs.
 import csv
 import io
 import math
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from typing import Mapping
 
 import pandas as pd
@@ -107,13 +107,6 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
     except (requests.RequestException, UnicodeError, ValueError, KeyError,
             TypeError, OverflowError, OSError, csv.Error):
         return {}
-
-
-def previous_weekday(day):
-    past = day - timedelta(days=1)
-    while past.weekday() >= 5:
-        past -= timedelta(days=1)
-    return past
 
 
 def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_day, now):

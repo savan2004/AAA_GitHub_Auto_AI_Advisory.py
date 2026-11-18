@@ -233,5 +233,47 @@ class SessionTests(unittest.TestCase):
                 self.assertTrue(doctor.looks_like_holdings_text(text))
 
 
+
+    def test_expired_or_disabled_session_blocks_even_unrecognised_text(self):
+        for expired, enabled in ((True, True), (True, False), (False, False)):
+            env, _, notices = self._env()
+            if expired:
+                env["_portfolio_doctor_waiting"][101] = time.monotonic() - 1
+            env["_doctor_allowed"] = lambda m, value=enabled: value
+            env["API_RATE_LIMITER"] = SimpleNamespace(is_allowed=lambda uid: True)
+            def prohibited(*args, **kwargs):
+                self.fail("private session input escaped to generic analysis")
+            env["executor"] = SimpleNamespace(submit=prohibited)
+            env["state"] = SimpleNamespace(get=prohibited)
+            env["portfolio_doctor_text"] = prohibited
+            fn = _function("handle_text", env)
+            fn(_message(101, text="private malformed row without numeric fields"))
+            self.assertEqual(env["_portfolio_doctor_waiting"], {})
+            self.assertIn("Portfolio Doctor session", notices[-1][1])
+            self.assertNotIn("private malformed", str(notices))
+
+    def test_typed_csv_header_does_not_reduce_five_holding_capacity(self):
+        env, _, _ = self._env()
+        delivered = []
+        env["portfolio_doctor_document"] = lambda m, **kw: delivered.append(kw["_typed_payload"])
+        raw = "Symbol,Qty,Buy Price\n" + "\n".join(
+            "SAMPLE" + str(i) + ",2,100" for i in range(5))
+        fn = _function("portfolio_doctor_text", env)
+        fn(_message(101, text=raw))
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(len(doctor.parse_holdings("input.csv", delivered[0])), 5)
+
+    def test_running_private_job_stays_private_after_access_flag_changes(self):
+        env, _, notices = self._env()
+        env["_portfolio_doctor_waiting"].clear()
+        env["_portfolio_doctor_running"].add(101)
+        env["_doctor_allowed"] = lambda m: False
+        env["API_RATE_LIMITER"] = SimpleNamespace(is_allowed=lambda uid: True)
+        env["state"] = SimpleNamespace(get=lambda uid: self.fail("generic lookup reached"))
+        fn = _function("handle_text", env)
+        fn(_message(101, text="private incomplete request"))
+        self.assertIn("already running", notices[-1][1])
+
+
 if __name__ == "__main__":
     unittest.main()
