@@ -7,6 +7,7 @@ Results are technical research observations, never personalised swaps.
 """
 import csv
 import io
+import math
 import re
 from datetime import datetime
 
@@ -71,7 +72,8 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     if not isinstance(members, dict) or not MIN_MEMBERS <= len(members) <= MAX_MEMBERS:
         return out
     held = {str(row.get("symbol", "")).upper() for row in holdings}
-    industries = list(dict.fromkeys(members[sym] for sym in held if sym in members))
+    industries = list(dict.fromkeys(members[sym] for row in holdings
+                                    if (sym := str(row.get("symbol", "")).upper()) in members))
     if not industries:
         return out
     pool = [(sym, industry) for sym, industry in members.items()
@@ -119,14 +121,14 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
                 continue
             score = float(scored["score"])
             price = float(scored["ltp"])
-            if not 0 <= score <= 100 or price <= 0:
+            if not math.isfinite(score) or not math.isfinite(price) or not 0 <= score <= 100 or price <= 0:
                 continue
             qualified.append({
                 "symbol": sym, "industry": industry, "score": score,
                 "close": price, "date": scored["asof"],
                 "rsi": scored.get("rsi"), "adx": scored.get("adx"),
             })
-        except (Exception):
+        except Exception:
             # Never emit customer tickers or provider details in worker logs.
             continue
     qualified.sort(key=lambda row: (-row["score"], row["symbol"]))
