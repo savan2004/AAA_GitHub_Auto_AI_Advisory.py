@@ -105,6 +105,26 @@ def build_pdf_bytes(holdings):
     line("Invested: Rs {:,.2f}   Last-close value: Rs {:,.2f}".format(total_cost, total_value), 10)
     line("Unrealised P/L: Rs {:+,.2f} ({:+.2f}%)".format(diff, 100 * diff / total_cost), 10, True, 23)
     divider()
+    line("EXECUTIVE DIAGNOSIS (PRICE-BASED ONLY)", 11, True, 21)
+    biggest = max(holdings, key=lambda h: h["weight"])
+    line("{} positions | Largest: {} ({:.1f}% of value)".format(
+        len(holdings), biggest["symbol"], biggest["weight"]), 9)
+    line("Return: {:+.2f}% on entered average costs; unrealised, not booked.".format(
+        100 * diff / total_cost), 9)
+    if len(holdings) < 3:
+        line("Diversification: only {} holdings; sector diversification cannot be established.".format(
+            len(holdings)), 9)
+    line("No verified fundamentals, sector mapping, risk profile or target weights supplied.", 8, False, 20)
+    divider()
+    line("HOLDING ALLOCATION & PRICE TREND MATRIX", 11, True, 21)
+    for h in holdings:
+        trend_label = ("Above EMA20" if h["close"] > Decimal(str(h["ema20"]))
+                       else "Below EMA20" if h["close"] < Decimal(str(h["ema20"]))
+                       else "At EMA20")
+        line("{} | Weight {:.1f}% | P/L {:+.2f}% | {}".format(
+            h["symbol"], h["weight"], h["pnl_pct"], trend_label), 9)
+    line("Trend labels describe historical closing prices, not HOLD/ADD/EXIT advice.", 8, False, 20)
+    divider()
     line("HOLDING-WISE VERIFIED RESULTS", 11, True, 23)
     for h in holdings:
         line("{} | Qty {:g} | Average purchase Rs {:,.2f}".format(
@@ -139,6 +159,13 @@ def build_pdf_bytes(holdings):
     for msg in (flags or ["No threshold flags from this limited price-only check."]):
         line("- " + msg, 9, False, 17)
     y -= 6
+    divider()
+    line("PORTFOLIO HEALTH & EVIDENCE CHECKLIST", 11, True, 21)
+    line("Position concentration: measured from verified last-close values.", 9)
+    line("Sector allocation / ideal weights: unavailable without validated sector metadata", 9)
+    line("Fundamentals (P/E, debt, growth): not verified; no grades assigned.", 9)
+    line("Replacement stocks / tax projections: not assessed; no fabricated targets.", 9)
+    line("Health score: withheld until a published, validated methodology exists.", 9, False, 21)
     divider()
     line("LIMITS & DISCLAIMER", 9, True)
     line("Last close is not a tradeable live price. Prices can change after the last session.", 8)
