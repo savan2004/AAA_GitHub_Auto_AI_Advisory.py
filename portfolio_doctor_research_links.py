@@ -17,5 +17,5 @@ def full_research_choices(filename, payload):
         rows = parse_holdings(filename, payload)
     except PortfolioDoctorError:
         return ()
-    return tuple((row["symbol"], "pdf|" + row["symbol"])
+    return tuple((row["symbol"], "doctorpdf|" + row["symbol"])
                  for row in rows if row.get("exchange") != "BSE")
