@@ -1445,6 +1445,8 @@ _portfolio_doctor_lock = threading.Lock()
 _portfolio_doctor_running = set()
 # Pending state contains only user IDs and expires after three minutes.
 _portfolio_doctor_waiting = {}
+# User IDs + expiry only. Does not retain any position, cost or file.
+_portfolio_audit_mode = {}
 # Bound memory and provider demand without storing any client holdings.
 _portfolio_doctor_slots = threading.BoundedSemaphore(2)
 
@@ -1460,6 +1462,26 @@ def _doctor_allowed(m):
     return private_user and (customer_access or owner_test)
 
 
+@bot.message_handler(commands=["audit"])
+def portfolio_audit_start(m):
+    """Owner-test-only upgraded PDF; leave the current /doctor untouched."""
+    if not _doctor_allowed(m):
+        safe_send(m.chat.id, "Portfolio Audit is available in enabled private chats only.")
+        return
+    with _portfolio_doctor_lock:
+        if m.chat.id in _portfolio_doctor_running:
+            safe_send(m.chat.id, "A private report is already running.")
+            return
+        expiry = time.monotonic() + 180
+        _portfolio_doctor_waiting[m.chat.id] = expiry
+        _portfolio_audit_mode[m.chat.id] = expiry
+    safe_send(m.chat.id,
+              "Portfolio Audit test: send 1-5 NSE holdings as SYMBOL QTY AVERAGE_BUY, "
+              "one per line, or upload CSV/XLSX. This 10-14 page private research PDF "
+              "does not save holdings and uses verified completed closing prices. "
+              "The existing /doctor report remains unchanged.")
+
+
 @bot.message_handler(commands=["doctor", "portfolio_doctor"])
 @bot.message_handler(func=lambda m: m.text == "🩺 Portfolio Doctor")
 def portfolio_doctor_start(m):
@@ -1471,6 +1493,7 @@ def portfolio_doctor_start(m):
         if m.chat.id in _portfolio_doctor_running:
             safe_send(m.chat.id, "A Portfolio Doctor report is already running.")
             return
+        _portfolio_audit_mode.pop(m.chat.id, None)
         _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 180
     safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\n"
               "Upload CSV/XLSX or paste 1–5 rows: <code>SBIN 100 840</code> then "
@@ -1525,6 +1548,7 @@ def portfolio_doctor_document(m, _typed_payload=None):
         expiry = _portfolio_doctor_waiting.get(uid, 0)
         if expiry <= time.monotonic():
             _portfolio_doctor_waiting.pop(uid, None)
+            _portfolio_audit_mode.pop(uid, None)
             return
         if uid in _portfolio_doctor_running:
             safe_send(uid, "A Portfolio Doctor report is already running.")
@@ -1533,6 +1557,7 @@ def portfolio_doctor_document(m, _typed_payload=None):
             _portfolio_doctor_waiting.pop(uid, None)
             safe_send(uid, "Portfolio Doctor is busy. Retry shortly; no holdings were saved.")
             return
+        audit_requested = _portfolio_audit_mode.pop(uid, 0) > time.monotonic()
         _portfolio_doctor_waiting.pop(uid, None)
         _portfolio_doctor_running.add(uid)
 
@@ -1558,7 +1583,10 @@ def portfolio_doctor_document(m, _typed_payload=None):
                 return
             safe_send(uid, "Checking recent market prices for your private, one-time report.")
             # PDF and holdings travel through worker stdin/stdout, never a local file.
-            pdf_bytes = run_isolated_memory(name, payload, timeout=150)
+            if audit_requested:
+                pdf_bytes = run_isolated_memory(name, payload, timeout=150, audit=True)
+            else:
+                pdf_bytes = run_isolated_memory(name, payload, timeout=150)
             # A full 9-page company report is an existing separate product.
             # Offer it only on explicit tap, rather than automatically building
             # five slow PDFs inside the private/stateless Doctor worker.
@@ -1575,13 +1603,15 @@ def portfolio_doctor_document(m, _typed_payload=None):
                 # Optional navigation cannot withhold an otherwise verified PDF.
                 research_markup = None
             with io.BytesIO(pdf_bytes) as document:
-                document.name = "MSK_Portfolio_Doctor.pdf"
+                document.name = ("MSK_Portfolio_Audit.pdf" if audit_requested
+                                 else "MSK_Portfolio_Doctor.pdf")
                 receipt = bot.send_document(
                     uid, document,
-                    caption=("MSK Portfolio Doctor | Private educational PDF. "
-                             "Tap a stock below for a separate full fundamental + "
-                             "technical research report (independent verification; "
-                             "not automatic advice)."),
+                    caption=(("MSK Portfolio Audit | Private, on-demand research PDF. "
+                              if audit_requested else
+                              "MSK Portfolio Doctor | Private educational PDF. ") +
+                             "Tap a stock below for separate detailed company research. "
+                             "Educational only; not investment instructions."),
                     timeout=30, protect_content=True, reply_markup=research_markup)
             message_id = getattr(receipt, "message_id", None)
             sent = getattr(receipt, "document", None)
