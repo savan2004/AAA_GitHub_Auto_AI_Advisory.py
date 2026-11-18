@@ -76,8 +76,11 @@ def expected_doctor_session(now=None):
         stamp = stamp.replace(tzinfo=IST)
     stamp = stamp.astimezone(IST)
     day = stamp.date()
+    # NSE equity files are not guaranteed to be published by 16:00 IST.
+    # Use the last completed PRIOR session through the ordinary 17:00 EOD
+    # publication buffer; special sessions retain reviewed explicit cutoffs.
     if (doctor_trading_session(day) and
-            stamp.time() >= _NSE_SPECIAL_2026.get(day, daytime(16))):
+            stamp.time() >= _NSE_SPECIAL_2026.get(day, daytime(17))):
         return day
     return previous_doctor_session(day)
 
@@ -312,7 +315,9 @@ def price_holdings(holdings, *, include_frames=False):
                         **amounts,
                         "ema20": _ema(values, 20), "ema50": _ema(values, 50),
                         "rsi14": _rsi(values),
-                        "high20": max(values[-20:]), "low20": min(values[-20:])})
+                        "high20": max(values[-20:]), "low20": min(values[-20:]),
+                "return20": round(100 * (close / values[-21] - 1), 2)
+                if len(values) >= 21 else None})
         except PortfolioDoctorError:
             raise
         except (TypeError, ValueError, IndexError, OverflowError, AttributeError) as exc:

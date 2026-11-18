@@ -140,6 +140,9 @@ class DeepRepairTests(unittest.TestCase):
     def test_exchange_holidays_special_session_and_year_expiry(self):
         from datetime import date
         cases = [
+            ((2026, 11, 18, 16, 15), date(2026, 11, 17)),
+            ((2026, 11, 18, 16, 59), date(2026, 11, 17)),
+            ((2026, 11, 18, 17, 0), date(2026, 11, 18)),
             ((2026, 11, 24, 18, 0), date(2026, 11, 23)),
             ((2026, 11, 25, 10, 0), date(2026, 11, 23)),
             ((2026, 4, 6, 10, 0), date(2026, 4, 2)),

@@ -3,7 +3,7 @@ import io
 import re
 import math
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from portfolio_doctor_input import MAX_BYTES, MAX_STOCKS
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -24,8 +24,14 @@ def _report_records(holdings):
             if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol) or symbol in seen:
                 raise PdfRejected()
             seen.add(symbol)
-            qty, buy, close = (Decimal(str(row[key])) for key in ("qty", "buy", "close"))
-            if any(not value.is_finite() or value <= 0 for value in (qty, buy, close)):
+            qty, buy, raw_close = (Decimal(str(row[key])) for key in ("qty", "buy", "close"))
+            if any(not value.is_finite() or value <= 0 for value in (qty, buy, raw_close)):
+                raise PdfRejected()
+            # Money displayed to paisa precision must reconcile with the
+            # *displayed* close. Yahoo OHLC floating noise previously made
+            # 40,000 x Rs 12.30 show as Rs 492,000.01 in the PDF.
+            close = raw_close.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if close <= 0:
                 raise PdfRejected()
             price_date = date.fromisoformat(str(row.get("date", "")))
             if price_date > datetime.now(IST).date():

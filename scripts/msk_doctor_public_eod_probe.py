@@ -6,8 +6,7 @@ Informational smoke: GitHub network reachability is not Render reachability.
 import logging
 from datetime import datetime
 
-from portfolio_doctor_live import IST, PortfolioDoctorError, recover_fresh_daily_for_doctor, verified_completed_daily_frame
-from market_breadth import expected_completed_session
+from portfolio_doctor_live import IST, PortfolioDoctorError, recover_fresh_daily_for_doctor, verified_completed_daily_frame, expected_doctor_session
 from market_data import bulk_history
 
 PUBLIC_DEMO_SYMBOL = "INFY"
@@ -16,7 +15,7 @@ PUBLIC_DEMO_SYMBOL = "INFY"
 def main():
     logging.disable(logging.CRITICAL)
     now = datetime.now(IST)
-    expected = expected_completed_session(now)
+    expected = expected_doctor_session(now)
     frames = bulk_history([PUBLIC_DEMO_SYMBOL], "1y", chunk_size=1,
                           retries=0, max_fallbacks=0, download_timeout=12)
     from market_data import _clean_frame, to_yahoo

@@ -7,6 +7,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
+from portfolio_doctor_diagnostics import diagnose_portfolio, industry_exposure
 
 IST = timezone(timedelta(hours=5, minutes=30))
 NAVY = HexColor('#132338')
@@ -106,6 +107,8 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
     value = sum(row['value'] for row in holdings)
     pnl = value - invested
     top = sorted(holdings, key=lambda r: (-r['weight'], r['symbol']))
+    insights = diagnose_portfolio(holdings)
+    exposures = industry_exposure(holdings, peers)
     stamp = datetime.now(IST).strftime('%d %b %Y %H:%M IST')
 
     # PAGE 1: meaningful quantitative summary; all source data is verified.
@@ -150,6 +153,15 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
     subhead('DATA BOUNDARIES')
     line('Values use your current quantity and average buy cost, plus a verified dated close.', 8)
     line('Price-based allocation is not a recommendation to sell or add any security.', 8)
+    subhead('WHAT IS DRIVING RESULTS')
+    line('Top 2 holdings: {:.1f}% of value | Effective stock count: {:.2f} (from {} holdings).'.format(
+        insights['top_two_pct'], insights['effective_positions'], len(holdings)), 8.5)
+    if insights['top_gain'] or insights['top_loss']:
+        gain = insights['top_gain']
+        loss = insights['top_loss']
+        line('Largest gain: {} | Largest loss: {}'.format(
+            '{} (+{})'.format(gain[0], money(gain[1])) if gain else 'None',
+            '{} ({})'.format(loss[0], money(loss[1])) if loss else 'None'), 8.2)
 
     # PAGE 2: all 1-5 holdings, with full precision and technical observations.
     new_page('02 / HOLDING-WISE VERIFIED RESULTS', 'Every holding contributes to the portfolio summary; technicals use completed daily prices.')
@@ -173,12 +185,20 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
         line('EMA20 Rs {:.2f} | EMA50 {} | RSI14 {} | {}'.format(
             row['ema20'], 'Rs {:.2f}'.format(ema50) if ema50 else 'N/A',
             rsi, trend), 8, leading=13)
-        line('20-close high Rs {:.2f} | low Rs {:.2f}'.format(
-            row['high20'], row['low20']), 8, leading=14)
+        movement = row.get('return20')
+        twenty = ' | 20-session change {:+.1f}%'.format(movement) if movement is not None else ''
+        line('20-close high Rs {:.2f} | low Rs {:.2f}{}'.format(
+            row['high20'], row['low20'], twenty), 8, leading=14)
         if str(row.get('price_source') or '').startswith('BSE:'):
             line('Source: BSE exact ticker; INR completed daily OHLCV.', 7.5, leading=12)
         elif str(row.get('price_source') or '').startswith('NSE EOD'):
             line('Source: NSE official daily file; historical OHLC cross-checked.', 7.5, leading=12)
+        # Colored review flag communicates *which rule fired*, not a trade.
+        priority = insights['by_symbol'][row['symbol']]['priority']
+        label_color = RED if priority == 'HIGH FLAGS' else (BLUE if priority == 'WATCH FLAGS' else GREEN)
+        pdf.setFillColor(label_color)
+        pdf.roundRect(right - 120, card_top - 100, 111, 16, 4, stroke=0, fill=1)
+        text_fit(priority, right - 115, card_top - 96, 100, 7, True, WHITE)
         y = min(card_top - 118, y - 7)
     line('Price status is evidence, not a HOLD / ADD / EXIT instruction.', 8, color=MUTED)
 
@@ -191,6 +211,11 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
             peers['universe'], peers['pool'], peers['screened'], peers['fresh']), 9)
         line('Moderate technical screen qualified: {}; up to 2 per industry shown.'.format(
             peers['qualified']), 9)
+        if exposures:
+            subhead('OFFICIAL INDUSTRY EXPOSURE (NOT TARGET ALLOCATION)')
+            for group in exposures:
+                line('{} | {:.1f}% of current value'.format(
+                    group['industry'], group['weight']), 8, leading=14)
         subhead('QUALIFIED TECHNICAL WATCHLIST')
         candidates = peers.get('candidates') or []
         if candidates:
@@ -216,6 +241,8 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
         if not shown:
             line('No additional fresh, fully verified peer history available.', 9)
         line('These comparisons have NOT passed the full moderate technical screen.', 8, color=RED)
+        line('Industry labels are broad NSE categories, not proof of direct competition.', 8,
+             color=MUTED)
     else:
         line('Unavailable: official membership, same-industry peers or fresh data not verified.', 9)
     subhead('INTERPRETING THE SHORTLIST')
@@ -226,6 +253,13 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
     # PAGE 4: explicit evidence gaps, risk and scope.
     new_page('04 / RISK, SOURCES AND LIMITS',
              'Risk flags are deterministic historical-price observations, never trade instructions.')
+    subhead('CONCENTRATION SENSITIVITY (HYPOTHETICAL ONLY)')
+    line('Top 2 holdings = {:.1f}% of value; effective stock count {:.2f}.'.format(
+        insights['top_two_pct'], insights['effective_positions']), 8.7)
+    line('If ONLY {} fell 10% with other prices fixed: approx -{} ({:.2f}% of portfolio).'.format(
+        insights['largest_symbol'], money(insights['largest_ten_percent_stress']),
+        insights['largest_stress_portfolio_pct']), 8.7)
+    line('This is an arithmetic scenario, NOT a probability, price target or forecast.', 8, color=MUTED)
     subhead('RISK CHECKS')
     flags = []
     for row in holdings:
@@ -249,6 +283,10 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
         'Educational information only. Not SEBI-registered investment advice.',
     ):
         line('- ' + message, 8.5, leading=20)
+    subhead('MISSING EVIDENCE FOR A TRUE QUALITY RANKING')
+    line('Before selecting replacement shares: verify quarterly filings, debt, cash flow,', 8)
+    line('valuation, corporate actions, business-model fit and sector overlap.', 8)
+    line('No "best stock" label can be earned from 20-day momentum alone.', 8, color=RED)
     subhead('DATA QUALITY CHECKLIST')
     line('Market prices: dated completed OHLCV, checked for missing/stale/nonfinite values.', 8)
     line('Constituents: official Nifty 500 membership verified before peer comparison.', 8)
