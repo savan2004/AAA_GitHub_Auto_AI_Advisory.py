@@ -441,3 +441,31 @@ The rewritten facade shrank from 606 to 420 lines while moving pure parsing, ind
 H07–H10 candidate repairs now pass controlled regression and real public-worker validation. H11 separation is implemented. H12 broker cost-basis verification is still an input limitation, H13 production delivery/privacy acceptance is still OPEN. These are release gates, not reasons to relabel old CI or delivery evidence as current production proof.
 
 **Customer release: NO-GO.** This draft is the consolidated implementation/evidence record requested by the owner. It does not enable customer/test flags or claim a 9/10 product.
+
+## Deep repair and unused-code audit — 18 November 2026
+
+Owner requested a deeper review of the rewrite, removal of unused code and repair of remaining defects.
+
+Repository-wide collection covered all 243 current text files, including 172 Python files. Before deletion, references were traced across code, workflows, tests and documentation.
+
+| Removed current file/helper | Reference finding | Preservation |
+|---|---|---|
+| portfolio_doctor_runner.py | No active caller; one stale CI py_compile entry; imports old portfolio_report | Historical blob links above retained |
+| portfolio_doctor_ledger.py | No active import/caller; only historical documentation | Historical blob links above retained |
+| portfolio_report.py | Imported only by the unused old runner; no live bot caller | October precursor and all PR revisions retained |
+| previous_weekday in portfolio_doctor_bhavcopy.py | Definition only; current recovery uses exchange-aware previous_doctor_session | Removal does not change calendar policy |
+| csv/re/zipfile imports and duplicated size/stock constants in live facade | No remaining use; common limits now imported from parser | Public MAX_BYTES/MAX_STOCKS aliases preserved |
+
+Shared report_charts.py stays: active sector/report modules still import it. No legacy portfolio, database migration, other menu or cron is altered.
+
+Newly confirmed repair points:
+- Expired/disabled private sessions relied on identifying holdings-shaped text. Arbitrary malformed private input could still fall through; session intent now blocks generic routing before content classification.
+- Typed CSV with a header plus five positions had six lines and was rejected before the parser; the parser now owns the 1–5 holding limit.
+- A missing/nonfinite latest close or conflicting duplicate daily rows could be normalised away at a shared boundary. The Doctor boundary now rejects incomplete/conflicting completed evidence.
+- Basic PDF acceptance did not independently reject mixed price dates, invalid/future dates or nonfinite/out-of-range indicators. These now fail closed.
+- Numeric text could lose precision on float conversion; unsupported precision is now rejected instead of silently rounding user cost/quantity.
+- Incomplete/malformed private rows need local classification too; index-name queries such as NIFTY 50 remain available.
+
+Additional validation introduced: regression for every above defect; AST/reference checks for removed modules; actual public-data CSV and XLSX worker PDFs; two genuinely concurrent disposable workers with distinct synthetic holdings and cross-request leakage checks. Private live Telegram delivery remains unverified.
+
+Candidate status: implemented in this draft; new validation pending. The earlier 104-test PASS applies to the earlier candidate only.

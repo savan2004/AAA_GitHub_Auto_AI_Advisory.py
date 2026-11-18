@@ -30,8 +30,15 @@ def looks_like_holdings_text(text):
         return False
     for line in text[:MAX_BYTES].splitlines():
         try:
-            cells = _cells(line)
-            if len(cells) < 3:
+            try:
+                cells = _cells(line)
+            except csv.Error:
+                # Malformed CSV is still private-looking, not a search query.
+                cells = [cell.strip('"') for cell in re.split(r"[,;\t ]+", line.strip())]
+            if len(cells) < 2:
+                continue
+            if " ".join(cell.upper() for cell in cells) in {
+                    "NIFTY 50", "NIFTY 100", "NIFTY 200", "NIFTY 500", "SENSEX 30"}:
                 continue
             symbol = cells[0].strip().upper().removeprefix("NSE:")
             symbol = symbol.removesuffix(".NS").removesuffix(".BO")
@@ -107,7 +114,7 @@ def _positive(value):
     if not number.is_finite() or not 0 < number <= Decimal("1e9"):
         raise InputRejected()
     result = float(number)
-    if not math.isfinite(result) or result <= 0:
+    if not math.isfinite(result) or result <= 0 or Decimal(str(result)) != number:
         raise InputRejected()
     return result
 

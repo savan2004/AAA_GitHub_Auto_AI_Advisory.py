@@ -4,20 +4,15 @@ No persistent database, holdings store, upload file or report file is used.
 Input reaches the isolated worker through stdin; PDF returns through stdout.
 The process is killed on deadline. Only non-sensitive error codes are logged.
 """
-import csv
 import io
 import math
 import os
-import re
 import subprocess
 import sys
 import time
 from contextlib import contextmanager
-import zipfile
 from datetime import date, datetime, time as daytime, timedelta, timezone
 
-MAX_BYTES = 5 * 1024 * 1024
-MAX_STOCKS = 5
 IST = timezone(timedelta(hours=5, minutes=30))
 CODES = {"BAD_INPUT", "NO_PRICES", "STALE_PRICES", "PDF_FAILED", "TIMEOUT",
          "WORKER_FAILED", "NO_CAPACITY"}
@@ -29,7 +24,7 @@ class PortfolioDoctorError(RuntimeError):
 
 
 from portfolio_doctor_input import (
-    InputRejected, decode_holdings, looks_like_holdings_text,
+    MAX_BYTES, MAX_STOCKS, InputRejected, decode_holdings, looks_like_holdings_text,
 )
 from portfolio_doctor_calculations import (
     _ema, _rsi, position_values, portfolio_weights,
@@ -88,22 +83,33 @@ def expected_doctor_session(now=None):
 
 
 def verified_completed_daily_frame(frame, *, now=None):
-    """Require the latest completed session from the reviewed NSE calendar."""
+    """Latest completed session, unique daily rows and finite positive closes."""
     if frame is None or getattr(frame, "empty", True):
         raise PortfolioDoctorError("NO_PRICES")
     from market_breadth import completed_prices
     expected = expected_doctor_session(now)
-    clean = completed_prices(frame, now=now)
-    clean = clean.loc[clean.index.date <= expected]
-    if clean.empty or "Close" not in clean or not clean.index.is_monotonic_increasing:
-        raise PortfolioDoctorError("NO_PRICES")
     try:
-        last_date = clean.index[-1].date()
-    except (TypeError, IndexError, AttributeError):
-        raise PortfolioDoctorError("NO_PRICES")
-    if last_date != expected:
-        raise PortfolioDoctorError("STALE_PRICES")
-    return clean
+        # Do not hide conflicting duplicate/provider intraday rows by sorting
+        # and keeping one observation during the completion filter.
+        if not frame.index.is_monotonic_increasing or frame.index.has_duplicates:
+            raise PortfolioDoctorError("NO_PRICES")
+        days = list(frame.index.date)
+        if len(days) != len(set(days)):
+            raise PortfolioDoctorError("NO_PRICES")
+        clean = completed_prices(frame, now=now)
+        clean = clean.loc[clean.index.date <= expected]
+        if clean.empty or "Close" not in clean:
+            raise PortfolioDoctorError("NO_PRICES")
+        if clean.index[-1].date() != expected:
+            raise PortfolioDoctorError("STALE_PRICES")
+        closes = [float(value) for value in clean["Close"].tolist()]
+        if any(not math.isfinite(value) or value <= 0 for value in closes):
+            raise PortfolioDoctorError("NO_PRICES")
+        return clean
+    except PortfolioDoctorError:
+        raise
+    except (ValueError, TypeError, AttributeError, IndexError, OverflowError):
+        raise PortfolioDoctorError("NO_PRICES") from None
 
 
 def recover_fresh_daily_for_doctor(symbol, *, now=None, fetchers=None):
