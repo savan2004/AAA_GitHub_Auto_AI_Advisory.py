@@ -4,6 +4,9 @@ on:
     branches: [main]
     paths:
       - 'portfolio_doctor_live.py'
+      - 'portfolio_audit_report.py'
+      - 'portfolio_audit_bridge.py'
+      - 'tests/test_portfolio_audit_canary.py'
       - 'portfolio_doctor_input.py'
       - 'portfolio_doctor_calculations.py'
       - 'portfolio_doctor_report.py'
@@ -51,9 +54,9 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install offline test dependencies
-        run: python -m pip install 'pandas==2.2.2' 'numpy==1.26.4' 'requests==2.32.3' 'reportlab==4.2.5' 'pypdf>=5,<7' 'openpyxl==3.1.5' 'yfinance==0.2.61' 'curl_cffi==0.7.4'
+        run: python -m pip install 'pandas==2.2.2' 'numpy==1.26.4' 'requests==2.32.3' 'reportlab==4.2.5' 'pypdf>=5,<7' 'openpyxl==3.1.5' 'yfinance==0.2.61' 'curl_cffi==0.7.4' 'matplotlib==3.9.0'
       - name: Compile advanced modules and basic worker
-        run: python -m py_compile portfolio_doctor_advanced.py portfolio_doctor_advanced_pdf.py portfolio_doctor_builder_private.py portfolio_doctor_live.py portfolio_doctor_visual.py portfolio_doctor_peers.py portfolio_doctor_bhavcopy.py main.py portfolio_doctor_diagnostics.py portfolio_doctor_visual.py portfolio_doctor_risk_history.py portfolio_doctor_research_links.py portfolio_doctor_company_research.py
+        run: python -m py_compile portfolio_doctor_advanced.py portfolio_doctor_advanced_pdf.py portfolio_doctor_builder_private.py portfolio_doctor_live.py portfolio_doctor_visual.py portfolio_doctor_peers.py portfolio_doctor_bhavcopy.py main.py portfolio_doctor_diagnostics.py portfolio_doctor_visual.py portfolio_doctor_risk_history.py portfolio_doctor_research_links.py portfolio_doctor_company_research.py portfolio_audit_report.py portfolio_audit_bridge.py
       - name: Run deterministic financial, privacy and PDF tests
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_advanced.py' -v
       - name: Test optional builder input, prices, cash, PDF and delivery isolation
@@ -74,6 +77,12 @@ jobs:
 
       - name: Test redesigned four-page report and verified peers
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_visual.py' -v
+
+      - name: Test complete standalone audit metrics and 10-14 page PDF offline
+        run: python portfolio_audit_report.py --test
+
+      - name: Test private Portfolio Audit canary and old Doctor safety
+        run: python -m unittest discover -s tests -p 'test_portfolio_audit_canary.py' -v
 
       - name: Test verified historical portfolio risk and Nifty comparison
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_risk_history.py' -v
