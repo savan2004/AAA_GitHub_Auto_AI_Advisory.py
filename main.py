@@ -2085,6 +2085,13 @@ def handle_text(m):
         portfolio_doctor_text(m)
         return
 
+    # Expired/disabled Doctor requests must never become provider search queries.
+    from portfolio_doctor_live import looks_like_holdings_text
+    if looks_like_holdings_text(text):
+        safe_send(uid, "Holdings require an enabled private Portfolio Doctor session. "
+                  "Select Portfolio Doctor again before sending them.")
+        return
+
     if state.get(uid) == "analysis":
         safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
 

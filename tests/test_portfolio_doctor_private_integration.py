@@ -198,5 +198,40 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(env["_portfolio_doctor_slots"].acquire(blocking=False))
 
 
+
+    def test_disabled_or_expired_holdings_never_reach_stock_lookup(self):
+        for enabled in (True, False):
+            for text in ("SAMPLEA 7 120", "SAMPLEA,7,120",
+                         "SAMPLEA;7;120", "SAMPLEA -7 nan",
+                         "Symbol,Qty,Buy Price\nSAMPLEA,7,120"):
+                with self.subTest(enabled=enabled, text=text):
+                    env, bot, notices = self._env()
+                    env["_portfolio_doctor_waiting"][101] = time.monotonic() - 1
+                    env["_doctor_allowed"] = lambda m, value=enabled: value
+                    env["API_RATE_LIMITER"] = SimpleNamespace(is_allowed=lambda uid: True)
+                    env["state"] = SimpleNamespace(get=lambda uid: "analysis")
+                    def prohibited(*args, **kwargs):
+                        self.fail("private holdings reached generic stock/provider lookup")
+                    env["send_symbol_menu"] = prohibited
+                    env["executor"] = SimpleNamespace(submit=prohibited)
+                    handler = _function("handle_text", env)
+                    handler(_message(101, text=text))
+                    self.assertEqual(env["_portfolio_doctor_waiting"], {})
+                    self.assertEqual(bot.sent, [])
+                    self.assertIn("Portfolio Doctor session", notices[-1][1])
+                    self.assertNotIn("SAMPLEA", str(notices))
+
+    def test_holdings_classifier_keeps_ordinary_stock_queries_available(self):
+        for text in ("INFY", "NSE:SBIN", "M&M", "Tata Motors",
+                     "Lloyds Metals and Energy", "3M India Limited", "hello"):
+            with self.subTest(text=text):
+                self.assertFalse(doctor.looks_like_holdings_text(text))
+        for text in ("SAMPLEA 7 120", '"SAMPLEA",7,120',
+                     "SAMPLEA 7 120 extra", "SAMPLEA 7 nan",
+                     "SAMPLEA\t7\t120", "SAMPLEA.NS 7 120"):
+            with self.subTest(text=text):
+                self.assertTrue(doctor.looks_like_holdings_text(text))
+
+
 if __name__ == "__main__":
     unittest.main()

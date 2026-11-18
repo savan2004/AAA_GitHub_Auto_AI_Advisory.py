@@ -28,6 +28,35 @@ class PortfolioDoctorError(RuntimeError):
         self.code = code if code in CODES else "WORKER_FAILED"
 
 
+def looks_like_holdings_text(text):
+    """Recognise private-looking rows without providers, storage or logging.
+
+    Classification is deliberately separate from validation: negative/NaN
+    quantities and extra columns must not turn a private upload into search.
+    """
+    if not isinstance(text, str):
+        return False
+    for line in text[:MAX_BYTES].splitlines():
+        try:
+            if any(mark in line for mark in (",", ";", "\t")):
+                mark = "," if "," in line else ";" if ";" in line else "\t"
+                cells = next(csv.reader([line], delimiter=mark))
+            else:
+                cells = re.split(r"\s+", line.strip())
+            if len(cells) < 3:
+                continue
+            symbol = cells[0].strip().upper().removesuffix(".NS")
+            if not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol):
+                continue
+            # Numeric conversion only classifies shape, never validates prices.
+            float(cells[1])
+            float(cells[2])
+            return True
+        except (ValueError, TypeError, csv.Error, StopIteration):
+            continue
+    return False
+
+
 def parse_holdings(filename, payload):
     """Strict 1..5 symbol, quantity and purchase-price records; no storage."""
     if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_BYTES:
