@@ -68,7 +68,8 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
         members = official_nifty500_industries()
     out = {"status": "UNAVAILABLE", "universe": len(members or {}),
            "pool": 0, "screened": 0, "fresh": 0, "qualified": 0,
-           "candidates": [], "scope": "same-industry sampled peers only"}
+           "candidates": [], "comparisons": [],
+           "scope": "same-industry sampled peers only"}
     if not isinstance(members, dict) or not MIN_MEMBERS <= len(members) <= MAX_MEMBERS:
         return out
     held = {str(row.get("symbol", "")).upper() for row in holdings}
@@ -79,17 +80,21 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     pool = [(sym, industry) for sym, industry in members.items()
             if sym not in held and industry in industries]
     out["pool"] = len(pool)
+    # Spread the bounded sample across each represented industry rather than
+    # always choosing the first members of the official CSV. Each industry
+    # receives a fair quota even when five holdings span five industries.
     sampled = []
-    for industry in industries:
-        for sym, label in pool:
-            if label == industry:
-                sampled.append((sym, label))
-                if sum(x[1] == industry for x in sampled) >= PEERS_PER_INDUSTRY:
-                    break
-            if len(sampled) >= MAX_SCREENED:
-                break
-        if len(sampled) >= MAX_SCREENED:
-            break
+    base, extra = divmod(MAX_SCREENED, len(industries))
+    for i, industry in enumerate(industries):
+        matches = [(sym, label) for sym, label in pool if label == industry]
+        quota = min(PEERS_PER_INDUSTRY, base + (1 if i < extra else 0), len(matches))
+        if quota <= 0:
+            continue
+        if quota == 1:
+            positions = [len(matches) // 2]
+        else:
+            positions = [round(j * (len(matches) - 1) / (quota - 1)) for j in range(quota)]
+        sampled.extend(matches[j] for j in positions)
     if not sampled:
         out["status"] = "NO_SAME_INDUSTRY_PEERS"
         return out
@@ -110,10 +115,25 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
         return out
     from portfolio_doctor_live import verified_completed_daily_frame
     qualified = []
+    comparisons = []
     for sym, industry in sampled:
         try:
             checked = verified_completed_daily_frame(histories.get(sym), now=now)
             out["fresh"] += 1
+            # Show independently verified industry peers even when strict
+            # moderate entry/volume/risk gates don't produce a candidate.
+            # These are comparison observations, NOT qualified replacements.
+            closes = [float(x) for x in checked["Close"].tolist()]
+            if len(closes) >= 51 and all(math.isfinite(x) and x > 0 for x in closes):
+                from portfolio_doctor_calculations import _rsi
+                day20 = 100 * (closes[-1] / closes[-21] - 1)
+                rsi = _rsi(closes)
+                if rsi is not None and all(math.isfinite(x) for x in (day20, float(rsi))):
+                    comparisons.append({
+                        "symbol": sym, "industry": industry,
+                        "close": closes[-1], "date": checked.index[-1].date().isoformat(),
+                        "return20": round(day20, 2), "rsi14": round(float(rsi), 1),
+                    })
             scored = evaluator(sym, checked, "moderate", asof=now)
             if not isinstance(scored, dict) or scored.get("sym") != sym:
                 continue
@@ -143,5 +163,13 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
             break
     out["qualified"] = len(qualified)
     out["candidates"] = chosen
+    # Price momentum is disclosed only as one comparable measurement; no
+    # fundamental-quality ranking is inferred from short-window returns.
+    comparison_rows = []
+    for industry in industries:
+        ordered = sorted((row for row in comparisons if row["industry"] == industry),
+                         key=lambda row: (-row["return20"], row["symbol"]))
+        comparison_rows.extend(ordered[:2])
+    out["comparisons"] = comparison_rows[:10]
     out["status"] = "SCREENED"
     return out
