@@ -68,11 +68,12 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
         members = official_nifty500_industries()
     out = {"status": "UNAVAILABLE", "universe": len(members or {}),
            "pool": 0, "screened": 0, "fresh": 0, "qualified": 0,
-           "candidates": [], "comparisons": [],
+           "candidates": [], "comparisons": [], "held_industries": {},
            "scope": "same-industry sampled peers only"}
     if not isinstance(members, dict) or not MIN_MEMBERS <= len(members) <= MAX_MEMBERS:
         return out
     held = {str(row.get("symbol", "")).upper() for row in holdings}
+    out["held_industries"] = {sym: members[sym] for sym in held if sym in members}
     industries = list(dict.fromkeys(members[sym] for row in holdings
                                     if (sym := str(row.get("symbol", "")).upper()) in members))
     if not industries:
