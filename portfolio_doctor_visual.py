@@ -463,18 +463,27 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                 finance.get('scope', 'unknown'), finance.get('annual_period','unknown')), 8)
             line('Retrieved UTC: {} | Issuer filing reconciliation: NO.'.format(
                 str(finance.get('retrieved_utc','unavailable'))[:24]), 8, color=RED)
-            for metric in (finance.get('metrics') or [])[:11]:
-                line('{}: {:,.2f} {} | Period: {}'.format(
-                    metric['label'], metric['value'], metric['unit'],
-                    metric['period']), 8, leading=13)
+            metrics = (finance.get('metrics') or [])[:10]
+            # Two balanced columns retain every printed figure without
+            # overflowing the hard 10-page private-report envelope.
+            for j in range(0, len(metrics), 2):
+                first = metrics[j]
+                text_fit('{}: {:,.2f} {} ({})'.format(
+                    first['label'], first['value'], first['unit'], first['period']),
+                    left, y, 245, 7.8)
+                if j + 1 < len(metrics):
+                    second = metrics[j+1]
+                    text_fit('{}: {:,.2f} {} ({})'.format(
+                        second['label'], second['value'], second['unit'], second['period']),
+                        left+260, y, 245, 7.8)
+                y -= 16
         else:
             line('Not verified: no usable dated comparable financial statement facts.', 8)
             line('P/E, sales, profit, margins, cash flow and debt are not guessed.', 8)
         subhead('IMPORTANT RESEARCH LIMITS')
-        line('Shareholding, news catalysts and peer valuation: NOT VERIFIED here.', 8)
-        line('Scores, buying zones, targets and personal trade calls: NOT GENERATED.', 8)
-        line('For the full separate 8+ page company report, tap the stock button', 8)
-        line('under the Portfolio Doctor PDF in Telegram. Validate issuer filings.', 8)
+        line('Shareholding, news and peer valuation: NOT VERIFIED.', 8)
+        line('No trade calls/targets; source figures require issuer-filing checks.', 8)
+        line('Tap the Telegram button for the full separate 8+ page report.', 8)
     footer()
     pdf.save()
     data = out.getvalue()
