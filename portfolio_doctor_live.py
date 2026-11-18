@@ -178,9 +178,12 @@ def bse_daily_for_doctor(symbol, *, now=None, explicit=False, get=None):
             if len(matches) != 1:
                 return None
         from urllib.parse import quote
+        stamp = now or datetime.now(IST)
         response = get("https://query2.finance.yahoo.com/v8/finance/chart/" +
                        quote(ticker, safe=""),
-                       params={"interval": "1d", "range": "1y",
+                       params={"interval": "1d",
+                               "period1": int((stamp - timedelta(days=370)).timestamp()),
+                               "period2": int(stamp.timestamp()),
                                "includePrePost": "false"},
                        headers=headers, timeout=8)
         response.raise_for_status()

@@ -50,7 +50,8 @@ def _run(case, folder):
             import requests
             response = requests.get(
                 "https://query2.finance.yahoo.com/v8/finance/chart/SBIN.BO",
-                params={"interval":"1d", "range":"1y", "includePrePost":"false"},
+                params={"interval":"1d", "period1": int(time.time())-370*86400,
+                        "period2":int(time.time()), "includePrePost":"false"},
                 headers={"User-Agent":"Mozilla/5.0"}, timeout=8)
             print("BSE_PUBLIC_DIAGNOSTIC http=", response.status_code)
             if response.ok:
