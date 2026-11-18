@@ -4,6 +4,10 @@ on:
     branches: [main]
     paths:
       - 'portfolio_doctor_live.py'
+      - 'portfolio_doctor_input.py'
+      - 'portfolio_doctor_calculations.py'
+      - 'portfolio_doctor_report.py'
+      - 'tests/test_portfolio_doctor_rewrite.py'
       - 'tests/test_portfolio_doctor_deep_repair.py'
       - 'portfolio_doctor_bhavcopy.py'
       - 'tests/test_portfolio_doctor_bhavcopy.py'
@@ -49,6 +53,9 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_safety.py' -v
       - name: Test Doctor RSI accuracy and complete upload parsing
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_deep_repair.py' -v
+
+      - name: Test consolidated Doctor rewrite boundaries and full PDF content
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_rewrite.py' -v
 
   public-provider-smoke:
     runs-on: ubuntu-latest

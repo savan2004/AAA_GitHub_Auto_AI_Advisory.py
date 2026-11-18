@@ -396,6 +396,16 @@ Discussion/reviews: 1 automated conversation notice; 0 submitted reviews. [Conve
 
 ## Validation ledger
 
-Baseline controlled tests: PASS (95 Doctor tests); baseline real public-data 1/5-holding PDF: PASS; old 17-Nov receipt: PASS for old version only; rewritten code: NOT YET IMPLEMENTED; rewrite CI: NOT RUN; rewrite deployment: NOT DEPLOYED; latest private Telegram delivery: NOT TESTED; customer release: NO-GO.
+Baseline controlled tests: PASS (95 Doctor tests); baseline real public-data 1/5-holding PDF: PASS; old 17-Nov receipt: PASS for old version only; rewritten code: IMPLEMENTED / validation pending; rewrite CI: PENDING; rewrite deployment: NOT DEPLOYED; latest private Telegram delivery: NOT TESTED; customer release: NO-GO.
 
 This document must be updated with exact rewrite commit, CI URLs, observed failures/fixes and deployment evidence. Do not carry historical PASS labels forward without rerunning the relevant gates.
+
+## Rewrite implementation, first candidate
+
+- `portfolio_doctor_input.py`: one local typed/CSV/XLSX parser and private-row classifier; rejects booleans, malformed CSV, macros, encrypted/duplicate/traversal ZIP entries, nonfinite/invalid numbers and over-limit sheets. Adds explicit NSE: canonicalisation without treating BSE symbols as NSE.
+- `portfolio_doctor_calculations.py`: pure Wilder RSI/EMA and Decimal-based position arithmetic/portfolio weights, with compatible public record fields.
+- `portfolio_doctor_report.py`: pure RAM-only basic PDF; independently recomputes displayed monetary values with Decimal, wraps text to measured page width and retains all holdings/disclosures.
+- `portfolio_doctor_live.py`: compatibility facade + provider/worker orchestration; allows only runtime/public-network settings in child environment. No Telegram, database, ledger, AI or SMTP credentials are inherited. Raw NSE full-history fallback is removed because split/bonus adjustment equivalence is not established; official overlap-verified NSE bhavcopy remains available, with direct Yahoo history retry.
+- Dedicated rewrite tests cover parser rejection, malformed private-row classification, credential boundary, adjustment-source policy, decimal subtraction and measured PDF bounds. All original suites and real public-market worker probes remain required.
+
+H07–H10 have candidate repairs; they are not marked PASS until CI results are inspected. Live customer access is unchanged (disabled).

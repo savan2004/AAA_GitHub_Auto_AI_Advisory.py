@@ -20,7 +20,7 @@ def main():
     frames = bulk_history([PUBLIC_DEMO_SYMBOL], "1y", chunk_size=1,
                           retries=0, max_fallbacks=0, download_timeout=12)
     from market_data import _clean_frame, to_yahoo
-    from data_engine import _nse_hist, _yahoo_v8_hist
+    from data_engine import _yahoo_v8_hist
 
     source = "primary"
     primary = frames.get(PUBLIC_DEMO_SYMBOL)
@@ -32,7 +32,6 @@ def main():
     except PortfolioDoctorError:
         source = "recovered"
         providers = (
-            ("NSE", lambda: _nse_hist(PUBLIC_DEMO_SYMBOL)),
             ("Yahoo-v8", lambda: _yahoo_v8_hist(to_yahoo(PUBLIC_DEMO_SYMBOL), period="1y")),
         )
         def observed(name, fetch):

@@ -28,144 +28,20 @@ class PortfolioDoctorError(RuntimeError):
         self.code = code if code in CODES else "WORKER_FAILED"
 
 
-def looks_like_holdings_text(text):
-    """Recognise private-looking rows without providers, storage or logging.
-
-    Classification is deliberately separate from validation: negative/NaN
-    quantities and extra columns must not turn a private upload into search.
-    """
-    if not isinstance(text, str):
-        return False
-    for line in text[:MAX_BYTES].splitlines():
-        try:
-            if any(mark in line for mark in (",", ";", "\t")):
-                mark = "," if "," in line else ";" if ";" in line else "\t"
-                cells = next(csv.reader([line], delimiter=mark))
-            else:
-                cells = re.split(r"\s+", line.strip())
-            if len(cells) < 3:
-                continue
-            symbol = cells[0].strip().upper().removesuffix(".NS")
-            if not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol):
-                continue
-            # Numeric conversion only classifies shape, never validates prices.
-            float(cells[1])
-            float(cells[2])
-            return True
-        except (ValueError, TypeError, csv.Error, StopIteration):
-            continue
-    return False
+from portfolio_doctor_input import (
+    InputRejected, decode_holdings, looks_like_holdings_text,
+)
+from portfolio_doctor_calculations import (
+    _ema, _rsi, position_values, portfolio_weights,
+)
 
 
 def parse_holdings(filename, payload):
-    """Strict 1..5 symbol, quantity and purchase-price records; no storage."""
-    if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_BYTES:
-        raise PortfolioDoctorError("BAD_INPUT")
-    name = (filename or "").lower()
+    """Compatibility entry point with one privacy-safe parser error contract."""
     try:
-        if name.endswith(".xlsx"):
-            with zipfile.ZipFile(io.BytesIO(payload)) as z:
-                parts = z.infolist()
-                if len(parts) > 250 or sum(p.file_size for p in parts) > 20 * 1024 * 1024:
-                    raise PortfolioDoctorError("BAD_INPUT")
-                if any(p.file_size > 10 * 1024 * 1024 for p in parts):
-                    raise PortfolioDoctorError("BAD_INPUT")
-            import openpyxl
-            book = openpyxl.load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
-            try:
-                if len(book.worksheets) != 1:
-                    raise PortfolioDoctorError("BAD_INPUT")
-                sheet = book.worksheets[0]
-                # Read the actual XML, not untrusted/stale worksheet dimensions.
-                # ZIP expansion is already bounded above. Never truncate rows.
-                sheet.reset_dimensions()
-                rows = []
-                for row_number, row in enumerate(sheet.iter_rows(values_only=True), 1):
-                    if row_number > 10000 or len(row) > 64:
-                        raise PortfolioDoctorError("BAD_INPUT")
-                    cells = list(row)
-                    while cells and cells[-1] is None:
-                        cells.pop()
-                    if any(str(v if v is not None else "").strip() for v in cells):
-                        rows.append(cells)
-                        if len(rows) > MAX_STOCKS + 1:
-                            raise PortfolioDoctorError("BAD_INPUT")
-            finally:
-                book.close()
-        elif name.endswith(".csv"):
-            text = payload.decode("utf-8-sig")
-            if "\x00" in text:
-                raise PortfolioDoctorError("BAD_INPUT")
-            rows = []
-            for line in text.splitlines():
-                if not line.strip():
-                    continue
-                if any(mark in line for mark in (",", ";", "\t")):
-                    # Preserve each cell rather than splitting ticker characters like X.
-                    row = next(csv.reader([line], delimiter=("," if "," in line else ";" if ";" in line else "\t")))
-                else:
-                    row = re.split(r"\s+", line.strip())
-                rows.append(row)
-                if len(rows) > 7:
-                    raise PortfolioDoctorError("BAD_INPUT")
-        else:
-            raise PortfolioDoctorError("BAD_INPUT")
-        rows = [r for r in rows if r and any(str(c or "").strip() for c in r)]
-        if rows and len(rows[0]) >= 3:
-            header = [re.sub(r"[^a-z0-9]", "", str(v or "").lower()) for v in rows[0][:3]]
-            if (header[0] in ("symbol", "ticker", "stock", "tradingsymbol") and
-                    header[1] in ("qty", "quantity", "shares") and
-                    header[2] in ("buyprice", "averageprice", "avgprice", "price", "buy")):
-                rows = rows[1:]
-        if not 1 <= len(rows) <= MAX_STOCKS:
-            raise PortfolioDoctorError("BAD_INPUT")
-        result, seen = [], set()
-        for r in rows:
-            if len(r) != 3:
-                raise PortfolioDoctorError("BAD_INPUT")
-            sym = str(r[0] or "").strip().upper().removesuffix(".NS")
-            if not re.fullmatch(r"[A-Z0-9&-]{2,20}", sym) or sym in seen:
-                raise PortfolioDoctorError("BAD_INPUT")
-            qty, buy = float(r[1]), float(r[2])
-            if (not math.isfinite(qty) or not math.isfinite(buy) or
-                    qty <= 0 or buy <= 0 or qty > 1e9 or buy > 1e9):
-                raise PortfolioDoctorError("BAD_INPUT")
-            seen.add(sym)
-            result.append({"symbol": sym, "qty": qty, "buy": buy})
-        return result
-    except PortfolioDoctorError:
-        raise
-    except (UnicodeError, ValueError, TypeError, IndexError, OSError, KeyError,
-            zipfile.BadZipFile, ImportError, StopIteration) as exc:
-        raise PortfolioDoctorError("BAD_INPUT") from exc
-
-
-def _ema(values, period):
-    if len(values) < period:
-        return None
-    factor = 2.0 / (period + 1.0)
-    value = float(values[0])
-    for p in values[1:]:
-        value = factor * float(p) + (1.0 - factor) * value
-    return value
-
-
-def _rsi(values):
-    """Wilder RSI14: seed from 14 changes, then smooth every later change."""
-    period = 14
-    if len(values) < period + 1:
-        return None
-    moves = [float(b) - float(a) for a, b in zip(values, values[1:])]
-    gains = sum(max(v, 0.0) for v in moves[:period]) / period
-    losses = sum(max(-v, 0.0) for v in moves[:period]) / period
-    for move in moves[period:]:
-        gains = (gains * (period - 1) + max(move, 0.0)) / period
-        losses = (losses * (period - 1) + max(-move, 0.0)) / period
-    if gains == losses == 0:
-        return 50.0
-    if losses == 0:
-        return 100.0
-    return 100.0 - 100.0 / (1.0 + gains / losses)
+        return decode_holdings(filename, payload)
+    except InputRejected:
+        raise PortfolioDoctorError("BAD_INPUT") from None
 
 
 # Reviewed 18-Nov-2026 against NSE CMTR71775 and the official holiday page.
@@ -240,11 +116,14 @@ def recover_fresh_daily_for_doctor(symbol, *, now=None, fetchers=None):
     """
     from market_data import _clean_frame
     if fetchers is None:
-        # Use existing provider clients; not their persistent get_hist() cache.
-        from data_engine import _nse_hist, _yahoo_v8_hist
+        # Only Yahoo daily history shares the primary adjustment convention.
+        # Raw NSE full histories can cross a split/bonus without restatement.
+        # NSE recovery is confined to the separately overlap-verified bhavcopy
+        # path above; never use a raw alternate series for RSI/EMA.
+        # Bypass the shared provider cache.
+        from data_engine import _yahoo_v8_hist
         from market_data import to_yahoo
         fetchers = (
-            lambda: _nse_hist(symbol),
             lambda: _yahoo_v8_hist(to_yahoo(symbol), period="1y"),
         )
     for fetch in fetchers:
@@ -333,12 +212,10 @@ def price_holdings(holdings, *, include_frames=False):
             if age < 0:
                 raise PortfolioDoctorError("STALE_PRICES")
             close = values[-1]
-            invested = holding["qty"] * holding["buy"]
-            value = holding["qty"] * close
+            amounts = position_values(holding, close)
             out.append({**holding, "close": close, "date": price_date.isoformat(),
                         "price_source": price_sources[holding["symbol"]],
-                        "invested": invested, "value": value, "pnl": value - invested,
-                        "pnl_pct": 100.0 * (close / holding["buy"] - 1.0),
+                        **amounts,
                         "ema20": _ema(values, 20), "ema50": _ema(values, 50),
                         "rsi14": _rsi(values),
                         "high20": max(values[-20:]), "low20": min(values[-20:])})
@@ -346,98 +223,40 @@ def price_holdings(holdings, *, include_frames=False):
             raise
         except (TypeError, ValueError, IndexError, OverflowError, AttributeError) as exc:
             raise PortfolioDoctorError("NO_PRICES") from exc
-    total = sum(h["value"] for h in out)
-    if not total or not math.isfinite(total):
-        raise PortfolioDoctorError("NO_PRICES")
-    for h in out:
-        h["weight"] = 100.0 if len(out) == 1 else 100.0 * h["value"] / total
+    try:
+        weights = portfolio_weights(out)
+    except (ValueError, TypeError, ArithmeticError):
+        raise PortfolioDoctorError("NO_PRICES") from None
+    for row, weight in zip(out, weights):
+        row["weight"] = weight
     return (out, frames) if include_frames else out
 
 
 def build_pdf_bytes(holdings):
-    """ReportLab canvas writes directly into RAM, never a filename."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
-    stream = io.BytesIO()
-    pdf = canvas.Canvas(stream, pagesize=A4, pageCompression=1)
-    width, height = A4
-    margin = 42
-    y = height - 52
+    """Compatibility entry point; rendering failures contain no holding data."""
+    try:
+        from portfolio_doctor_report import build_pdf_bytes as render
+        return render(holdings)
+    except Exception:
+        raise PortfolioDoctorError("PDF_FAILED") from None
 
-    def line(text, size=9, bold=False, gap=16):
-        nonlocal y
-        if y < 85:
-            pdf.showPage()
-            y = height - 52
-        pdf.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        pdf.drawString(margin, y, str(text)[:107])
-        y -= gap
 
-    def divider():
-        nonlocal y
-        pdf.line(margin, y + 5, width - margin, y + 5)
-        y -= 12
-
-    total_cost = sum(h["invested"] for h in holdings)
-    total_value = sum(h["value"] for h in holdings)
-    diff = total_value - total_cost
-    now = datetime.now(IST).strftime("%d %b %Y %H:%M IST")
-    line("MSK | PORTFOLIO DOCTOR", 17, True, 27)
-    line("Private on-demand educational report | " + now, 10, False, 21)
-    line("Source: dated daily OHLCV via Yahoo/provider fallback. NOT a live quote.", 9)
-    line("This service does not save holdings or PDFs in an MSK database.", 9, False, 20)
-    divider()
-    line("PORTFOLIO SUMMARY", 11, True, 22)
-    line("Invested: Rs {:,.2f}   Last-close value: Rs {:,.2f}".format(total_cost, total_value), 10)
-    line("Unrealised P/L: Rs {:+,.2f} ({:+.2f}%)".format(diff, 100 * diff / total_cost), 10, True, 23)
-    divider()
-    line("HOLDING-WISE VERIFIED RESULTS", 11, True, 23)
-    for h in holdings:
-        line("{} | Qty {:g} | Average purchase Rs {:,.2f}".format(
-            h["symbol"], h["qty"], h["buy"]), 10, True, 17)
-        line("Last close Rs {:,.2f} ({}) | Value Rs {:,.2f}".format(
-            h["close"], h["date"], h["value"]))
-        if h.get("price_source", "").startswith("NSE EOD"):
-            line("Source: NSE official daily file; historical OHLC cross-checked.", 8)
-        line("P/L Rs {:+,.2f} ({:+.2f}%) | Portfolio weight {:.1f}%".format(
-            h["pnl"], h["pnl_pct"], h["weight"]))
-        trend = ("Above EMA20 and EMA50" if h["ema50"] and h["close"] > h["ema20"] > h["ema50"]
-                 else "Below EMA20 and EMA50" if h["ema50"] and h["close"] < h["ema20"] < h["ema50"]
-                 else "Mixed / insufficient trend confirmation")
-        rsi = "N/A" if h["rsi14"] is None else "{:.1f}".format(h["rsi14"])
-        line("EMA20 Rs {:.2f} | EMA50 {} | RSI14 {} | {}".format(
-            h["ema20"], "Rs {:.2f}".format(h["ema50"]) if h["ema50"] else "N/A",
-            rsi, trend), 8, False, 15)
-        line("20-close high Rs {:.2f} | low Rs {:.2f}".format(h["high20"], h["low20"]), 8, False, 21)
-    divider()
-    line("RISK CHECKS", 11, True, 21)
-    flags = []
-    for h in holdings:
-        if h["weight"] > 40:
-            flags.append("{} concentration {:.1f}% (over 40% of current portfolio value)".format(
-                h["symbol"], h["weight"]))
-        if h["rsi14"] is not None and h["rsi14"] > 70:
-            flags.append("{} RSI above 70; extended/overbought conditions".format(h["symbol"]))
-        if h["ema50"] and h["close"] < h["ema50"]:
-            flags.append("{} close below its 50-session exponential moving average".format(h["symbol"]))
-    for msg in (flags or ["No threshold flags from this limited price-only check."]):
-        line("- " + msg, 9, False, 17)
-    y -= 6
-    divider()
-    line("LIMITS & DISCLAIMER", 9, True)
-    line("Last close is not a tradeable live price. Prices can change after the last session.", 8)
-    line("Indicators are calculated from historical closes, not audited fundamentals.", 8)
-    line("Cost and P/L use your entered current share count and average purchase cost.", 8)
-    line("Use broker-adjusted quantities/costs after splits or bonuses; these are not inferred.", 8)
-    line("Telegram processes your messages and PDF under its own storage policies.", 8)
-    line("No BUY/SELL signal, guaranteed return or order is provided.", 8)
-    line("Educational information only. Not SEBI-registered investment advice.", 8)
-    pdf.showPage()
-    pdf.save()
-    data = stream.getvalue()
-    if not (1000 <= len(data) <= MAX_BYTES and data.startswith(b"%PDF-")):
-        raise PortfolioDoctorError("PDF_FAILED")
-    return data
+def worker_environment(source=None):
+    """Public-market worker receives runtime settings, never app credentials."""
+    source = os.environ if source is None else source
+    permitted = frozenset((
+        "PATH", "SYSTEMROOT", "WINDIR", "HOME", "USERPROFILE",
+        "LANG", "LC_ALL", "TZ", "LD_LIBRARY_PATH", "VIRTUAL_ENV",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+        "XDG_CACHE_HOME", "CACHE_DIR", "MPLCONFIGDIR",
+        "MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED",
+        "MSK_PORTFOLIO_DOCTOR_ADVANCED_FUNDAMENTALS",
+    ))
+    result = {key: value for key, value in source.items() if key in permitted}
+    result.update(PYTHONDONTWRITEBYTECODE="1", MSK_RESEARCH_ONLY="1")
+    return result
 
 
 def run_isolated_memory(filename, payload, timeout=150):
@@ -445,12 +264,7 @@ def run_isolated_memory(filename, payload, timeout=150):
     if not (isinstance(payload, bytes) and 0 < len(payload) <= MAX_BYTES and
             str(filename).lower().endswith((".csv", ".xlsx"))):
         raise PortfolioDoctorError("BAD_INPUT")
-    env = os.environ.copy()
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    # Existing config.py explicitly permits public read-only market research.
-    # The worker never needs Telegram credentials; keep them out of its env.
-    env["MSK_RESEARCH_ONLY"] = "1"
-    env.pop("TELEGRAM_TOKEN", None)
+    env = worker_environment()
     worker_name = "input.xlsx" if str(filename).lower().endswith(".xlsx") else "input.csv"
     command = [sys.executable, os.path.abspath(__file__), "--worker", worker_name]
     try:
