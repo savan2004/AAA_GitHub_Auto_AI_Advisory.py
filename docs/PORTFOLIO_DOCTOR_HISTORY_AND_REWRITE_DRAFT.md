@@ -396,7 +396,7 @@ Discussion/reviews: 1 automated conversation notice; 0 submitted reviews. [Conve
 
 ## Validation ledger
 
-Baseline controlled tests: PASS (95 Doctor tests); baseline real public-data 1/5-holding PDF: PASS; old 17-Nov receipt: PASS for old version only; rewritten code: IMPLEMENTED / validation pending; rewrite CI: PENDING; rewrite deployment: NOT DEPLOYED; latest private Telegram delivery: NOT TESTED; customer release: NO-GO.
+Baseline controlled tests: PASS (95 Doctor tests); baseline real public-data 1/5-holding PDF: PASS; old 17-Nov receipt: PASS for old version only; rewritten code: IMPLEMENTED and controlled validation PASS; rewrite CI: PASS on 17a86aec06cf6b63e58acddda20723a91aa8084f; rewrite deployment: NOT DEPLOYED; latest private Telegram delivery: NOT TESTED; customer release: NO-GO.
 
 This document must be updated with exact rewrite commit, CI URLs, observed failures/fixes and deployment evidence. Do not carry historical PASS labels forward without rerunning the relevant gates.
 
@@ -409,3 +409,35 @@ This document must be updated with exact rewrite commit, CI URLs, observed failu
 - Dedicated rewrite tests cover parser rejection, malformed private-row classification, credential boundary, adjustment-source policy, decimal subtraction and measured PDF bounds. All original suites and real public-market worker probes remain required.
 
 H07–H10 have candidate repairs; they are not marked PASS until CI results are inspected. Live customer access is unchanged (disabled).
+
+## Rewrite validation and resulting file map
+
+Validated implementation commit: [17a86aec06cf6b63e58acddda20723a91aa8084f](https://github.com/savan2004/AAA_GitHub_Auto_AI_Advisory.py/commit/17a86aec06cf6b63e58acddda20723a91aa8084f).
+
+Single work PR: [#186](https://github.com/savan2004/AAA_GitHub_Auto_AI_Advisory.py/pull/186), still DRAFT. The collection-only draft was committed first at `8c4d1c490f6ec8f5c8c566d3dfbc588b4cfd61c3`; code was rewritten only after that record was created.
+
+| Gate | Verified result | Proof / limit |
+|---|---|---|
+| Existing Doctor regression suites | PASS, 95 tests | Old financial, privacy, handler, bhavcopy, optional builder and timeout safeguards retained |
+| Dedicated rewrite suite | PASS, 9 tests | Booleans/malformed archives/CSV, canonical symbols, malformed private rows, worker credentials, alternate adjustment policy, Decimal arithmetic and actual PDF text bounds |
+| Total Doctor tests | PASS, 104 | CI advanced-evidence job |
+| Actual public-data worker: 1 holding | PASS: 1 page, 1.22s, cache_files=0 | Synthetic holdings, public INFY prices, actual isolated worker |
+| Actual public-data worker: 5 holdings | PASS: 2 pages, 1.46s, cache_files=0 | All positions and financial totals checked against public official closes |
+| Latest completed-session filtering | PASS: expected/got 2026-11-17 | Provider included 18-Nov forming bar; it was excluded |
+| GitHub workflows | PASS: 5 applicable workflows | Sixth workflow explicitly skipped opt-in live integration; no live claim |
+| Live Telegram send of rewrite | NOT TESTED | No authorised test chat established |
+| Deployment / customer availability | NOT DEPLOYED / DISABLED | Baseline e82120a1565d52099a2ff82c5f85392aa5fac81c remains the last verified LIVE code |
+
+CI: https://github.com/savan2004/AAA_GitHub_Auto_AI_Advisory.py/actions/runs/44237128664
+
+New source files:
+- [portfolio_doctor_input.py](https://github.com/savan2004/AAA_GitHub_Auto_AI_Advisory.py/blob/17a86aec06cf6b63e58acddda20723a91aa8084f/portfolio_doctor_input.py)
+- [portfolio_doctor_calculations.py](https://github.com/savan2004/AAA_GitHub_Auto_AI_Advisory.py/blob/17a86aec06cf6b63e58acddda20723a91aa8084f/portfolio_doctor_calculations.py)
+- [portfolio_doctor_report.py](https://github.com/savan2004/AAA_GitHub_Auto_AI_Advisory.py/blob/17a86aec06cf6b63e58acddda20723a91aa8084f/portfolio_doctor_report.py)
+- [tests/test_portfolio_doctor_rewrite.py](https://github.com/savan2004/AAA_GitHub_Auto_AI_Advisory.py/blob/17a86aec06cf6b63e58acddda20723a91aa8084f/tests/test_portfolio_doctor_rewrite.py)
+
+The rewritten facade shrank from 606 to 420 lines while moving pure parsing, indicators/valuation and rendering into explicit modules. Existing public APIs remain available to the handler and optional builder. Historical ledger/runner/report files are retained for history and unrelated compatibility, not activated.
+
+H07–H10 candidate repairs now pass controlled regression and real public-worker validation. H11 separation is implemented. H12 broker cost-basis verification is still an input limitation, H13 production delivery/privacy acceptance is still OPEN. These are release gates, not reasons to relabel old CI or delivery evidence as current production proof.
+
+**Customer release: NO-GO.** This draft is the consolidated implementation/evidence record requested by the owner. It does not enable customer/test flags or claim a 9/10 product.
