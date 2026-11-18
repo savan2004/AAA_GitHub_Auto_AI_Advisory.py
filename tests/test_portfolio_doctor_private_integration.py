@@ -3,6 +3,7 @@ import ast
 import copy
 import io
 import logging
+import os
 from pathlib import Path
 import threading
 import time
@@ -148,6 +149,47 @@ class SessionTests(unittest.TestCase):
         self.assertIn("already running", notices[-1][1])
         self.assertEqual(routed, [101])
 
+
+    def test_missing_owner_session_recovers_only_authorized_private_tester(self):
+        """A restart-lost session must not redirect the owner's five holdings."""
+        raw = "BEL 10 100\\nreliance 50 800\\nsbin 150 865.5\\nDLF 500 458\\nSJVN 40000 15"
+        env, _, notices = self._env(user_ids=())
+        routed = []
+        env.update(
+            os=os,
+            API_RATE_LIMITER=SimpleNamespace(is_allowed=lambda _uid: True),
+            portfolio_doctor_text=lambda m: routed.append(m.text),
+        )
+        handler = _function("handle_text", env)
+        flags = {"MSK_PORTFOLIO_DOCTOR_TEST_ENABLED": "1",
+                 "MSK_PORTFOLIO_DOCTOR_TEST_USER_ID": "101"}
+        with patch.dict(os.environ, flags):
+            handler(_message(101, text=raw))
+        self.assertEqual(routed, [raw])
+        self.assertGreater(env["_portfolio_doctor_waiting"][101], time.monotonic())
+        self.assertEqual(notices, [])
+
+        # Another account is never routed to the Doctor via recovery.
+        env["_portfolio_doctor_waiting"].clear()
+        with patch.dict(os.environ, flags):
+            handler(_message(102, text=raw))
+        self.assertEqual(routed, [raw])
+        self.assertNotIn(102, env["_portfolio_doctor_waiting"])
+        self.assertIn("enabled private", notices[-1][1])
+
+    def test_missing_owner_session_is_not_recovered_when_test_disabled(self):
+        env, _, notices = self._env(user_ids=())
+        routed = []
+        env.update(os=os,
+                   API_RATE_LIMITER=SimpleNamespace(is_allowed=lambda _uid: True),
+                   portfolio_doctor_text=lambda m: routed.append(m.text))
+        handler = _function("handle_text", env)
+        with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_TEST_ENABLED": "0",
+                                    "MSK_PORTFOLIO_DOCTOR_TEST_USER_ID": "101"}):
+            handler(_message(101, text="BEL 10 100"))
+        self.assertEqual(routed, [])
+        self.assertEqual(env["_portfolio_doctor_waiting"], {})
+        self.assertIn("enabled private", notices[-1][1])
 
     def test_upload_delivery_uses_memory_and_closes_pdf(self):
         env, bot, _ = self._env()

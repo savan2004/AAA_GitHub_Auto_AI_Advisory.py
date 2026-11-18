@@ -2096,9 +2096,27 @@ def handle_text(m):
             safe_send(uid, "Portfolio Doctor session is unavailable. No holdings were processed.")
         return
 
-    # Expired/disabled Doctor requests must never become provider search queries.
+    # Lost in-memory state after a process restart must not strand the
+    # explicitly configured PRIVATE owner tester. This does NOT extend
+    # customer access, restore expired sessions, or use persistent holdings.
     from portfolio_doctor_live import looks_like_holdings_text
     if looks_like_holdings_text(text):
+        owner_id = os.getenv("MSK_PORTFOLIO_DOCTOR_TEST_USER_ID", "").strip()
+        owner_recovery = (
+            not deadline
+            and _doctor_allowed(m)
+            and os.getenv("MSK_PORTFOLIO_DOCTOR_TEST_ENABLED", "") == "1"
+            and owner_id.isdecimal()
+            and str(getattr(m.from_user, "id", None)) == owner_id
+            and getattr(m.chat, "type", None) == "private"
+            and getattr(m.chat, "id", None) == getattr(m.from_user, "id", None)
+        )
+        if owner_recovery:
+            with _portfolio_doctor_lock:
+                _portfolio_doctor_waiting[uid] = time.monotonic() + 180
+            logger.info("MSK_DOCTOR_OWNER_SESSION_RECOVERED reason=missing_session")
+            portfolio_doctor_text(m)
+            return
         safe_send(uid, "Holdings require an enabled private Portfolio Doctor session. "
                   "Select Portfolio Doctor again before sending them.")
         return
