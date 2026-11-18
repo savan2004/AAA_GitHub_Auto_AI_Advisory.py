@@ -64,7 +64,7 @@ def _report_records(holdings):
         raise PdfRejected() from None
 
 
-def build_pdf_bytes(holdings):
+def build_pdf_bytes(holdings, *, peers=None):
     """Render every holding in memory with exact displayed money and wrapping."""
     holdings = _report_records(holdings)
     from reportlab.lib.pagesizes import A4
@@ -139,6 +139,25 @@ def build_pdf_bytes(holdings):
     for msg in (flags or ["No threshold flags from this limited price-only check."]):
         line("- " + msg, 9, False, 17)
     y -= 6
+    divider()
+    line("NIFTY 500 INDUSTRY-PEER WATCHLIST (EDUCATIONAL)", 11, True, 21)
+    peers = peers or {}
+    if peers.get("status") == "SCREENED":
+        line("Official constituents: {} | Same-industry pool: {} | Screened: {} | Fresh: {}".format(
+            peers["universe"], peers["pool"], peers["screened"], peers["fresh"]), 8)
+        line("Moderate technical screen qualified: {}; up to 2 per industry shown.".format(
+            peers["qualified"]), 8, False, 20)
+        for candidate in peers.get("candidates", []):
+            line("{} | {} | Technical score {:.0f}/100 | Close Rs {:,.2f} ({})".format(
+                candidate["symbol"], candidate["industry"], candidate["score"],
+                candidate["close"], candidate["date"]), 8)
+        if not peers.get("candidates"):
+            line("No candidate passed verified price, trend, liquidity and risk gates.", 8)
+    else:
+        line("Unavailable: official membership, same-industry peers or fresh data not verified.", 8)
+    line("Sample screen only; NOT a ranking of all 500 companies.", 8)
+    line("Technical strength is not fundamental quality, suitability or expected returns.", 8)
+    line("Candidates are for further research; no automatic replacement or order.", 8, False, 20)
     divider()
     line("LIMITS & DISCLAIMER", 9, True)
     line("Last close is not a tradeable live price. Prices can change after the last session.", 8)
