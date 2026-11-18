@@ -42,28 +42,7 @@ def _run(case, folder):
     invested = "{:,.2f}".format(sum(Decimal(qty) * Decimal(buy)
                                     for _, qty, buy in positions))
     start = time.monotonic()
-    try:
-        data = run_isolated_memory(filename, payload, timeout=150)
-    except Exception:
-        if payload == b"SBIN.BO 100 840":
-            # Fixed public diagnostic only; never enabled for customer input.
-            import requests
-            response = requests.get(
-                "https://query2.finance.yahoo.com/v8/finance/chart/SBIN.BO",
-                params={"interval":"1d", "period1": int(time.time())-370*86400,
-                        "period2":int(time.time()), "includePrePost":"false"},
-                headers={"User-Agent":"Mozilla/5.0"}, timeout=8)
-            print("BSE_PUBLIC_DIAGNOSTIC http=", response.status_code)
-            if response.ok:
-                result = response.json().get("chart", {}).get("result") or []
-                if result:
-                    data = result[0]
-                    meta = data.get("meta", {})
-                    print("BSE_PUBLIC_DIAGNOSTIC meta=", {k:meta.get(k) for k in
-                        ("symbol","exchangeName","currency","instrumentType")})
-                    stamps = data.get("timestamp", [])
-                    print("BSE_PUBLIC_DIAGNOSTIC rows=", len(stamps), "last=", stamps[-3:])
-        raise
+    data = run_isolated_memory(filename, payload, timeout=150)
     pages = PdfReader(io.BytesIO(data), strict=True).pages
     text = "\n".join(page.extract_text() or "" for page in pages)
     assert all(symbol in text for symbol in symbols), "incomplete PDF holdings"
@@ -107,6 +86,30 @@ def _run(case, folder):
     return len(pages)
 
 
+def _bse_public_evidence(folder):
+    """Real fixed-public BSE request: validate a PDF or prove safe rejection.
+
+    The provider currently returns fewer than 20 SBIN.BO daily candles on some
+    endpoints. Do not pretend rejection is successful BSE report generation.
+    """
+    from portfolio_doctor_live import PortfolioDoctorError, bse_daily_for_doctor
+    public = bse_daily_for_doctor("SBIN", explicit=True)
+    case = ("synthetic.csv", b"SBIN.BO 100 840", (("SBIN", "100", "840"),), ())
+    if public is not None:
+        _run(case, folder)
+        print("MSK_DOCTOR_BSE_PUBLIC_REPORT PASS")
+        return
+    try:
+        run_isolated_memory(case[0], case[1], timeout=150)
+    except PortfolioDoctorError as error:
+        assert error.code in ("NO_PRICES", "STALE_PRICES"), "unexpected BSE worker failure"
+        assert not list(Path(folder).rglob("*")), "BSE request created cache"
+        print("MSK_DOCTOR_BSE_PUBLIC_REPORT NOT_AVAILABLE insufficient_verified_history")
+        print("MSK_DOCTOR_BSE_FAIL_CLOSED PASS no_fabricated_pdf cache_files=0")
+        return
+    raise AssertionError("BSE evidence differed between probe and worker; inspect before release")
+
+
 def main():
     one = (("INFY", "2", "1000"),)
     five = tuple((symbol, str(i), "1000") for i, symbol in enumerate(
@@ -114,8 +117,7 @@ def main():
     client = (("SBIN", "100", "840"), ("BHEL", "150", "150"))
     numbered = ("synthetic.csv", b"1. sbin 100 840\n2. Bhel 150 150", client, ())
     sequential = (_case(one), _case(five), _case(five, xlsx=True),
-                  _case(client), numbered,
-                  ("synthetic.csv", b"SBIN.BO 100 840", (client[0],), ()))
+                  _case(client), numbered)
     concurrent = (
         _case(one, forbidden=("TCS",)),
         _case((("TCS", "3", "1000"),), forbidden=("INFY",)),
@@ -129,6 +131,7 @@ def main():
         with patch.dict(os.environ, env):
             for case in sequential:
                 _run(case, folder)
+            _bse_public_evidence(folder)
             with ThreadPoolExecutor(max_workers=2) as pool:
                 pending = [pool.submit(_run, case, folder) for case in concurrent]
                 assert all(future.result() >= 1 for future in pending)

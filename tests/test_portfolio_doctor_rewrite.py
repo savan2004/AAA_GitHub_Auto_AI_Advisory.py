@@ -218,3 +218,24 @@ class NumberedIndianSymbolTests(unittest.TestCase):
         self.assertIn("BSE:", rows[0]["price_source"])
         self.assertEqual(rows[0]["value"], 200.)
         self.assertTrue(portfolio_doctor_report.build_pdf_bytes(rows).startswith(b"%PDF-"))
+
+    def test_bse_short_history_stale_prices_and_duplicates_are_rejected(self):
+        now = datetime(2026, 11, 18, 9, tzinfo=doctor.IST)
+        from copy import deepcopy
+        for kind in ("short", "stale", "duplicate", "invalid"):
+            chart = deepcopy(self._chart())
+            data = chart["chart"]["result"][0]
+            if kind == "short":
+                data["timestamp"] = data["timestamp"][-4:]
+                for key, values in data["indicators"]["quote"][0].items():
+                    data["indicators"]["quote"][0][key] = values[-4:]
+            elif kind == "stale":
+                data["timestamp"] = [stamp - 86400 for stamp in data["timestamp"]]
+            elif kind == "duplicate":
+                data["timestamp"][-1] = data["timestamp"][-2]
+            else:
+                data["indicators"]["quote"][0]["high"][-1] = 1.
+            with self.subTest(kind=kind):
+                self.assertIsNone(doctor.bse_daily_for_doctor(
+                    "SAMPLEA", now=now, explicit=True,
+                    get=lambda *a, **kw: self._response(chart)))
