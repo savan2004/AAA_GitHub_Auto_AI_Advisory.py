@@ -438,9 +438,10 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             line('Not enough independently verified completed candles for analysis.', 9)
         else:
             subhead('PRICE, TREND AND RISK')
-            line('20-session return: {:+.1f}% | RSI14: {:.1f} | MACD histogram: {:+.3f}'.format(
+            macd = company.get('macd_hist')
+            line('20-session return: {:+.1f}% | RSI14: {:.1f} | MACD histogram: {}'.format(
                 company['return20'], company['rsi14'],
-                company['macd_hist'] if company['macd_hist'] is not None else 0.0), 8.5)
+                '{:+.3f}'.format(macd) if macd is not None else 'Unavailable'), 8.5)
             line('EMA20: {} | EMA50: {} | EMA200: {}'.format(
                 money(company['ema20']) if company['ema20'] is not None else 'N/A',
                 money(company['ema50']) if company['ema50'] is not None else 'N/A',
