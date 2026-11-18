@@ -145,7 +145,7 @@ def render_pdf(holdings, peers=None, risk=None, max_bytes=5 * 1024 * 1024):
             trace(benchmark, MUTED)
         text_fit(days[0], x0, bot_y - 16, 95, 7, color=MUTED)
         text_fit(days[-1], x1 - 95, bot_y - 16, 95, 7, color=MUTED)
-        text_fit('Today's holdings (rebased 100)', x0 + 6, top_y + 8, 190, 8, True, BLUE)
+        text_fit("Current holdings (rebased 100)", x0 + 6, top_y + 8, 190, 8, True, BLUE)
         if benchmark is not None:
             text_fit('Nifty 50 (same dates)', x1 - 150, top_y + 8,
                      150, 8, True, MUTED)
