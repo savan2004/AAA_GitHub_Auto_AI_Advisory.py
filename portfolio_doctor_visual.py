@@ -21,9 +21,13 @@ RED = HexColor('#BD4040')
 WHITE = HexColor('#FFFFFF')
 
 
-def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
+def render_pdf(holdings, peers=None, risk=None, max_bytes=5 * 1024 * 1024):
     """Use already validated records; never fetch market data or persist files."""
     peers = peers or {}
+    risk = risk if isinstance(risk, dict) else None
+    has_risk = bool(risk and risk.get("status") == "VERIFIED" and
+                    len(risk.get("chart_portfolio") or []) >= 65)
+    total_pages = 5 if has_risk else 4
     out = io.BytesIO()
     pdf = canvas.Canvas(out, pagesize=A4, pageCompression=1)
     w, h = A4
@@ -53,7 +57,7 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
         pdf.setFillColor(MUTED)
         pdf.setFont('Helvetica', 7)
         pdf.drawString(left, 46, 'PRIVATE | Historical closes | Educational research | No automatic orders')
-        pdf.drawRightString(right, 46, 'Page {} of 4'.format(page_no))
+        pdf.drawRightString(right, 46, 'Page {} of {}'.format(page_no, total_pages))
 
     def new_page(title, desc):
         nonlocal y, page_no
@@ -102,6 +106,50 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
         if abs(n) >= 100_000:
             return 'Rs {:.2f} L'.format(n / 100_000)
         return money(value)
+
+    def draw_historical_chart(details):
+        nonlocal y
+        values = details['chart_portfolio']
+        benchmark = details.get('chart_nifty')
+        days = details['chart_dates']
+        if len(values) < 2 or len(values) != len(days):
+            return
+        if benchmark is not None and len(benchmark) != len(values):
+            benchmark = None
+        all_values = values + (benchmark or [])
+        low = min(all_values) - 4
+        high = max(all_values) + 4
+        if high <= low:
+            high = low + 1
+        x0, x1 = left + 40, right - 15
+        top_y, bot_y = y - 16, y - 153
+        pdf.setStrokeColor(BORDER)
+        pdf.setLineWidth(0.6)
+        for j in range(4):
+            yy = bot_y + (top_y - bot_y) * j / 3
+            pdf.line(x0, yy, x1, yy)
+            text_fit('{:.0f}'.format(low + (high - low) * j / 3),
+                     left, yy - 2, 36, 7.5, color=MUTED)
+        def trace(points, color):
+            pdf.setStrokeColor(color)
+            pdf.setLineWidth(1.7)
+            previous = None
+            for i, value in enumerate(points):
+                px = x0 + (x1 - x0) * i / (len(points) - 1)
+                py = bot_y + (top_y - bot_y) * (value - low) / (high - low)
+                if previous is not None:
+                    pdf.line(previous[0], previous[1], px, py)
+                previous = (px, py)
+        trace(values, BLUE)
+        if benchmark is not None:
+            trace(benchmark, MUTED)
+        text_fit(days[0], x0, bot_y - 16, 95, 7, color=MUTED)
+        text_fit(days[-1], x1 - 95, bot_y - 16, 95, 7, color=MUTED)
+        text_fit("Current holdings (rebased 100)", x0 + 6, top_y + 8, 190, 8, True, BLUE)
+        if benchmark is not None:
+            text_fit('Nifty 50 (same dates)', x1 - 150, top_y + 8,
+                     150, 8, True, MUTED)
+        y = bot_y - 35
 
     invested = sum(row['invested'] for row in holdings)
     value = sum(row['value'] for row in holdings)
@@ -293,6 +341,39 @@ def render_pdf(holdings, peers=None, max_bytes=5 * 1024 * 1024):
     line('Company fundamentals, valuation, governance: NOT VERIFIED in the basic report.', 8)
     line('Sector target weights, tax impact, health score and replacements: NOT CALCULATED.', 8)
     line('Privacy: PDF created in memory for one request; MSK does not store holdings.', 8)
+
+    if has_risk:
+        new_page('05 / HISTORICAL RISK & NIFTY 50',
+                 "Reconstructed value of today's holdings; not your actual trade history.")
+        subhead('VERIFIED HISTORY COVERAGE')
+        line('All {} holdings | {} common observed sessions | {} to {}.'.format(
+            risk['included'], risk['coverage'],
+            risk['first_date'], risk['last_date']), 8.8)
+        line('Only matching market dates; no missing-day interpolation or backfill.', 8,
+             color=MUTED)
+        subhead('RISK METRICS FOR STATIC SHARE COUNTS')
+        line('Annualised volatility: {:.1f}% | Max historical drawdown: {:.1f}%'.format(
+            risk['annual_vol_pct'], risk['max_drawdown_pct']), 9.2, True)
+        line('Current drawdown: {:.1f}% | Observed window change: {:+.1f}%'.format(
+            risk['current_drawdown_pct'], risk['static_change_pct']), 9.0)
+        if risk.get('beta') is not None:
+            line('Beta vs Nifty 50: {:.2f} | Paired observations: {}'.format(
+                risk['beta'], risk['beta_coverage']), 9)
+        else:
+            line('Beta vs Nifty 50: not verified on enough matching index sessions.', 8.5)
+        subhead('REBASED HISTORICAL PATH (START = 100)')
+        draw_historical_chart(risk)
+        subhead('STOCKS THAT MOVED TOGETHER')
+        if risk.get('pairs'):
+            for pair in risk['pairs'][:4]:
+                line('{} / {} | daily-return correlation {:.2f}'.format(
+                    pair['a'], pair['b'], pair['correlation']), 8.5)
+        else:
+            line('No pair reached correlation >=0.75 with sufficient daily variation.', 8.5)
+        subhead('IMPORTANT INTERPRETATION')
+        line('These are risk estimates for fixed current quantities, not realised P/L.', 8)
+        line('Past results are not a forecast. Corporate actions can affect comparability.', 8)
+        line('No BUY / SELL, asset allocation or risk tolerance has been assumed.', 8)
     footer()
     pdf.save()
     data = out.getvalue()

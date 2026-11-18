@@ -70,8 +70,8 @@ def _report_records(holdings):
         raise PdfRejected() from None
 
 
-def build_pdf_bytes(holdings, *, peers=None):
+def build_pdf_bytes(holdings, *, peers=None, risk=None):
     """Validate each holding, then render the styled PDF entirely in memory."""
     rows = _report_records(holdings)
     from portfolio_doctor_visual import render_pdf
-    return render_pdf(rows, peers=peers, max_bytes=MAX_BYTES)
+    return render_pdf(rows, peers=peers, risk=risk, max_bytes=MAX_BYTES)
