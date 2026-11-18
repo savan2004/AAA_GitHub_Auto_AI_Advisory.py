@@ -342,8 +342,11 @@ class PDFAndPrivacyTests(unittest.TestCase):
         frame = pd.DataFrame({"Close": [float(i + 100) for i in range(40)]},
                              index=dates)
         before = datetime(2026, 11, 17, 15, 0, tzinfo=basic.IST)
-        after = datetime(2026, 11, 17, 16, 30, tzinfo=basic.IST)
+        publishing = datetime(2026, 11, 17, 16, 30, tzinfo=basic.IST)
+        after = datetime(2026, 11, 17, 17, 30, tzinfo=basic.IST)
         self.assertEqual(verified_completed_daily_frame(frame, now=before).index[-1].date(),
+                         date(2026, 11, 16))
+        self.assertEqual(verified_completed_daily_frame(frame, now=publishing).index[-1].date(),
                          date(2026, 11, 16))
         self.assertEqual(verified_completed_daily_frame(frame, now=after).index[-1].date(),
                          date(2026, 11, 17))
