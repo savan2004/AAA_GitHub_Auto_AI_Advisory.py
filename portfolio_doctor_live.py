@@ -272,8 +272,8 @@ def price_holdings(holdings, *, include_frames=False):
     # history merely because its latest candle is stale.
     bse_candidates = [h for h in holdings if h["symbol"] in failures and
                       (h.get("exchange") == "BSE" or
-                       (frames.get(h["symbol"]) is None or
-                        getattr(frames.get(h["symbol"]), "empty", True)))]
+                       (h.get("exchange") != "NSE" and (frames.get(h["symbol"]) is None or
+                        getattr(frames.get(h["symbol"]), "empty", True))))]
     if bse_candidates:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(3, len(bse_candidates))) as pool:

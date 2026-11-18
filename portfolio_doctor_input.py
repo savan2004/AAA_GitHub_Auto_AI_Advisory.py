@@ -164,6 +164,8 @@ def decode_holdings(filename, payload):
             item = {"symbol": symbol, "qty": _positive(row[1]), "buy": _positive(row[2])}
             if bse:
                 item["exchange"] = "BSE"
+            elif raw_symbol.startswith("NSE:") or raw_symbol.endswith(".NS"):
+                item["exchange"] = "NSE"
             result.append(item)
             seen.add(symbol)
         return result

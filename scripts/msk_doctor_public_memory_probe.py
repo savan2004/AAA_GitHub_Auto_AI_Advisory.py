@@ -51,7 +51,7 @@ def _run(case, folder):
 
     assert "Unrealised P/L" in text and "RSI14" in text, "missing financial content"
     if b".BO" in payload:
-        assert "BSE: exact ticker" in text, "explicit BSE request lost exchange identity"
+        assert "Source: BSE exact ticker" in text, "explicit BSE request lost exchange identity"
     money = lambda value: Decimal(value.replace(",", ""))
     expected = expected_doctor_session()
     official = fetch_nse_bhavcopy_rows(expected, symbols)

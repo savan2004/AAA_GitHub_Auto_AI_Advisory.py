@@ -217,7 +217,10 @@ class NumberedIndianSymbolTests(unittest.TestCase):
         bse.assert_called_once()
         self.assertIn("BSE:", rows[0]["price_source"])
         self.assertEqual(rows[0]["value"], 200.)
-        self.assertTrue(portfolio_doctor_report.build_pdf_bytes(rows).startswith(b"%PDF-"))
+        pdf = portfolio_doctor_report.build_pdf_bytes(rows)
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(pdf)).pages)
+        self.assertIn("Source: BSE exact ticker", text)
 
     def test_bse_short_history_stale_prices_and_duplicates_are_rejected(self):
         now = datetime(2026, 11, 18, 9, tzinfo=doctor.IST)
@@ -239,3 +242,14 @@ class NumberedIndianSymbolTests(unittest.TestCase):
                 self.assertIsNone(doctor.bse_daily_for_doctor(
                     "SAMPLEA", now=now, explicit=True,
                     get=lambda *a, **kw: self._response(chart)))
+
+    def test_explicit_nse_never_falls_back_to_bse(self):
+        fake = SimpleNamespace(bulk_history=lambda *a, **kw: {})
+        with patch.dict(sys.modules, {"market_data": fake}), \
+             patch("portfolio_doctor_bhavcopy.recover_from_public_bhavcopy", return_value={}), \
+             patch.object(doctor, "recover_fresh_daily_for_doctor", return_value=None), \
+             patch.object(doctor, "bse_daily_for_doctor", side_effect=AssertionError("exchange changed")):
+            for payload in (b"NSE:SAMPLEA 2 100", b"SAMPLEA.NS 2 100"):
+                with self.assertRaises(doctor.PortfolioDoctorError) as error:
+                    doctor.price_holdings(doctor.parse_holdings("input.csv", payload))
+                self.assertEqual(error.exception.code, "NO_PRICES")
