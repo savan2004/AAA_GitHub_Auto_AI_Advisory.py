@@ -42,7 +42,27 @@ def _run(case, folder):
     invested = "{:,.2f}".format(sum(Decimal(qty) * Decimal(buy)
                                     for _, qty, buy in positions))
     start = time.monotonic()
-    data = run_isolated_memory(filename, payload, timeout=150)
+    try:
+        data = run_isolated_memory(filename, payload, timeout=150)
+    except Exception:
+        if payload == b"SBIN.BO 100 840":
+            # Fixed public diagnostic only; never enabled for customer input.
+            import requests
+            response = requests.get(
+                "https://query2.finance.yahoo.com/v8/finance/chart/SBIN.BO",
+                params={"interval":"1d", "range":"1y", "includePrePost":"false"},
+                headers={"User-Agent":"Mozilla/5.0"}, timeout=8)
+            print("BSE_PUBLIC_DIAGNOSTIC http=", response.status_code)
+            if response.ok:
+                result = response.json().get("chart", {}).get("result") or []
+                if result:
+                    data = result[0]
+                    meta = data.get("meta", {})
+                    print("BSE_PUBLIC_DIAGNOSTIC meta=", {k:meta.get(k) for k in
+                        ("symbol","exchangeName","currency","instrumentType")})
+                    stamps = data.get("timestamp", [])
+                    print("BSE_PUBLIC_DIAGNOSTIC rows=", len(stamps), "last=", stamps[-3:])
+        raise
     pages = PdfReader(io.BytesIO(data), strict=True).pages
     text = "\n".join(page.extract_text() or "" for page in pages)
     assert all(symbol in text for symbol in symbols), "incomplete PDF holdings"

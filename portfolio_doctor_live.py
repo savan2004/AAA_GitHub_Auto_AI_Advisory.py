@@ -155,12 +155,12 @@ def bse_daily_for_doctor(symbol, *, now=None, explicit=False, get=None):
     no exact NSE listing. All requests are bounded and confined to the worker.
     """
     import requests
-    import pandas as pd
-    from market_data import _clean_frame
     get = get or requests.get
     ticker = symbol + ".BO"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
+        import pandas as pd
+        from market_data import _clean_frame
         if not explicit:
             response = get("https://query2.finance.yahoo.com/v1/finance/search",
                            params={"q": symbol, "quotesCount": 20,
