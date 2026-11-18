@@ -34,8 +34,10 @@ def _message(uid, text=None):
 class FakeBot:
     def __init__(self):
         self.sent = []
-    def send_document(self, uid, handle, caption, timeout=None, protect_content=None):
+    def send_document(self, uid, handle, caption, timeout=None, protect_content=None,
+                      reply_markup=None):
         self.delivery_options = (timeout, protect_content)
+        self.research_markup = reply_markup
         self.last_handle = handle
         data = handle.read()
         self.sent.append((uid, data, caption))
@@ -50,7 +52,18 @@ class SessionTests(unittest.TestCase):
     def _env(self, *, user_ids=(101,), executor=None):
         bot = FakeBot()
         notices = []
+        class FakeMarkup:
+            def __init__(self, row_width=2):
+                self.row_width = row_width
+                self.buttons = []
+            def add(self, *buttons):
+                self.buttons.extend(buttons)
+
+        button = lambda text, callback_data: SimpleNamespace(
+            text=text, callback_data=callback_data)
         env = {
+            "types": SimpleNamespace(InlineKeyboardMarkup=FakeMarkup,
+                                     InlineKeyboardButton=button),
             "threading": threading, "time": time,
             "_portfolio_doctor_lock": threading.Lock(),
             "_portfolio_doctor_waiting": {uid: time.monotonic()+180 for uid in user_ids},
@@ -73,6 +86,9 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(len(bot.sent), 1)
         self.assertEqual(bot.delivery_options, (30, True))
         self.assertTrue(bot.last_handle.closed)
+        self.assertEqual([button.callback_data for button in bot.research_markup.buttons],
+                         ["doctorpdf|SAMPLEA"])
+        self.assertNotIn("7 120", str(bot.research_markup.buttons))
         self.assertEqual(bot.sent[0][0], 101)
         self.assertTrue(bot.sent[0][1].startswith(b"%PDF-"))
         self.assertEqual(env["_portfolio_doctor_running"], set())
