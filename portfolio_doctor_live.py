@@ -479,8 +479,9 @@ def _safe_peer_watchlist(recs):
     # holdings-only PDF. The worker already suppresses all sensitive logs.
     try:
         from portfolio_doctor_peers import research_industry_peers
-        return research_industry_peers(recs)
-    except Exception:
+        with optional_review_deadline(25):
+            return research_industry_peers(recs)
+    except (Exception, OptionalReviewTimeout):
         return None
 
 
