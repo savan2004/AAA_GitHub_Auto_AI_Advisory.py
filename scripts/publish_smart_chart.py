@@ -18,7 +18,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     result = subprocess.run(
         [sys.executable, "-u", "gen_smart_stock_chart.py"],
-        cwd=root, capture_output=True, text=True, timeout=70
+        cwd=root, capture_output=True, text=True, timeout=180
     )
     if result.returncode != 0:
         errors = [line for line in (result.stdout + "\n" + result.stderr).splitlines()
