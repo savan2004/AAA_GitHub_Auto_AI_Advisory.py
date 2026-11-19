@@ -101,6 +101,42 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertEqual((sampled, valid, universe_count), (2, 1, 2))
 
 
+    def test_full_universe_ranks_only_confirmed_twelve_plus_final_scores(self):
+        data = self.history()
+        universe = [(f"STOCK{i}.NS", f"Stock {i}") for i in range(85)]
+        batches = []
+        def fetch(*, tickers, **kwargs):
+            batches.append(list(tickers))
+            return pd.concat({sym: data for sym in tickers}, axis=1)
+        def full_score(sym, name, *, df):
+            number = int(sym.removeprefix("STOCK").removesuffix(".NS"))
+            # 19/20 but UNCONFIRMED cannot beat a confirmed 13/20.
+            score = 19 if number == 3 else (13 if number == 70 else 7)
+            confirmed = number == 70
+            return {"sym": sym, "score": score, "setup_confirmed": confirmed,
+                    "close": float(df["Close"].iloc[-1]), "cross_dir": 1}
+        winner, attempted, valid, whole = choose_auto_chart(
+            universe, download=fetch, scorer=full_score,
+            session_key=self.SESSION, sample_limit=60,
+            min_score=12, require_confirmed_setup=True, scan_all=True)
+        self.assertEqual(winner["sym"], "STOCK70.NS")
+        self.assertEqual(winner["score"], 13)
+        self.assertEqual((attempted, valid, whole), (85, 1, 85))
+        self.assertEqual([len(x) for x in batches], [40, 40, 5])
+
+    def test_no_confirmed_twelve_plus_setup_returns_unavailable(self):
+        good = self.history()
+        def weak(sym, name, *, df):
+            return {"sym": sym, "score": 11, "setup_confirmed": True,
+                    "close": float(df["Close"].iloc[-1]), "cross_dir": 1}
+        with self.assertRaisesRegex(ChartScanUnavailable, "12\\+/20"):
+            choose_auto_chart(
+                [("SBIN.NS", "SBI"), ("TCS.NS", "TCS")],
+                download=lambda **kw: pd.concat(
+                    {s: good for s in kw["tickers"]}, axis=1),
+                scorer=weak, session_key=self.SESSION,
+                min_score=12, require_confirmed_setup=True, scan_all=True)
+
     def test_rendered_chart_readability_layout_guards(self):
         source = (Path(__file__).resolve().parent /
                   "gen_smart_stock_chart.py").read_text(encoding="utf-8")
