@@ -12,7 +12,8 @@ from portfolio_doctor_live import IST
 from portfolio_doctor_report import build_pdf_bytes
 from portfolio_doctor_risk_history import calculate_historical_risk
 
-NOW = datetime(2026, 11, 18, 16, 15, tzinfo=IST)
+# Before the 18-Nov close: 17-Nov is the expected completed session.
+NOW = datetime(2026, 11, 18, 10, 0, tzinfo=IST)
 DATES = pd.bdate_range(end="2026-11-17", periods=140)
 
 
@@ -97,6 +98,56 @@ class HistoricalRiskAcceptance(unittest.TestCase):
             self.holdings, {**self.frames, "SAMPLEB": missing}, now=NOW)
         self.assertEqual(risk["status"], "UNAVAILABLE")
 
+    def test_benchmark_subset_has_matching_chart_without_changing_full_risk(self):
+        # Later index start and an interior missing date are real omissions,
+        # not invented/interpolated benchmark prices. Keep >=65 paired dates.
+        benchmark = frame(1.2).iloc[20:].drop(DATES[65])
+        full = calculate_historical_risk(self.holdings, self.frames, now=NOW)
+        risk = calculate_historical_risk(
+            self.holdings, self.frames, benchmark_frame=benchmark, now=NOW)
+        self.assertEqual(risk["status"], "VERIFIED")
+        for key in ("coverage", "first_date", "last_date", "annual_vol_pct",
+                    "max_drawdown_pct", "current_drawdown_pct", "static_change_pct"):
+            self.assertEqual(risk[key], full[key], key)
+        expected_dates = [d.date().isoformat() for d in benchmark.index]
+        self.assertEqual(risk["chart_dates"], expected_dates)
+        self.assertEqual(risk["chart_coverage"], 119)
+        self.assertEqual(risk["chart_first_date"], expected_dates[0])
+        self.assertEqual(risk["chart_last_date"], expected_dates[-1])
+        self.assertEqual(len(risk["chart_portfolio"]), len(risk["chart_nifty"]))
+        self.assertEqual(len(risk["chart_nifty"]), 119)
+        self.assertEqual(risk["benchmark_coverage"], 119)
+        self.assertEqual(risk["chart_portfolio"][0], 100.)
+        self.assertEqual(risk["chart_nifty"][0], 100.)
+        total = sum(self.frames[h["symbol"]]["Close"] * h["qty"]
+                    for h in self.holdings).loc[benchmark.index]
+        self.assertAlmostEqual(risk["chart_portfolio"][-1],
+                               float(100 * total.iloc[-1] / total.iloc[0]))
+        self.assertAlmostEqual(risk["chart_nifty"][-1], float(
+            100 * benchmark["Close"].iloc[-1] / benchmark["Close"].iloc[0]))
+        self.assertAlmostEqual(risk["chart_portfolio_change_pct"], round(float(
+            100 * (total.iloc[-1] / total.iloc[0] - 1)), 2))
+        self.assertAlmostEqual(risk["chart_nifty_change_pct"], round(float(
+            100 * (benchmark["Close"].iloc[-1] /
+                   benchmark["Close"].iloc[0] - 1)), 2))
+        self.assertNotEqual(risk["chart_portfolio_change_pct"], risk["static_change_pct"])
+        text = PdfReader(io.BytesIO(build_pdf_bytes(self.holdings, risk=risk))).pages[4].extract_text()
+        self.assertIn("Nifty 50 (same dates)", text)
+        self.assertIn("Chart window: 119 observed sessions", text)
+        self.assertIn(expected_dates[0], text)
+        self.assertIn("Same chart dates: current holdings", text)
+        self.assertIn("140 common observed sessions", text)
+
+    def test_too_short_benchmark_subset_retains_full_portfolio_chart_only(self):
+        risk = calculate_historical_risk(
+            self.holdings, self.frames, benchmark_frame=frame(1.2).iloc[-64:], now=NOW)
+        self.assertEqual(risk["status"], "VERIFIED")
+        self.assertIsNone(risk["chart_nifty"])
+        self.assertEqual(risk["chart_coverage"], 140)
+        self.assertEqual(risk["chart_first_date"], risk["first_date"])
+        self.assertEqual(risk["chart_last_date"], risk["last_date"])
+        self.assertIsNone(risk["chart_nifty_change_pct"])
+
     def test_no_disk_persistence_or_user_holding_in_errors(self):
         from portfolio_doctor_risk_history import _unavailable
         self.assertEqual(_unavailable("Insufficient validated historical series")["status"],
@@ -108,3 +159,4 @@ class HistoricalRiskAcceptance(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -35,14 +35,18 @@ def audited_data(holdings: list[dict], recs: list[dict], frames: dict,
         # The standalone audit's symbol identity is NSE-only.
         raise PortfolioDoctorError("BAD_INPUT")
 
-    def lookup(seconds, fn, fallback=None):
+    def lookup(seconds, fn, fallback=None, *, label=None):
         remaining = budget_seconds - (monotonic() - start)
         if remaining < 1:
+            if label: data.errors[label] = "collection budget exhausted"
             return fallback
         try:
             with optional_review_deadline(min(seconds, remaining)):
                 return fn()
-        except BaseException:
+        except BaseException as exc:
+            if label:
+                data.errors[label] = ("source timeout" if type(exc).__name__ == "OptionalReviewTimeout"
+                                      else "source lookup failed")
             # Never print a client's symbol, cost or provider exception text.
             return fallback
 
@@ -59,6 +63,18 @@ def audited_data(holdings: list[dict], recs: list[dict], frames: dict,
                 abs(float(daily["Close"].iloc[-1]) - float(rec["close"])) > 0.015):
             raise PortfolioDoctorError("STALE_PRICES")
         verified[sym] = daily
+
+    # Financial evidence gets a fair bounded slot BEFORE optional history,
+    # dividends and events can consume the whole enrichment deadline.
+    symbols = list(verified)
+    for i, sym in enumerate(symbols):
+        remaining = max(0, budget_seconds - (monotonic() - start))
+        allowance = min(9, remaining / (len(symbols) - i + 1))
+        raw = lookup(allowance, lambda s=sym: provider.fundamentals(s), {},
+                     label="fundamentals:"+sym) or {}
+        data.fundamentals[sym] = raw if isinstance(raw, dict) else {}
+        if not data.fundamentals[sym]:
+            data.errors.setdefault("fundamentals:"+sym, "source returned no usable financial evidence")
 
     # Upgrade up to 2Y in one bounded batch, never at the cost of a validated
     # one-year fallback. Official EOD is still checked by the original worker.
@@ -115,8 +131,6 @@ def audited_data(holdings: list[dict], recs: list[dict], frames: dict,
         data.errors["nifty500:constituents"] = "official index roster unavailable"
 
     for sym in symbols:
-        raw = lookup(3, lambda s=sym: provider.fundamentals(s), {}) or {}
-        data.fundamentals[sym] = raw if isinstance(raw, dict) else {}
         raw_div = lookup(3, lambda s=sym: provider.dividends(s), []) or []
         data.dividends[sym] = list(raw_div) if isinstance(raw_div, (list, tuple)) else []
         raw_act = lookup(3, lambda s=sym: provider.actions(s), []) or []
@@ -140,3 +154,4 @@ def build_verified_audit(holdings: list[dict], recs: list[dict],
     if data.synthetic or b"SYNTHETIC DEMO" in result.pdf:
         raise PortfolioDoctorError("PDF_FAILED")
     return result.pdf
+
