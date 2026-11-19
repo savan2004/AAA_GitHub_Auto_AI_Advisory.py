@@ -215,7 +215,7 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
         with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "0"}):
             handler(m)
         self.assertEqual(sent, [])
-        self.assertIn("review", notices[-1][1].lower())
+        self.assertIn("disabled", notices[-1][1].lower())
 
     def test_source_contains_no_holdings_files_or_db_operations(self):
         text = Path(builder.__file__).read_text()
