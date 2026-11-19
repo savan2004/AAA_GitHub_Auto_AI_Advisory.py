@@ -114,5 +114,96 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertNotIn('fig.text(0.99, 0.005', source)
 
 
+    def test_retry_smaller_serial_batch_recovers_current_completed_bar(self):
+        good = self.history()
+        calls = []
+        def download(*, tickers, **kwargs):
+            calls.append((list(tickers), kwargs))
+            if len(calls) == 1:
+                return pd.DataFrame()  # full-batch rate limit, no usable rows
+            self.assertFalse(kwargs["threads"])
+            self.assertEqual(kwargs["timeout"], 9)
+            return pd.concat({s: good for s in tickers}, axis=1)
+
+        def score(sym, name, *, df):
+            return {"sym": sym, "score": 2.0,
+                    "close": float(df["Close"].iloc[-1]), "cross_dir": 0}
+        got, sampled, valid, whole = choose_auto_chart(
+            [(f"SYM{i}.NS", f"Name {i}") for i in range(60)],
+            download=download, scorer=score, session_key=self.SESSION)
+        self.assertEqual((sampled, valid, whole), (60, 10, 60))
+        self.assertEqual(len(calls), 2)
+        self.assertIn(got["sym"], calls[-1][0])
+        self.assertEqual(str(got["_daily_history"].index[-1].date()), self.SESSION)
+
+    def test_both_yahoo_requests_fail_official_history_recovers_no_made_up_data(self):
+        good = self.history()
+        fallback_calls = []
+        def official(sym):
+            fallback_calls.append(sym)
+            return good
+        def score(sym, name, *, df):
+            return {"sym": sym, "score": 1.0,
+                    "close": float(df["Close"].iloc[-1]), "cross_dir": 0}
+        got, sampled, valid, whole = choose_auto_chart(
+            [("SBIN.NS", "SBI"), ("INFY.NS", "Infosys")],
+            download=lambda **kw: pd.DataFrame(), scorer=score,
+            session_key=self.SESSION, fallback_history=official)
+        self.assertIn(got["sym"], fallback_calls)
+        self.assertEqual((sampled, valid, whole), (2, 2, 2))
+        self.assertEqual(len(fallback_calls), 2)
+        self.assertEqual(str(got["_daily_history"].index[-1].date()), self.SESSION)
+
+    def test_missing_or_stale_secondary_data_never_creates_chart(self):
+        attempted = []
+        def stale(sym):
+            attempted.append(sym)
+            return self.history("2026-11-12")
+        def score(sym, name, *, df):
+            return {"sym": sym, "score": 1,
+                    "close": float(df["Close"].iloc[-1]), "cross_dir": 0}
+        with self.assertRaisesRegex(ChartScanUnavailable, "session=2026-11-13"):
+            choose_auto_chart(
+                [("SBIN.NS", "SBI"), ("TCS.NS", "TCS")],
+                download=lambda **kw: pd.DataFrame(), scorer=score,
+                session_key=self.SESSION, fallback_history=stale)
+        self.assertEqual(len(attempted), 2)
+
+    def test_reversed_multiindex_and_incomplete_today_bar(self):
+        good = self.history()
+        later = good.iloc[-1:].copy()
+        later.index = pd.to_datetime(["2026-11-14"])
+        later["Close"] = 999.0
+        data = pd.concat([good, later])
+        reversed_columns = pd.concat({"SBIN.NS": data}, axis=1)
+        reversed_columns = reversed_columns.swaplevel(0, 1, axis=1)
+        def score(sym, name, *, df):
+            self.assertEqual(str(df.index[-1].date()), self.SESSION)
+            self.assertEqual(float(df["Close"].iloc[-1]), float(good["Close"].iloc[-1]))
+            return {"sym": sym, "score": 1.0,
+                    "close": float(df["Close"].iloc[-1]), "cross_dir": 0}
+        result = choose_auto_chart(
+            [("SBIN.NS", "SBI")],
+            download=lambda **kw: reversed_columns,
+            scorer=score, session_key=self.SESSION)
+        self.assertEqual(result[2], 1)
+
+    def test_invalid_candles_and_price_mismatch_cannot_pass(self):
+        bad = self.history()
+        bad["Low"] = bad["High"] + 50
+        def score(sym, name, *, df):
+            return {"sym": sym, "score": 5,
+                    "close": float(df["Close"].iloc[-1]) + 1,
+                    "cross_dir": 1}
+        with self.assertRaises(ChartScanUnavailable):
+            choose_auto_chart(
+                [("SBIN.NS", "SBI")], download=lambda **kw: bad,
+                scorer=score, session_key=self.SESSION)
+        with self.assertRaises(ChartScanUnavailable):
+            choose_auto_chart(
+                [("SBIN.NS", "SBI")], download=lambda **kw: self.history(),
+                scorer=score, session_key=self.SESSION)
+
+
 if __name__ == "__main__":
     unittest.main()
