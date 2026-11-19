@@ -23,7 +23,7 @@ def main(symbol="SBIN"):
     try:
         ok, result, _ = generate_stock_report_pdf(symbol, evidence_out=actual_report_evidence)
         if not ok:
-            raise RuntimeError("Real SBIN research PDF generation withheld; no snapshot written")
+            raise RuntimeError("Real {} research PDF generation withheld; no snapshot written".format(symbol))
         original = Path(result)
         quality = _verified(original, symbol)
         # Inspect every ACTUAL page from the real PDF, not a mock. This is
