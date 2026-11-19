@@ -145,15 +145,19 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
 
     # Bounded full-universe scan. Small batches avoid 500-ticker Yahoo timeouts
     # and keep failures isolated. Stop after 55s; never claim full coverage.
+    attempted = 0
     if scan_all:
         started = time.monotonic()
         for start in range(0, len(symbols), 40):
-            if time.monotonic() - started > 55:
+            if time.monotonic() - started > 48:
                 break
-            bulk(symbols[start:start + 40], threads=True, timeout=9)
+            batch = symbols[start:start + 40]
+            attempted += len(batch)
+            bulk(batch, threads=True, timeout=9)
     else:
+        attempted = len(symbols)
         bulk(symbols, threads=True, timeout=12)
-    if not candidates:
+    if not candidates and (not scan_all or attempted < 10):
         # Yahoo can rate-limit a 60-name request while serving a 10-name
         # serial batch. Retry once, without concurrent ticker workers.
         bulk(symbols[:min(10, len(symbols))], threads=False, timeout=9)
@@ -176,11 +180,11 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
             ("No verified 12+/20 breakout or trend-confirmation setup " if min_score is not None
              else "No valid real price bars in bounded chart sample ")
             f"(session={session_key}; sampled={len(selected)}; "
-            f"rejected={diagnostics['rejected']}; "
+            f"attempted={attempted}/{whole}; rejected={diagnostics['rejected']}; "
             f"scorer_rejected={diagnostics['scorer']}; "
             f"provider_errors={diagnostics['download_failures']})."
         )
 
     # Sort by the FINAL 11-check score, not by preliminary EMA crossover.
     winner = max(candidates.values(), key=lambda c: float(c["score"]))
-    return winner, (len(selected) if not scan_all else len(symbols)), len(candidates), whole
+    return winner, attempted, len(candidates), whole
