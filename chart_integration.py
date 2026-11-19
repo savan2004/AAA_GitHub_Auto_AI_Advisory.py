@@ -66,9 +66,10 @@ class ChartGenerator:
             logger.warning("[Chart] MSK_SMART_CHART_SNAPSHOT_NOT_READY session=%s",
                            expected_session)
             return (False,
-                    "⚠️ <b>Smart Chart preparing</b> — current completed-session "
-                    "image not independently verified. No stale or invented chart "
-                    "will be sent. Please try again after the daily chart refresh.",
+                    "⚠️ <b>No confirmed Smart Chart available</b> for the current "
+                    "completed session. A verified 12+/20 breakout or bullish trend "
+                    "confirmation is required. If the market has no qualifying "
+                    "setup, no chart will be published. Try again after the EOD scan.",
                     None)
 
         try:
