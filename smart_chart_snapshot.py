@@ -21,7 +21,11 @@ META = re.compile(
     r"([+-]?\d{1,2}/20)\|(\d+(?:\.\d+)?)\|"
     r"(\d+(?:\.\d+)?)\|(\d+(?:\.\d+)?)\|(\d+(?:\.\d+)?)\|"
     r"Sample: (\d+)/(\d+) qualifying NSE setups from (\d+); "
-    r"(full-universe scan|partial-universe scan); EOD (\d{4}-\d{2}-\d{2})$"
+    r"(full-universe scan|partial-universe scan); Setup: "
+    r"(Breakout confirmed: 20-session high \+ volume|"
+    r"Trend change: bullish EMA cross \+ weekly alignment|"
+    r"Trend confirmation: higher highs/lows \+ weekly trend); "
+    r"EOD (\d{4}-\d{2}-\d{2})$"
 )
 
 
@@ -52,7 +56,7 @@ def _validate(image, meta, session):
     except Exception as exc:
         raise ValueError("Chart image failed PNG integrity verification") from exc
     match = META.fullmatch(meta or "")
-    if not match or match.group(13) != str(session):
+    if not match or match.group(14) != str(session):
         raise ValueError("Chart metadata does not match completed market session")
     valid, sampled, universe = (int(match.group(x)) for x in (9, 10, 11))
     if not (0 < valid <= sampled <= universe <= 550):
@@ -71,7 +75,7 @@ def format_chart_meta(meta, session):
     """Preserve familiar Telegram caption without trusting unescaped metadata."""
     # Actual image is validated independently on upload and read-back.
     match = META.fullmatch(meta or "")
-    if not match or match.group(13) != str(session):
+    if not match or match.group(14) != str(session):
         raise ValueError("Unverified chart metadata")
     symbol, name, signal, score, ltp, sl, t1, t2 = match.groups()[:8]
     result = (
@@ -88,6 +92,7 @@ def format_chart_meta(meta, session):
         )
     else:
         result += "⚠️ Trade levels unavailable — no actionable signal"
+    result += f"\n📊 Confirmed setup: {html.escape(match.group(13))}"
     result += (
         f"\n🔎 Sample: {match.group(9)}/{match.group(10)} qualifying NSE setups "
         f"from {match.group(11)}; {match.group(12)}; EOD {session}"
