@@ -149,7 +149,7 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     if scan_all:
         started = time.monotonic()
         for start in range(0, len(symbols), 40):
-            if time.monotonic() - started > 48:
+            if time.monotonic() - started > 120:
                 break
             batch = symbols[start:start + 40]
             attempted += len(batch)
