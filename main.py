@@ -1658,7 +1658,10 @@ def portfolio_doctor_builder_command(m):
         safe_send(m.chat.id, "Private Portfolio Doctor access is not enabled.")
         return
     if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "0") != "1":
-        safe_send(m.chat.id, "Optional Portfolio Builder is under accuracy review. Basic Portfolio Doctor remains available.")
+        safe_send(m.chat.id, "Portfolio Builder is currently disabled for accuracy review. "
+                  "No builder request was started. Do not send CAPITAL= settings separately. "
+                  "When enabled, send /doctor_builder, settings, and 1-5 stock weights "
+                  "together in ONE private message. Basic /doctor remains available.")
         return
 
     uid = m.chat.id
@@ -2190,6 +2193,16 @@ def handle_text(m):
             return
         safe_send(uid, "Holdings require an enabled private Portfolio Doctor session. "
                   "Select Portfolio Doctor again before sending them.")
+        return
+
+    # Builder settings are never stock names. A disabled or incomplete
+    # /doctor_builder attempt must not fall into generic symbol discovery.
+    if (text.upper().startswith("CAPITAL=")
+            or (text.upper().startswith("HORIZON=") and "STOCKCAP=" in text.upper())):
+        safe_send(uid, "Those are Portfolio Builder settings, not a stock symbol. "
+                  "Builder is currently disabled for accuracy review. "
+                  "When enabled, send /doctor_builder, the settings, and "
+                  "1-5 stock weights together in ONE private message.")
         return
 
     if state.get(uid) == "analysis":
