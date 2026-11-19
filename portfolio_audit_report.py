@@ -71,6 +71,34 @@ from urllib.parse import urlparse
 
 import matplotlib
 matplotlib.use('Agg')
+# Matplotlib 3.9 writes its font-list JSON during first import. Keep that
+# public font metadata in RAM so a fresh read-only private worker can start.
+# Scope the interception to that single cache file and restore all APIs before
+# any rendering or input processing continues.
+from contextlib import contextmanager, nullcontext
+import builtins
+from matplotlib import cbook as _mpl_cbook
+
+@contextmanager
+def _ram_font_cache():
+    original_open, original_lock = builtins.open, _mpl_cbook._lock_path
+    def is_font_cache(path):
+        name = str(path).replace("\\", "/").rsplit("/", 1)[-1]
+        return name.startswith("fontlist-v") and name.endswith(".json")
+    def ram_open(path, mode="r", *args, **kwargs):
+        if is_font_cache(path) and any(mark in mode for mark in "wax"):
+            return io.StringIO()
+        return original_open(path, mode, *args, **kwargs)
+    def ram_lock(path):
+        return nullcontext() if is_font_cache(path) else original_lock(path)
+    builtins.open, _mpl_cbook._lock_path = ram_open, ram_lock
+    try:
+        yield
+    finally:
+        builtins.open, _mpl_cbook._lock_path = original_open, original_lock
+
+with _ram_font_cache():
+    import matplotlib.font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
