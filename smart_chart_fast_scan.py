@@ -6,6 +6,7 @@ to rank unscanned Nifty constituents.
 """
 import math
 import random
+import time
 
 import pandas as pd
 
@@ -66,7 +67,8 @@ def _completed_frame(frame, session_key):
 
 
 def choose_auto_chart(universe, *, download, scorer, session_key,
-                      sample_limit=60, fallback_history=None):
+                      sample_limit=60, fallback_history=None, min_score=None,
+                      require_confirmed_setup=False, scan_all=False):
     """Return (winning real candidate, sampled, verified, total universe).
 
     The full-sample batch is attempted once. Only when it yields zero verified
@@ -86,8 +88,9 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     if not isinstance(sample_limit, int) or not 1 <= sample_limit <= 120:
         raise ValueError("Sample size must be between 1 and 120")
 
-    selected = random.Random(str(session_key)).sample(
-        list(distinct.items()), min(whole, sample_limit))
+    selected = (list(distinct.items()) if scan_all else
+                random.Random(str(session_key)).sample(
+                    list(distinct.items()), min(whole, sample_limit)))
     names = dict(selected)
     symbols = list(names)
     candidates = {}
@@ -113,6 +116,12 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                                  rel_tol=0.00001)):
                 diagnostics["scorer"] += 1
                 return
+            if min_score is not None and score < min_score:
+                diagnostics["scorer"] += 1
+                return
+            if require_confirmed_setup and not candidate.get("setup_confirmed"):
+                diagnostics["scorer"] += 1
+                return
             candidate["_daily_history"] = complete
             candidates[symbol] = candidate
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
@@ -134,8 +143,21 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
             except (KeyError, TypeError, ValueError, AttributeError):
                 diagnostics["rejected"] += 1
 
-    bulk(symbols, threads=True, timeout=12)
-    if not candidates:
+    # Bounded full-universe scan. Small batches avoid 500-ticker Yahoo timeouts
+    # and keep failures isolated. Stop after 55s; never claim full coverage.
+    attempted = 0
+    if scan_all:
+        started = time.monotonic()
+        for start in range(0, len(symbols), 40):
+            if time.monotonic() - started > 120:
+                break
+            batch = symbols[start:start + 40]
+            attempted += len(batch)
+            bulk(batch, threads=True, timeout=9)
+    else:
+        attempted = len(symbols)
+        bulk(symbols, threads=True, timeout=12)
+    if not candidates and (not scan_all or attempted < 10):
         # Yahoo can rate-limit a 60-name request while serving a 10-name
         # serial batch. Retry once, without concurrent ticker workers.
         bulk(symbols[:min(10, len(symbols))], threads=False, timeout=9)
@@ -155,14 +177,14 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
 
     if not candidates:
         raise ChartScanUnavailable(
-            "No valid real price bars in bounded chart sample "
+            ("No verified 12+/20 breakout or trend-confirmation setup " if min_score is not None
+             else "No valid real price bars in bounded chart sample ") +
             f"(session={session_key}; sampled={len(selected)}; "
-            f"rejected={diagnostics['rejected']}; "
+            f"attempted={attempted}/{whole}; rejected={diagnostics['rejected']}; "
             f"scorer_rejected={diagnostics['scorer']}; "
             f"provider_errors={diagnostics['download_failures']})."
         )
 
-    fresh = [c for c in candidates.values() if c.get("cross_dir") != 0]
-    winner = max(fresh or list(candidates.values()),
-                 key=lambda c: float(c["score"]))
-    return winner, len(selected), len(candidates), whole
+    # Sort by the FINAL 11-check score, not by preliminary EMA crossover.
+    winner = max(candidates.values(), key=lambda c: float(c["score"]))
+    return winner, attempted, len(candidates), whole

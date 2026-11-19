@@ -241,52 +241,86 @@ def detect_candle_pattern(data):
 
 # ── NEW: WEIGHTED 11-CHECK SCORING ENGINE ────────────────────────────────────
 def score_symbol_weighted(sym, name, df=None):
-    """
-    Lightweight scorer for auto-scan. Uses weighted EMA freshness.
-    Returns candidate dict or None.
+    """Pre-render EXACT 11-check /20 chart score, never the 4-point EMA proxy.
+
+    The selector uses the same 6mo candle window and full-year weekly-derived
+    trend as the final rendered chart. This makes score eligibility match the
+    photo itself, rather than selecting a +4 EMA candidate that renders -2.
     """
     try:
-        if df is None:
-            df = yf.download(sym, period="6mo", interval="1d", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 55: return None
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=["Open","High","Low","Close","Volume"])
-        if len(df) < 55: return None
-        c   = df["Close"]
-        e9  = c.ewm(span=9,  adjust=False).mean()
-        e21 = c.ewm(span=21, adjust=False).mean()
-        s20 = c.rolling(20).mean()
-        s50 = c.rolling(50).mean()
-        ed_diff = (e9 - e21).values
-        dd_diff = (s20 - s50).values
+        if df is None or df.empty or len(df) < 55:
+            return None
+        df = df.copy()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+        if len(df) < 55:
+            return None
+        weekly_close = df["Close"].resample("W-FRI").last().dropna()
+        weekly_data = (pd.DataFrame({"Close": weekly_close})
+                       if len(weekly_close) >= 10 else None)
+        cutoff = df.index.max() - pd.DateOffset(months=6)
+        data = df.loc[df.index >= cutoff].copy()
+        if len(data) < 55:
+            return None
+        close_s = data["Close"]
+        volume = data["Volume"]
+        ema9 = close_s.ewm(span=9, adjust=False).mean()
+        ema21 = close_s.ewm(span=21, adjust=False).mean()
+        sma20 = close_s.rolling(20).mean()
+        sma50 = close_s.rolling(50).mean()
+        ema12 = close_s.ewm(span=12, adjust=False).mean()
+        ema26 = close_s.ewm(span=26, adjust=False).mean()
+        macd = ema12 - ema26
+        hist = macd - macd.ewm(span=9, adjust=False).mean()
+        bb_mid = sma20
+        bb_std = close_s.rolling(20).std()
+        bb_upper = bb_mid + 2 * bb_std
+        bb_lower = bb_mid - 2 * bb_std
+        bb_pct = ((close_s - bb_lower) / (bb_upper - bb_lower)).clip(0, 1)
+        rsi_last = float(calc_rsi(close_s.values)[-1])
+        pivots = find_pivots(data, left=5, right=5)
+        checks, score, max_score, signal, _ = compute_full_score(
+            data, weekly_data, pivots, rsi_last, hist, macd,
+            ema9, ema21, sma20, sma50, bb_upper, bb_lower, bb_pct,
+            float(close_s.iloc[-1]), volume, volume.rolling(20).mean())
+        if max_score != 20 or not np.isfinite(score):
+            return None
 
-        # EMA freshness weighted
-        score = 0
-        reasons = []
-        cross_age = None
-        cross_dir = 0
-        for i in range(1, min(6, len(ed_diff))):
-            idx = len(ed_diff) - i
-            if ed_diff[idx] > 0 and ed_diff[idx-1] <= 0:
-                pts = 3 if i <= 2 else (2 if i <= 4 else 1)
-                score += pts; cross_dir = +1; cross_age = i
-                reasons.append(f"EMA 9/21 Bull Cross {i}d ago (+{pts})")
-                break
-            elif ed_diff[idx] < 0 and ed_diff[idx-1] >= 0:
-                pts = 3 if i <= 2 else (2 if i <= 4 else 1)
-                score -= pts; cross_dir = -1; cross_age = i
-                reasons.append(f"EMA 9/21 Bear Cross {i}d ago (-{pts})")
-                break
-
-        e9l = float(e9.iloc[-1]); e21l = float(e21.iloc[-1])
-        score += 1 if e9l > e21l else -1
-
-        reason = reasons[0] if reasons else ("EMA Bullish" if e9l > e21l else "EMA Bearish")
-        return {"sym": sym, "name": name, "score": score,
-                "cross_dir": cross_dir, "cross_age": cross_age,
-                "reason": reason, "close": float(c.iloc[-1])}
-    except Exception:
+        # Strong technical evidence is more than an arbitrary threshold.
+        # Price breaks the previous 20-session high on >=1.5x volume, OR
+        # an actual bullish EMA 9/21 cross with weekly alignment, OR
+        # an aligned higher-high/higher-low and weekly bullish structure.
+        last = float(close_s.iloc[-1])
+        prior_high = float(data["High"].iloc[-21:-1].max())
+        avg_vol = float(volume.iloc[-21:-1].mean())
+        vol_ratio = float(volume.iloc[-1]) / avg_vol if avg_vol > 0 else 0
+        weekly_bull = any("Weekly BULLISH" in row[0] and row[1] > 0
+                          for row in checks)
+        bullish_cross = any("Bull Cross" in row[0] and row[1] > 0
+                            for row in checks)
+        structure_bull = any("HH + HL Structure" in row[0] and row[1] > 0
+                             for row in checks)
+        breakout = (last > prior_high and vol_ratio >= 1.5)
+        trend_change = bullish_cross and weekly_bull
+        trend_confirm = structure_bull and weekly_bull
+        if breakout:
+            setup = "Breakout confirmed: 20-session high + volume"
+        elif trend_change:
+            setup = "Trend change: bullish EMA cross + weekly alignment"
+        elif trend_confirm:
+            setup = "Trend confirmation: higher highs/lows + weekly trend"
+        else:
+            setup = ""
+        return {"sym": sym, "name": name, "score": int(score),
+                "cross_dir": 1 if bullish_cross else 0,
+                "reason": setup or "No independently confirmed bullish setup",
+                "setup_confirmed": bool(setup), "signal": signal,
+                "close": last}
+    except (KeyError, ValueError, TypeError, IndexError, OverflowError,
+            AttributeError, ZeroDivisionError):
         return None
+
 
 def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
                        ema9, ema21, sma20, sma50, bb_upper, bb_lower, bb_pct,
@@ -602,10 +636,9 @@ _cleanup_old_charts(OUT_DIR)
 try:
     import sys as _sys, os as _os
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-    from nifty500_collector import SECTOR_STOCKS as _SS
-    _all = sorted({s for v in _SS.values() for s in v})
-    UNIVERSE = [(f"{s}.NS", s.title()) for s in _all]
-    print(f"SCAN: {len(UNIVERSE)} stocks from nifty500_collector")
+    from smart_chart_universe import load_nifty500_universe
+    UNIVERSE, _source = load_nifty500_universe()
+    print(f"SCAN: {len(UNIVERSE)} stocks source={_source}")
 except Exception:
     UNIVERSE = [
         ("RELIANCE.NS","Reliance Industries"),("TCS.NS","TCS"),
@@ -646,14 +679,16 @@ else:
         winner, sampled, valid, universe_size = choose_auto_chart(
             UNIVERSE, download=yf.download, scorer=score_symbol_weighted,
             session_key=session_key, sample_limit=60,
-            fallback_history=_official_nse_history)
+            fallback_history=_official_nse_history,
+            min_score=12, require_confirmed_setup=True, scan_all=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
         sys.exit(1)
     winner["scope_note"] = (
-        f"Sample: {valid}/{sampled} verified NSE symbols from {universe_size}; "
-        f"not a full-universe ranking; EOD {session_key}")
-    print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key}")
+        f"Sample: {valid}/{sampled} qualifying NSE setups from {universe_size}; "
+        f"{'full-universe scan' if sampled == universe_size else 'partial-universe scan'}; "
+        f"Setup: {winner['reason']}; EOD {session_key}")
+    print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key} score={winner['score']}/20")
     print(f"WINNER: {winner['sym']}|{winner['name']}|{winner['reason']}|{winner['score']:+d}")
     forced_sym = winner["sym"]; forced_name = winner["name"]
 
@@ -786,6 +821,11 @@ checks, score, max_score, signal_text, sig_col = compute_full_score(
     last_close, vol_s, vol_ma20
 )
 score_str = f"{score:+d}/{max_score}"
+if auto_history is not None and (
+        score < 12 or signal_text not in ("BUY", "STRONG BUY") or
+        not winner.get("setup_confirmed")):
+    print(f"[ERROR] Chart release gate: final score {score}/20 or setup confirmation failed", file=sys.stderr)
+    sys.exit(1)
 is_bull   = score >= 0
 is_wait   = signal_text == "WAIT"
 
