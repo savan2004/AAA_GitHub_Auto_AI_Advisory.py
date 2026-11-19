@@ -637,12 +637,10 @@ else:
     # Preserve the 11-check chart's independent BUY/WAIT gating.
     from smart_chart_fast_scan import choose_auto_chart, ChartScanUnavailable
     from market_breadth import expected_completed_session
-    from data_engine import _nse_hist
+    from smart_chart_nse_history import official_nse_chart_history
 
     def _official_nse_history(yahoo_symbol):
-        # Request only the sampled NSE identity. The existing provider returns
-        # a dated exchange CSV or no data; never a substituted symbol.
-        return _nse_hist(yahoo_symbol.removesuffix(".NS"))
+        return official_nse_chart_history(yahoo_symbol, session_key)
     session_key = str(expected_completed_session())
     try:
         winner, sampled, valid, universe_size = choose_auto_chart(
