@@ -177,7 +177,7 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
         state = running if running is not None else set()
         env = {
             "os": os, "threading": threading, "io": io,
-            "bot": FakeBot(), "_doctor_allowed": lambda _m: True,
+            "bot": FakeBot(), "_doctor_allowed": lambda _m: True, "_builder_allowed": lambda _m: True,
             "safe_send": lambda uid, txt: notices.append((uid, txt)),
             "_portfolio_doctor_lock": threading.Lock(),
             "_portfolio_doctor_running": state,
@@ -215,7 +215,7 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
         with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "0"}):
             handler(m)
         self.assertEqual(sent, [])
-        self.assertIn("review", notices[-1][1].lower())
+        self.assertIn("disabled", notices[-1][1].lower())
 
     def test_source_contains_no_holdings_files_or_db_operations(self):
         text = Path(builder.__file__).read_text()
