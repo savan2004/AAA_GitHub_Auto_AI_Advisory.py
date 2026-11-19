@@ -408,6 +408,14 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         else:
             line('Beta vs Nifty 50: not verified on enough matching index sessions.', 8.5)
         subhead('REBASED HISTORICAL PATH (START = 100)')
+        line('Chart window: {} observed sessions | {} to {}.'.format(
+            risk.get('chart_coverage', len(risk['chart_dates'])),
+            risk.get('chart_first_date', risk['chart_dates'][0]),
+            risk.get('chart_last_date', risk['chart_dates'][-1])), 8)
+        if risk.get('chart_nifty_change_pct') is not None:
+            line('Same chart dates: current holdings {:+.1f}% | Nifty 50 {:+.1f}%.'.format(
+                risk['chart_portfolio_change_pct'], risk['chart_nifty_change_pct']),
+                8, color=MUTED)
         draw_historical_chart(risk)
         subhead('STOCKS THAT MOVED TOGETHER')
         if risk.get('pairs'):

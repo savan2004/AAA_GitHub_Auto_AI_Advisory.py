@@ -112,6 +112,11 @@ def calculate_historical_risk(holdings, frames, benchmark_frame=None, *, now=Non
             "chart_portfolio": [float(100 * value / total.iloc[0]) for value in total],
             "chart_nifty": None, "chart_dates": [
                 item.date().isoformat() for item in total.index],
+            "chart_coverage": len(total),
+            "chart_first_date": total.index[0].date().isoformat(),
+            "chart_last_date": total.index[-1].date().isoformat(),
+            "chart_portfolio_change_pct": round(raw_change, 2),
+            "chart_nifty_change_pct": None,
             "scope": "Historical value of today's share counts; not actual portfolio returns",
         }
         # Nifty 50 is an OPTIONAL comparator. Refuse if any session is stale,
@@ -136,15 +141,34 @@ def calculate_historical_risk(holdings, frames, benchmark_frame=None, *, now=Non
                             if math.isfinite(beta) and abs(beta) <= 20:
                                 result["beta"] = round(beta, 2)
                                 result["beta_coverage"] = len(pair)
-                        # Chart compares same-date observations ONLY; both
-                        # curves are rebased to 100 on the SAME first date.
+                        # Chart uses its own matched observed-date window.
+                        # Missing benchmark dates must not hide a valid paired
+                        # comparison or be forward/back filled. Full-history
+                        # portfolio risk above remains unchanged and separately
+                        # labelled; only these chart arrays use the pair.
                         result["benchmark_coverage"] = len(pair)
-                        if len(pair) == len(total) and pair.index.equals(total.index):
-                            result["chart_nifty"] = [
+                        result.update({
+                            "chart_portfolio": [
+                                float(100 * value / pair["holdings"].iloc[0])
+                                for value in pair["holdings"]],
+                            "chart_nifty": [
                                 float(100 * value / pair["nifty"].iloc[0])
-                                for value in pair["nifty"]]
+                                for value in pair["nifty"]],
+                            "chart_dates": [item.date().isoformat()
+                                            for item in pair.index],
+                            "chart_coverage": len(pair),
+                            "chart_first_date": pair.index[0].date().isoformat(),
+                            "chart_last_date": pair.index[-1].date().isoformat(),
+                            "chart_portfolio_change_pct": round(float(100 * (
+                                pair["holdings"].iloc[-1] /
+                                pair["holdings"].iloc[0] - 1)), 2),
+                            "chart_nifty_change_pct": round(float(100 * (
+                                pair["nifty"].iloc[-1] /
+                                pair["nifty"].iloc[0] - 1)), 2),
+                        })
             except Exception:
                 pass
         return result
     except (ValueError, TypeError, OverflowError, ArithmeticError):
         return _unavailable("Insufficient validated historical series")
+

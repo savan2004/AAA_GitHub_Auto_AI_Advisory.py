@@ -71,6 +71,34 @@ from urllib.parse import urlparse
 
 import matplotlib
 matplotlib.use('Agg')
+# Matplotlib 3.9 writes its font-list JSON during first import. Keep that
+# public font metadata in RAM so a fresh read-only private worker can start.
+# Scope the interception to that single cache file and restore all APIs before
+# any rendering or input processing continues.
+from contextlib import contextmanager, nullcontext
+import builtins
+from matplotlib import cbook as _mpl_cbook
+
+@contextmanager
+def _ram_font_cache():
+    original_open, original_lock = builtins.open, _mpl_cbook._lock_path
+    def is_font_cache(path):
+        name = str(path).replace("\\", "/").rsplit("/", 1)[-1]
+        return name.startswith("fontlist-v") and name.endswith(".json")
+    def ram_open(path, mode="r", *args, **kwargs):
+        if is_font_cache(path) and any(mark in mode for mark in "wax"):
+            return io.StringIO()
+        return original_open(path, mode, *args, **kwargs)
+    def ram_lock(path):
+        return nullcontext() if is_font_cache(path) else original_lock(path)
+    builtins.open, _mpl_cbook._lock_path = ram_open, ram_lock
+    try:
+        yield
+    finally:
+        builtins.open, _mpl_cbook._lock_path = original_open, original_lock
+
+with _ram_font_cache():
+    import matplotlib.font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -577,7 +605,8 @@ def _quarterly_valid(records: Any, max_count: int = 8) -> list[dict[str, Any]]:
         if rev is None or profit is None:
             continue
         result.append({'period': str(row['period'])[:10],
-                       'revenue': rev, 'profit': profit, 'margin': margin})
+                       'revenue': rev, 'profit': profit, 'margin': margin,
+                       **{key:row.get(key) for key in ('source','source_url','scope','unit','basis','retrieved_utc')}})
     return result
 
 
@@ -594,7 +623,9 @@ def _evidence(raw: Any) -> dict[str, Any]:
     verified = bool(raw.get('issuer_reconciled', False)) and 'screener' not in src.lower()
     return {'value': n, 'confidence': 'VERIFIED' if verified else 'SECONDARY',
             'source': src, 'period': d.isoformat(),
-            'retrieved': _str(raw.get('retrieved_utc'), 30) or 'not provided'}
+            'retrieved': _str(raw.get('retrieved_utc'), 30) or 'not provided',
+            'scope':raw.get('scope'), 'basis':raw.get('basis'),
+            'unit':raw.get('unit'), 'source_url':raw.get('source_url')}
 
 
 def financial_value(fund: Mapping[str, Any], field_name: str) -> Optional[float]:
@@ -690,18 +721,33 @@ class AuditModel:
     synthetic: bool = False
 
 
+def _comparable_facts(a, b):
+    return (a.get('value') is not None and b.get('value') is not None
+            and a.get('period') == b.get('period')
+            and a.get('scope') in ('consolidated', 'standalone')
+            and a.get('scope') == b.get('scope')
+            and a.get('basis') in ('FY', 'TTM', 'quarter')
+            and a.get('basis') == b.get('basis')
+            and bool(a.get('unit')) and a.get('unit') == b.get('unit'))
+
+
+def _display_benchmark_window(frame, count=260):
+    window = frame.tail(count).copy()
+    return window.div(window.iloc[0]).mul(100)
+
+
 def _financial_flags(sym: str, data: Mapping[str, Any]) -> list[AuditFlag]:
     """Issuer-agnostic deterministic financial checks; no opinion or forecasts."""
     output: list[AuditFlag] = []
     funds = (data or {}).get('metrics', {})
     cfo = _evidence(funds.get('operating_cash_flow'))
     profit = _evidence(funds.get('net_profit'))
-    if cfo['value'] is not None and profit['value'] is not None and cfo['value'] < profit['value']:
+    if not data.get('is_lender') and _comparable_facts(cfo, profit) and cfo['value'] < profit['value']:
         output.append(AuditFlag(sym, 'MEDIUM', 'CFO below reported profit',
                                 f'CFO {money(cfo["value"])}, profit {money(profit["value"])}',
                                 profit['value']-cfo['value']))
     debt = _evidence(funds.get('debt_equity'))
-    if debt['value'] is not None and debt['value'] > 1:
+    if not data.get('is_lender') and debt['value'] is not None and debt['value'] > 1:
         output.append(AuditFlag(sym, 'MEDIUM', 'Debt/equity above 1.0',
                                 f'{debt["value"]:.2f}x > 1.0x', debt['value']))
     pledge = _evidence(funds.get('promoter_pledge_pct'))
@@ -1627,7 +1673,7 @@ def _make_page5(story: list[Any], m: AuditModel) -> None:
               'percentage-point gap. Relative drawdown uses the portfolio/index relative path.',tiny=True)
         if risk.get('aligned_for_plot') is not None:
             try:
-                story.append(_lines_chart(risk['aligned_for_plot'].tail(260),
+                story.append(_lines_chart(_display_benchmark_window(risk['aligned_for_plot']),
                                           'Portfolio vs Nifty 50 / Nifty 500 (start=100)',height=140))
             except Exception:
                 _para(story,unavailable('benchmark chart'))
@@ -1722,6 +1768,10 @@ def _field_text(financials: Mapping[str, Any], key: str,
 def _company_trend_and_financials(story: list[Any], r: dict[str, Any]) -> None:
     """Exactly one page of dated technical/issuer facts, no extra page break."""
     source=r['fund']
+    url=source.get('source_url') or ''
+    if urlparse(url).scheme == 'https' and urlparse(url).hostname == 'www.screener.in':
+        _para(story,'Financial evidence: secondary; scope '+html_escape(str(source.get('scope') or 'unavailable'))+
+              ' | <link href="'+html_escape(url,quote=True)+'">Source page</link>',tiny=True)
     _company_sub(story,'PRICE HISTORY, MOVING AVERAGES AND 52W RANGE')
     if r['valid_technicals'] and len(r['frame'])>=60:
         close=r['frame']['Close']
@@ -1772,7 +1822,12 @@ def _company_trend_and_financials(story: list[Any], r: dict[str, Any]) -> None:
     fund_profit=financial_value(source,'net_profit')
     receivable=financial_value(source,'receivable_days')
     ratio=_number_ratio(fund_cash,fund_profit)
-    divergence=(fund_cash-fund_profit) if fund_cash is not None and fund_profit is not None else None
+    comparable = (not source.get('is_lender') and _comparable_facts(
+        _evidence(source.get('metrics',{}).get('operating_cash_flow')),
+        _evidence(source.get('metrics',{}).get('net_profit'))))
+    if not comparable:
+        ratio = None
+    divergence=(fund_cash-fund_profit) if comparable else None
     _para(story,f'Operating cash flow / net profit: '
           f'{ratio:.2f}x' if ratio is not None else unavailable('matching dated CFO/profit'),tiny=True)
     _para(story,f'Receivable days: {f"{receivable:.1f}" if receivable is not None else "unavailable"} '
@@ -1797,7 +1852,7 @@ def _company_trend_and_financials(story: list[Any], r: dict[str, Any]) -> None:
                 changes.append(f'{key.upper()} {v1-v0:+.2f} pp'
                                if v0 is not None and v1 is not None
                                else f'{key.upper()} change unavailable')
-            _para(story,'Four-quarter ownership changes: '+', '.join(changes),tiny=True)
+            _para(story,'Observed ownership-window changes: '+', '.join(changes),tiny=True)
     else:
         _para(story,unavailable('dated four-quarter ownership and promoter-pledge data'),tiny=True)
     f1=financial_value(source,'pe')
@@ -2129,7 +2184,7 @@ class MSKRepoProvider:
 
     def fundamentals(self, symbol: str) -> Mapping[str,Any]:
         from portfolio_doctor_advanced import collect_fundamentals_no_holdings_cache
-        raw=collect_fundamentals_no_holdings_cache(symbol,'')
+        raw=collect_fundamentals_no_holdings_cache(symbol,'', request_timeout=4)
         if not isinstance(raw,dict) or raw.get('status') not in ('PARTIAL','COMPLETE'):
             return {}
         source=raw.get('source') or 'Screener.in (secondary)'
@@ -2142,8 +2197,11 @@ class MSKRepoProvider:
                     'value':detail.get('value'), 'period':period_label,
                     'source':source, 'retrieved_utc':raw.get('retrieved_utc'),
                     'issuer_reconciled':False,
+                    'scope':detail.get('scope'), 'unit':detail.get('unit'),
+                    'basis':detail.get('basis'), 'source_url':detail.get('source_url'),
                 }
-        return {'metrics':metrics,
+        return {'metrics':metrics, 'is_lender':raw.get('is_lender', False),
+                'scope':raw.get('scope'), 'source_url':raw.get('source_url'),
                 'quarterly':[dict(x, source=source) for x in (raw.get('quarterly') or [])
                              if isinstance(x,dict) and x.get('source')],
                 'ownership':[dict(x, source=source) for x in (raw.get('ownership') or [])
@@ -2441,3 +2499,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+

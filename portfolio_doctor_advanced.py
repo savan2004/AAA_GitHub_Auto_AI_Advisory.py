@@ -145,7 +145,8 @@ def normalize_fundamentals(symbol, sector, extras, ratio_values=None, *, today=N
         val = _finite(value)
         return {"value": val, "source": statement_source if val is not None else "Unavailable",
                 "period": period, "basis": basis, "scope": evidence_scope,
-                "retrieved_utc": fetched_at, "unit": unit}
+                "retrieved_utc": fetched_at, "unit": unit,
+                "source_url": extras.get("_source_url", ""), "issuer_reconciled": False}
     metrics = {
         "revenue": metric(p.get("revenue"), latest_year, unit="INR Cr"),
         "net_profit": metric(p.get("net_profit"), latest_year, unit="INR Cr"),
@@ -178,8 +179,39 @@ def normalize_fundamentals(symbol, sector, extras, ratio_values=None, *, today=N
         "operating_cash_flow", "pe"]
     available = sum(metrics[k]["value"] is not None for k in applicable)
     status = ("PARTIAL" if available else "MISSING")
+    from research_data import period_end
+    def dated_rows(key, aliases):
+        rows, seen = [], set()
+        if evidence_scope == "unverified" or not fetched_at:
+            return rows
+        for raw in extras.get(key) or []:
+            if not isinstance(raw, dict):
+                continue
+            day = period_end(raw.get("label", ""))
+            if day is None or day > today or day in seen:
+                continue
+            seen.add(day)
+            row = {"period": day.isoformat(), "source": statement_source,
+                   "source_url": extras.get("_source_url", ""),
+                   "scope": evidence_scope, "retrieved_utc": fetched_at,
+                   "issuer_reconciled": False}
+            for dest, source in aliases.items():
+                row[dest] = _finite(raw.get(source))
+            rows.append(row)
+        return sorted(rows, key=lambda row: row["period"])[-8:]
+    quarterly = dated_rows("quarters", {"revenue":"revenue", "profit":"net_profit", "margin":"opm"})
+    ownership = dated_rows("shareholding", {"promoter":"promoters", "fii":"fii", "dii":"dii", "public":"public"})
+    for row in quarterly:
+        row.update(basis="quarter", unit="INR Cr; margin %")
+    for row in ownership:
+        row.update(basis="point-in-time", unit="%")
+        for key in ("promoter", "fii", "dii", "public"):
+            if row[key] is not None and not 0 <= row[key] <= 100:
+                row[key] = None
     return {"symbol": symbol, "sector": _normalize_sector(sector),
             "is_lender": is_lender, "status": status,
+            "quarterly": quarterly, "ownership": ownership,
+            "source_url": extras.get("_source_url", ""),
             "freshness": quarter_status.get("status", "MISSING"),
             "annual_period": latest_year,
             "quarter_period": str(quarter_status.get("latest") or "unavailable"),
@@ -221,11 +253,11 @@ def _ratio_values_from_html(html, scope):
     return fields
 
 
-def _screener_same_page_evidence(symbol, *, get=None):
+def _screener_same_page_evidence(symbol, *, get=None, request_timeout=9):
     """One bounded public issuer-page fetch, no shared cache or customer details."""
     import requests
     from research_data import (
-        _HEADERS, parse_years, parse_quarters, detect_layout,
+        _HEADERS, parse_years, parse_quarters, parse_shareholding, detect_layout,
     )
     if not re.fullmatch(r"[A-Z0-9&-]{2,20}", str(symbol).upper()):
         return {}, {}
@@ -234,7 +266,7 @@ def _screener_same_page_evidence(symbol, *, get=None):
                           ("standalone", "/")):
         url = "https://www.screener.in/company/" + symbol.upper() + suffix
         try:
-            resp = get(url, headers=_HEADERS, timeout=9)
+            resp = get(url, headers=_HEADERS, timeout=request_timeout)
             if not getattr(resp, "ok", False) or "data-table" not in resp.text:
                 continue
             annual = parse_years(resp.text)
@@ -243,6 +275,7 @@ def _screener_same_page_evidence(symbol, *, get=None):
                 continue
             evidence = {
                 "years": annual, "quarters": quarterly,
+                "shareholding": parse_shareholding(resp.text), "_source_url": url,
                 "layout": detect_layout(resp.text),
                 "_source": "Screener.in", "_statement_scope": scope,
                 "_retrieved_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -253,7 +286,7 @@ def _screener_same_page_evidence(symbol, *, get=None):
     return {}, {}
 
 
-def collect_fundamentals_no_holdings_cache(symbol, sector, collector=None, ratio_collector=None):
+def collect_fundamentals_no_holdings_cache(symbol, sector, collector=None, ratio_collector=None, *, request_timeout=9):
     """Disposable worker fetch; same-page fundamentals cannot mix reporting bases.
 
     In a live request, the statement tables and key ratios are extracted from
@@ -261,7 +294,7 @@ def collect_fundamentals_no_holdings_cache(symbol, sector, collector=None, ratio
     Injected collectors are for isolated unit tests only.
     """
     if collector is None and ratio_collector is None:
-        extras, ratios = _screener_same_page_evidence(symbol)
+        extras, ratios = _screener_same_page_evidence(symbol, request_timeout=request_timeout)
     else:
         try:
             extras = (collector(symbol) if collector else {}) or {}
@@ -527,3 +560,4 @@ def assemble_review(recs, price_frames, *, fund_collector=None, ratio_collector=
             "quality": {"holdings_covered": len(recs), "holdings_expected": len(recs),
                         "financial_source_scope": "UNVERIFIED",
                         "corporate_action_basis": "NOT VERIFIED"}}
+
