@@ -21,7 +21,7 @@ META = re.compile(
     r"([+-]?\d{1,2}/20)\|(\d+(?:\.\d+)?)\|"
     r"(\d+(?:\.\d+)?)\|(\d+(?:\.\d+)?)\|(\d+(?:\.\d+)?)\|"
     r"Sample: (\d+)/(\d+) verified NSE symbols from (\d+); "
-    r"not a full-universe ranking; EOD (\d{4}-\d{2}-\d{2})$"
+    r"(full-universe scan|partial-universe scan); EOD (\d{4}-\d{2}-\d{2})$"
 )
 
 
@@ -52,11 +52,15 @@ def _validate(image, meta, session):
     except Exception as exc:
         raise ValueError("Chart image failed PNG integrity verification") from exc
     match = META.fullmatch(meta or "")
-    if not match or match.group(12) != str(session):
+    if not match or match.group(13) != str(session):
         raise ValueError("Chart metadata does not match completed market session")
     valid, sampled, universe = (int(match.group(x)) for x in (9, 10, 11))
     if not (0 < valid <= sampled <= universe <= 550):
         raise ValueError("Chart candidate coverage invalid")
+    if match.group(12) == "full-universe scan" and sampled != universe:
+        raise ValueError("Chart claims unverified full-universe coverage")
+    if match.group(3) not in ("BUY", "STRONG BUY") or int(match.group(4).split("/")[0]) < 12:
+        raise ValueError("Auto Smart Chart must have a confirmed 12+/20 bullish score")
     price = float(match.group(5))
     if not math.isfinite(price) or price <= 0:
         raise ValueError("Chart price invalid")
@@ -67,7 +71,7 @@ def format_chart_meta(meta, session):
     """Preserve familiar Telegram caption without trusting unescaped metadata."""
     # Actual image is validated independently on upload and read-back.
     match = META.fullmatch(meta or "")
-    if not match or match.group(12) != str(session):
+    if not match or match.group(13) != str(session):
         raise ValueError("Unverified chart metadata")
     symbol, name, signal, score, ltp, sl, t1, t2 = match.groups()[:8]
     result = (
@@ -86,7 +90,7 @@ def format_chart_meta(meta, session):
         result += "⚠️ Trade levels unavailable — no actionable signal"
     result += (
         f"\n🔎 Sample: {match.group(9)}/{match.group(10)} verified NSE symbols "
-        f"from {match.group(11)}; not a full-universe ranking; EOD {session}"
+        f"from {match.group(11)}; {match.group(12)}; EOD {session}"
     )
     return result
 
