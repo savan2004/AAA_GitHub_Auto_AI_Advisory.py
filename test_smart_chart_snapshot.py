@@ -47,7 +47,7 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             store._validate(self.image[:80] + b"x" * 30000, META, SESSION)
         with self.assertRaises(ValueError):
-            store._validate(self.image, META.replace("WAIT", "BUY NOW"), SESSION)
+            store._validate(self.image, META.replace("BUY|+13/20", "BUY NOW|+13/20"), SESSION)
 
     def test_wait_and_weak_old_snapshots_are_blocked(self):
         for weak in ("WAIT|-2/20", "WAIT|+11/20", "BUY|+11/20",
