@@ -71,6 +71,7 @@ class SessionTests(unittest.TestCase):
             "_portfolio_doctor_running": set(),
             "_portfolio_doctor_slots": threading.BoundedSemaphore(2),
             "_doctor_allowed": lambda m: True,
+            "portfolio_builder_form_text": lambda m, text: False,
             "safe_send": lambda uid, msg: notices.append((uid, msg)),
             "bot": bot, "executor": executor or SimpleNamespace(submit=lambda fn: fn()),
             "logger": logging.getLogger("doctor-private-test"),
