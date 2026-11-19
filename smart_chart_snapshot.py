@@ -20,7 +20,7 @@ META = re.compile(
     r"(WAIT|BUY|STRONG BUY|SELL|STRONG SELL)\|"
     r"([+-]?\d{1,2}/20)\|(\d+(?:\.\d+)?)\|"
     r"(\d+(?:\.\d+)?)\|(\d+(?:\.\d+)?)\|(\d+(?:\.\d+)?)\|"
-    r"Sample: (\d+)/(\d+) verified NSE symbols from (\d+); "
+    r"Sample: (\d+)/(\d+) qualifying NSE setups from (\d+); "
     r"(full-universe scan|partial-universe scan); EOD (\d{4}-\d{2}-\d{2})$"
 )
 
@@ -89,7 +89,7 @@ def format_chart_meta(meta, session):
     else:
         result += "⚠️ Trade levels unavailable — no actionable signal"
     result += (
-        f"\n🔎 Sample: {match.group(9)}/{match.group(10)} verified NSE symbols "
+        f"\n🔎 Sample: {match.group(9)}/{match.group(10)} qualifying NSE setups "
         f"from {match.group(11)}; {match.group(12)}; EOD {session}"
     )
     return result
