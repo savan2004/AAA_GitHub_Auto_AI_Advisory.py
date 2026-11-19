@@ -130,10 +130,13 @@ def isolated_environment():
         "render_latest_profile": lambda profile: "Mock full-index prepared research: " + profile,
         "_require_private_portfolio": lambda m: True,
         "_doctor_allowed": lambda m: True,
+        "_builder_allowed": lambda m: True,
+        "_builder_form": {},
         "_portfolio_doctor_lock": threading.Lock(),
         "_portfolio_doctor_waiting": {},
         "_portfolio_audit_mode": {},
         "_portfolio_doctor_running": set(),
+        "os": __import__("os"),
         "build_breadth": lambda: "Mock breadth snapshot (offline fixture)",
         "build_intraday_trade_report": lambda: "Mock intraday: NSE CLOSED — NO TRADE",
         "get_swing_trades": lambda mode: "Mock swing scan: " + mode,
@@ -153,7 +156,7 @@ def isolated_environment():
         "cmd_start", "cmd_menu", "cmd_portfolio", "chart_button", "port_btn",
         "scan_btn", "breadth_btn", "swing_btn", "intraday_btn", "analysis_btn", "report_btn",
         "deliver_daily_reports", "plain_daily_report",
-        "buzz_btn", "sector_btn", "portfolio_doctor_start",
+        "buzz_btn", "sector_btn", "portfolio_doctor_start", "portfolio_builder_button",
     }
     for node in TREE.body:
         if isinstance(node, ast.FunctionDef) and node.name in names:
@@ -171,6 +174,7 @@ class MainMenuAcceptanceTests(unittest.TestCase):
         self.assertIn("⚡ Intraday Trade", labels)
         self.assertNotIn("💼 Portfolio", labels)
         self.assertIn("🩺 Portfolio Doctor", labels)
+        self.assertIn("🏗️ Portfolio Builder", labels)
         self.assertEqual(len(labels), len(set(labels)))
         for label in labels:
             with self.subTest(button=label):
