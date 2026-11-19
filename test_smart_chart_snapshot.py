@@ -19,7 +19,8 @@ SESSION = "2026-11-13"
 META = (
     "CONCOR.NS|Concor|BUY|+13/20|442.15|425.00|470.00|490.00|"
     "Sample: 52/60 qualifying NSE setups from 250; "
-    "partial-universe scan; EOD 2026-11-13"
+    "partial-universe scan; Setup: Breakout confirmed: 20-session high + volume; "
+    "EOD 2026-11-13"
 )
 
 
@@ -37,6 +38,7 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
         self.assertEqual(match.group(9), "52")
         caption = store.format_chart_meta(META, SESSION)
         self.assertIn("BUY", caption)
+        self.assertIn("Confirmed setup: Breakout confirmed:", caption)
         self.assertNotIn("No-Trade Zone", caption)
         self.assertIn("52/60", caption)
         self.assertIn("SL: ₹", caption)
