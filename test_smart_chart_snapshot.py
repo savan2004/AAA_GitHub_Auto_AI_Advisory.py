@@ -18,7 +18,7 @@ import smart_chart_snapshot as store
 SESSION = "2026-11-13"
 META = (
     "CONCOR.NS|Concor|BUY|+13/20|442.15|425.00|470.00|490.00|"
-    "Sample: 52/60 verified NSE symbols from 250; "
+    "Sample: 52/60 qualifying NSE setups from 250; "
     "partial-universe scan; EOD 2026-11-13"
 )
 
