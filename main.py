@@ -861,7 +861,7 @@ def main_keyboard():
     kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
     kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "⚡ Intraday Trade")
     kb.add("📈 Chart", "📄 Report")
-    kb.add("🏭 Sector Report", "🩺 Portfolio Doctor")
+    kb.add("🏭 Sector Report", "🩺 Portfolio Doctor", "🏗️ Portfolio Builder")
     kb.add("🆕 New Version")
     return kb
 
@@ -1652,13 +1652,41 @@ def portfolio_doctor_document(m, _typed_payload=None):
 
 # Portfolio Doctor's optional new-capital builder is independent of saved holdings.
 # It uses a single private message and a disposable in-memory worker.
+def _builder_allowed(m):
+    """Only private one-to-one Telegram chats; no permission escalation for /doctor."""
+    uid = getattr(getattr(m, "from_user", None), "id", None)
+    return (getattr(getattr(m, "chat", None), "type", None) == "private"
+            and type(uid) is int and uid > 0 and uid == m.chat.id)
+
+
+@bot.message_handler(func=lambda m: (m.text or "") == "🏗️ Portfolio Builder")
+def portfolio_builder_button(m):
+    if not _builder_allowed(m):
+        safe_send(m.chat.id, "Portfolio Builder works only in a private bot chat.")
+        return
+    if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "1") != "1":
+        safe_send(m.chat.id, "Portfolio Builder is temporarily disabled. Basic /doctor remains available.")
+        return
+    safe_send(m.chat.id,
+              "🏗️ <b>Portfolio Builder</b>\n"
+              "Explore a hypothetical allocation for stocks YOU choose. "
+              "This is educational, not a stock recommendation.\n\n"
+              "Send the WHOLE example below as ONE Telegram message, "
+              "changing the capital, limits and percentages:\n"
+              "<code>/doctor_builder\n"
+              "CAPITAL=100000 HORIZON=36 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45\n"
+              "INFY 25\nHDFCBANK 30\nTCS 15</code>\n\n"
+              "Choose 1-5 stocks, with total weights at most 100%. "
+              "Remaining capital stays in cash. No orders or saved holdings.")
+
+
 @bot.message_handler(commands=["doctor_builder"])
 def portfolio_doctor_builder_command(m):
-    if not _doctor_allowed(m):
-        safe_send(m.chat.id, "Private Portfolio Doctor access is not enabled.")
+    if not _builder_allowed(m):
+        safe_send(m.chat.id, "Portfolio Builder works only in a private bot chat.")
         return
-    if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "0") != "1":
-        safe_send(m.chat.id, "Optional Portfolio Builder is under accuracy review. Basic Portfolio Doctor remains available.")
+    if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "1") != "1":
+        safe_send(m.chat.id, "Portfolio Builder is temporarily disabled. Basic /doctor remains available.")
         return
 
     uid = m.chat.id
@@ -2190,6 +2218,12 @@ def handle_text(m):
             return
         safe_send(uid, "Holdings require an enabled private Portfolio Doctor session. "
                   "Select Portfolio Doctor again before sending them.")
+        return
+
+    # Builder settings must not be treated as a stock name.
+    if text.upper().startswith("CAPITAL="):
+        safe_send(uid, "These are Portfolio Builder settings, not an NSE ticker. "
+                  "Tap 🏗️ Portfolio Builder for the complete one-message example.")
         return
 
     if state.get(uid) == "analysis":
