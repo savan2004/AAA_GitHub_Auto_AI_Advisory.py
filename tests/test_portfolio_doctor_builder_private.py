@@ -177,7 +177,7 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
         state = running if running is not None else set()
         env = {
             "os": os, "threading": threading, "io": io,
-            "bot": FakeBot(), "_doctor_allowed": lambda _m: True,
+            "bot": FakeBot(), "_doctor_allowed": lambda _m: True, "_builder_allowed": lambda _m: True,
             "safe_send": lambda uid, txt: notices.append((uid, txt)),
             "_portfolio_doctor_lock": threading.Lock(),
             "_portfolio_doctor_running": state,
