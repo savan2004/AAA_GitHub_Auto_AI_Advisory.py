@@ -178,7 +178,7 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     if not candidates:
         raise ChartScanUnavailable(
             ("No verified 12+/20 breakout or trend-confirmation setup " if min_score is not None
-             else "No valid real price bars in bounded chart sample ")
+             else "No valid real price bars in bounded chart sample ") +
             f"(session={session_key}; sampled={len(selected)}; "
             f"attempted={attempted}/{whole}; rejected={diagnostics['rejected']}; "
             f"scorer_rejected={diagnostics['scorer']}; "
