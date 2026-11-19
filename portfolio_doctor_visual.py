@@ -92,6 +92,18 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             pdf.drawString(left, y, item)
             y -= leading
 
+    def fact(label, value, *, note=None, accent=INK):
+        """Readable label/value row, with optional client-facing meaning."""
+        nonlocal y
+        pdf.setFillColor(MUTED)
+        pdf.setFont('Helvetica-Bold', 8)
+        pdf.drawString(left, y, label)
+        text_fit(value, left + 150, y, right - left - 155, 9, True, accent)
+        y -= 17
+        if note:
+            line(note, 8.3, leading=14, color=MUTED)
+            y -= 4
+
     def subhead(value):
         nonlocal y
         y -= 7
@@ -219,19 +231,20 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         text_fit(label, x + 10, y - 16, width - 20, 7.6, True, MUTED)
         text_fit(metric, x + 10, y - 44, width - 20, 13, True, color)
     y -= 91
-    line('PORTFOLIO SUMMARY', 11, True, 20, NAVY)
-    line('Invested: {}   Last-close value: {}'.format(money(invested), money(value)), 9)
-    line('Unrealised P/L: Rs {:+,.2f} ({:+.2f}%)'.format(pnl, 100 * pnl / invested), 10, True, 18,
-         GREEN if pnl >= 0 else RED)
-    subhead('EXECUTIVE DIAGNOSIS (PRICE-BASED)')
+    subhead('YOUR MONEY AT A GLANCE')
+    fact('You invested', money(invested))
+    fact('Value at last close', money(value))
+    fact('Change in value', 'Rs {:+,.2f} ({:+.2f}%)'.format(pnl, 100 * pnl / invested),
+         note='This is a paper gain/loss, not money received from selling.',
+         accent=GREEN if pnl >= 0 else RED)
+    subhead('WHAT NEEDS YOUR ATTENTION')
     biggest = top[0]
     line('{} positions | Largest: {} at {:.1f}% of value.'.format(
         len(holdings), biggest['symbol'], biggest['weight']), 9)
     if biggest['weight'] > 40:
         line('Concentration warning: a single holding exceeds the illustrative 40% threshold.', 9,
              color=RED)
-    line('No numerical health score or personalised target allocation without verified suitability data.', 8,
-         color=MUTED)
+    line('This report describes what the data shows. It does not choose investments for you.', 8, color=MUTED)
     subhead('CURRENT HOLDING ALLOCATION')
     for row in top:
         pct = float(row['weight'])
@@ -258,31 +271,34 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             '{} ({})'.format(loss[0], money(loss[1])) if loss else 'None'), 8.2)
 
     # PAGE 2: all 1-5 holdings, with full precision and technical observations.
-    new_page('02 / HOLDING-WISE VERIFIED RESULTS', 'Every holding contributes to the portfolio summary; technicals use completed daily prices.')
+    new_page('02 / YOUR STOCKS, ONE BY ONE', 'Each stock is shown using its last verified daily closing price.')
     for row in holdings:
         card_top = y
         pdf.setFillColor(PANEL)
-        pdf.roundRect(left - 2, card_top - 103, right - left + 4, 110, 7, stroke=0, fill=1)
-        label = '{} | Qty {:g} | Average purchase {}'.format(
-            row['symbol'], row['qty'], money(row['buy']))
-        line(label, 10, True, 17, NAVY)
-        line('Last close Rs {:,.2f} ({}) | Value {}'.format(
-            row['close'], row['date'], money(row['value'])), 9, leading=16)
-        line('P/L Rs {:+,.2f} ({:+.2f}%) | Portfolio weight {:.1f}%'.format(
-            row['pnl'], row['pnl_pct'], row['weight']), 9, leading=15,
+        pdf.roundRect(left - 2, card_top - 155, right - left + 4, 162, 7, stroke=0, fill=1)
+        line(row['symbol'], 12, True, 20, NAVY)
+        line('You own {:g} shares; average purchase price {}.'.format(
+            row['qty'], money(row['buy'])), 9, leading=16)
+        line('Last closing price: {} on {}.'.format(money(row['close']), row['date']), 9, leading=16)
+        line('Your shares were worth {} at that close.'.format(money(row['value'])), 9, leading=16)
+        line('Change since purchase: Rs {:+,.2f} ({:+.2f}%).'.format(
+            row['pnl'], row['pnl_pct']), 9, leading=16,
             color=GREEN if row['pnl'] >= 0 else RED)
+        line('Share of your portfolio: {:.1f}%.'.format(row['weight']), 9, leading=16)
         ema50 = row.get('ema50')
         trend = ('Above EMA20 and EMA50' if ema50 and row['close'] > row['ema20'] > ema50
                  else 'Below EMA20 and EMA50' if ema50 and row['close'] < row['ema20'] < ema50
                  else 'Mixed / insufficient trend confirmation')
         rsi = 'N/A' if row['rsi14'] is None else '{:.1f}'.format(row['rsi14'])
-        line('EMA20 Rs {:.2f} | EMA50 {} | RSI14 {} | {}'.format(
-            row['ema20'], 'Rs {:.2f}'.format(ema50) if ema50 else 'N/A',
-            rsi, trend), 8, leading=13)
+        line('Recent price trend: {}.'.format(
+            'Above both short- and medium-term averages' if trend.startswith('Above')
+            else 'Below both short- and medium-term averages' if trend.startswith('Below')
+            else 'Mixed; no clear agreement between the averages'), 8, leading=14)
+        line('RSI (price momentum): {}. 20-day price range: {} to {}.'.format(
+            rsi, money(row['low20']), money(row['high20'])), 8, leading=14)
         movement = row.get('return20')
-        twenty = ' | 20-session change {:+.1f}%'.format(movement) if movement is not None else ''
-        line('20-close high Rs {:.2f} | low Rs {:.2f}{}'.format(
-            row['high20'], row['low20'], twenty), 8, leading=14)
+        if movement is not None:
+            line('Price change over the last 20 sessions: {:+.1f}%.'.format(movement), 8, leading=14)
         if str(row.get('price_source') or '').startswith('BSE:'):
             line('Source: BSE exact ticker; INR completed daily OHLCV.', 7.5, leading=12)
         elif str(row.get('price_source') or '').startswith('NSE EOD'):
@@ -291,9 +307,9 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         priority = insights['by_symbol'][row['symbol']]['priority']
         label_color = RED if priority == 'HIGH FLAGS' else (BLUE if priority == 'WATCH FLAGS' else GREEN)
         pdf.setFillColor(label_color)
-        pdf.roundRect(right - 120, card_top - 100, 111, 16, 4, stroke=0, fill=1)
-        text_fit(priority, right - 115, card_top - 96, 100, 7, True, WHITE)
-        y = min(card_top - 118, y - 7)
+        pdf.roundRect(right - 120, card_top - 152, 111, 16, 4, stroke=0, fill=1)
+        text_fit(priority, right - 115, card_top - 148, 100, 7, True, WHITE)
+        y = min(card_top - 170, y - 8)
     line('Price status is evidence, not a HOLD / ADD / EXIT instruction.', 8, color=MUTED)
 
     # PAGE 3: sample coverage, vetted signals and non-vetted comparisons separately.
@@ -445,23 +461,22 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             subhead('TECHNICAL EVIDENCE UNAVAILABLE')
             line('Not enough independently verified completed candles for analysis.', 9)
         else:
-            subhead('PRICE, TREND AND RISK')
+            subhead('HOW THE SHARE PRICE HAS MOVED')
             macd = company.get('macd_hist')
-            line('20-session return: {:+.1f}% | RSI14: {:.1f} | MACD histogram: {}'.format(
-                company['return20'], company['rsi14'],
-                '{:+.3f}'.format(macd) if macd is not None else 'Unavailable'), 8.5)
-            line('EMA20: {} | EMA50: {} | EMA200: {}'.format(
-                money(company['ema20']) if company['ema20'] is not None else 'N/A',
-                money(company['ema50']) if company['ema50'] is not None else 'N/A',
-                money(company['ema200']) if company['ema200'] is not None else 'N/A'), 8.5)
-            line('1Y close range: {} to {} | 60-day annualised vol: {:.1f}%'.format(
-                money(company['year_close_low']),
-                money(company['year_close_high']), company['annual_vol_pct']), 8.5)
+            fact('Last 20 sessions', '{:+.1f}% price change'.format(company['return20']))
+            fact('Price momentum (RSI)', '{:.1f}'.format(company['rsi14']),
+                 note='RSI describes recent buying/selling momentum, not a prediction.')
+            fact('Trend indicator (MACD)', '{:+.3f}'.format(macd) if macd is not None else 'Unavailable')
+            line('Lowest / highest daily close in the past year:', 8.5)
+            line('{} to {}'.format(money(company['year_close_low']),
+                                  money(company['year_close_high'])), 9, True)
+            fact('Price volatility', '{:.1f}% annualised'.format(company['annual_vol_pct']))
             atr = company.get('atr14_pct')
             volume = company.get('volume_ratio')
-            line('ATR14: {} | Latest volume / previous 20-day mean: {}'.format(
-                '{:.2f}% of price'.format(atr) if atr is not None else 'Unavailable',
-                '{:.2f}x'.format(volume) if volume is not None else 'Unavailable'), 8.5)
+            fact('Daily price movement (ATR)',
+                 '{:.2f}% of price'.format(atr) if atr is not None else 'Unavailable')
+            fact('Trading volume vs usual',
+                 '{:.2f}x'.format(volume) if volume is not None else 'Unavailable')
             subhead('VERIFIED DAILY CLOSE / EMA CHART')
             company_price_chart(company)
         subhead('FUNDAMENTAL AND VALUATION FACTS')
@@ -472,19 +487,10 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             line('Retrieved UTC: {} | Issuer filing reconciliation: NO.'.format(
                 str(finance.get('retrieved_utc','unavailable'))[:24]), 8, color=RED)
             metrics = (finance.get('metrics') or [])[:10]
-            # Two balanced columns retain every printed figure without
-            # overflowing the hard 10-page private-report envelope.
-            for j in range(0, len(metrics), 2):
-                first = metrics[j]
-                text_fit('{}: {:,.2f} {} ({})'.format(
-                    first['label'], first['value'], first['unit'], first['period']),
-                    left, y, 245, 7.8)
-                if j + 1 < len(metrics):
-                    second = metrics[j+1]
-                    text_fit('{}: {:,.2f} {} ({})'.format(
-                        second['label'], second['value'], second['unit'], second['period']),
-                        left+260, y, 245, 7.8)
-                y -= 16
+            # One readable row per metric, instead of cramped tiny columns.
+            for metric in metrics:
+                fact(str(metric['label']), '{:,.2f} {} ({})'.format(
+                    metric['value'], metric['unit'], metric['period']))
         else:
             line('Not verified: no usable dated comparable financial statement facts.', 8)
             line('P/E, sales, profit, margins, cash flow and debt are not guessed.', 8)
