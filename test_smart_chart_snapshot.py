@@ -17,9 +17,9 @@ import smart_chart_snapshot as store
 
 SESSION = "2026-11-13"
 META = (
-    "CONCOR.NS|Concor|WAIT|+0/20|442.15|0.00|0.00|0.00|"
+    "CONCOR.NS|Concor|BUY|+13/20|442.15|425.00|470.00|490.00|"
     "Sample: 52/60 verified NSE symbols from 250; "
-    "not a full-universe ranking; EOD 2026-11-13"
+    "partial-universe scan; EOD 2026-11-13"
 )
 
 
@@ -36,10 +36,10 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
         match = store._validate(self.image, META, SESSION)
         self.assertEqual(match.group(9), "52")
         caption = store.format_chart_meta(META, SESSION)
-        self.assertIn("WAIT", caption)
-        self.assertIn("No-Trade Zone", caption)
+        self.assertIn("BUY", caption)
+        self.assertNotIn("No-Trade Zone", caption)
         self.assertIn("52/60", caption)
-        self.assertNotIn("SL: ₹", caption)
+        self.assertIn("SL: ₹", caption)
 
     def test_reject_stale_metadata_and_corrupt_png(self):
         with self.assertRaisesRegex(ValueError, "session"):
@@ -48,6 +48,20 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
             store._validate(self.image[:80] + b"x" * 30000, META, SESSION)
         with self.assertRaises(ValueError):
             store._validate(self.image, META.replace("WAIT", "BUY NOW"), SESSION)
+
+    def test_wait_and_weak_old_snapshots_are_blocked(self):
+        for weak in ("WAIT|-2/20", "WAIT|+11/20", "BUY|+11/20",
+                     "SELL|-12/20"):
+            with self.assertRaises(ValueError):
+                store._validate(
+                    self.image,
+                    META.replace("BUY|+13/20", weak), SESSION)
+
+    def test_cannot_claim_full_universe_when_only_partially_scanned(self):
+        with self.assertRaisesRegex(ValueError, "full-universe"):
+            store._validate(
+                self.image,
+                META.replace("partial-universe scan", "full-universe scan"), SESSION)
 
     def test_db_load_requires_matching_sha_and_writes_verified_file(self):
         context = MagicMock()
@@ -64,7 +78,7 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
             verified = store.load_verified_daily_chart(SESSION, folder)
             self.assertIsNotNone(verified)
             caption, png_path = verified
-            self.assertIn("not a full-universe ranking", caption)
+            self.assertIn("partial-universe scan", caption)
             self.assertEqual(hashlib.sha256(Path(png_path).read_bytes()).hexdigest(),
                              expected_sha)
             self.assertNotIn("options", fake.connect.call_args.kwargs)
