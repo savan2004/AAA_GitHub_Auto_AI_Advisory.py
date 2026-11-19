@@ -1180,6 +1180,10 @@ def handle_analysis_callback(call):
             pass
         return
 
+    if action == "builder":
+        portfolio_builder_option(call, sym)
+        return
+
     if not action or not sym or not re.fullmatch(r"[A-Za-z0-9&_.-]{1,30}", sym):
         try:
             bot.answer_callback_query(call.id)
@@ -1659,29 +1663,150 @@ def _builder_allowed(m):
             and type(uid) is int and uid > 0 and uid == m.chat.id)
 
 
+_builder_form = {}
+
+def _builder_options(stage, choices):
+    kb = types.InlineKeyboardMarkup(row_width=len(choices))
+    kb.add(*[types.InlineKeyboardButton(label, callback_data="builder|" + stage + "|" + val)
+             for label, val in choices])
+    return kb
+
+
 @bot.message_handler(func=lambda m: (m.text or "") == "🏗️ Portfolio Builder")
 def portfolio_builder_button(m):
     if not _builder_allowed(m):
-        safe_send(m.chat.id, "Portfolio Builder works only in a private bot chat.")
+        safe_send(m.chat.id, "Portfolio Builder is available in private chat only.")
         return
     if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "1") != "1":
-        safe_send(m.chat.id, "Portfolio Builder is temporarily disabled. Basic /doctor remains available.")
+        safe_send(m.chat.id, "Portfolio Builder is disabled in Render settings.")
         return
-    safe_send(m.chat.id,
-              "🏗️ <b>Portfolio Builder</b>\n"
-              "Explore a hypothetical allocation for stocks YOU choose. "
-              "This is educational, not a stock recommendation.\n\n"
-              "Send the WHOLE example below as ONE Telegram message, "
-              "changing the capital, limits and percentages:\n"
-              "<code>/doctor_builder\n"
-              "CAPITAL=100000 HORIZON=36 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45\n"
-              "INFY 25\nHDFCBANK 30\nTCS 15</code>\n\n"
-              "Choose 1-5 stocks, with total weights at most 100%. "
-              "Remaining capital stays in cash. No orders or saved holdings.")
+    with _portfolio_doctor_lock:
+        if m.chat.id in _portfolio_doctor_running:
+            safe_send(m.chat.id, "Another private report is already running.")
+            return
+        _portfolio_doctor_waiting.pop(m.chat.id, None)
+        _builder_form[m.chat.id] = {"step": "amount", "until": time.monotonic() + 180}
+    state.clear(m.chat.id)
+    safe_send(m.chat.id, "🏗️ Portfolio Builder — Step 1/5\n"
+              "Type the amount in rupees, e.g. 1000000.\n"
+              "Next you will choose risk and time frame with buttons. Type /cancel to stop.")
+
+
+def portfolio_builder_option(call, value):
+    uid = getattr(getattr(call, "from_user", None), "id", None)
+    chat = getattr(getattr(call, "message", None), "chat", None)
+    if chat is None or chat.type != "private" or type(uid) is not int or uid != chat.id:
+        return
+    stage, _, option = value.partition("|")
+    with _portfolio_doctor_lock:
+        entry = _builder_form.get(uid)
+        if entry is None or entry["until"] <= time.monotonic():
+            _builder_form.pop(uid, None)
+            next_step = "expired"
+        elif stage == "risk" and entry["step"] == "risk" and option in ("low", "medium", "high"):
+            entry.update(risk=option, step="horizon", until=time.monotonic() + 180)
+            next_step = "horizon"
+        elif stage == "horizon" and entry["step"] == "horizon" and option in ("6", "18", "36", "60"):
+            entry.update(horizon=option, step="stocks", until=time.monotonic() + 180)
+            next_step = "stocks"
+        else:
+            next_step = "invalid"
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+    if next_step == "horizon":
+        safe_send(uid, "Step 3/5 — Select time frame:",
+                  reply_markup=_builder_options("horizon", [
+                      ("6 months", "6"), ("18 months", "18"),
+                      ("36 months", "36"), ("60 months", "60")]))
+    elif next_step == "stocks":
+        safe_send(uid, "Step 4/5 — Type 1–5 symbols and your chosen percentages:\n"
+                  "<code>SBIN 25\nBHEL 20\nINFY 15</code>\n"
+                  "Total percentages cannot exceed 100%. Stocks are NOT selected by AI.")
+    else:
+        safe_send(uid, "Selection expired or not valid. Tap Portfolio Builder to restart.")
+
+
+def portfolio_builder_form_text(m, text):
+    """Temporary form fields only; return True if builder consumed this input."""
+    uid = m.chat.id
+    with _portfolio_doctor_lock:
+        entry = _builder_form.get(uid)
+        if not entry:
+            return False
+        if entry["until"] <= time.monotonic():
+            _builder_form.pop(uid, None)
+            entry = None
+    if not entry:
+        safe_send(uid, "Form expired. Tap Portfolio Builder again.")
+        return True
+    if text.strip().lower() in ("/cancel", "cancel"):
+        with _portfolio_doctor_lock:
+            _builder_form.pop(uid, None)
+        safe_send(uid, "Builder cancelled. No details saved.")
+        return True
+    step = entry["step"]
+    if step == "amount":
+        amount = text.strip().replace(",", "")
+        if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= 1000000000000:
+            safe_send(uid, "Enter a valid rupee amount, like 1000000.")
+            return True
+        entry.update(amount=amount, step="risk", until=time.monotonic() + 180)
+        safe_send(uid, "Step 2/5 — Tap your risk preference (not an AI risk assessment):",
+                  reply_markup=_builder_options("risk", [
+                      ("Low", "low"), ("Mid", "medium"), ("High", "high")]))
+        return True
+    if step in ("risk", "horizon"):
+        safe_send(uid, "Please tap a choice on the previous message.")
+        return True
+    if step == "stocks":
+        from portfolio_doctor_builder_private import parse_builder_request, BuilderError
+        rows = [line.strip() for line in text.splitlines() if line.strip()]
+        try:
+            if not 1 <= len(rows) <= 5:
+                raise BuilderError()
+            preview = ("/doctor_builder\nCAPITAL={amount} HORIZON={horizon} RISK={risk} "
+                       "CASH=0 STOCKCAP=100 SECTORCAP=100\n{rows}").format(
+                           amount=entry["amount"], horizon=entry["horizon"], risk=entry["risk"],
+                           rows="\n".join(rows))
+            parse_builder_request(preview)
+        except BuilderError:
+            safe_send(uid, "Enter 1–5 lines, e.g. <code>SBIN 25\nBHEL 20</code>, "
+                      "with unique symbols and total allocation up to 100%.")
+            return True
+        entry.update(stocks="\n".join(rows), step="limits", until=time.monotonic() + 180)
+        safe_send(uid, "Step 5/5 — Set your limits as three numbers:\n"
+                  "Minimum cash (₹), max per stock (%), max per sector (%).\n"
+                  "Example: <code>20000 35 45</code>\n"
+                  "These limits are YOUR choices and are not inferred from risk level.")
+        return True
+    if step == "limits":
+        fields = text.split()
+        try:
+            if len(fields) != 3 or any(not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?", v) for v in fields):
+                raise ValueError()
+            cash, stock, sector = map(float, fields)
+            if not 0 <= cash <= int(entry["amount"]) or not 0 < stock <= 100 or not 0 < sector <= 100:
+                raise ValueError()
+        except ValueError:
+            safe_send(uid, "Enter numbers like <code>20000 35 45</code>; cash cannot exceed capital.")
+            return True
+        payload = ("/doctor_builder\nCAPITAL={amount} HORIZON={horizon} RISK={risk} "
+                   "CASH={cash} STOCKCAP={stock} SECTORCAP={sector}\n{stocks}").format(
+                       amount=entry["amount"], horizon=entry["horizon"], risk=entry["risk"],
+                       cash=fields[0], stock=fields[1], sector=fields[2],
+                       stocks=entry["stocks"]).encode("utf-8")
+        with _portfolio_doctor_lock:
+            _builder_form.pop(uid, None)
+        safe_send(uid, "Validating historical closing prices and your chosen limits...")
+        portfolio_doctor_builder_command(m, payload_override=payload)
+        return True
+    return False
 
 
 @bot.message_handler(commands=["doctor_builder"])
-def portfolio_doctor_builder_command(m):
+def portfolio_doctor_builder_command(m, payload_override=None):
     if not _builder_allowed(m):
         safe_send(m.chat.id, "Portfolio Builder works only in a private bot chat.")
         return
@@ -1690,7 +1815,7 @@ def portfolio_doctor_builder_command(m):
         return
 
     uid = m.chat.id
-    payload = (m.text or "").encode("utf-8", "replace")
+    payload = payload_override if payload_override is not None else (m.text or "").encode("utf-8", "replace")
     from portfolio_doctor_builder_private import BuilderError, parse_builder_request, run_isolated_builder
     try:
         parse_builder_request(payload)
@@ -2171,6 +2296,9 @@ def handle_text(m):
 
     if not API_RATE_LIMITER.is_allowed(uid):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
+        return
+
+    if portfolio_builder_form_text(m, text):
         return
 
     # Never route private holdings or repeated inputs to public stock search.
