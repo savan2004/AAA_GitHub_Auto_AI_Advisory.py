@@ -72,6 +72,9 @@ class MarketHealthFactorsTest(unittest.TestCase):
         self.assertIsNone(h.parse_option_pcr(payload, SESSION, "26-Nov-2026"))
         self.assertIsNone(h.parse_option_pcr(payload, date(2026, 11, 12),
                                                "19-Nov-2026"))
+        options.append(dict(options[0]))
+        self.assertIsNone(h.parse_option_pcr(payload, SESSION, "19-Nov-2026"))
+        options.pop()
         options[0]["CE"]["openInterest"] = None
         result = h.parse_option_pcr(payload, SESSION, "19-Nov-2026")
         self.assertEqual(result["strikes"], 10)
@@ -151,6 +154,24 @@ class MarketHealthFactorsTest(unittest.TestCase):
     def test_mismatched_session_never_converts_last_week_to_today(self):
         msg = h.format_market_health(BREADTH, {"session": "2026-11-12"})
         self.assertIn("sessions do not match", msg)
+
+    def test_newer_pcr_must_be_from_today(self):
+        now = datetime(2026, 11, 16, 11, tzinfo=h.IST)
+        factors = {"session": SESSION.isoformat(),
+                   "pcr": {"session": "2026-11-16", "pcr": .8, "strikes": 50,
+                           "expiry": "19-Nov-2026"}}
+        self.assertIn("newer than the breadth close", h.format_market_health(BREADTH, factors, now=now))
+        for other_day in ("2026-11-15", "2026-11-17"):
+            factors["pcr"]["session"] = other_day
+            self.assertIn("put-call OI ratio: Unavailable", h.format_market_health(BREADTH, factors, now=now))
+
+    def test_invalid_participation_withholds_verdict(self):
+        factors = {"session": SESSION.isoformat()}
+        for invalid in (dict(BREADTH, advances=999), dict(BREADTH, unchanged=0),
+                        dict(BREADTH, ma20={"pct": 101})):
+            report = h.format_market_health(invalid, factors)
+            self.assertIn("inconsistent", report)
+            self.assertNotIn("Verdict:", report)
 
     def test_brief_provider_error_does_not_prevent_fully_dated_breadth(self):
         with patch.object(h, "fetch_fii_cash", return_value=None), \
