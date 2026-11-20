@@ -506,13 +506,31 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                     text_fit('{}: {:,.2f} {} ({})'.format(
                         second['label'], second['value'], second['unit'], second['period']),
                         left+260, y, 245, 7.8)
-                y -= 16
+                y -= 13
         else:
             line('Not verified: no usable dated comparable financial statement facts.', 8)
             line('P/E, sales, profit, margins, cash flow and debt are not guessed.', 8)
-        subhead('IMPORTANT RESEARCH LIMITS')
-        line('Shareholding, news and peer valuation: NOT VERIFIED.', 8)
-        line('No trade calls/targets; source figures require issuer-filing checks.', 8)
+        window = company.get('return_window')
+        matched_peers = [
+            peer for peer in (peers.get('candidates') or [])
+            if held_row.get('exchange') != 'BSE' and window
+            and peer.get('return_window') == window
+            and peer.get('industry') == company.get('industry')
+            and peer.get('return20') is not None
+        ][:2]
+        subhead('SAME-INDUSTRY MOMENTUM COMPARISON')
+        if matched_peers:
+            line('20-session return on matching trading dates | {}: {:+.1f}%'.format(
+                symbol, company['return20']), 8, bold=True, leading=12)
+            for peer in matched_peers:
+                line('{}: {:+.1f}% | Difference: {:+.1f} pp | Screen score {:.0f}/100'.format(
+                    peer['symbol'], peer['return20'], peer['return20'] - company['return20'],
+                    peer['score']), 8, leading=12)
+            line('Technical comparison only. Peer valuation and financial quality are unverified.',
+                 8, color=MUTED, leading=12)
+        else:
+            line('No screened peer with matching industry and all 21 closing dates.', 8)
+            line('Peer valuation and financial quality are unverified.', 8, color=MUTED)
     footer()
     pdf.save()
     data = out.getvalue()
