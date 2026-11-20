@@ -1890,7 +1890,8 @@ def portfolio_doctor_builder_command(m, payload_override=None, *, form_entry=Non
             elif exc.code == "UNKNOWN_SECTOR":
                 safe_send(uid, "One stock's sector could not be verified." + retry_hint)
             elif exc.code in ("BAD_INPUT", "CONSTRAINTS"):
-                safe_send(uid, "Inputs or stock, sector, and cash limits conflict." + retry_hint)
+                detail = html.escape(exc.detail) if exc.detail else "Inputs or allocation limits conflict."
+                safe_send(uid, detail + retry_hint)
             else:
                 safe_send(uid, "Portfolio Builder is temporarily unavailable." + retry_hint)
         except Exception as exc:
