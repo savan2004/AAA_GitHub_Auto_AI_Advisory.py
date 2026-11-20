@@ -118,6 +118,7 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     from portfolio_doctor_live import verified_completed_daily_frame
     qualified = []
     comparisons = []
+    evidence = {}
     for sym, industry in sampled:
         try:
             checked = verified_completed_daily_frame(histories.get(sym), now=now)
@@ -131,11 +132,14 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
                 day20 = 100 * (closes[-1] / closes[-21] - 1)
                 rsi = _rsi(closes)
                 if rsi is not None and all(math.isfinite(x) for x in (day20, float(rsi))):
-                    comparisons.append({
+                    observation = {
                         "symbol": sym, "industry": industry,
                         "close": closes[-1], "date": checked.index[-1].date().isoformat(),
                         "return20": round(day20, 2), "rsi14": round(float(rsi), 1),
-                    })
+                        "return_window": tuple(day.date().isoformat() for day in checked.index[-21:]),
+                    }
+                    comparisons.append(observation)
+                    evidence[sym] = observation
             scored = evaluator(sym, checked, "moderate", asof=now)
             if not isinstance(scored, dict) or scored.get("sym") != sym:
                 continue
@@ -149,6 +153,8 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
                 "symbol": sym, "industry": industry, "score": score,
                 "close": price, "date": scored["asof"],
                 "rsi": scored.get("rsi"), "adx": scored.get("adx"),
+                "return20": evidence.get(sym, {}).get("return20"),
+                "return_window": evidence.get(sym, {}).get("return_window"),
             })
         except Exception:
             # Never emit customer tickers or provider details in worker logs.
