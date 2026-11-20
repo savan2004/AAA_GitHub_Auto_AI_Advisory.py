@@ -139,7 +139,12 @@ def prepare_company_pages(holdings, frames, *, fundamentals=None,
                 continue
             dates = [x.date().isoformat() for x in frame.index[-MAX_CHART_DAYS:]]
             closes_chart = closes[-MAX_CHART_DAYS:]
-            tail = closes[-min(252, len(closes)):]
+            tail = closes[-252:]
+            chart_volume = []
+            if "Volume" in frame:
+                observed = [_safe_float(v) for v in frame["Volume"].iloc[-MAX_CHART_DAYS:]]
+                if all(v is not None and v >= 0 for v in observed) and any(observed):
+                    chart_volume = observed
             change20 = 100 * (closes[-1] / closes[-21] - 1)
             day_returns = [p / q - 1 for q, p in zip(closes[-61:-1],
                                                        closes[-60:])]
@@ -165,7 +170,13 @@ def prepare_company_pages(holdings, frames, *, fundamentals=None,
                 rsi14=_rsi(closes), macd_hist=_macd_hist(closes),
                 atr14_pct=_atr_pct(frame, closes),
                 volume_ratio=volume_ratio,
+                return5=round(100 * (closes[-1] / closes[-6] - 1), 2),
                 return20=round(change20, 2),
+                return60=(round(100 * (closes[-1] / closes[-61] - 1), 2)
+                          if len(closes) >= 61 else None),
+                drawdown_from_peak=round(100 * (closes[-1] / max(tail) - 1), 2),
+                range_sessions=len(tail),
+                chart_volume=chart_volume,
                 annual_vol_pct=round(vol, 2),
                 year_close_high=max(tail),
                 year_close_low=min(tail),
