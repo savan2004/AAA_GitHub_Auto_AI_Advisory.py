@@ -33,11 +33,12 @@ def make_bars(up=True, last="2026-10-28", count=170, volume=1500000):
 
 
 class AnalysisHistoryTests(unittest.TestCase):
-    def test_healthy_1yr_snapshot_with_correct_52_week_bounds(self):
+    def test_healthy_snapshot_reports_observed_high_low(self):
         s = aq.inspect_history(make_bars(count=260), now=NOW)
         self.assertIsNotNone(s)
         self.assertEqual(s["asof"], "2026-10-28")
-        self.assertIsNotNone(s["high52"])
+        self.assertEqual(s["history_high"], round(float(make_bars(count=260).High.max()), 2))
+        self.assertEqual(s["history_low"], round(float(make_bars(count=260).Low.min()), 2))
         self.assertIn(s["trend"], ("BULLISH", "NEUTRAL", "BEARISH"))
         body = aq.format_snapshot("SBIN", "Bank <Tester>", s)
         self.assertIn("&lt;Tester&gt;", body)
@@ -47,8 +48,10 @@ class AnalysisHistoryTests(unittest.TestCase):
     def test_six_months_not_labeled_full_year(self):
         s = aq.inspect_history(make_bars(count=125), now=NOW)
         self.assertIsNotNone(s)
-        self.assertIsNone(s["high52"])
-        self.assertIn("insufficient full-year", aq.format_snapshot("SBIN", "Bank", s))
+        body = aq.format_snapshot("SBIN", "Bank", s)
+        first = make_bars(count=125).index[0].date().isoformat()
+        self.assertIn(f"{first} to 2026-10-28", body)
+        self.assertNotIn("52W", body)
 
     def test_fail_closed_for_stale_short_or_corrupted_data(self):
         self.assertIsNone(aq.inspect_history(make_bars(last="2026-10-01"), now=NOW))
@@ -174,6 +177,9 @@ class HandlerIntegrationTests(unittest.TestCase):
         sent = []
         ns = {
             "resolve_symbol": lambda q: ("FAKE.NS", "Fake Co"),
+            "bees_etf_symbol": aq.bees_etf_symbol,
+            "BEES_ETFS": aq.BEES_ETFS,
+            "format_etf_profile": aq.format_etf_profile,
             "get_hist": lambda s, p: pd.DataFrame(),
             # Freeze the clock at the fixture's as-of session. Without this,
             # the October candles correctly become stale as calendar time passes
