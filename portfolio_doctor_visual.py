@@ -172,7 +172,9 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         low -= gap
         high += gap
         x0, x1 = left+48, right-10
-        ytop, ybottom = y-35, y-169
+        ytop, ybottom = y-28, y-145
+        pdf.setFillColor(PANEL)
+        pdf.roundRect(x0, ybottom, x1 - x0, ytop - ybottom, 4, stroke=0, fill=1)
         for gridline in range(4):
             yy = ybottom + (ytop-ybottom)*gridline/3
             pdf.setStrokeColor(BORDER)
@@ -193,9 +195,22 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         text_fit('Close', x0, ytop+10, 50, 8, True, BLUE)
         text_fit('EMA20', x0+72, ytop+10, 60, 8, True, HexColor('#CB8B22'))
         text_fit('EMA50', x0+157, ytop+10, 60, 8, True, HexColor('#8066AE'))
-        text_fit(dates[0], x0, ybottom-15, 96, 7, color=MUTED)
-        text_fit(dates[-1], x1-96, ybottom-15, 96, 7, color=MUTED)
-        y = ybottom-33
+        volume = details.get('chart_volume') or []
+        axis_y = ybottom
+        if len(volume) == len(dates) and max(volume) > 0:
+            tallest = max(volume)
+            axis_y = ybottom - 38
+            pdf.setFillColor(BLUE)
+            step = (x1 - x0) / (len(volume) - 1)
+            bar_width = min(3, step * .72)
+            for i, value in enumerate(volume):
+                pdf.rect(x0 + i * step - bar_width / 2, axis_y, bar_width,
+                         26 * value / tallest, stroke=0, fill=1)
+            text_fit('Volume', left, axis_y + 16, 43, 7, True, MUTED)
+        text_fit(dates[0], x0, axis_y-15, 96, 7, color=MUTED)
+        text_fit(dates[len(dates)//2], (x0+x1)/2-20, axis_y-15, 96, 7, color=MUTED)
+        text_fit(dates[-1], x1-60, axis_y-15, 60, 7, color=MUTED)
+        y = axis_y-24
 
     invested = sum(row['invested'] for row in holdings)
     value = sum(row['value'] for row in holdings)
@@ -303,7 +318,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     if peers.get('status') == 'SCREENED':
         line('Official constituents: {} | Same-industry pool: {} | Screened: {} | Fresh: {}'.format(
             peers['universe'], peers['pool'], peers['screened'], peers['fresh']), 9)
-        line('Moderate technical screen qualified: {}; up to 2 per industry shown.'.format(
+        line('Moderate technical screen qualified: {}; up to 3 per industry shown.'.format(
             peers['qualified']), 9)
         if exposures:
             subhead('OFFICIAL INDUSTRY EXPOSURE (NOT TARGET ALLOCATION)')
@@ -313,10 +328,10 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         subhead('QUALIFIED TECHNICAL WATCHLIST')
         candidates = peers.get('candidates') or []
         if candidates:
-            for row in candidates[:8]:
+            for row in candidates[:12]:
                 line('{} | {} | Technical score {:.0f}/100 | Close {} ({})'.format(
                     row['symbol'], row['industry'], float(row['score']),
-                    money(row['close']), row['date']), 8.3, leading=16)
+                    money(row['close']), row['date']), 8.3, leading=13)
         else:
             line('No candidate passed all fresh-price, trend, liquidity and risk gates.', 9)
         subhead('OTHER VERIFIED INDUSTRY COMPARISONS (NOT QUALIFIED)')
@@ -330,7 +345,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                 break
             line('{} | {} | Close {} | 20D {:+.1f}% | RSI14 {:.1f} ({})'.format(
                 row['symbol'], row['industry'], money(row['close']),
-                row['return20'], row['rsi14'], row['date']), 8, leading=15)
+                row['return20'], row['rsi14'], row['date']), 8, leading=13)
             shown += 1
         if not shown:
             line('No additional fresh, fully verified peer history available.', 9)
@@ -441,6 +456,9 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         line('Exchange close {}: {} | Current portfolio weight {:.2f}%'.format(
             company['date'], money(held_row['close']), held_row['weight']), 9, True)
         line('Industry: {}'.format(company.get('industry') or 'Not verified'), 8)
+        line('Cost basis {} | Current value {} | Unrealised P/L {} ({:+.1f}%)'.format(
+            money(held_row['invested']), money(held_row['value']),
+            money(held_row['pnl']), held_row['pnl_pct']), 8.5)
         if company.get('status') != 'VERIFIED':
             subhead('TECHNICAL EVIDENCE UNAVAILABLE')
             line('Not enough independently verified completed candles for analysis.', 9)
@@ -454,15 +472,19 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                 money(company['ema20']) if company['ema20'] is not None else 'N/A',
                 money(company['ema50']) if company['ema50'] is not None else 'N/A',
                 money(company['ema200']) if company['ema200'] is not None else 'N/A'), 8.5)
-            line('1Y close range: {} to {} | 60-day annualised vol: {:.1f}%'.format(
-                money(company['year_close_low']),
-                money(company['year_close_high']), company['annual_vol_pct']), 8.5)
+            return60 = company.get('return60')
+            line('5-session return: {:+.1f}% | 60-session return: {}'.format(
+                company['return5'], '{:+.1f}%'.format(return60) if return60 is not None else 'Unavailable'), 8.5)
+            line('{}-session close range: {} to {} | From peak: {:+.1f}%'.format(
+                company['range_sessions'], money(company['year_close_low']),
+                money(company['year_close_high']), company['drawdown_from_peak']), 8.5)
+            line('60-session annualised volatility: {:.1f}%'.format(company['annual_vol_pct']), 8.5)
             atr = company.get('atr14_pct')
             volume = company.get('volume_ratio')
             line('ATR14: {} | Latest volume / previous 20-day mean: {}'.format(
                 '{:.2f}% of price'.format(atr) if atr is not None else 'Unavailable',
                 '{:.2f}x'.format(volume) if volume is not None else 'Unavailable'), 8.5)
-            subhead('VERIFIED DAILY CLOSE / EMA CHART')
+            subhead('DAILY PRICE, MOVING AVERAGES AND VOLUME')
             company_price_chart(company)
         subhead('FUNDAMENTAL AND VALUATION FACTS')
         finance = company.get('financial') or {}
@@ -491,7 +513,6 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         subhead('IMPORTANT RESEARCH LIMITS')
         line('Shareholding, news and peer valuation: NOT VERIFIED.', 8)
         line('No trade calls/targets; source figures require issuer-filing checks.', 8)
-        line('Tap the Telegram button for the full separate 8+ page report.', 8)
     footer()
     pdf.save()
     data = out.getvalue()
