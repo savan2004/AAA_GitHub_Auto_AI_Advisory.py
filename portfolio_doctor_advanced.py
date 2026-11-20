@@ -17,6 +17,14 @@ class DoctorEvidenceError(ValueError):
     """Safe data-quality failure without a symbol or customer holding in its text."""
 
 
+class BuilderConstraintError(DoctorEvidenceError):
+    """Private UI detail carried separately from the safe exception code."""
+
+    def __init__(self, code, detail):
+        super().__init__(code)
+        self.detail = detail
+
+
 def _d(value):
     try:
         d = Decimal(str(value))
@@ -432,8 +440,12 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
             raise DoctorEvidenceError("invalid_or_duplicate_builder_candidate")
         seen.add(sym)
         price, target = _d(row.get("price")), _d(row.get("target_weight_pct"))
-        if price <= 0 or target < 0 or target > max_stock:
+        if price <= 0 or target < 0:
             raise DoctorEvidenceError("invalid_builder_target")
+        if target > max_stock:
+            raise BuilderConstraintError(
+                "invalid_builder_target",
+                f"{sym} target is {target:.2f}% against your {max_stock:.2f}% stock cap.")
         total_target += target
         sector = _normalize_sector(row.get("sector"))
         if sector == "Unknown / unclassified":
@@ -447,11 +459,16 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
         rows.append({"symbol": sym, "shares": shares, "price": float(price),
                      "new_value": float(amount), "sector": sector,
                      "requested_weight_pct": float(target)})
-    if total_target > 100 or spending + need > budget:
-        raise DoctorEvidenceError("builder_cash_or_weight_shortfall")
+    if total_target > 100:
+        raise BuilderConstraintError(
+            "builder_cash_or_weight_shortfall",
+            f"Stock targets add up to {total_target:.2f}%. Reduce them to 100% or less.")
     cash = budget - spending
     if cash < need:
-        raise DoctorEvidenceError("builder_liquidity_shortfall")
+        raise BuilderConstraintError(
+            "builder_cash_or_weight_shortfall",
+            f"Whole shares leave Rs {cash:,.2f} cash against your Rs {need:,.2f} minimum "
+            f"(shortfall Rs {need - cash:,.2f}).")
     for row in rows:
         after_value = prior.get(row["symbol"], Decimal("0")) + _d(row["new_value"])
         if 100 * after_value / full > max_stock + Decimal("0.00000001"):
@@ -469,9 +486,12 @@ def build_portfolio_scenario(*, capital, horizon_months, risk_tolerance,
             if sector == "Unknown / unclassified":
                 raise DoctorEvidenceError("existing_sector_breakdown_required")
             sectors[sector] += value
-    for value in sectors.values():
-        if 100 * value / full > max_sector + Decimal("0.00000001"):
-            raise DoctorEvidenceError("builder_sector_cap_exceeded")
+    for sector, value in sectors.items():
+        weight = 100 * value / full
+        if weight > max_sector + Decimal("0.00000001"):
+            raise BuilderConstraintError(
+                "builder_sector_cap_exceeded",
+                f"{sector} would be {weight:.2f}% against your {max_sector:.2f}% sector cap.")
     current = {k: float(100 * v / current_total) for k, v in prior.items()} if current_total else {}
     return {"mode": funding_mode, "current_weights": current,
             "proposed": rows, "cash": float(cash), "cash_weight_pct": float(100 * cash / full),
