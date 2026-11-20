@@ -172,6 +172,7 @@ def prepare_company_pages(holdings, frames, *, fundamentals=None,
                 volume_ratio=volume_ratio,
                 return5=round(100 * (closes[-1] / closes[-6] - 1), 2),
                 return20=round(change20, 2),
+                return_window=tuple(day.date().isoformat() for day in frame.index[-21:]),
                 return60=(round(100 * (closes[-1] / closes[-61] - 1), 2)
                           if len(closes) >= 61 else None),
                 drawdown_from_peak=round(100 * (closes[-1] / max(tail) - 1), 2),
