@@ -566,10 +566,13 @@ def build_technical_text(sym, cname=None):
     trend = "BULLISH" if ltp > ema20 > ema50 else "BEARISH" if ltp < ema20 < ema50 else "NEUTRAL"
     t_icon = "🔼" if trend == "BULLISH" else "🔽" if trend == "BEARISH" else "↔️"
 
-    n = min(252, len(close))
-    w52h = round(float(close.rolling(n).max().iloc[-1]), 2)
-    w52l = round(float(close.rolling(n).min().iloc[-1]), 2)
-    dist52 = round((ltp - w52h) / w52h * 100, 1) if w52h else None
+    closing_prices = [float(price) for price in close.dropna()]
+    range_line = "📏 Closing range unavailable"
+    if closing_prices and all(math.isfinite(price) and price > 0 for price in closing_prices):
+        high, low = max(closing_prices), min(closing_prices)
+        distance = 100 * (ltp / high - 1)
+        range_line = (f"📏 Closing range ({len(closing_prices)} candles): "
+                      f"₹{low:,.2f}–₹{high:,.2f}  ({distance:+.1f}% from closing peak)")
 
     name = cname or sym
     chg_icon = "🟢" if chg >= 0 else "🔴"
@@ -580,7 +583,7 @@ def build_technical_text(sym, cname=None):
         f"{chg_icon} Historical close change: <b>{chg:+.2f}%</b> vs prior candle",
         "━━━━━━━━━━━━━━━━━━━━",
         f"📐 EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}",
-        f"📏 52W H: ₹{w52h}  |  52W L: ₹{w52l}" + (f"  ({dist52:+.1f}% from peak)" if dist52 is not None else ""),
+        range_line,
         "━━━━━━━━━━━━━━━━━━━━",
         f"🔬 Trend: <b>{trend} {t_icon}</b>",
         f"📊 RSI: {rsi}  |  MACD: {'▲' if macd > 0 else '▼'} {macd}  |  ASI: {asi}",
