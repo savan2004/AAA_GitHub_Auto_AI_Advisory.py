@@ -1228,10 +1228,13 @@ def handle_analysis_callback(call):
     except Exception:
         pass
 
-    if sym in BEES_ETFS and action in ("fund", "pdf"):
-        safe_send(chat_id, format_etf_profile(sym))
+    if action in ("fund", "pdf"):
+        from analysis_quality import BEES_ETFS, format_etf_profile
+        if sym in BEES_ETFS:
+            safe_send(chat_id, format_etf_profile(sym))
+            return
 
-    elif action == "tech":
+    if action == "tech":
         def _run(cid=chat_id, s=sym):
             try:
                 ticker, cname = resolve_symbol(s)
