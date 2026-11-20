@@ -18,7 +18,8 @@ MIN_MEMBERS = 450
 MAX_MEMBERS = 550
 PEERS_PER_INDUSTRY = 8
 MAX_SCREENED = 36
-MAX_RESULTS = 8
+MAX_RESULTS = 12
+MAX_PER_INDUSTRY = 3
 
 
 def official_nifty500_industries(*, get=None):
@@ -156,7 +157,7 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     chosen, counts = [], {}
     for row in qualified:
         label = row["industry"]
-        if counts.get(label, 0) >= 2:
+        if counts.get(label, 0) >= MAX_PER_INDUSTRY:
             continue
         chosen.append(row)
         counts[label] = counts.get(label, 0) + 1
@@ -166,11 +167,13 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     out["candidates"] = chosen
     # Price momentum is disclosed only as one comparable measurement; no
     # fundamental-quality ranking is inferred from short-window returns.
+    selected_symbols = {row['symbol'] for row in chosen}
     comparison_rows = []
     for industry in industries:
-        ordered = sorted((row for row in comparisons if row["industry"] == industry),
+        ordered = sorted((row for row in comparisons if row["industry"] == industry
+                          and row["symbol"] not in selected_symbols),
                          key=lambda row: (-row["return20"], row["symbol"]))
-        comparison_rows.extend(ordered[:2])
+        comparison_rows.extend(ordered[:MAX_PER_INDUSTRY])
     out["comparisons"] = comparison_rows[:10]
     out["status"] = "SCREENED"
     return out
