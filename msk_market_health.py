@@ -182,7 +182,7 @@ def parse_option_pcr(payload, session, expiry):
     if not isinstance(rows, list):
         return None
     put = call = 0
-    counted = 0
+    strikes = set()
     for item in rows:
         if not isinstance(item, dict) or str(item.get("expiryDate", "")) != expiry:
             continue
@@ -192,13 +192,18 @@ def parse_option_pcr(payload, session, expiry):
         coi, poi = _number(ce.get("openInterest")), _number(pe.get("openInterest"))
         if coi is None or poi is None or coi < 0 or poi < 0:
             continue
+        strike = _number(item.get("strikePrice"))
+        if strike is None or strike <= 0:
+            continue
+        if strike in strikes:
+            return None
+        strikes.add(strike)
         call += coi
         put += poi
-        counted += 1
-    if counted < 10 or call <= 0 or put <= 0:
+    if len(strikes) < 10 or call <= 0 or put <= 0:
         return None
     return {"session": session.isoformat(), "expiry": expiry, "pcr": round(put / call, 2),
-            "put_oi": int(put), "call_oi": int(call), "strikes": counted,
+            "put_oi": int(put), "call_oi": int(call), "strikes": len(strikes),
             "source": "NSE NIFTY option OI (selected expiry)"}
 
 
@@ -377,7 +382,7 @@ def _crore(value):
     return f"{v:+,.0f}" if v is not None else "unavailable"
 
 
-def format_market_health(breadth, factors):
+def format_market_health(breadth, factors, *, now=None):
     """Investor-first diagnosis with unambiguous dated figures and no invented data."""
     if not isinstance(breadth, dict) or breadth.get("state") in ("warming", "unavailable"):
         from market_breadth import format_breadth
@@ -391,8 +396,14 @@ def format_market_health(breadth, factors):
     rising = _number(breadth.get("advances"))
     ma20 = _number((breadth.get("ma20") or {}).get("pct"))
     benchmark = _number(breadth.get("benchmark_change"))
-    if not valid or fallen is None or rising is None or ma20 is None:
-        return "⚠️ <b>Market Health unavailable</b>\nMarket participation incomplete."
+    unchanged = _number(breadth.get("unchanged"))
+    requested = _number(breadth.get("requested"))
+    if (valid is None or valid <= 0 or fallen is None or rising is None
+            or fallen < 0 or rising < 0 or fallen + rising > valid
+            or (unchanged is not None and (unchanged < 0 or fallen + rising + unchanged != valid))
+            or (requested is not None and requested < valid)
+            or ma20 is None or not 0 <= ma20 <= 100):
+        return "⚠️ <b>Market Health unavailable</b>\nMarket participation incomplete or inconsistent."
     falling_share = fallen / valid * 100
     # Breadth is the only source of global posture when derivatives are absent.
     posture = ("🟠 CAUTIOUS" if falling_share >= 60 and ma20 >= 50 else
@@ -403,6 +414,7 @@ def format_market_health(breadth, factors):
         "🩺 <b>MSK TOTAL MARKET HEALTH | INDIA</b>",
         f"📅 {day.strftime('%d %b %Y')} closing session",
         f"📌 <b>Verdict: {posture}</b>",
+        "Verdict based on Nifty 500 participation and its 20-day trend.",
         "",
         "💰 <b>INSTITUTIONAL CASH FLOW (₹ crore)</b>",
     ]
@@ -427,12 +439,16 @@ def format_market_health(breadth, factors):
         lines.append("FII index-futures positioning: Unavailable.")
     pcr = factors.get("pcr")
     pcr_day = _nse_day(pcr.get("session")) if isinstance(pcr, dict) else None
-    if (pcr_day is not None and day <= pcr_day <= day + timedelta(days=5)
-            and pcr.get("pcr") is not None):
-        lines.append(f"Nifty OI PCR: {pcr['pcr']:.2f} "
+    today = (now or datetime.now(IST)).astimezone(IST).date()
+    pcr_value = _number(pcr.get("pcr")) if isinstance(pcr, dict) else None
+    if (pcr_day is not None and (pcr_day == day or day < pcr_day == today)
+            and pcr_day <= today and pcr_value is not None and pcr_value > 0):
+        lines.append(f"Nifty OI PCR: {pcr_value:.2f} "
                      f"(as of {pcr_day.isoformat()}, "
                      f"expiry {html.escape(pcr['expiry'])}; "
                      f"{pcr['strikes']} paired strikes)")
+        if pcr_day > day:
+            lines.append("Today's option-chain observation is newer than the breadth close.")
         lines.append("PCR = put OI / call OI; not a directional guarantee.")
     else:
         lines.append("Nifty put-call OI ratio: Unavailable (not treated as zero).")
