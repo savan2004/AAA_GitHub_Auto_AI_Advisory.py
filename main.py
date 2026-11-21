@@ -1677,6 +1677,11 @@ def portfolio_builder_button(m):
     if not _builder_allowed(m):
         safe_send(m.chat.id, "Portfolio Builder is available in private chat only.")
         return
+    if os.getenv("MSK_BUILDER_V2_PREVIEW_ENABLED") == "1":
+        from msk_ai_builder_telegram import preview_allowed
+        if preview_allowed(m.chat.id):
+            portfolio_builder_v2_preview(m)
+            return
     if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "1") != "1":
         safe_send(m.chat.id, "Portfolio Builder is disabled in Render settings.")
         return
@@ -1712,7 +1717,7 @@ def portfolio_builder_v2_preview(m):
                               "until": time.monotonic() + 180}
     state.clear(uid)
     safe_send(uid, "Portfolio Builder V2 preview — Step 1/3\n"
-                   "Enter capital in rupees (1 to 1 crore). This preview uses fictional companies.")
+                   "Enter capital in rupees (1 to 1.5 crore). This preview uses fictional companies.")
 
 
 def portfolio_builder_option(call, value):
@@ -1818,9 +1823,12 @@ def portfolio_builder_form_text(m, text):
     if step == "amount":
         amount = text.strip().replace(",", "")
         preview = entry.get("mode") == "v2_preview"
-        maximum = 10_000_000 if preview else 1_000_000_000_000
+        maximum = 1_000_000_000_000
+        if preview:
+            from msk_ai_builder_profile import MAX_CAPITAL_RUPEES
+            maximum = MAX_CAPITAL_RUPEES
         if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= maximum:
-            message = "Enter capital between Rs 1 and Rs 1 crore." if preview else "Enter a valid rupee amount, like 1000000."
+            message = "Enter capital between Rs 1 and Rs 1.5 crore." if preview else "Enter a valid rupee amount, like 1000000."
             safe_send(uid, message)
             return True
         entry.update(amount=amount, step="risk", until=time.monotonic() + 180)
