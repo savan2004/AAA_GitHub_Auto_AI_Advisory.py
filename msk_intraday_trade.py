@@ -9,8 +9,12 @@ fictional volume from the spot index.
 from __future__ import annotations
 
 import html
+import csv
+import io
 import logging
 import math
+import re
+import threading
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -324,11 +328,13 @@ def evaluate_instrument(name, spot, etf, now):
     risk_pct = 100 * risk / last
     if (risk <= 0 or risk_pct > _MAX_RISK_PCT or risk_pct < 0.08):
         return {"name": name, "status": "NO TRADE",
+                "asof": price_at.strftime("%d %b %H:%M IST"),
                 "reason": "Stop-loss distance outside 0.08%–0.90% allowed range."}
     score = (2 + 2 + (2 if ind["adx"] >= 25 else 1)
              + 1 + 1 + (1 if relvol >= 1.5 else 0) + 1)
     if score < 8:
         return {"name": name, "status": "NO TRADE",
+                "asof": price_at.strftime("%d %b %H:%M IST"),
                 "reason": "Technical quality score below 8/10; setup withheld."}
     target1, target2 = last + sign * 2 * risk, last + sign * 3 * risk
     return {"name": name, "status": "WATCH", "direction": direction,
@@ -412,3 +418,85 @@ def build_intraday_trade_report(*, now=None, fetcher=None):
             results.append({"name": name, "status": "NO TRADE",
                             "reason": "Fresh spot/ETF source data unavailable; signal withheld."})
     return format_intraday(now, results)
+
+
+_MEMBERS_URL = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
+_EQUITY_SCAN_LOCK = threading.Lock()
+
+
+def nifty200_members():
+    response = requests.get(_MEMBERS_URL, timeout=8, allow_redirects=False)
+    response.raise_for_status()
+    rows = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig")))
+    symbols = []
+    for row in rows:
+        symbol = (row.get("Symbol") or "").strip()
+        if row.get("Series") != "EQ" or not re.fullmatch(r"[A-Z0-9&.-]{1,30}", symbol):
+            raise ValueError("Unverified constituent row")
+        symbols.append(symbol)
+    if len(symbols) != 200 or len(set(symbols)) != 200:
+        raise ValueError("Expected 200 distinct equity constituents")
+    return symbols
+
+
+def equity_bars(symbols):
+    import yfinance as yf
+    return yf.download([s + ".NS" for s in symbols], period="1mo", interval="15m",
+                       group_by="ticker", auto_adjust=False, prepost=False,
+                       ignore_tz=False, threads=4, progress=False, timeout=6)
+
+
+def build_nifty200_report(*, clock=lambda: datetime.now(IST), members=nifty200_members,
+                          download=equity_bars):
+    now = _as_ist(clock())
+    header = "⚡ <b>Nifty 200 intraday watchlist</b>"
+    if not market_session_open(now):
+        return header + "\nOutside the 09:46–15:15 IST signal window. No live setups."
+    if not _EQUITY_SCAN_LOCK.acquire(blocking=False):
+        return header + "\nA scan is in progress. Please retry shortly."
+    try:
+        try:
+            symbols = members()
+        except (requests.RequestException, ValueError, csv.Error):
+            return header + "\nOfficial constituent list unavailable. Scan withheld."
+        frames = {}
+        for start in range(0, len(symbols), 25):
+            batch = symbols[start:start + 25]
+            try:
+                bars = download(batch)
+                for symbol in batch:
+                    ticker = symbol + ".NS"
+                    if ticker in bars.columns:
+                        frames[symbol] = bars[ticker].dropna(how="all")
+            except Exception:
+                LOG.exception("Nifty 200 candle batch unavailable")
+        now = _as_ist(clock())
+        if not market_session_open(now):
+            return header + "\nSignal window ended during the scan. Setups withheld."
+        watches = []
+        assessed = 0
+        for symbol, frame in frames.items():
+            # For cash equities price and traded volume belong to the same security.
+            try:
+                decision = evaluate_instrument(symbol, frame, frame, now)
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                LOG.warning("Invalid intraday candles for %s", symbol)
+                continue
+            if decision.get("asof"):
+                assessed += 1
+            if decision["status"] == "WATCH":
+                watches.append(decision)
+        lines = [header, now.strftime("%d %b %Y · %H:%M IST"),
+                 f"Usable data: {assessed}/{len(symbols)} stocks · completed 15m bars"]
+        watches.sort(key=lambda s: (-s["score"], -s["volume_multiple"], s["name"]))
+        for item in watches[:3]:
+            lines.extend(["", f"<b>{html.escape(item['name'])} · {item['direction']} watch</b>",
+                          f"Reference ₹{item['entry']:,.2f} · Stop ₹{item['sl']:,.2f} · T1 ₹{item['t1']:,.2f}",
+                          f"Bar start: {item['asof']}"])
+        if not watches:
+            lines.append("No qualifying setup among assessed stocks." if assessed else
+                         "Insufficient fresh price and volume data to assess setups.")
+        lines.extend(["", "Research watchlist · Win rate unverified."])
+        return "\n".join(lines)
+    finally:
+        _EQUITY_SCAN_LOCK.release()
