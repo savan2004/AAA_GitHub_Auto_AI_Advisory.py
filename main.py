@@ -1086,10 +1086,19 @@ def run_report(chat_id, query):
                 except Exception:
                     pass
         else:
-            safe_send(chat_id, f"❌ Could not generate report for <b>{query}</b>: {result}")
-    except Exception as e:
-        logger.error(f"Report err: {e}", exc_info=True)
-        safe_send(chat_id, f"❌ Error generating report: {e}")
+            # The generator's error string may contain provider/HTTP internals.
+            # Never show it, or unescaped request text, to a customer.
+            logger.warning("MSK_RESEARCH_PDF_GENERATION_WITHHELD symbol=%s", sym)
+            safe_send(chat_id,
+                      "❌ Research PDF unavailable: verified report data could "
+                      "not be prepared. No unverified PDF was sent.")
+    except Exception as exc:
+        # Error details can include provider URLs, tokens or private paths.
+        # The error class is enough for safe production diagnostics.
+        logger.warning("MSK_RESEARCH_PDF_FAILED type=%s", type(exc).__name__)
+        safe_send(chat_id,
+                  "❌ Research PDF unavailable. Please retry later; "
+                  "no unverified PDF was sent.")
 
 
 def deliver_daily_reports(chat_id, profiles):
