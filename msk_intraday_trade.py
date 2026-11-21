@@ -420,7 +420,7 @@ def build_intraday_trade_report(*, now=None, fetcher=None):
     return format_intraday(now, results)
 
 
-_MEMBERS_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty200list.csv"
+_MEMBERS_URL = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
 _EQUITY_SCAN_LOCK = threading.Lock()
 
 
