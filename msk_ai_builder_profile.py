@@ -1,6 +1,8 @@
 """Pure input contract for MSK AI Builder V2; no stock advice or I/O."""
 from dataclasses import dataclass
 
+MAX_CAPITAL_RUPEES = 15_000_000
+
 @dataclass(frozen=True)
 class ResearchProfile:
     capital_rupees: int
@@ -8,8 +10,8 @@ class ResearchProfile:
     months: int
 
     def __post_init__(self):
-        if type(self.capital_rupees) is not int or not 1 <= self.capital_rupees <= 10_000_000:
-            raise ValueError("Capital must be 1 to 10,000,000 rupees")
+        if type(self.capital_rupees) is not int or not 1 <= self.capital_rupees <= MAX_CAPITAL_RUPEES:
+            raise ValueError(f"Capital must be 1 to {MAX_CAPITAL_RUPEES:,} rupees")
         if self.risk not in ("low", "medium", "high"):
             raise ValueError("Invalid risk preference")
         if type(self.months) is not int or self.months not in (6, 18, 36, 60):
