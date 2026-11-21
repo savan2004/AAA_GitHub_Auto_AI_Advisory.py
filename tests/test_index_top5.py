@@ -21,7 +21,7 @@ def nse_csv(n):
 
 class OfficialIndexMembershipTests(unittest.TestCase):
     def test_nse_csv_accepts_correct_counts_and_preserves_industry(self):
-        for profile, count in (("conservative", 100), ("moderate", 150), ("aggressive", 250)):
+        for profile, count in (("conservative", 100), ("moderate", 150), ("aggressive", 100)):
             symbols, industries = ic.parse_constituents(nse_csv(count), profile)
             self.assertEqual(len(symbols), count)
             self.assertEqual(symbols[0], "TEST000")
@@ -96,15 +96,15 @@ class Top5ScoringTests(unittest.TestCase):
 
     def test_full_index_data_not_fixed_20_stock_seed(self):
         histories = {"TEST000": Mock(empty=False)}
-        universe = {"symbols": tuple(f"TEST{i:03d}" for i in range(250)),
-                    "cap": "Small Cap", "name": "Nifty Smallcap 250",
+        universe = {"symbols": tuple(f"TEST{i:03d}" for i in range(100)),
+                    "cap": "Small Cap", "name": "Nifty Smallcap 100",
                     "source": "Official NSE constituent CSV", "industries": {},
                     "asof": "29 Oct 2026"}
         with patch.object(top5, "get_index_universe", return_value=universe), patch(
                 "market_data.bulk_history", return_value=histories) as bulk, patch.object(
                 top5, "technical_candidate", return_value=None) as ev:
             out = top5._build_index_top5("aggressive")
-        self.assertEqual(len(bulk.call_args.args[0]), 250)
+        self.assertEqual(len(bulk.call_args.args[0]), 100)
         self.assertEqual(bulk.call_args.kwargs["chunk_size"], 50)
         self.assertIn("Insufficient price coverage", out)
         ev.assert_called_once()
