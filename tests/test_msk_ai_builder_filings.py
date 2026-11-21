@@ -63,6 +63,16 @@ class FilingTests(unittest.TestCase):
             with self.subTest(old=old,new=new), self.assertRaises(EvidenceError):
                 self.extract(fixture().replace(old,new))
 
+    def test_segment_table_is_not_income_statement(self):
+        # Actual NSE format has a separate segment table with the same
+        # period and revenue labels, but no total net profit field.
+        segment = (b"<table><tr><td>Date of start of reporting period</td>"
+                   b"<td>01-07-2026</td><td>01-04-2026</td></tr>"
+                   b"<tr><td>Revenue from operations</td><td></td><td></td></tr></table>")
+        result=self.extract(fixture()+segment)
+        self.assertEqual(result.revenue_cr,Decimal("1234.5678"))
+        self.assertEqual(result.profit_cr,Decimal("-23.4567"))
+
     def test_url_allowlist(self):
         self.assertEqual(check_url(URL),URL)
         for url in (URL.replace("https:","http:"), URL.replace("nsearchives.nseindia.com","evil.example"),
