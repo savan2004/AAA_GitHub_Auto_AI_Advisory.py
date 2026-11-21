@@ -1,0 +1,116 @@
+name: MSK Builder real research bank staging probe
+on:
+  pull_request:
+    paths:
+      - 'msk_ai_builder_weekly*.py'
+      - 'msk_ai_builder_bank.py'
+      - 'msk_ai_builder_common.py'
+      - 'msk_ai_builder_evidence.py'
+      - '.github/workflows/msk-ai-builder-real-bank-probe.yml'
+permissions:
+  contents: read
+jobs:
+  real-bank:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: builder_test
+          POSTGRES_PASSWORD: local_ci_only
+          POSTGRES_DB: builder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U builder_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests==2.32.3 pandas==2.2.2 numpy==1.26.4 yfinance==0.2.61 curl_cffi==0.7.4 'psycopg[binary]>=3.2,<3.4'
+      - name: Actual public source ingestion and database readback
+        run: |
+          python -u - <<'PY'
+          from collections import Counter
+          from datetime import datetime,timezone
+          from msk_ai_builder_common import review_companies
+          from portfolio_doctor_advanced import _screener_same_page_evidence
+          from msk_ai_builder_evidence import _exact_issuer_get
+          from market_data import bulk_history
+          import json
+          from pathlib import Path
+          import psycopg
+          from msk_ai_builder_bank import WeeklyResearchBank,BankError
+          from msk_ai_builder_weekly import stage_week
+          from msk_ai_builder_evidence import collect_secondary,EvidenceError
+          # Disposable service only. Never uses a real database URL or bot token.
+          def connect(_):
+              return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
+          bank=WeeklyResearchBank("postgresql://test@localhost/test?sslmode=require",connector=connect)
+          pages={}
+          def collect(symbol,timeout):
+              try:
+                  def capture(sym,request_timeout):
+                      pages[sym]=_screener_same_page_evidence(sym,get=_exact_issuer_get,request_timeout=request_timeout)
+                      return pages[sym]
+                  evidence=collect_secondary(symbol,timeout=timeout,collector=capture)
+                  print("SECONDARY_OK",symbol,evidence.scope,len(evidence.annual),len(evidence.quarterly),flush=True)
+                  return evidence
+              except EvidenceError as exc:
+                  print("SECONDARY_REJECTED",symbol,str(exc),flush=True)
+                  raise
+          result,version=stage_week(bank,evidence_provider=collect,max_attempts=40,deadline_seconds=300)
+          summary={"universe":result.universe_size,"close_coverage":result.close_coverage,
+                   "attempted":len(result.attempted),"scored":len(result.scored),
+                   "selected":len(result.companies),"failure_counts":dict(Counter(result.failures.values())),
+                   "status":result.status,"version":version,"publication_status":"WITHHELD"}
+          print("REAL_BANK_RESULT",json.dumps(summary,sort_keys=True),flush=True)
+          audit={"summary":summary,"attempted":list(result.attempted),"scores":dict(result.scored), "failures":result.failures,"reviews":result.reviews}
+          Path("weekly-research-audit.json").write_text(json.dumps(audit,sort_keys=True,indent=2),encoding="utf-8")
+          if version:
+              got,stored=bank.read_staging()
+              assert got==version and len(stored["companies"])==len(result.companies)
+              assert stored["publication_status"]=="WITHHELD"
+              assert all(x["evidence_status"]=="SECONDARY_ONLY" for x in stored["companies"])
+              import hashlib
+              canonical=json.dumps(stored,sort_keys=True,separators=(",",":"),allow_nan=False,ensure_ascii=True)
+              assert hashlib.sha256(canonical.encode()).hexdigest()==got
+              Path("weekly-research-snapshot.json").write_text(canonical,encoding="utf-8")
+              print("DATABASE_READBACK",got,len(stored["companies"]),flush=True)
+          else:
+              raise RuntimeError("NO_REAL_SECONDARY_SNAPSHOT")
+          try:
+              bank.read_for_customer()
+          except BankError as exc:
+              assert str(exc)=="PRODUCTION_PUBLICATION_DISABLED"
+              print("CUSTOMER_PUBLICATION_WITHHELD")
+          else:
+              raise AssertionError("Unapproved customer publication")
+          assert len(result.companies)==20,"Fewer than 20 preliminary qualifiers; do not force selection"
+          frames=bulk_history([c.member.symbol for c in result.companies],"6mo",chunk_size=20,
+                              adjusted=False,retries=0,max_fallbacks=0,download_timeout=20)
+          evidence=review_companies(result.companies,frames,now=datetime.now(timezone.utc),
+                                    collector=lambda sym:pages[sym])
+          Path("weekly-shared-review.json").write_text(json.dumps(evidence,sort_keys=True,indent=2,allow_nan=False),encoding="utf-8")
+          financial=Counter(x["financial"]["status"] for x in evidence["companies"].values())
+          technical=Counter(x["technical"]["status"] for x in evidence["companies"].values())
+          print("SHARED_REVIEW_COVERAGE",dict(financial),dict(technical),flush=True)
+          assert financial.get("SECONDARY_ONLY")==20,"Incomplete same-page financial review"
+          assert technical.get("EOD_CLOSE_MATCHED_HISTORY_NOT_INDEPENDENTLY_VERIFIED")==20,"Incomplete technical close reconciliation"
+          PY
+      - name: Preserve internal research evidence for independent review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-weekly-internal-audit
+          path: |
+            weekly-research-audit.json
+            weekly-research-snapshot.json
+            weekly-shared-review.json
+          if-no-files-found: warn
+          retention-days: 7
