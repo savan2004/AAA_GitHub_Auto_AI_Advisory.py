@@ -155,6 +155,20 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertFalse(rows)
         self.assertIn("excerpt", errors[0])
 
+    def test_stale_prior_year_figure_rejected(self):
+        row = copy.deepcopy(self.row)
+        row["observed_on"] = "2025-11-13"
+        rows, errors = self.verify(row)
+        self.assertFalse(rows)
+        self.assertIn("freshness", errors[0])
+
+    def test_stale_prior_month_figure_rejected(self):
+        row = copy.deepcopy(self.row)
+        row["observed_on"] = "2026-09-01"
+        rows, errors = self.verify(row)
+        self.assertFalse(rows)
+        self.assertIn("freshness", errors[0])
+
     def test_future_figure_rejected(self):
         row = copy.deepcopy(self.row)
         row["observed_on"] = "2026-12-01"
