@@ -164,7 +164,7 @@ class LiveEvidenceGate(unittest.TestCase):
     def test_smallcap_owner_text_logged_only_in_its_acceptance(self):
         from unittest.mock import patch
         from msk_live_acceptance import _PROBE, capture_telegram_ack
-        text = "📊 SMALL CAP | Nifty Smallcap 250\\n247/247 reviewed, no BUY"
+        text = "📊 SMALL CAP | Nifty Smallcap 100\\n100/100 reviewed, no BUY"
         for action, approved in (("SmallCapTop5", True),
                                  ("MidCapTop5", False), ("Portfolio", False)):
             probe = {"action": action, "receipts": [], "files": {}, "closed": False}
@@ -177,6 +177,20 @@ class LiveEvidenceGate(unittest.TestCase):
                         for x in logs.call_args_list), approved)
             finally:
                 _PROBE.reset(token)
+
+    def test_old_smallcap250_text_is_not_owner_acceptance(self):
+        from unittest.mock import patch
+        from msk_live_acceptance import _PROBE, capture_telegram_ack
+        probe = {"action":"SmallCapTop5", "receipts":[], "files":{}, "closed":False}
+        token = _PROBE.set(probe)
+        try:
+            with patch("msk_live_acceptance.LOG.info") as logs:
+                capture_telegram_ack("text", 14226,
+                    message_text="📊 SMALL CAP | Nifty Smallcap 250")
+                self.assertFalse(any("SMALLCAP_RETURNED_TEXT" in x.args[0]
+                                     for x in logs.call_args_list))
+        finally:
+            _PROBE.reset(token)
 
     def test_full_audit_does_not_label_an_api_ack_as_pass(self):
         code = (ROOT / "msk_live_acceptance.py").read_text(encoding="utf-8")
