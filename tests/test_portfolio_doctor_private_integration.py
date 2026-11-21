@@ -71,6 +71,7 @@ class SessionTests(unittest.TestCase):
             "_portfolio_doctor_running": set(),
             "_portfolio_doctor_slots": threading.BoundedSemaphore(2),
             "_doctor_allowed": lambda m: True,
+            "_builder_form": {},
             "portfolio_builder_form_text": lambda m, text: False,
             "safe_send": lambda uid, msg: notices.append((uid, msg)),
             "bot": bot, "executor": executor or SimpleNamespace(submit=lambda fn: fn()),
@@ -112,7 +113,7 @@ class SessionTests(unittest.TestCase):
         self.assertIn("timed out", notices[-1][1])
         self.assertNotIn("SAMPLEA", str(notices))
 
-    def test_multiple_clients_isolated_and_busy_client_state_cleared(self):
+    def test_multiple_clients_isolated_and_busy_client_can_retry(self):
         pending = []
         executor = SimpleNamespace(submit=lambda fn: pending.append(fn))
         env, bot, notices = self._env(user_ids=(101, 102, 103), executor=executor)
@@ -122,7 +123,7 @@ class SessionTests(unittest.TestCase):
         fn(_message(103), _typed_payload=b"SAMPLEC 9 340")
         self.assertEqual(len(pending), 2)
         self.assertEqual(env["_portfolio_doctor_running"], {101, 102})
-        self.assertNotIn(103, env["_portfolio_doctor_waiting"])
+        self.assertIn(103, env["_portfolio_doctor_waiting"])
         self.assertIn("busy", notices[-1][1])
         def distinct_report(name, payload, timeout):
             return b"%PDF-" + payload + b"_"*3000
@@ -144,12 +145,13 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(env["_portfolio_doctor_waiting"], {})
         self.assertEqual(bot.sent, [])
 
-    def test_invalid_typed_input_discards_waiting_request(self):
+    def test_invalid_typed_input_preserves_waiting_request(self):
         env, _, notices = self._env()
         env["portfolio_doctor_document"] = lambda *a, **kw: self.fail("must not launch")
         fn = _function("portfolio_doctor_text", env)
+        deadline = env["_portfolio_doctor_waiting"][101]
         fn(_message(101, text="NOT VALID"))
-        self.assertEqual(env["_portfolio_doctor_waiting"], {})
+        self.assertEqual(env["_portfolio_doctor_waiting"], {101: deadline})
         self.assertTrue(notices)
 
     def test_catchall_routes_doctor_input_and_while_running_blocks_generic_analysis(self):
@@ -252,7 +254,7 @@ class SessionTests(unittest.TestCase):
         fn(_message(101), _typed_payload=b"SAMPLEA 7 120")
         self.assertFalse(bot.sent)
         self.assertEqual(env["_portfolio_doctor_running"], set())
-        self.assertEqual(env["_portfolio_doctor_waiting"], {})
+        self.assertIn(101, env["_portfolio_doctor_waiting"])
         self.assertTrue(env["_portfolio_doctor_slots"].acquire(blocking=False))
         self.assertTrue(env["_portfolio_doctor_slots"].acquire(blocking=False))
         self.assertFalse(env["_portfolio_doctor_slots"].acquire(blocking=False))
