@@ -25,8 +25,8 @@ INDEXES = {
         "filename": "ind_niftymidcap100list.csv",
     },
     "aggressive": {
-        "name": "Nifty Smallcap 250", "cap": "Small Cap", "count": 250, "tolerance": 15,
-        "filename": "ind_niftysmallcap250list.csv",
+        "name": "Nifty Smallcap 100", "cap": "Small Cap", "count": 100, "tolerance": 5,
+        "filename": "ind_niftysmallcap100list.csv",
     },
 }
 _HOSTS = ("https://nsearchives.nseindia.com/content/indices/",
