@@ -549,7 +549,13 @@ def readiness_check(store, session=None, profiles=PROFILES):
                   v.get("membership_hash")==stats.get("membership_hash")]
         ledger_reviews=sum(v.get("fund_attempted") is True for v in matching)
         ledger_prices=sum(_fresh(v.get("technical"),day) for v in matching)
-        valid_ledger=(valid_size and len(evidence)==expected and
+        # During Smallcap 250 -> 100 cutover, old same-session rows may
+        # remain stored. They cannot count toward the current membership hash,
+        # but must not block a completely verified official Smallcap 100 audit.
+        count_ok=(len(evidence)==expected or (
+            profile=="aggressive" and INDEXES[profile]["count"]==100
+            and expected==100 and len(matching)==100))
+        valid_ledger=(valid_size and count_ok and
                       len(matching)==expected and
                       ledger_reviews==reviewed and
                       ledger_prices==fresh)
