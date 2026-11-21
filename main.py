@@ -2077,8 +2077,7 @@ def _deliver_buzz(chat_id, result):
 
 def run_buzz(chat_id, *, force_refresh=False):
     global _buzz_running
-    # Explicit owner-only test can request a real scan; normal bot requests
-    # still use the verified completed-session Neon snapshot.
+    # Normal requests can reuse a verified completed-session snapshot.
     cached = None if force_refresh else stocks_buzz.get_cached()
     if cached:
         _deliver_buzz(chat_id, cached)
@@ -2087,46 +2086,50 @@ def run_buzz(chat_id, *, force_refresh=False):
     with _buzz_lock:
         _buzz_waiters.add(chat_id)
         if _buzz_running:
-            safe_send(chat_id, "⏳ A scan is already running — you'll get the results here as soon as it finishes.")
             return
         _buzz_running = True
 
-    safe_send(chat_id, "🔥 <b>Stocks Buzz</b> — scanning the top 1000 NSE stocks for breakouts…\n"
-                       "⏱ First scan takes ~2-4 minutes; the next ones are instant (30-min cache).")
-    last_ping = [time.time()]
+    last_ping = time.monotonic()
 
     def _progress(done, total):
-        if time.time() - last_ping[0] > 40:
-            last_ping[0] = time.time()
-            with _buzz_lock:
-                targets = list(_buzz_waiters)
-            for cid in targets:
-                try:
-                    safe_send(cid, f"⏳ Stocks Buzz scan: downloaded {done}/{total} stocks…")
-                except Exception as exc:
-                    logger.warning("Buzz progress delivery chat=%s: %s", cid, type(exc).__name__)
-
-    try:
-        result = stocks_buzz.run_scan(progress_cb=_progress)
+        nonlocal last_ping
+        now = time.monotonic()
+        if now - last_ping <= 40:
+            return
+        last_ping = now
         with _buzz_lock:
+            targets = list(_buzz_waiters)
+        for cid in targets:
+            try:
+                safe_send(cid, f"⏳ Stocks Buzz scan: downloaded {done}/{total} stocks…")
+            except Exception as exc:
+                logger.warning("Buzz progress delivery chat=%s: %s", cid, type(exc).__name__)
+
+    result = None
+    try:
+        safe_send(chat_id, "🔥 <b>Stocks Buzz</b> — scanning NSE stocks for breakouts…\n"
+                           "Verified completed-session results can be reused for later requests.")
+        result = stocks_buzz.run_scan(progress_cb=_progress)
+    except Exception:
+        logger.exception("Stocks Buzz scan failed")
+
+    # Requests can join while Telegram sends the previous batch. Release the
+    # scan only when the queue is empty, in the same lock as the empty check.
+    while True:
+        with _buzz_lock:
+            if not _buzz_waiters:
+                _buzz_running = False
+                return
             targets = list(_buzz_waiters)
             _buzz_waiters.clear()
         for cid in targets:
             try:
-                _deliver_buzz(cid, result)
-            except Exception as e:
-                logger.error(f"Buzz deliver {cid}: {e}")
-    except Exception as e:
-        logger.error(f"Buzz err: {e}", exc_info=True)
-        with _buzz_lock:
-            targets = list(_buzz_waiters)
-            _buzz_waiters.clear()
-        for cid in targets:
-            safe_send(cid, f"❌ Stocks Buzz failed: {e}")
-    finally:
-        with _buzz_lock:
-            _buzz_running = False
-
+                if result is None:
+                    safe_send(cid, "❌ Stocks Buzz could not complete the scan. Please retry shortly.")
+                else:
+                    _deliver_buzz(cid, result)
+            except Exception:
+                logger.exception("Buzz result delivery failed chat=%s", cid)
 
 @bot.message_handler(commands=["buzz"])
 def cmd_buzz(m):
