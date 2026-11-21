@@ -1692,6 +1692,25 @@ def portfolio_builder_button(m):
               "Next you will choose risk and time frame with buttons. Type /cancel to stop.")
 
 
+@bot.message_handler(commands=["builder_v2"])
+def portfolio_builder_v2_preview(m):
+    from msk_ai_builder_telegram import preview_allowed
+
+    uid = m.chat.id
+    if not _builder_allowed(m) or not preview_allowed(uid):
+        return
+    with _portfolio_doctor_lock:
+        if uid in _portfolio_doctor_running:
+            safe_send(uid, "Another private report is already running.")
+            return
+        _portfolio_doctor_waiting.pop(uid, None)
+        _builder_form[uid] = {"mode": "v2_preview", "step": "amount",
+                              "until": time.monotonic() + 180}
+    state.clear(uid)
+    safe_send(uid, "Portfolio Builder V2 preview — Step 1/3\n"
+                   "Enter capital in rupees (1 to 1 crore). This preview uses fictional companies.")
+
+
 def portfolio_builder_option(call, value):
     uid = getattr(getattr(call, "from_user", None), "id", None)
     chat = getattr(getattr(call, "message", None), "chat", None)
@@ -1707,16 +1726,22 @@ def portfolio_builder_option(call, value):
             entry.update(risk=option, step="horizon", until=time.monotonic() + 180)
             next_step = "horizon"
         elif stage == "horizon" and entry["step"] == "horizon" and option in ("6", "18", "36", "60"):
-            entry.update(horizon=option, step="stocks", until=time.monotonic() + 180)
-            next_step = "stocks"
+            if entry.get("mode") == "v2_preview":
+                next_step = "v2_preview"
+            else:
+                entry.update(horizon=option, step="stocks", until=time.monotonic() + 180)
+                next_step = "stocks"
         else:
             next_step = "invalid"
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-    if next_step == "horizon":
-        safe_send(uid, "Step 3/5 — Select time frame:",
+    if next_step == "v2_preview":
+        send_builder_v2_preview(uid, entry, option)
+    elif next_step == "horizon":
+        steps = 3 if entry.get("mode") == "v2_preview" else 5
+        safe_send(uid, f"Step 3/{steps} — Select time frame:",
                   reply_markup=_builder_options("horizon", [
                       ("6 months", "6"), ("18 months", "18"),
                       ("36 months", "36"), ("60 months", "60")]))
@@ -1726,6 +1751,45 @@ def portfolio_builder_option(call, value):
                   "Total percentages cannot exceed 100%. Stocks are NOT selected by AI.")
     else:
         safe_send(uid, "Selection expired or not valid. Tap Portfolio Builder to restart.")
+
+
+def send_builder_v2_preview(uid, entry, horizon):
+    from msk_ai_builder_telegram import deliver_preview, preview_allowed
+
+    if not preview_allowed(uid):
+        return
+    with _portfolio_doctor_lock:
+        if _builder_form.get(uid) is not entry or entry["until"] <= time.monotonic():
+            notice = "Preview expired. Use /builder_v2 to restart."
+        elif uid in _portfolio_doctor_running or not _portfolio_doctor_slots.acquire(blocking=False):
+            notice = "Portfolio Builder is busy. Tap your chosen horizon again shortly."
+        else:
+            notice = None
+            _builder_form.pop(uid)
+            _portfolio_doctor_running.add(uid)
+    if notice:
+        safe_send(uid, notice)
+        return
+
+    def release():
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_running.discard(uid)
+        _portfolio_doctor_slots.release()
+
+    def run():
+        try:
+            deliver_preview(bot, uid, int(entry["amount"]), entry["risk"], int(horizon))
+        except Exception as exc:
+            logger.warning("MSK_BUILDER_V2_PREVIEW_ERROR kind=%s", type(exc).__name__)
+            safe_send(uid, "The preview could not be delivered. Use /builder_v2 to try again.")
+        finally:
+            release()
+
+    try:
+        executor.submit(run)
+    except Exception:
+        release()
+        safe_send(uid, "The preview could not start. Use /builder_v2 to try again.")
 
 
 def portfolio_builder_form_text(m, text):
@@ -1749,11 +1813,16 @@ def portfolio_builder_form_text(m, text):
     step = entry["step"]
     if step == "amount":
         amount = text.strip().replace(",", "")
-        if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= 1000000000000:
-            safe_send(uid, "Enter a valid rupee amount, like 1000000.")
+        preview = entry.get("mode") == "v2_preview"
+        maximum = 10_000_000 if preview else 1_000_000_000_000
+        if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= maximum:
+            message = "Enter capital between Rs 1 and Rs 1 crore." if preview else "Enter a valid rupee amount, like 1000000."
+            safe_send(uid, message)
             return True
         entry.update(amount=amount, step="risk", until=time.monotonic() + 180)
-        safe_send(uid, "Step 2/5 — Tap your risk preference (not an AI risk assessment):",
+        prompt = ("Step 2/3 — Select your risk preference:" if preview else
+                  "Step 2/5 — Tap your risk preference (not an AI risk assessment):")
+        safe_send(uid, prompt,
                   reply_markup=_builder_options("risk", [
                       ("Low", "low"), ("Mid", "medium"), ("High", "high")]))
         return True
