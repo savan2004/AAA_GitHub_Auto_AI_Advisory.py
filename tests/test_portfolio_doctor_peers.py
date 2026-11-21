@@ -75,9 +75,12 @@ class Nifty500ResearchTests(unittest.TestCase):
         self.assertEqual([r["symbol"] for r in result["candidates"]], ["NTPC", "JSWENERGY"])
         self.assertNotIn("SJVN", checked)
         self.assertNotIn("POWERGRID", [r["symbol"] for r in result["candidates"]])
-        self.assertEqual({r["symbol"] for r in result["comparisons"]},
-                         {"NTPC", "JSWENERGY"})
-        self.assertTrue(all(r["date"] == "2026-11-17" for r in result["comparisons"]))
+        self.assertEqual(result["comparisons"], [])
+        for candidate in result["candidates"]:
+            self.assertEqual(candidate["date"], "2026-11-17")
+            self.assertEqual(len(candidate["return_window"]), 21)
+            self.assertEqual(candidate["return_window"][-1], candidate["date"])
+            self.assertIsNotNone(candidate["return20"])
 
     def test_no_index_membership_means_no_fabricated_candidates_or_fetch(self):
         def prohibited(*a, **kw):
