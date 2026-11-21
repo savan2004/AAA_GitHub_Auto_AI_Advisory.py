@@ -150,7 +150,7 @@ class LiveEvidenceGate(unittest.TestCase):
     def test_smallcap_owner_text_logged_only_in_its_acceptance(self):
         from unittest.mock import patch
         from msk_live_acceptance import _PROBE, capture_telegram_ack
-        text = "📊 SMALL CAP | Nifty Smallcap 250\\n247/247 reviewed, no BUY"
+        text = "📊 SMALL CAP | Nifty Smallcap 100\\n100/100 reviewed, no BUY"
         for action, approved in (("SmallCapTop5", True),
                                  ("MidCapTop5", False), ("Portfolio", False)):
             probe = {"action": action, "receipts": [], "files": {}, "closed": False}
