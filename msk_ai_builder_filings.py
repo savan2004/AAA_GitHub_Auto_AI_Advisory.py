@@ -166,6 +166,10 @@ def extract_quarter(document, member, *, expected_end, now):
     if len(candidates)!=1:
         raise EvidenceError("FILING_FINANCIAL_LAYOUT")
     rows=candidates[0]
+    headers=[row for row in rows if len(row)>=3 and any(_label(c)=="particulars" for c in row[:2])]
+    if (len(headers)!=1 or _label(headers[0][-2])!="3 months/ 6 months ended (dd-mm-yyyy)"
+        or _label(headers[0][-1])!="year to date figures for current period ended (dd-mm-yyyy)"):
+        raise EvidenceError("FILING_COLUMN_ORDER_UNSUPPORTED")
     def quarter(key):
         return _one(rows,key,columns=2)[0]
     start=_date(quarter("Date of start of reporting period"))
