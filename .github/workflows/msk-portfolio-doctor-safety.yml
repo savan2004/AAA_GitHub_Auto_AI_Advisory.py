@@ -5,6 +5,8 @@ on:
     paths:
       - 'main.py'
       - 'portfolio_doctor_live.py'
+      - 'portfolio_doctor_incomplete.py'
+      - 'tests/test_portfolio_doctor_incomplete.py'
       - 'portfolio_audit_report.py'
       - 'portfolio_audit_bridge.py'
       - 'tests/test_portfolio_audit_canary.py'
@@ -50,6 +52,10 @@ jobs:
         run: python -m py_compile portfolio_doctor_live.py portfolio_doctor_input.py portfolio_doctor_calculations.py portfolio_doctor_report.py portfolio_doctor_visual.py portfolio_doctor_peers.py portfolio_doctor_bhavcopy.py main.py portfolio_doctor_diagnostics.py portfolio_doctor_visual.py portfolio_doctor_risk_history.py portfolio_doctor_research_links.py portfolio_doctor_company_research.py portfolio_audit_report.py portfolio_audit_bridge.py
       - name: Test stateless private path (no market API or Telegram sends)
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_safety.py' -v
+      - name: Test incomplete private diagnostics and full-report fail-closed gate
+        run: |
+          python -m py_compile portfolio_doctor_incomplete.py tests/test_portfolio_doctor_incomplete.py
+          python -m unittest discover -s tests -p 'test_portfolio_doctor_incomplete.py' -v
       - name: Test official exchange CSV and prior-day overlap
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_bhavcopy.py' -v
       - name: Test stale primary-provider recovery without synthetic prices
