@@ -83,8 +83,8 @@ class IncompletePrivateDoctorTests(unittest.TestCase):
         data = encode_incomplete_diagnostic({"SAMPLEB": "NO_PRICES"})
         child = subprocess.CompletedProcess(
             args=[], returncode=1, stdout=data,
-            stderr=b"MSK_DOCTOR_CODE=NO_PRICES\\n")
-        upload = b"SAMPLEA,1,100\\nSAMPLEB,2,200"
+            stderr=b"MSK_DOCTOR_CODE=NO_PRICES\n")
+        upload = b"SAMPLEA,1,100\nSAMPLEB,2,200"
         with patch.object(doctor.subprocess, "run", return_value=child):
             with self.assertRaises(doctor.PortfolioDoctorError) as err:
                 doctor.run_isolated_memory("private.csv", upload)
@@ -95,8 +95,8 @@ class IncompletePrivateDoctorTests(unittest.TestCase):
         data = encode_incomplete_diagnostic({"SAMPLEC": "NO_PRICES"})
         child = subprocess.CompletedProcess(
             args=[], returncode=1, stdout=data,
-            stderr=b"MSK_DOCTOR_CODE=NO_PRICES\\n")
-        upload = b"SAMPLEA,1,100\\nSAMPLEB,2,200"
+            stderr=b"MSK_DOCTOR_CODE=NO_PRICES\n")
+        upload = b"SAMPLEA,1,100\nSAMPLEB,2,200"
         with patch.object(doctor.subprocess, "run", return_value=child):
             with self.assertRaises(doctor.PortfolioDoctorError) as err:
                 doctor.run_isolated_memory("private.csv", upload)
