@@ -34,6 +34,17 @@ CREATE TABLE IF NOT EXISTS portfolio_cutover (
     initial_position_count INTEGER NOT NULL CHECK (initial_position_count >= 0)
 )
 """
+_PORTFOLIO_COMMAND_SCHEMA = """
+CREATE TABLE IF NOT EXISTS portfolio_message_operations (
+    uid BIGINT NOT NULL CHECK (uid > 0),
+    message_id BIGINT NOT NULL CHECK (message_id > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('buy','sell')),
+    request_sha256 CHAR(64) NOT NULL,
+    changed BOOLEAN NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(uid, message_id)
+)
+"""
 _SYMBOL = re.compile(r"[A-Za-z0-9&._-]{1,50}\Z")
 _MAX_UID = 9223372036854775807
 _MAX_NUM = Decimal("9999999999999999.99999999")
@@ -73,6 +84,7 @@ def _create_schema(conn):
     conn.execute(_ACCOUNTS_SCHEMA)
     conn.execute(_HOLDINGS_SCHEMA)
     conn.execute(_CUTOVER_SCHEMA)
+    conn.execute(_PORTFOLIO_COMMAND_SCHEMA)
 
 
 def _uid(value):
@@ -101,6 +113,19 @@ def _amount(value, *, positive):
     return result
 
 
+
+def _telegram_message_id(message_id):
+    if type(message_id) is not int or not 1 <= message_id <= _MAX_UID:
+        raise ValueError("A positive Telegram message ID is required")
+    return message_id
+
+
+def _operation_digest(kind, uid, message_id, sym, quantity="", price=""):
+    # A digest of a normalized command, not raw user messages or credentials.
+    raw = f"{kind}|{uid}|{message_id}|{sym}|{quantity}|{price}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 class PostgresPortfolioStore:
     """Compatible with legacy PortfolioManager.get/add/remove signatures."""
 
@@ -127,7 +152,7 @@ class PostgresPortfolioStore:
         return {symbol: {"qty": float(qty), "avg": float(avg)}
                 for symbol, qty, avg in rows}
 
-    def add(self, uid, sym, qty, price):
+    def add(self, uid, sym, qty, price, *, telegram_message_id=None):
         """Atomic 10-position maximum for real PostgreSQL concurrent writers.
 
         The advisory transaction lock serializes all buys for a user before
@@ -148,6 +173,18 @@ class PostgresPortfolioStore:
             # uid-based transaction-scoped lock prevents 2 workers from
             # both observing 9 holdings and inserting the 10th/11th.
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (uid,))
+            message_id = (_telegram_message_id(telegram_message_id)
+                          if telegram_message_id is not None else None)
+            if message_id is not None:
+                digest = _operation_digest("buy", uid, message_id, sym, quantity, average)
+                row = conn.execute(
+                    """SELECT kind, request_sha256 FROM portfolio_message_operations
+                       WHERE uid=%s AND message_id=%s""", (uid, message_id)
+                ).fetchone()
+                if row is not None:
+                    if row != ("buy", digest):
+                        raise PortfolioStorageError("Conflicting Telegram command identity")
+                    return {"applied": False, "duplicate": True}
             current = conn.execute(
                 "SELECT qty FROM holdings WHERE uid=%s AND symbol=%s",
                 (uid, sym)
@@ -175,15 +212,46 @@ class PostgresPortfolioStore:
                        qty = holdings.qty + EXCLUDED.qty""",
                 (uid, sym, quantity, average),
             )
+            if message_id is not None:
+                conn.execute(
+                    """INSERT INTO portfolio_message_operations
+                       (uid, message_id, kind, request_sha256, changed)
+                       VALUES (%s,%s,'buy',%s,TRUE)""",
+                    (uid, message_id, digest),
+                )
+                return {"applied": True, "duplicate": False}
 
-    def remove(self, uid, sym):
+    def remove(self, uid, sym, *, telegram_message_id=None):
         uid, sym = _uid(uid), _symbol(sym)
+        message_id = (_telegram_message_id(telegram_message_id)
+                      if telegram_message_id is not None else None)
         with self._connector(self._dsn) as conn:
+            if message_id is not None:
+                # Serialize messages for the same user with the buy path.
+                conn.execute("SELECT pg_advisory_xact_lock(%s)", (uid,))
+                digest = _operation_digest("sell", uid, message_id, sym)
+                row = conn.execute(
+                    """SELECT kind, request_sha256, changed
+                       FROM portfolio_message_operations
+                       WHERE uid=%s AND message_id=%s""", (uid, message_id)
+                ).fetchone()
+                if row is not None:
+                    if row[0] != "sell" or row[1] != digest:
+                        raise PortfolioStorageError("Conflicting Telegram command identity")
+                    return {"removed": bool(row[2]), "duplicate": True}
             result = conn.execute(
                 "DELETE FROM holdings WHERE uid = %s AND symbol = %s", (uid, sym)
             )
-            return result.rowcount > 0
-
+            removed = result.rowcount > 0
+            if message_id is not None:
+                conn.execute(
+                    """INSERT INTO portfolio_message_operations
+                       (uid, message_id, kind, request_sha256, changed)
+                       VALUES (%s,%s,'sell',%s,%s)""",
+                    (uid, message_id, digest, removed),
+                )
+                return {"removed": removed, "duplicate": False}
+            return removed
 
 def _holdings_match_snapshot(conn, rows):
     """Verify all imported positions; an identical SHA alone is not a restore proof.
