@@ -87,6 +87,10 @@ def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=Non
         if symbol not in by_symbol:
             decisions[symbol]="removed: absent from current official index roster"
             continue
+        if by_symbol[symbol].series!="EQ":
+            if symbol in incumbent_set:
+                decisions[symbol]="removed: exchange series outside ordinary equity research scope"
+            continue
         if symbol not in closes:
             failures[symbol]="EOD_MISSING"
             continue
