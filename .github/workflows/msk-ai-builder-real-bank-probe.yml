@@ -1,0 +1,78 @@
+name: MSK Builder real research bank staging probe
+on:
+  pull_request:
+    paths:
+      - 'msk_ai_builder_weekly*.py'
+      - 'msk_ai_builder_bank.py'
+      - 'msk_ai_builder_evidence.py'
+      - '.github/workflows/msk-ai-builder-real-bank-probe.yml'
+permissions:
+  contents: read
+jobs:
+  real-bank:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: builder_test
+          POSTGRES_PASSWORD: local_ci_only
+          POSTGRES_DB: builder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U builder_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests==2.32.3 'psycopg[binary]>=3.2,<3.4'
+      - name: Actual public source ingestion and database readback
+        run: |
+          python -u - <<'PY'
+          from collections import Counter
+          import json
+          import psycopg
+          from msk_ai_builder_bank import WeeklyResearchBank,BankError
+          from msk_ai_builder_weekly import stage_week
+          from msk_ai_builder_evidence import collect_secondary,EvidenceError
+          # Disposable service only. Never uses a real database URL or bot token.
+          def connect(_):
+              return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
+          bank=WeeklyResearchBank("postgresql://test@localhost/test?sslmode=require",connector=connect)
+          def collect(symbol,timeout):
+              try:
+                  evidence=collect_secondary(symbol,timeout=timeout)
+                  print("SECONDARY_OK",symbol,evidence.scope,len(evidence.annual),len(evidence.quarterly),flush=True)
+                  return evidence
+              except EvidenceError as exc:
+                  print("SECONDARY_REJECTED",symbol,str(exc),flush=True)
+                  raise
+          result,version=stage_week(bank,evidence_provider=collect,max_attempts=40,deadline_seconds=300)
+          summary={"universe":result.universe_size,"close_coverage":result.close_coverage,
+                   "attempted":len(result.attempted),"scored":len(result.scored),
+                   "selected":len(result.companies),"failure_counts":dict(Counter(result.failures.values())),
+                   "status":result.status,"version":version,"publication_status":"WITHHELD"}
+          print("REAL_BANK_RESULT",json.dumps(summary,sort_keys=True),flush=True)
+          if version:
+              got,stored=bank.read_staging()
+              assert got==version and len(stored["companies"])==len(result.companies)
+              assert stored["publication_status"]=="WITHHELD"
+              assert all(x["evidence_status"]=="SECONDARY_ONLY" for x in stored["companies"])
+              print("DATABASE_READBACK",got,len(stored["companies"]),flush=True)
+          else:
+              raise RuntimeError("NO_REAL_SECONDARY_SNAPSHOT")
+          try:
+              bank.read_for_customer()
+          except BankError as exc:
+              assert str(exc)=="PRODUCTION_PUBLICATION_DISABLED"
+              print("CUSTOMER_PUBLICATION_WITHHELD")
+          else:
+              raise AssertionError("Unapproved customer publication")
+          assert len(result.companies)==20,"Fewer than 20 preliminary qualifiers; do not force selection"
+          PY
