@@ -1697,7 +1697,11 @@ def portfolio_builder_v2_preview(m):
     from msk_ai_builder_telegram import preview_allowed
 
     uid = m.chat.id
-    if not _builder_allowed(m) or not preview_allowed(uid):
+    if not _builder_allowed(m):
+        safe_send(uid, "Portfolio Builder V2 is available in private chat.")
+        return
+    if not preview_allowed(uid):
+        safe_send(uid, "Automatic stock selection is not available yet. Portfolio Builder V2 is still in testing.")
         return
     with _portfolio_doctor_lock:
         if uid in _portfolio_doctor_running:
