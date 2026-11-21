@@ -49,7 +49,7 @@ def preliminary_score(e):
     return round(points,2)
 
 def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=None,
-                max_attempts=40,deadline_seconds=300,clock=time.monotonic):
+                max_attempts=40,deadline_seconds=300,clock=time.monotonic,utc_clock=None):
     """Review incumbents first; don't drop one due to a transient fetch failure.
 
     A bounded candidate batch is never reported as a full 500-company analysis.
@@ -102,7 +102,8 @@ def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=Non
             item=StagedCompany(c.member,c.sector,c.name,e,p.day,p.price,p.source)
             # Reuse the bank contract for freshness and source validation now;
             # don't wait until a complete refresh to discover an invalid row.
-            encode_snapshot([item],reviewed_at=now,close_date=close_date,reviews={},now=now)
+            checked_at=utc_clock() if utc_clock else now
+            encode_snapshot([item],reviewed_at=checked_at,close_date=close_date,reviews={},now=checked_at)
             scored.append((symbol,score))
             if score>=65:
                 candidates.append((score,item))
@@ -137,25 +138,32 @@ def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=Non
 def stage_week(bank,*,now=None,roster_provider=fetch_roster,close_provider=fetch_closes,
                evidence_provider=None,max_attempts=40,deadline_seconds=300):
     """Operator entry point; no Telegram, no customer publication, no auto scheduler."""
-    now=now or datetime.now(timezone.utc)
+    utc_clock=(lambda: datetime.now(timezone.utc)) if now is None else (lambda: now)
+    now=utc_clock()
     if now.utcoffset() is None:
         raise BankError("TIMEZONE_REQUIRED")
     from portfolio_doctor_live import expected_doctor_session
     close_date=expected_doctor_session(now)
     # The calendar helper explicitly refuses unreviewed years.
     try:
-        version,old=bank.read_staging(now=now)
+        version,old=bank.read_for_review(now=now)
     except BankError as exc:
         if str(exc)!="BANK_EMPTY":
             raise
         version,old=None,{"companies":[]}
     previous=[x["symbol"] for x in old["companies"]]
     roster=roster_provider()
+    old_ids={x['symbol']:x['isin'] for x in old['companies']}
+    if any(c.member.symbol in old_ids and c.member.isin!=old_ids[c.member.symbol] for c in roster):
+        raise BankError('INCUMBENT_IDENTITY_CHANGED')
     closes=close_provider(close_date,roster)
     result=plan_review(roster,closes,previous=previous,close_date=close_date,now=now,
-                       evidence_provider=evidence_provider,max_attempts=max_attempts,deadline_seconds=deadline_seconds)
+                       evidence_provider=evidence_provider,max_attempts=max_attempts,deadline_seconds=deadline_seconds,utc_clock=utc_clock)
     if result.status!="INTERNAL_SECONDARY_STAGING":
         return result,None
-    new_version=bank.replace(result.companies,reviewed_at=now,close_date=close_date,
-                             reviews=result.reviews,expected_version=version,now=now)
+    finished=utc_clock()
+    if expected_doctor_session(finished)!=close_date:
+        raise BankError('SESSION_CHANGED_DURING_REVIEW')
+    new_version=bank.replace(result.companies,reviewed_at=finished,close_date=close_date,
+                             reviews=result.reviews,expected_version=version,now=finished)
     return result,new_version
