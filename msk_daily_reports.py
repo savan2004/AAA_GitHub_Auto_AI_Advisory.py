@@ -18,7 +18,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 NAMES = {
     "conservative": ("LARGE CAP", "Nifty 100", 8.0),
     "moderate": ("MID CAP", "Nifty Midcap 150", 11.0),
-    "aggressive": ("SMALL CAP", "Nifty Smallcap 250", 15.0),
+    "aggressive": ("SMALL CAP", "Nifty Smallcap 100", 12.0),
 }
 WEIGHTS = (0.30, 0.25, 0.20, 0.15, 0.10)
 VERDICT_FIVE = "SCREENING COMPLETE — 5 RESEARCH CANDIDATES"
