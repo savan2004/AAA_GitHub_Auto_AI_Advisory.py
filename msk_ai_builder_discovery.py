@@ -7,8 +7,8 @@ from msk_ai_builder_evidence import EvidenceError
 from msk_ai_builder_primary import SYMBOL
 from msk_ai_builder_filings import check_url
 
-ENDPOINT="https://www.nseindia.com/api/integrated-filing-results"
-PAGE="https://www.nseindia.com/companies-listing/corporate-integrated-filing"
+ENDPOINT="https://www.nseindia.in/api/integrated-filing-results"
+PAGE="https://www.nseindia.in/companies-listing/corporate-integrated-filing"
 IST=timezone(timedelta(hours=5,minutes=30))
 
 @dataclass(frozen=True)
@@ -77,13 +77,13 @@ def fetch_listing(symbol,period_end,*,session=None):
         # Ordinary public session, no bypass, credentials or hidden retries.
         with session.get(PAGE,headers={"User-Agent":"Mozilla/5.0"},timeout=(4,8),allow_redirects=False) as warm:
             if warm.status_code!=200 or warm.url!=PAGE:
-                raise EvidenceError("FILING_METADATA_SESSION")
+                raise EvidenceError("FILING_METADATA_SESSION_HTTP_"+str(warm.status_code))
         params={"index":"equities","symbol":symbol,"period_ended":period_end.strftime("%d-%b-%Y"),
                 "type":"Integrated Filing- Financials","page":1,"size":20}
         with session.get(ENDPOINT,params=params,headers=headers,timeout=(4,10),allow_redirects=False,stream=True) as response:
             parsed=urlsplit(response.url)
-            if response.status_code!=200 or parsed.scheme!="https" or parsed.netloc!="www.nseindia.com" or parsed.path!="/api/integrated-filing-results":
-                raise EvidenceError("FILING_METADATA_HTTP")
+            if response.status_code!=200 or parsed.scheme!="https" or parsed.netloc!="www.nseindia.in" or parsed.path!="/api/integrated-filing-results":
+                raise EvidenceError("FILING_METADATA_HTTP_"+str(response.status_code))
             raw=bytearray()
             for chunk in response.iter_content(chunk_size=16384):
                 raw.extend(chunk)
