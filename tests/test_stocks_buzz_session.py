@@ -164,6 +164,15 @@ class SessionSafety(unittest.TestCase):
         old_scan = dict(scan, breakouts=[dict(row, ext_pct=11., sym="OVER")],
                         extended=2)
         self.assertIn("3 extended", ns["format_buzz"](old_scan)[0])
+        # One missed completed NSE session must suppress old trade-ready
+        # prices and targets; informational research remains visible.
+        ns["_last_completed_session"] = lambda now=None: date(2026, 11, 16)
+        previous = ns["format_buzz"](scan)
+        previous_text = "\\n".join(previous)
+        self.assertIn("DATA STATUS: <b>STALE</b>", previous[0])
+        self.assertIn("No trade-ready calls on stale data", previous_text)
+        self.assertNotIn("Reference Entry", previous_text)
+        self.assertNotIn("T1 ₹", previous_text)
         ns["_last_completed_session"] = lambda now=None: date(2026, 11, 18)
         stale = ns["format_buzz"](scan)
         self.assertIn("DATA STATUS: <b>STALE</b>", stale[0])
