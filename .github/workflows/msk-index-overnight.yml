@@ -267,3 +267,19 @@ jobs:
         run: pip install 'psycopg[binary]>=3.2,<3.4' requests
       - name: Finalize strict full-index reports and missing-data ledger
         run: python -m overnight_index_reports finalize --profile '${{ matrix.profile }}'
+
+  morning-import-smoke:
+    # Reproduce the scheduled readiness imports using ONLY its installed
+    # dependencies, without accessing the protected Neon research ledger.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install exact morning readiness dependency set
+        run: python -m pip install 'psycopg[binary]>=3.2,<3.4' 'requests>=2.32,<3'
+      - name: Assert module loads with only morning dependencies
+        run: python -m overnight_index_reports --help
