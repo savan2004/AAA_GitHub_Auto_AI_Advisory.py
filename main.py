@@ -1812,9 +1812,15 @@ def portfolio_builder_form_text(m, text):
     if step in ("risk", "horizon"):
         safe_send(uid, "Please tap a choice on the previous message.")
         return True
-    if step == "stocks":
+    rows = [line.strip() for line in text.splitlines() if line.strip()]
+    # A holding row has two fields. Limit entries have three numeric fields.
+    # Let users correct stocks directly after a failed limit check.
+    editing_stocks = step == "limits" and bool(rows) and all(
+        re.fullmatch(r"[A-Za-z0-9&.-]{2,23}\s+[0-9]+(?:\.[0-9]+)?", row)
+        for row in rows
+    )
+    if step == "stocks" or editing_stocks:
         from portfolio_doctor_builder_private import parse_builder_request, BuilderError
-        rows = [line.strip() for line in text.splitlines() if line.strip()]
         try:
             if not 1 <= len(rows) <= 5:
                 raise BuilderError()
@@ -1831,7 +1837,7 @@ def portfolio_builder_form_text(m, text):
         safe_send(uid, "Step 5/5 — Set your limits as three numbers:\n"
                   "Minimum cash (₹), max per stock (%), max per sector (%).\n"
                   "Example: <code>20000 35 45</code>\n"
-                  "Type back to edit your stocks or /cancel to stop.")
+                  "Paste revised stocks here or type back to edit. Type /cancel to stop.")
         return True
     if step == "limits":
         if text.casefold() == "back":
@@ -1909,7 +1915,7 @@ def portfolio_doctor_builder_command(m, payload_override=None, *, form_entry=Non
             _portfolio_doctor_running.discard(uid)
             _portfolio_doctor_slots.release()
 
-    retry_hint = (" Resend your three limits or type back to edit stocks."
+    retry_hint = (" Resend your three limits or paste revised stocks."
                   if form_entry is not None else " Review and resend your one-message request.")
 
     def _run():
