@@ -134,9 +134,9 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
         pages = PdfReader(io.BytesIO(raw), strict=True).pages
         self.assertTrue(1 <= len(pages) <= 3)
         text = "\n".join(p.extract_text() or "" for p in pages)
-        for term in ("PORTFOLIO DOCTOR", "Rs 1,000.00", "Cash after rounding",
-                     "100.0000%", "SAMPLEA", "SAMPLEB", "last close",
-                     "no earlier holdings", "No orders", "Telegram"):
+        for term in ("PORTFOLIO BUILDER", "Rs 1,000.00", "Cash left",
+                     "Target / actual", "SAMPLEA", "SAMPLEB", "completed close",
+                     "sector exposure vs. cap", "cash minimum", "No automatic orders"):
             self.assertIn(term.lower(), text.lower())
 
     def test_isolated_parent_is_stdin_stdout_only(self):
@@ -169,7 +169,9 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
         node = copy.deepcopy(node)
         node.decorator_list = []
         class FakeBot:
-            def send_document(self, uid, handle, caption):
+            def send_document(self, uid, handle, caption, *, protect_content):
+                if not protect_content:
+                    raise AssertionError("private PDF must be protected")
                 sent.append((uid, handle.read()))
                 return SimpleNamespace(message_id=12345,
                                        document=SimpleNamespace(file_id="telegram"))
