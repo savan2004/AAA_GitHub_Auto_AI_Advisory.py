@@ -46,9 +46,17 @@ class OfficialIndexMembershipTests(unittest.TestCase):
             self.assertEqual(len(res["symbols"]), 100)
             self.assertEqual(res["name"], "Nifty Midcap 100")
             self.assertIn("nsearchives.nseindia.com", get.call_args.args[0])
+            self.assertTrue(get.call_args.args[0].endswith("ind_niftymidcap100list.csv"))
             again = ic.get_index_universe("moderate")
             self.assertTrue(again["cached"])
             self.assertEqual(get.call_count, 1)
+
+    def test_old_midcap150_constituents_cannot_be_accepted_as_midcap100(self):
+        self.assertEqual(ic.INDEXES["moderate"]["count"], 100)
+        self.assertEqual(ic.INDEXES["moderate"]["filename"],
+                         "ind_niftymidcap100list.csv")
+        with self.assertRaisesRegex(ValueError, "count outside expected range"):
+            ic.parse_constituents(nse_csv(150), "moderate")
 
     def test_no_arbitrary_fallback_when_index_unavailable(self):
         with patch.object(ic, "_CACHE", {}), patch.object(ic.requests, "get", side_effect=ic.requests.RequestException):
