@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS portfolio_message_operations (
     kind TEXT NOT NULL CHECK (kind IN ('buy','sell')),
     request_sha256 CHAR(64) NOT NULL,
     changed BOOLEAN NOT NULL,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(uid, message_id)
 )
 """
