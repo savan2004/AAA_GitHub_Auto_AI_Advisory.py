@@ -138,7 +138,7 @@ def isolated_environment():
         "_portfolio_doctor_running": set(),
         "os": __import__("os"),
         "build_breadth": lambda: "Mock breadth snapshot (offline fixture)",
-        "build_intraday_trade_report": lambda: "Mock intraday: NSE CLOSED — NO TRADE",
+        "build_nifty200_report": lambda: "Mock intraday: NSE CLOSED — NO TRADE",
         "get_swing_trades": lambda mode: "Mock swing scan: " + mode,
         "build_portfolio_card": lambda uid: "Mock portfolio: no real holdings",
         "test_ai_providers": lambda: {"_status": "MOCK/OFFLINE"},
@@ -213,9 +213,10 @@ class MainMenuAcceptanceTests(unittest.TestCase):
         ns["intraday_btn"](SimpleNamespace(text="⚡ Intraday Trade",
             chat=SimpleNamespace(id=CHAT, type="private"),
             from_user=SimpleNamespace(id=SENDER)))
-        self.assertEqual(len(output), 1)
-        self.assertIn("NSE CLOSED", output[0][1])
-        self.assertIn("NO TRADE", output[0][1])
+        self.assertEqual(len(output), 2)
+        self.assertIn("Nifty 200", output[0][1])
+        self.assertIn("NSE CLOSED", output[1][1])
+        self.assertIn("NO TRADE", output[1][1])
         self.assertEqual(len([x for x in actual_menu_labels()
                               if x == "⚡ Intraday Trade"]), 1)
 

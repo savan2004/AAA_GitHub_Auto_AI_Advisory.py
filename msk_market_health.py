@@ -399,6 +399,8 @@ def format_market_health(breadth, factors, *, now=None):
     unchanged = _number(breadth.get("unchanged"))
     requested = _number(breadth.get("requested"))
     if (valid is None or valid <= 0 or fallen is None or rising is None
+            or any(not count.is_integer() for count in (valid, fallen, rising, unchanged, requested)
+                   if count is not None)
             or fallen < 0 or rising < 0 or fallen + rising > valid
             or (unchanged is not None and (unchanged < 0 or fallen + rising + unchanged != valid))
             or (requested is not None and requested < valid)

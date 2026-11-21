@@ -9,6 +9,7 @@ on:
       - msk_live_acceptance.py
       - tests/test_owner_acceptance_contract.py
       - tests/test_stocks_buzz_final_receipt.py
+      - tests/test_buzz_sector_delivery.py
       - .github/workflows/msk-owner-acceptance.yml
   workflow_dispatch:
 permissions:
@@ -25,3 +26,4 @@ jobs:
       - run: python -m py_compile main.py msk_live_acceptance.py
       - run: python -m unittest discover -s tests -p 'test_owner_acceptance_contract.py' -v
       - run: python -m unittest discover -s tests -p 'test_stocks_buzz_final_receipt.py' -v
+      - run: python -m unittest discover -s tests -p 'test_buzz_sector_delivery.py' -v

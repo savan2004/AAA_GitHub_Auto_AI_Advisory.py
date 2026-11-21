@@ -46,7 +46,7 @@ from ai_engine import (
     test_ai_providers,
 )
 from swing_trades import get_swing_trades
-from msk_intraday_trade import build_intraday_trade_report
+from msk_intraday_trade import build_nifty200_report
 from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
@@ -1001,7 +1001,7 @@ def cmd_menu(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIntraday Nifty/Bank Nifty: tap ⚡ Intraday Trade or <code>/intraday</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIntraday Nifty 200 stocks: tap ⚡ Intraday Trade or <code>/intraday</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>")
 
 
 def run_report(chat_id, query):
@@ -2057,9 +2057,10 @@ def intraday_btn(m):
         safe_send(m.chat.id, "⚠️ Intraday reports are available in private bot chat.")
         return
 
+    safe_send(m.chat.id, "Checking Nifty 200 stocks for intraday setups…")
     def _run(chat_id=m.chat.id):
         try:
-            report = build_intraday_trade_report()
+            report = build_nifty200_report()
             if not isinstance(report, str) or not report.strip():
                 raise ValueError("intraday_report_empty")
             safe_send(chat_id, report)
@@ -2108,7 +2109,10 @@ def _deliver_buzz(chat_id, result):
     kb = _buzz_keyboard(result)
     for i, m in enumerate(msgs):
         last = i == len(msgs) - 1
-        safe_send(chat_id, m, reply_markup=kb if (last and kb) else None)
+        if safe_send(chat_id, m, reply_markup=kb if (last and kb) else None) is None:
+            logger.warning("Stocks Buzz result delivery unconfirmed, part=%s", i + 1)
+            safe_send(chat_id, "⚠️ Stocks Buzz delivery was incomplete. Tap Stocks Buzz to retry.")
+            return
     if kb:
         safe_send(chat_id, "👆 Tap a stock for Technical / Fundamental / Chart / full PDF report.")
 
@@ -2216,12 +2220,12 @@ def run_sector_report(chat_id):
     global _sector_running
     with _sector_lock:
         _sector_waiters.add(chat_id)
-        if _sector_running:
-            safe_send(chat_id, "⏳ The sector report is already being built — you'll get it here as soon as it's ready.")
-            return
+        already_running = _sector_running
         _sector_running = True
+    if already_running:
+        safe_send(chat_id, "⏳ The sector report is already being built — you'll get it here as soon as it's ready.")
+        return
 
-    safe_send(chat_id, "🏭 Building the <b>Index &amp; Sectoral Update</b>… (~1-3 min: 15 indices + ~250 constituents)")
     last_ping = [time.time()]
 
     def _progress(done, total):
@@ -2230,8 +2234,16 @@ def run_sector_report(chat_id):
             safe_send(chat_id, f"⏳ Downloaded {done}/{total} series…")
 
     try:
+        safe_send(chat_id, "🏭 Building the <b>Index &amp; Sectoral Update</b>… (~1-3 min: 15 indices + ~250 constituents)")
         ok, result, summary = sector_report.generate_sector_report_pdf(_progress)
+    except Exception:
+        logger.exception("Sector report generation failed")
+        ok, result, summary = False, "Sector report unavailable. Please retry shortly.", []
+    while True:
         with _sector_lock:
+            if not _sector_waiters:
+                _sector_running = False
+                return
             targets = list(_sector_waiters)
             _sector_waiters.clear()
         for cid in targets:
@@ -2242,16 +2254,7 @@ def run_sector_report(chat_id):
                     safe_send(cid, f"❌ {result}")
             except Exception as e:
                 logger.error(f"Sector deliver {cid}: {e}")
-    except Exception as e:
-        logger.error(f"Sector report err: {e}", exc_info=True)
-        with _sector_lock:
-            targets = list(_sector_waiters)
-            _sector_waiters.clear()
-        for cid in targets:
-            safe_send(cid, f"❌ Sector report failed: {e}")
-    finally:
-        with _sector_lock:
-            _sector_running = False
+                safe_send(cid, "⚠️ Sector report delivery was not confirmed. Please retry shortly.")
 
 
 @bot.message_handler(commands=["sectors", "sector"])
