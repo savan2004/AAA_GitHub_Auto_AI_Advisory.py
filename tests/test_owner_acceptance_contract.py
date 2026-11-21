@@ -147,6 +147,20 @@ class LiveEvidenceGate(unittest.TestCase):
             finally:
                 _PROBE.reset(token)
 
+    def test_old_midcap150_report_is_not_accepted_as_midcap100(self):
+        from unittest.mock import patch
+        from msk_live_acceptance import _PROBE, capture_telegram_ack
+        probe={"action":"MidCapTop5","receipts":[],"files":{},"closed":False}
+        token=_PROBE.set(probe)
+        try:
+            with patch("msk_live_acceptance.LOG.info") as log:
+                capture_telegram_ack("text",14225,
+                    message_text="📊 MID CAP | Nifty Midcap 150\\n149/149 checked")
+                self.assertFalse(any("MIDCAP_RETURNED_TEXT" in call.args[0]
+                                     for call in log.call_args_list))
+        finally:
+            _PROBE.reset(token)
+
     def test_smallcap_owner_text_logged_only_in_its_acceptance(self):
         from unittest.mock import patch
         from msk_live_acceptance import _PROBE, capture_telegram_ack
