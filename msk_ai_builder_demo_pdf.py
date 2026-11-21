@@ -116,6 +116,8 @@ def demo_pdf(profile):
         finish()
     heading("Financial comparison","Synthetic values only")
     y=height-169
+    if not basket.positions:
+        y=line("No fictional candidate was allocated under this profile. There are no company ratios to compare.",y)
     for p in basket.positions:
         c=p.company
         y=line(f"{c.label} | ROE {c.roe:.1f}% | Peer value {c.relative_value:.2f}x | Drawdown {c.drawdown:.1f}% | Score {p.score}",y,10)-8
