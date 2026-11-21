@@ -60,7 +60,9 @@ from investment_screener import evaluate_candidate, format_shortlist
 from investment_scan_runner import run_investment_scan
 from index_top5 import request_index_top5
 from msk_daily_reports import parse_request as parse_daily_report_request, render_latest_profile
-from analysis_quality import inspect_history, format_snapshot
+from analysis_quality import (
+    BEES_ETFS, bees_etf_symbol, format_etf_profile, format_snapshot, inspect_history,
+)
 
 # ── Logging Setup (Render & Local Safe) ──────────────────────────────────────
 logging.basicConfig(
@@ -566,10 +568,13 @@ def build_technical_text(sym, cname=None):
     trend = "BULLISH" if ltp > ema20 > ema50 else "BEARISH" if ltp < ema20 < ema50 else "NEUTRAL"
     t_icon = "🔼" if trend == "BULLISH" else "🔽" if trend == "BEARISH" else "↔️"
 
-    n = min(252, len(close))
-    w52h = round(float(close.rolling(n).max().iloc[-1]), 2)
-    w52l = round(float(close.rolling(n).min().iloc[-1]), 2)
-    dist52 = round((ltp - w52h) / w52h * 100, 1) if w52h else None
+    closing_prices = [float(price) for price in close.dropna()]
+    range_line = "📏 Closing range unavailable"
+    if closing_prices and all(math.isfinite(price) and price > 0 for price in closing_prices):
+        high, low = max(closing_prices), min(closing_prices)
+        distance = 100 * (ltp / high - 1)
+        range_line = (f"📏 Closing range ({len(closing_prices)} candles): "
+                      f"₹{low:,.2f}–₹{high:,.2f}  ({distance:+.1f}% from closing peak)")
 
     name = cname or sym
     chg_icon = "🟢" if chg >= 0 else "🔴"
@@ -580,7 +585,7 @@ def build_technical_text(sym, cname=None):
         f"{chg_icon} Historical close change: <b>{chg:+.2f}%</b> vs prior candle",
         "━━━━━━━━━━━━━━━━━━━━",
         f"📐 EMA20: ₹{ema20:,.2f}  |  EMA50: ₹{ema50:,.2f}",
-        f"📏 52W H: ₹{w52h}  |  52W L: ₹{w52l}" + (f"  ({dist52:+.1f}% from peak)" if dist52 is not None else ""),
+        range_line,
         "━━━━━━━━━━━━━━━━━━━━",
         f"🔬 Trend: <b>{trend} {t_icon}</b>",
         f"📊 RSI: {rsi}  |  MACD: {'▲' if macd > 0 else '▼'} {macd}  |  ASI: {asi}",
@@ -870,6 +875,13 @@ def analysis_choice_keyboard(sym):
     """Inline menu shown after a stock is found — lets the user pick exactly
     what they want instead of receiving one long combined message."""
     kb = types.InlineKeyboardMarkup(row_width=2)
+    if sym in BEES_ETFS:
+        kb.add(
+            types.InlineKeyboardButton("📊 Technical", callback_data=f"tech|{sym}"),
+            types.InlineKeyboardButton("📈 Chart", callback_data=f"chart|{sym}"),
+        )
+        kb.add(types.InlineKeyboardButton("💼 ETF Profile", callback_data=f"fund|{sym}"))
+        return kb
     kb.add(
         types.InlineKeyboardButton("📊 Technical", callback_data=f"tech|{sym}"),
         types.InlineKeyboardButton("💰 Fundamental", callback_data=f"fund|{sym}"),
@@ -1141,26 +1153,46 @@ def cmd_report(m):
 # then offer Technical / Fundamental / Chart / Full Report as buttons so the
 # user picks exactly what they want.
 def send_symbol_menu(chat_id, query):
-    """No stock analysis choice until recent completed NSE-listed OHLC is checked."""
+    """Resolve the requested instrument before fetching completed NSE candles."""
+    request = str(query or "").strip().upper()
+    if request.startswith("BSE:") or request.endswith((".BO", ":BSE")):
+        safe_send(chat_id, "Analysis currently supports NSE instruments. Enter the NSE symbol if that is the listing you want.",
+                  reply_markup=main_keyboard())
+        return
+    if request in {"BEES", "BEES ETF", "ETF BEES"}:
+        safe_send(chat_id, "Which BeES ETF? Try NIFTYBEES, GOLDBEES, BANKBEES, JUNIORBEES or LIQUIDBEES.")
+        return
+    etf_symbol = bees_etf_symbol(query)
     try:
-        ticker, company = resolve_symbol(query)
+        if etf_symbol:
+            ticker, company = f"{etf_symbol}.NS", f"Nippon India ETF {BEES_ETFS[etf_symbol]}"
+        else:
+            ticker, company = resolve_symbol(query)
         if not ticker or not ticker.endswith(".NS"):
             safe_send(chat_id, "❌ NSE ticker not unambiguous. Enter its full NSE symbol (e.g. SBIN).",
                       reply_markup=main_keyboard())
             return
         sym = ticker[:-3]
         snapshot = inspect_history(get_hist(sym, "1y"))
+        if snapshot is None and etf_symbol:
+            safe_send(chat_id, format_etf_profile(etf_symbol) +
+                      "\n\n⚠️ Recent completed price history could not be verified.")
+            return
         if snapshot is None:
             safe_send(chat_id,
                       f"⚠️ <b>{html.escape(sym, quote=False)}</b>: recent completed price history "
                       "could not be verified. No recommendation issued. Check the symbol or retry later.",
                       reply_markup=main_keyboard())
             return
-        safe_send(chat_id, format_snapshot(sym, company, snapshot),
+        safe_send(chat_id, format_snapshot(sym, company, snapshot, is_etf=bool(etf_symbol)),
                   reply_markup=analysis_choice_keyboard(sym))
     except Exception as exc:
         logger.warning("Analysis symbol validation unavailable (%s)", type(exc).__name__)
-        safe_send(chat_id, "⚠️ Stock data verification unavailable. No unverified stock issued.",
+        if etf_symbol:
+            safe_send(chat_id, format_etf_profile(etf_symbol) +
+                      "\n\n⚠️ Recent completed price history could not be verified.")
+            return
+        safe_send(chat_id, "⚠️ Instrument price history could not be verified.",
                   reply_markup=main_keyboard())
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -1195,6 +1227,12 @@ def handle_analysis_callback(call):
         bot.answer_callback_query(call.id, text="Working on it…")
     except Exception:
         pass
+
+    if action in ("fund", "pdf"):
+        from analysis_quality import BEES_ETFS, format_etf_profile
+        if sym in BEES_ETFS:
+            safe_send(chat_id, format_etf_profile(sym))
+            return
 
     if action == "tech":
         def _run(cid=chat_id, s=sym):
@@ -1998,8 +2036,11 @@ def intraday_btn(m):
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Analysis")
 def analysis_btn(m):
+    if getattr(m.chat, "type", None) in ("group", "supergroup"):
+        safe_send(m.chat.id, "Open a private chat with MSK Bot to use the Analysis menu.")
+        return
     state.set(m.chat.id, "analysis")
-    safe_send(m.chat.id, "🔍 Type any stock name or symbol:")
+    safe_send(m.chat.id, "🔍 Enter an NSE stock or ETF name or ticker, e.g. SBIN or Nifty BeES.")
 
 
 @bot.message_handler(func=lambda m: m.text == "📄 Report")
@@ -2355,15 +2396,9 @@ def handle_text(m):
         return
 
     if state.get(uid) == "analysis":
-        safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
-
-        def _arun(chat_id=uid, q=text):
-            try:
-                send_symbol_menu(chat_id, q)
-            finally:
-                state.clear(chat_id)
-
-        executor.submit(_arun)
+        state.clear(uid)
+        safe_send(uid, f"🔍 Looking up <b>{html.escape(text)}</b>…")
+        executor.submit(send_symbol_menu, uid, text)
         return
 
     if state.get(uid) == "report":
@@ -2372,12 +2407,12 @@ def handle_text(m):
         executor.submit(run_report, uid, text)
         return
 
-    raw_up = text.upper().replace(".NS", "").replace(".BO", "")
+    raw_up = text.upper().removeprefix("NSE:").removeprefix("BSE:").removesuffix(".NS").removesuffix(".BO").removesuffix(":BSE")
     looks_ticker = 2 <= len(raw_up) <= 15 and all(c.isalnum() or c in "&-" for c in raw_up)
     looks_name = " " in text or len(raw_up) > 12
 
-    if looks_ticker or looks_name:
-        safe_send(uid, f"🔍 Looking up <b>{text}</b>…")
+    if looks_ticker or looks_name or bees_etf_symbol(text):
+        safe_send(uid, f"🔍 Looking up <b>{html.escape(text)}</b>…")
         executor.submit(send_symbol_menu, uid, text)
     else:
         if text.lower().strip("!.?") in {"hi", "hello", "hey", "hlo", "hii", "gm"}:
