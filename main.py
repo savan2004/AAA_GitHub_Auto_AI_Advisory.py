@@ -1679,7 +1679,12 @@ def portfolio_doctor_document(m, _typed_payload=None):
                 allow_retry = True
                 safe_send(uid, "Invalid holdings. Send up to 5 rows: Symbol Qty Buy Price. Resend a corrected file or paste your holdings.")
             elif exc.code in ("STALE_PRICES", "NO_PRICES"):
-                safe_send(uid, "Verified recent closing prices unavailable. No estimates or PDF issued. Please retry later.")
+                # A separate PRIVATE diagnostic may identify failed holdings.
+                # It never contains prices, P&L or partial portfolio totals.
+                from portfolio_doctor_incomplete import private_incomplete_message
+                detailed = private_incomplete_message(exc.incomplete)
+                safe_send(uid, detailed or
+                          "Verified recent closing prices unavailable. No estimates or PDF issued. Please retry later.")
             elif exc.code == "TIMEOUT":
                 safe_send(uid, "Portfolio Doctor timed out. No holdings were saved. Please retry later.")
             else:
