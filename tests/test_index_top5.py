@@ -50,6 +50,23 @@ class OfficialIndexMembershipTests(unittest.TestCase):
             self.assertTrue(again["cached"])
             self.assertEqual(get.call_count, 1)
 
+    def test_smallcap100_only_rejects_legacy_250_member_list(self):
+        self.assertEqual(ic.INDEXES["aggressive"]["count"], 100)
+        self.assertEqual(ic.INDEXES["aggressive"]["filename"],
+                         "ind_niftysmallcap100list.csv")
+        with self.assertRaisesRegex(ValueError, "count outside expected range"):
+            ic.parse_constituents(nse_csv(250), "aggressive")
+        response = Mock()
+        response.content = nse_csv(100)
+        response.raise_for_status.return_value = None
+        with patch.object(ic, "_CACHE", {}), patch.object(
+                ic.requests, "get", return_value=response) as get:
+            universe = ic.get_index_universe("aggressive")
+            self.assertEqual(len(universe["symbols"]), 100)
+            self.assertEqual(universe["name"], "Nifty Smallcap 100")
+            self.assertTrue(get.call_args.args[0].endswith(
+                "ind_niftysmallcap100list.csv"))
+
     def test_no_arbitrary_fallback_when_index_unavailable(self):
         with patch.object(ic, "_CACHE", {}), patch.object(ic.requests, "get", side_effect=ic.requests.RequestException):
             with self.assertRaises(RuntimeError):
