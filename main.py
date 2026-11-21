@@ -1392,6 +1392,14 @@ def cmd_buy(m):
         return
     if not _require_private_portfolio(m):
         return
+    postgres_mode = os.getenv("PORTFOLIO_BACKEND", "legacy_json").lower() == "postgres"
+    # Telegram message ID is the durable operation identity within this private chat.
+    # Legacy JSON commands retain the existing API and are NOT exactly-once.
+    telegram_message_id = getattr(m, "message_id", None) if postgres_mode else None
+    if postgres_mode and (type(telegram_message_id) is not int
+                          or not 0 < telegram_message_id <= 9223372036854775807):
+        safe_send(m.chat.id, "⚠️ Invalid Telegram message ID. No portfolio change was made. Send a new command.")
+        return
     import math
     import html
     parts = m.text.strip().split()
@@ -1410,10 +1418,27 @@ def cmd_buy(m):
     ticker, _ = resolve_symbol(parts[1])
     sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else parts[1].upper().replace(".NS", "")
     try:
-        portfolio.add(m.chat.id, sym, qty, price)
+        if postgres_mode:
+            result = portfolio.add(
+                m.chat.id, sym, qty, price,
+                telegram_message_id=telegram_message_id)
+            # A wrong/unexpected return contract must never be reported as success.
+            if (not isinstance(result, dict) or
+                    type(result.get("applied")) is not bool or
+                    type(result.get("duplicate")) is not bool or
+                    result["applied"] == result["duplicate"]):
+                raise RuntimeError("Portfolio buy outcome unverified")
+            if result["duplicate"]:
+                safe_send(m.chat.id, "ℹ️ This /buy message was already processed. No additional holding was added.")
+                return
+        else:
+            portfolio.add(m.chat.id, sym, qty, price)
     except (ValueError, RuntimeError, OSError):
         logger.exception("Portfolio buy was rejected or storage failed")
-        safe_send(m.chat.id, "⚠️ Holding NOT saved; please retry or contact support.")
+        if postgres_mode:
+            safe_send(m.chat.id, "⚠️ Portfolio buy outcome could not be verified. Do not resend the same command; contact support.")
+        else:
+            safe_send(m.chat.id, "⚠️ Holding NOT saved; please retry or contact support.")
         return
     try:
         stored = portfolio.get(m.chat.id)
@@ -1436,6 +1461,14 @@ def cmd_sell(m):
         return
     if not _require_private_portfolio(m):
         return
+    postgres_mode = os.getenv("PORTFOLIO_BACKEND", "legacy_json").lower() == "postgres"
+    # Telegram message ID is the durable operation identity within this private chat.
+    # Legacy JSON commands retain the existing API and are NOT exactly-once.
+    telegram_message_id = getattr(m, "message_id", None) if postgres_mode else None
+    if postgres_mode and (type(telegram_message_id) is not int
+                          or not 0 < telegram_message_id <= 9223372036854775807):
+        safe_send(m.chat.id, "⚠️ Invalid Telegram message ID. No portfolio change was made. Send a new command.")
+        return
     import html
     parts = m.text.strip().split()
     if len(parts) < 2:
@@ -1443,10 +1476,25 @@ def cmd_sell(m):
         return
     sym = " ".join(parts[1:]).upper().replace(".NS", "").replace(".BO", "")
     try:
-        removed = portfolio.remove(m.chat.id, sym)
+        if postgres_mode:
+            result = portfolio.remove(
+                m.chat.id, sym, telegram_message_id=telegram_message_id)
+            if (not isinstance(result, dict) or
+                    type(result.get("removed")) is not bool or
+                    type(result.get("duplicate")) is not bool):
+                raise RuntimeError("Portfolio sell outcome unverified")
+            if result["duplicate"]:
+                safe_send(m.chat.id, "ℹ️ This /sell message was already processed. No additional change was made.")
+                return
+            removed = result["removed"]
+        else:
+            removed = portfolio.remove(m.chat.id, sym)
     except (ValueError, RuntimeError, OSError):
         logger.exception("Portfolio sell was rejected or storage failed")
-        safe_send(m.chat.id, "⚠️ Holding NOT removed; storage unavailable.")
+        if postgres_mode:
+            safe_send(m.chat.id, "⚠️ Portfolio sell outcome could not be verified. Do not resend the same command; contact support.")
+        else:
+            safe_send(m.chat.id, "⚠️ Holding NOT removed; storage unavailable.")
         return
     if removed:
         try:
