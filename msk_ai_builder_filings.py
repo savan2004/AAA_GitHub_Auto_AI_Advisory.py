@@ -53,7 +53,7 @@ def check_url(url):
     if not isinstance(url,str):
         raise EvidenceError("FILING_URL_INVALID")
     u=urlsplit(url)
-    if u.scheme!="https" or u.netloc!="nsearchives.nseindia.com" or u.query or u.fragment or not PATH.fullmatch(u.path):
+    if u.scheme!="https" or u.netloc not in ("nsearchives.nseindia.com","nsearchives.nseindia.in") or u.query or u.fragment or not PATH.fullmatch(u.path):
         raise EvidenceError("FILING_URL_INVALID")
     return url
 
