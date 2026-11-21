@@ -37,6 +37,7 @@ jobs:
           python -u - <<'PY'
           from collections import Counter
           import json
+          from pathlib import Path
           import psycopg
           from msk_ai_builder_bank import WeeklyResearchBank,BankError
           from msk_ai_builder_weekly import stage_week
@@ -59,11 +60,17 @@ jobs:
                    "selected":len(result.companies),"failure_counts":dict(Counter(result.failures.values())),
                    "status":result.status,"version":version,"publication_status":"WITHHELD"}
           print("REAL_BANK_RESULT",json.dumps(summary,sort_keys=True),flush=True)
+          audit={"summary":summary,"attempted":list(result.attempted),"scores":dict(result.scored), "failures":result.failures,"reviews":result.reviews}
+          Path("weekly-research-audit.json").write_text(json.dumps(audit,sort_keys=True,indent=2),encoding="utf-8")
           if version:
               got,stored=bank.read_staging()
               assert got==version and len(stored["companies"])==len(result.companies)
               assert stored["publication_status"]=="WITHHELD"
               assert all(x["evidence_status"]=="SECONDARY_ONLY" for x in stored["companies"])
+              import hashlib
+              canonical=json.dumps(stored,sort_keys=True,separators=(",",":"),allow_nan=False,ensure_ascii=True)
+              assert hashlib.sha256(canonical.encode()).hexdigest()==got
+              Path("weekly-research-snapshot.json").write_text(canonical,encoding="utf-8")
               print("DATABASE_READBACK",got,len(stored["companies"]),flush=True)
           else:
               raise RuntimeError("NO_REAL_SECONDARY_SNAPSHOT")
@@ -76,3 +83,13 @@ jobs:
               raise AssertionError("Unapproved customer publication")
           assert len(result.companies)==20,"Fewer than 20 preliminary qualifiers; do not force selection"
           PY
+      - name: Preserve internal research evidence for independent review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-weekly-internal-audit
+          path: |
+            weekly-research-audit.json
+            weekly-research-snapshot.json
+          if-no-files-found: warn
+          retention-days: 7
