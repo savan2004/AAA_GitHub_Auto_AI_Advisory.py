@@ -21,7 +21,8 @@ def _clean_failures(failures, *, allowed_symbols=None):
     cleaned = {}
     for symbol, code in failures.items():
         if (not isinstance(symbol, str) or not _SYMBOL.fullmatch(symbol)
-                or code not in _CODES or (allowed is not None and symbol not in allowed)):
+                or not isinstance(code, str) or code not in _CODES
+                or (allowed is not None and symbol not in allowed)):
             return {}
         cleaned[symbol] = code
     return dict(sorted(cleaned.items()))
