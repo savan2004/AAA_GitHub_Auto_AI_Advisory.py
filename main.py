@@ -1731,7 +1731,7 @@ def portfolio_builder_button(m):
         _portfolio_doctor_waiting.pop(m.chat.id, None)
         _builder_form[m.chat.id] = {"step": "amount", "until": time.monotonic() + 180}
     state.clear(m.chat.id)
-    safe_send(m.chat.id, "🏗️ Portfolio Builder — Step 1/5\n"
+    safe_send(m.chat.id, "🏗️ Portfolio Builder — Step 1/4\n"
               "Type the amount in rupees, e.g. 1000000.\n"
               "Next you will choose risk and time frame with buttons. Type /cancel to stop.")
 
@@ -1751,8 +1751,8 @@ def portfolio_builder_option(call, value):
             entry.update(risk=option, step="horizon", until=time.monotonic() + 180)
             next_step = "horizon"
         elif stage == "horizon" and entry["step"] == "horizon" and option in ("6", "18", "36", "60"):
-            entry.update(horizon=option, step="stocks", until=time.monotonic() + 180)
-            next_step = "stocks"
+            entry.update(horizon=option, step="limits", until=time.monotonic() + 180)
+            next_step = "limits"
         else:
             next_step = "invalid"
     try:
@@ -1760,14 +1760,16 @@ def portfolio_builder_option(call, value):
     except Exception:
         pass
     if next_step == "horizon":
-        safe_send(uid, "Step 3/5 — Select time frame:",
+        safe_send(uid, "Step 3/4 — Select time frame:",
                   reply_markup=_builder_options("horizon", [
                       ("6 months", "6"), ("18 months", "18"),
                       ("36 months", "36"), ("60 months", "60")]))
-    elif next_step == "stocks":
-        safe_send(uid, "Step 4/5 — Type 1–5 symbols and your chosen percentages:\n"
-                  "<code>SBIN 25\nBHEL 20\nINFY 15</code>\n"
-                  "Total percentages cannot exceed 100%. Stocks are NOT selected by AI.")
+    elif next_step == "limits":
+        safe_send(uid, "Step 4/4 — Set three limits:\n"
+                  "Minimum cash (₹), maximum per stock (%), maximum per sector (%).\n"
+                  "Example: <code>20000 35 45</code>\n"
+                  "Qualified shares are selected automatically after submission.\n"
+                  "Type back to choose another horizon or /cancel to stop.")
     else:
         safe_send(uid, "Selection expired or not valid. Tap Portfolio Builder to restart.")
 
@@ -1805,38 +1807,20 @@ def portfolio_builder_form_text(m, text):
             safe_send(uid, "Enter a valid rupee amount, like 1000000.")
             return True
         entry.update(amount=amount, step="risk", until=time.monotonic() + 180)
-        safe_send(uid, "Step 2/5 — Tap your risk preference (not an AI risk assessment):",
+        safe_send(uid, "Step 2/4 — Tap your risk preference (not an AI risk assessment):",
                   reply_markup=_builder_options("risk", [
                       ("Low", "low"), ("Mid", "medium"), ("High", "high")]))
         return True
     if step in ("risk", "horizon"):
         safe_send(uid, "Please tap a choice on the previous message.")
         return True
-    if step == "stocks":
-        from portfolio_doctor_builder_private import parse_builder_request, BuilderError
-        rows = [line.strip() for line in text.splitlines() if line.strip()]
-        try:
-            if not 1 <= len(rows) <= 5:
-                raise BuilderError()
-            preview = ("/doctor_builder\nCAPITAL={amount} HORIZON={horizon} RISK={risk} "
-                       "CASH=0 STOCKCAP=100 SECTORCAP=100\n{rows}").format(
-                           amount=entry["amount"], horizon=entry["horizon"], risk=entry["risk"],
-                           rows="\n".join(rows))
-            parse_builder_request(preview)
-        except BuilderError:
-            safe_send(uid, "Enter 1–5 lines, e.g. <code>SBIN 25\nBHEL 20</code>, "
-                      "with unique symbols and total allocation up to 100%.")
-            return True
-        entry.update(stocks="\n".join(rows), step="limits", until=time.monotonic() + 180)
-        safe_send(uid, "Step 5/5 — Set your limits as three numbers:\n"
-                  "Minimum cash (₹), max per stock (%), max per sector (%).\n"
-                  "Example: <code>20000 35 45</code>\n"
-                  "Type back to edit your stocks or /cancel to stop.")
-        return True
     if step == "limits":
-        if text.casefold() == "back":
-            entry.update(step="stocks", until=time.monotonic() + 180)
-            safe_send(uid, "Send your revised stocks and percentages, one per line. Total cannot exceed 100%.")
+        if text.strip().casefold() == "back":
+            entry.update(step="horizon", until=time.monotonic() + 180)
+            safe_send(uid, "Step 3/4 — Select time frame:",
+                      reply_markup=_builder_options("horizon", [
+                          ("6 months", "6"), ("18 months", "18"),
+                          ("36 months", "36"), ("60 months", "60")]))
             return True
         fields = text.split()
         try:
@@ -1849,10 +1833,9 @@ def portfolio_builder_form_text(m, text):
             safe_send(uid, "Enter numbers like <code>20000 35 45</code>; cash cannot exceed capital.")
             return True
         payload = ("/doctor_builder\nCAPITAL={amount} HORIZON={horizon} RISK={risk} "
-                   "CASH={cash} STOCKCAP={stock} SECTORCAP={sector}\n{stocks}").format(
+                   "CASH={cash} STOCKCAP={stock} SECTORCAP={sector} AUTO_SELECT=TRUE").format(
                        amount=entry["amount"], horizon=entry["horizon"], risk=entry["risk"],
-                       cash=fields[0], stock=fields[1], sector=fields[2],
-                       stocks=entry["stocks"]).encode("utf-8")
+                       cash=fields[0], stock=fields[1], sector=fields[2]).encode("utf-8")
         portfolio_doctor_builder_command(m, payload_override=payload, form_entry=entry)
         return True
     return False
@@ -1874,14 +1857,13 @@ def portfolio_doctor_builder_command(m, payload_override=None, *, form_entry=Non
         parse_builder_request(payload)
     except BuilderError:
         if form_entry is not None:
-            safe_send(uid, "Check your cash and allocation limits. Resend the three limits or type back to edit stocks.")
+            safe_send(uid, "Check your cash and allocation limits. Resend the three limits or type back to edit horizon.")
             return
         safe_send(uid, "Send one private message in this format:\n"
                   "<code>/doctor_builder\n"
-                  "CAPITAL=100000 HORIZON=36 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45\n"
-                  "INFY 25\nHDFCBANK 30\nTCS 15</code>\n"
-                  "The remaining amount stays as cash. Only 1–5 requested symbols; "
-                  "no trades or previous holdings are used.")
+                  "CAPITAL=100000 HORIZON=36 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45 AUTO_SELECT=TRUE</code>\n"
+                  "Up to five qualified, diversified research shares, or NO QUALIFIED PICKS. "
+                  "No trades and no previous holdings are used.")
         return
     with _portfolio_doctor_lock:
         if form_entry is not None and _builder_form.get(uid) is not form_entry:
@@ -1909,7 +1891,7 @@ def portfolio_doctor_builder_command(m, payload_override=None, *, form_entry=Non
             _portfolio_doctor_running.discard(uid)
             _portfolio_doctor_slots.release()
 
-    retry_hint = (" Resend your three limits or type back to edit stocks."
+    retry_hint = (" Resend your three limits or type back to edit horizon."
                   if form_entry is not None else " Review and resend your one-message request.")
 
     def _run():
@@ -1931,6 +1913,8 @@ def portfolio_doctor_builder_command(m, payload_override=None, *, form_entry=Non
             logger.warning("MSK_PORTFOLIO_BUILDER_HEALTH_ALERT code=%s", exc.code)
             if exc.code in ("NO_PRICES", "STALE_PRICES"):
                 safe_send(uid, "A current completed-market close is missing or stale." + retry_hint)
+            elif exc.code == "NO_QUALIFIED_PICKS":
+                safe_send(uid, "NO QUALIFIED PICKS — current evidence, risk or limits did not support a diversified portfolio." + retry_hint)
             elif exc.code == "UNKNOWN_SECTOR":
                 safe_send(uid, "One stock's sector could not be verified." + retry_hint)
             elif exc.code in ("BAD_INPUT", "CONSTRAINTS"):
