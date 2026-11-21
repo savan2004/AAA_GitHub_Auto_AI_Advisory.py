@@ -431,11 +431,18 @@ def render_latest_profile(profile, *, now=None):
     """Always re-read saved per-company evidence; never replay a 'sent today' flag."""
     if profile not in NAMES:
         raise ValueError("unknown_profile")
-    from overnight_index_reports import EvidenceStore
+    from overnight_index_reports import EvidenceStore, readiness_check, _session
+    now = now or datetime.now(IST)
     with EvidenceStore() as store:
         report = store.get_report(profile)
         if not report:
             raise ValueError("no_completed_market_session")
+        if profile == "moderate":
+            # An old Midcap 150 READY row must never be relabeled Midcap 100.
+            # Require the current completed-session 100-company evidence ledger.
+            if (str(report.get("day")) != str(_session(now=now)) or
+                    not readiness_check(store, report["day"], ("moderate",))["ready"]):
+                raise ValueError("midcap100_index_evidence_not_ready")
         rows = store.rows(report["day"], profile)
     breadth = None
     try:
