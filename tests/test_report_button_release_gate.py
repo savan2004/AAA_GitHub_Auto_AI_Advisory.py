@@ -65,6 +65,35 @@ class ResearchPdfButtonGateTests(unittest.TestCase):
             self.assertTrue(any("withheld" in str(x.args[1]).lower()
                                 for x in send.call_args_list))
 
+    def test_generation_error_does_not_expose_provider_message(self):
+        with TemporaryDirectory() as folder:
+            run, send, bot, ack = _world(Path(folder) / "unused.pdf")
+            secret = "postgresql://private-user:private-password@hidden-host/db"
+            run.__globals__["generate_stock_report_pdf"] = lambda sym: (
+                False, "HTTP failure: " + secret, "Issuer")
+            run(12, "SBIN")
+            customer_text = " ".join(str(call.args[1])
+                                     for call in send.call_args_list)
+            self.assertIn("Research PDF unavailable", customer_text)
+            self.assertNotIn(secret, customer_text)
+            bot.send_document.assert_not_called()
+            ack.assert_not_called()
+
+    def test_unhandled_provider_exception_does_not_expose_secret(self):
+        with TemporaryDirectory() as folder:
+            run, send, bot, ack = _world(Path(folder) / "unused.pdf")
+            secret = "PRIVATE_PROVIDER_TOKEN_NOT_FOR_TELEGRAM"
+            def fail(_sym):
+                raise RuntimeError(secret)
+            run.__globals__["generate_stock_report_pdf"] = fail
+            run(12, "SBIN")
+            customer_text = " ".join(str(call.args[1])
+                                     for call in send.call_args_list)
+            self.assertIn("Research PDF unavailable", customer_text)
+            self.assertNotIn(secret, customer_text)
+            bot.send_document.assert_not_called()
+            ack.assert_not_called()
+
     def test_validated_pdf_sent_once_and_ack_recorded(self):
         with TemporaryDirectory() as folder:
             file = Path(folder) / "SBIN_report.pdf"
