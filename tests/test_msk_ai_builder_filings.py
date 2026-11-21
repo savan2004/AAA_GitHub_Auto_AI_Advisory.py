@@ -28,6 +28,7 @@ def fixture():
             ("Level of rounding used in financial results","Lakhs"),
             ("Date of board meeting when results were approved","12-11-2026")
         ])+table([
+            ("Particulars","3 months/ 6 months ended (dd-mm-yyyy)","Year to date figures for current period ended (dd-mm-yyyy)"),
             ("","Date of start of reporting period","01-07-2026","01-04-2026"),
             ("","Date of end of reporting period","30-09-2026","30-09-2026"),
             ("","Nature of report standalone or consolidated","Standalone","Standalone"),
@@ -54,7 +55,7 @@ class FilingTests(unittest.TestCase):
         for old,new in (
             (b"FIXTURE",b"WRONG"),(MEMBER.isin.encode(),b"INE999999999"),
             (b"Standalone",b"Consolidated"),(b"INR",b"USD"),
-            (b"Lakhs",b"Unknown"),(b"01-07-2026",b"01-04-2026"),
+            (b"Lakhs",b"Unknown"),(b"3 months/ 6 months ended",b"Year to date figures"),(b"01-07-2026",b"01-04-2026"),
             (b"30-09-2026",b"31-12-2026"),(b"12-11-2026",b"12-11-2027"),
             (b"1,23,456.78",b"--"),(b"Total profit (loss) for period",b"other income"),
             (b"Unaudited",b"Unknown")
