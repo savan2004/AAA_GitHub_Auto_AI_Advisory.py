@@ -3,6 +3,8 @@ name: MSK Magazine - Monthly Design 3 Draft and Safety QA
 on:
   pull_request:
     paths:
+      - "scripts/msk_magazine_nse.py"
+      - "tests/test_msk_magazine_nse.py"
       - "scripts/msk_magazine_monthly.py"
       - "tests/test_msk_magazine_monthly.py"
       - "docs/msk_magazine/**"
@@ -10,6 +12,8 @@ on:
   push:
     branches: [main]
     paths:
+      - "scripts/msk_magazine_nse.py"
+      - "tests/test_msk_magazine_nse.py"
       - "scripts/msk_magazine_monthly.py"
       - "tests/test_msk_magazine_monthly.py"
       - "docs/msk_magazine/**"

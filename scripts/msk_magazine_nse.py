@@ -77,20 +77,18 @@ def _decode_source(body: bytes) -> tuple[list[dict], dict]:
     return result, {"fields": fields, "total_rows": len(raw_lines) - 1}
 
 
-def _download(url: str, *, session=requests, timeout: int = 15) -> bytes:
+def _download(url: str, *, session=requests, timeout: int = 15) -> tuple[bytes, str]:
     r = session.get(url, headers={"User-Agent": USER_AGENT,
                                  "Accept": "text/csv,text/plain,*/*"},
                     timeout=timeout, allow_redirects=True)
     r.raise_for_status()
-    final = urlsplit(r.url)
-    if final.scheme != "https" or (final.hostname or "") not in {
-        "archives.nseindia.com", "nsearchives.nseindia.com"
-    }:
-        raise ValueError("Archive redirected outside official NSE hosts")
+    filename = url.rsplit("/", 1)[1]
+    if r.url not in {base + filename for base in ARCHIVES}:
+        raise ValueError("Response URL differs from the requested dated NSE archive")
     content = r.content
     if not isinstance(content, bytes) or len(content) > MAX_BYTES:
         raise ValueError("NSE archive response is too large")
-    return content
+    return content, r.url
 
 
 def collect(issue: str, output_dir: Path, *, now: date | None = None,
@@ -113,7 +111,7 @@ def collect(issue: str, output_dir: Path, *, now: date | None = None,
         for base in ARCHIVES:
             url = base + "ind_close_all_" + day.strftime("%d%m%Y") + ".csv"
             try:
-                raw = _download(url, session=session)
+                raw, source_url = _download(url, session=session)
                 rows, meta = _decode_source(raw)
                 if not rows or any(r["observed"] != day for r in rows):
                     raise ValueError("No matching NSE index date in CSV")
@@ -132,7 +130,7 @@ def collect(issue: str, output_dir: Path, *, now: date | None = None,
                         observations.append({
                             "page": page, "label": row["name"] + " closing level",
                             "value": row["value"], "unit": "index points",
-                            "observed_on": day.isoformat(), "source_url": url,
+                            "observed_on": day.isoformat(), "source_url": source_url,
                             "source_file": filename, "source_sha256": digest,
                             "source_excerpt": row["excerpt"],
                         })
