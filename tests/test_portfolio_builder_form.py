@@ -66,7 +66,7 @@ def harness():
 
 
 class BuilderFormTests(unittest.TestCase):
-    def test_complete_manual_input_flow_and_payload(self):
+    def test_automatic_flow_skips_stock_entry_and_payload(self):
         ns, sent, submitted, answers, msg, click, clock = harness()
         with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}):
             ns["portfolio_builder_button"](msg("🏗️ Portfolio Builder"))
@@ -78,11 +78,14 @@ class BuilderFormTests(unittest.TestCase):
             self.assertEqual([b.text for b in sent[-1][2]["reply_markup"].buttons],
                              ["6 months", "18 months", "36 months", "60 months"])
             ns["portfolio_builder_option"](click("builder|horizon|18"), "horizon|18")
-            self.assertTrue(ns["portfolio_builder_form_text"](msg("SBIN 25\nBHEL 20"), "SBIN 25\nBHEL 20"))
+            self.assertEqual(ns["_builder_form"][UID]["step"], "limits")
+            self.assertIn("automatically", sent[-1][1])
+            self.assertNotIn("SBIN", sent[-1][1])
+            self.assertNotIn("Type 1", sent[-1][1])
             self.assertTrue(ns["portfolio_builder_form_text"](msg("20000 35 45"), "20000 35 45"))
         self.assertEqual(len(submitted), 1)
         self.assertEqual(submitted[0][0].decode(), "/doctor_builder\n"
-            "CAPITAL=1000000 HORIZON=18 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45\nSBIN 25\nBHEL 20")
+            "CAPITAL=1000000 HORIZON=18 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45 AUTO_SELECT=TRUE")
         self.assertIs(submitted[0][1], ns["_builder_form"][UID])
         self.assertEqual(ns["_builder_form"][UID]["step"], "limits")
         self.assertEqual(len(answers), 2)
@@ -100,6 +103,28 @@ class BuilderFormTests(unittest.TestCase):
             ns["portfolio_builder_form_text"](msg("200000 35 45"), "200000 35 45")
         self.assertEqual(ns["_builder_form"][UID]["step"], "limits")
         self.assertEqual(submitted, [])
+
+    def test_invalid_risk_horizon_and_limits_never_submit(self):
+        ns, sent, submitted, _, msg, click, _ = harness()
+        with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}):
+            ns["portfolio_builder_button"](msg("🏗️ Portfolio Builder"))
+            ns["portfolio_builder_form_text"](msg("100000"), "100000")
+            ns["portfolio_builder_option"](click("builder|risk|extreme"), "risk|extreme")
+            self.assertEqual(ns["_builder_form"][UID]["step"], "risk")
+            ns["portfolio_builder_option"](click("builder|risk|low"), "risk|low")
+            ns["portfolio_builder_option"](click("builder|horizon|120"), "horizon|120")
+            self.assertEqual(ns["_builder_form"][UID]["step"], "horizon")
+            ns["portfolio_builder_option"](click("builder|horizon|36"), "horizon|36")
+            for invalid in ("", "1000 0 50", "0 50 101", "999999 35 45",
+                            "20 35", "-1 35 45", "20 35 nan", "SBIN 25"):
+                ns["portfolio_builder_form_text"](msg(invalid), invalid)
+                self.assertEqual(submitted, [])
+            self.assertEqual(ns["_builder_form"][UID]["step"], "limits")
+            ns["portfolio_builder_form_text"](msg("back"), "back")
+            self.assertEqual(ns["_builder_form"][UID]["step"], "horizon")
+            self.assertEqual([b.text for b in sent[-1][2]["reply_markup"].buttons],
+                             ["6 months", "18 months", "36 months", "60 months"])
+            self.assertEqual(submitted, [])
 
     def test_expired_and_disabled_form(self):
         ns, sent, submitted, _, msg, click, clock = harness()
