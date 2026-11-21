@@ -111,7 +111,7 @@ def reconcile_statements(member, secondary, filings, *, now):
         if not isinstance(f.published_at,datetime) or f.published_at.utcoffset() is None or not f.end <= f.published_at.date() or f.published_at > now:
             raise EvidenceError("FILING_DATE_INVALID")
         url = urlsplit(f.filing_url)
-        if url.scheme != "https" or url.netloc not in ("nsearchives.nseindia.com","archives.nseindia.com","www.bseindia.com","www.nseindia.com") or not url.path.strip("/"):
+        if url.scheme != "https" or url.netloc not in ("nsearchives.nseindia.com","nsearchives.nseindia.in","archives.nseindia.com","www.bseindia.com","www.nseindia.com") or not url.path.strip("/"):
             raise EvidenceError("FILING_SOURCE_INVALID")
         if not re.fullmatch(r"[0-9a-f]{64}",f.document_sha256):
             raise EvidenceError("FILING_DIGEST_INVALID")
