@@ -134,12 +134,22 @@ def normalize_secondary(symbol, extras, *, now):
         raise EvidenceError("STALE_QUARTERLY_HISTORY")
     return SecondarySnapshot(symbol, scope, url, retrieved, annual, quarterly)
 
+def _exact_issuer_get(url, *, headers, timeout):
+    """Require the requested reporting basis and issuer URL; no redirect relabeling."""
+    import requests
+    response=requests.get(url,headers=headers,timeout=timeout,allow_redirects=False)
+    if response.status_code!=200 or response.url!=url:
+        response.close()
+        raise requests.RequestException("ISSUER_PAGE_IDENTITY_UNVERIFIED")
+    return response
+
 def collect_secondary(symbol, *, collector=None, now=None, timeout=9):
     """Reuse existing same-page collector. No per-customer storage or network on import."""
     symbol = _symbol(symbol)
     if collector is None:
         from portfolio_doctor_advanced import _screener_same_page_evidence
-        collector = _screener_same_page_evidence
+        def collector(symbol, *, request_timeout):
+            return _screener_same_page_evidence(symbol,get=_exact_issuer_get,request_timeout=request_timeout)
     try:
         extras, _ = collector(symbol, request_timeout=timeout)
     except Exception as exc:
