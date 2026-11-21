@@ -18,7 +18,7 @@ def _num(value):
     except (ValueError,TypeError,OverflowError):
         return None
 
-def financial_review(company,*,now,collector=None):
+def financial_review(company,*,now,collector=None,clock=None):
     from portfolio_doctor_advanced import _screener_same_page_evidence
     from top5_company_ratings import rate_financial_evidence
     if collector is None:
@@ -26,6 +26,7 @@ def financial_review(company,*,now,collector=None):
             return _screener_same_page_evidence(symbol,get=_exact_issuer_get,request_timeout=9)
     try:
         raw,ratios=collector(company.member.symbol)
+        now=clock() if clock else now
         secondary=normalize_secondary(company.member.symbol,raw,now=now)
         old=company.evidence
         if (secondary.scope,secondary.annual,secondary.quarterly)!=(old.scope,old.annual,old.quarterly):
@@ -80,7 +81,7 @@ def review_companies(companies,frames,*,now,collector=None,clock=None):
     for c in companies:
         row={}
         try:
-            row["financial"]=financial_review(c,now=clock() if clock else now,collector=collector)
+            row["financial"]=financial_review(c,now=now,collector=collector,clock=clock)
         except EvidenceError as exc:
             row["financial"]={"status":"WITHHELD","reason":str(exc)}
         try:
