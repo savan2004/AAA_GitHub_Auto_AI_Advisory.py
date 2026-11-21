@@ -36,6 +36,13 @@ def sample(i, profile="conservative"):
 
 
 class RoutingTests(unittest.TestCase):
+    def test_smallcap100_only_and_consistent_risk_limit(self):
+        from overnight_index_reports import LIMITS
+        from index_top5 import _CAPS
+        self.assertEqual(NAMES["aggressive"], ("SMALL CAP", "Nifty Smallcap 100", 12.0))
+        self.assertEqual(LIMITS["aggressive"], 12.0)
+        self.assertEqual(_CAPS["aggressive"], 12.0)
+
     def test_all_aliases_and_pdf_is_not_hijacked(self):
         for text in ("TOP5", "top 5", "report", "/report", "lc",
                      "large cap report", "🏦 Large Cap Top 5"):
