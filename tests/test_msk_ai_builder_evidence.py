@@ -84,7 +84,7 @@ class SecondaryTests(unittest.TestCase):
         d = fixture()
         d["quarters"] = [{"label":"Sep 2024","revenue":90,"net_profit":9}] + d["quarters"][:-1]
         with self.assertRaisesRegex(EvidenceError,"STALE_QUARTERLY_HISTORY"):
-            normalize_secondary("FIXTURE",d,now=datetime(2026,11,30,8,tzinfo=timezone.utc).replace(day=21,hour=8) if False else NOW.replace(day=30)) if False else normalize_secondary("FIXTURE",{**d,"_retrieved_utc":"2026-11-30T07:00:00Z"},now=NOW.replace(day=30))
+            normalize_secondary("FIXTURE", {**d, "_retrieved_utc": "2026-11-30T07:00:00Z"}, now=NOW.replace(day=30))
 
     def test_adapter_invokes_existing_contract_and_fails_closed(self):
         calls = []
