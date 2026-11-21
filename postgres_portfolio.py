@@ -1,1 +1,1 @@
-<original multiline postgres_portfolio.py source, with `        return True` added at the end of PostgresPortfolioStore.add()>
+<complete original multiline postgres_portfolio.py source with the approved `return True` addition>
