@@ -43,6 +43,10 @@ def _decode_source(body: bytes) -> tuple[list[dict], dict]:
     reader = csv.DictReader(io.StringIO(content))
     fields = reader.fieldnames or []
     lookup = {field.strip().casefold(): field for field in fields if field}
+    if "closing index value" in lookup:
+        if "closing" in lookup:
+            raise ValueError("Ambiguous NSE closing columns")
+        lookup["closing"] = lookup["closing index value"]
     required = ("index name", "index date", "closing")
     if any(name not in lookup for name in required):
         raise ValueError("NSE CSV required columns not found")

@@ -68,6 +68,14 @@ class NseCollectorTests(unittest.TestCase):
         self.assertEqual(len(session.requests), 1)
         self.assertEqual(session.kwargs["timeout"], 15)
 
+    def test_official_closing_index_value_header(self):
+        rows, _ = _decode_source(DATA.replace(b",Closing,", b",Closing Index Value,"))
+        self.assertEqual(rows[0]["value"], "25100.25")
+
+    def test_ambiguous_close_headers_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Ambiguous"):
+            _decode_source(DATA.replace(b",High,Low,Closing,", b",High,Closing,Closing Index Value,"))
+
     def test_collected_pack_passes_local_byte_consistency(self):
         collect("2026-12", self.folder, session=FakeSession(),
                 now=date(2026, 12, 7), lookback_days=0)
