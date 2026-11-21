@@ -6,7 +6,7 @@ cannot be promoted to a complete scan or to verified financial research.
 from dataclasses import dataclass
 import time
 from msk_ai_builder_primary import fetch_index, IndexMember
-from msk_ai_builder_evidence import collect_secondary, EvidenceError
+from msk_ai_builder_evidence import collect_secondary, EvidenceError, SecondarySnapshot
 
 @dataclass(frozen=True)
 class StageResult:
@@ -30,6 +30,7 @@ def stage_secondary(*, index_provider=None, evidence_provider=None,
         raise ValueError("Batch size must be between 1 and 20")
     if type(deadline_seconds) not in (int,float) or not 1<=deadline_seconds<=120:
         raise ValueError("Invalid deadline")
+    # Cooperative budget between requests; provider sockets may overrun.
     start=clock()
     members=tuple((index_provider or fetch_index)())
     if (len(members)!=500 or any(not isinstance(m,IndexMember) for m in members)
@@ -45,7 +46,7 @@ def stage_secondary(*, index_provider=None, evidence_provider=None,
         attempted+=1
         try:
             result=(evidence_provider or collect_secondary)(m.symbol,timeout=min(9,remaining/2))
-            if result.symbol!=m.symbol or result.publication_status!="SECONDARY_ONLY":
+            if not isinstance(result,SecondarySnapshot) or result.symbol!=m.symbol or result.publication_status!="SECONDARY_ONLY":
                 raise EvidenceError("INVALID_EVIDENCE")
             if clock()-start>deadline_seconds:
                 failures.append((m.symbol,"DEADLINE_EXCEEDED"))
