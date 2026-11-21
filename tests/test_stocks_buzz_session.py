@@ -173,9 +173,16 @@ class SessionSafety(unittest.TestCase):
         ns = load_functions("_buzz_data_status", globals_={
             "_last_completed_session": lambda now=None: date(2026, 11, 16)})
         self.assertEqual(ns["_buzz_data_status"]({
-            "data_session": date(2026, 11, 13)}), ("FRESH", 1))
+            "data_session": date(2026, 11, 16)}), ("FRESH", 0))
+        # Friday's report is stale after Monday's completed close.
+        self.assertEqual(ns["_buzz_data_status"]({
+            "data_session": date(2026, 11, 13)}), ("STALE", 1))
         self.assertEqual(ns["_buzz_data_status"]({
             "data_session": date(2026, 11, 12)}), ("STALE", 2))
+        # Weekend before the Monday close still belongs to Friday's session.
+        ns["_last_completed_session"] = lambda now=None: date(2026, 11, 13)
+        self.assertEqual(ns["_buzz_data_status"]({
+            "data_session": date(2026, 11, 13)}), ("FRESH", 0))
 
     def test_after_close_secondary_recovers_only_verified_symbol_history(self):
         universe = {"symbols": ["A", "B", "C", "D", "E"], "source": "Official"}
