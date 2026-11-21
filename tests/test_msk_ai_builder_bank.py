@@ -99,6 +99,7 @@ class PostgresBankTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT count(*) FROM msk_builder_research.snapshots").fetchone()[0],2)
         with self.assertRaisesRegex(BankError,"BANK_STALE"):
             b.read_staging(now=later+timedelta(days=9))
+        self.assertEqual(b.read_for_review(now=later+timedelta(days=9))[0],v2)
         with self.assertRaisesRegex(BankError,"PRODUCTION_PUBLICATION_DISABLED"):
             b.read_for_customer()
     def test_corrupt_snapshot_rejected(self):
