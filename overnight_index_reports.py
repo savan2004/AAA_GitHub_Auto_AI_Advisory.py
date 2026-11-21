@@ -30,7 +30,7 @@ LOG = logging.getLogger(__name__)
 PROFILES = tuple(INDEXES)
 PRICE_REQUIRED = 0.90
 MAX_REPORT_CHARS = 3900
-LIMITS = {"conservative": 8.0, "moderate": 11.0, "aggressive": 15.0}
+LIMITS = {"conservative": 8.0, "moderate": 11.0, "aggressive": 12.0}
 TBL_ROWS = "msk_index_evidence_v1"
 TBL_REPORTS = "msk_index_reports_v1"
 # NSE's 2026 HEG demerger includes a zero-priced, non-tradable dummy.
@@ -501,7 +501,7 @@ def load_prepared_report(profile, *, store=None, now=None):
     if record["state"]!="READY":
         return record["text"]+"\n⏳ Awaiting next overnight retry."
     # Telegram must apply the same real-ledger gate as morning CI. A report
-    # labelled READY is not proof that its 100/150/250 company rows still exist.
+    # labelled READY is not proof that its official company rows still exist.
     try:
         if store is not None:
             check=readiness_check(store,expected,(profile,))
@@ -549,7 +549,13 @@ def readiness_check(store, session=None, profiles=PROFILES):
                   v.get("membership_hash")==stats.get("membership_hash")]
         ledger_reviews=sum(v.get("fund_attempted") is True for v in matching)
         ledger_prices=sum(_fresh(v.get("technical"),day) for v in matching)
-        valid_ledger=(valid_size and len(evidence)==expected and
+        # During Midcap150 / Smallcap250 -> 100 cutover, old rows may
+        # remain stored. They cannot count toward the current membership hash,
+        # but must not block a completely verified official 100-member audit.
+        count_ok=(len(evidence)==expected or (
+            profile in ("moderate","aggressive") and INDEXES[profile]["count"]==100
+            and expected==100 and len(matching)==100))
+        valid_ledger=(valid_size and count_ok and
                       len(matching)==expected and
                       ledger_reviews==reviewed and
                       ledger_prices==fresh)
