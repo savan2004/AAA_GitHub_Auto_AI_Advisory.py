@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from contextlib import nullcontext
 from datetime import date, datetime, time
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -226,6 +227,13 @@ class OvernightLedgerTests(unittest.TestCase):
                                     now=datetime(2026,10,30,8,5,tzinfo=n.IST))
         self.assertIn("withheld",reply.lower())
         self.assertNotIn("OLD MIDCAP150 PICK",reply)
+        # The actual user-facing Mid Cap Top 5 renderer must enforce the gate
+        # too; merely relabeling a 150-stock old row is not acceptable.
+        from msk_daily_reports import render_latest_profile
+        with patch.object(n, "EvidenceStore", return_value=nullcontext(self.store)):
+            with self.assertRaisesRegex(ValueError, "midcap100_index_evidence_not_ready"):
+                render_latest_profile(
+                    "moderate", now=datetime(2026,10,30,8,5,tzinfo=n.IST))
 
     def test_readiness_rejects_orphan_summary_and_ledger_mismatch(self):
         universe=make_universe("conservative",100)
