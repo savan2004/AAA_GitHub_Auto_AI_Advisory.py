@@ -4,6 +4,7 @@ on:
     paths:
       - 'msk_ai_builder_weekly*.py'
       - 'msk_ai_builder_bank.py'
+      - 'msk_ai_builder_common.py'
       - 'msk_ai_builder_evidence.py'
       - '.github/workflows/msk-ai-builder-real-bank-probe.yml'
 permissions:
@@ -31,11 +32,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install requests==2.32.3 'psycopg[binary]>=3.2,<3.4'
+      - run: python -m pip install requests==2.32.3 pandas==2.2.2 numpy==1.26.4 yfinance==0.2.61 curl_cffi==0.7.4 'psycopg[binary]>=3.2,<3.4'
       - name: Actual public source ingestion and database readback
         run: |
           python -u - <<'PY'
           from collections import Counter
+          from datetime import datetime,timezone
+          from msk_ai_builder_common import review_companies
+          from portfolio_doctor_advanced import _screener_same_page_evidence
+          from msk_ai_builder_evidence import _exact_issuer_get
+          from market_data import bulk_history
           import json
           from pathlib import Path
           import psycopg
@@ -46,9 +52,13 @@ jobs:
           def connect(_):
               return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
           bank=WeeklyResearchBank("postgresql://test@localhost/test?sslmode=require",connector=connect)
+          pages={}
           def collect(symbol,timeout):
               try:
-                  evidence=collect_secondary(symbol,timeout=timeout)
+                  def capture(sym,request_timeout):
+                      pages[sym]=_screener_same_page_evidence(sym,get=_exact_issuer_get,request_timeout=request_timeout)
+                      return pages[sym]
+                  evidence=collect_secondary(symbol,timeout=timeout,collector=capture)
                   print("SECONDARY_OK",symbol,evidence.scope,len(evidence.annual),len(evidence.quarterly),flush=True)
                   return evidence
               except EvidenceError as exc:
@@ -82,6 +92,16 @@ jobs:
           else:
               raise AssertionError("Unapproved customer publication")
           assert len(result.companies)==20,"Fewer than 20 preliminary qualifiers; do not force selection"
+          frames=bulk_history([c.member.symbol for c in result.companies],"6mo",chunk_size=20,
+                              adjusted=False,retries=0,max_fallbacks=0,download_timeout=20)
+          evidence=review_companies(result.companies,frames,now=datetime.now(timezone.utc),
+                                    collector=lambda sym:pages[sym])
+          Path("weekly-shared-review.json").write_text(json.dumps(evidence,sort_keys=True,indent=2,allow_nan=False),encoding="utf-8")
+          financial=Counter(x["financial"]["status"] for x in evidence["companies"].values())
+          technical=Counter(x["technical"]["status"] for x in evidence["companies"].values())
+          print("SHARED_REVIEW_COVERAGE",dict(financial),dict(technical),flush=True)
+          assert financial.get("SECONDARY_ONLY")==20,"Incomplete same-page financial review"
+          assert technical.get("EOD_CLOSE_MATCHED_HISTORY_NOT_INDEPENDENTLY_VERIFIED")==20,"Incomplete technical close reconciliation"
           PY
       - name: Preserve internal research evidence for independent review
         if: always()
@@ -91,5 +111,6 @@ jobs:
           path: |
             weekly-research-audit.json
             weekly-research-snapshot.json
+            weekly-shared-review.json
           if-no-files-found: warn
           retention-days: 7
