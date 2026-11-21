@@ -97,3 +97,19 @@ class SecondaryTests(unittest.TestCase):
             raise TimeoutError()
         with self.assertRaisesRegex(EvidenceError,"PROVIDER_UNAVAILABLE"):
             collect_secondary("FIXTURE",collector=broken,now=NOW)
+
+    def test_exact_issuer_http_identity(self):
+        from unittest.mock import patch,Mock
+        import requests
+        from msk_ai_builder_evidence import _exact_issuer_get
+        url="https://www.screener.in/company/FIXTURE/consolidated/"
+        for status,actual in [(302,url),(200,"https://www.screener.in/company/FIXTURE/"),(200,"https://www.screener.in/company/OTHER/consolidated/")]:
+            response=Mock(status_code=status,url=actual)
+            with patch("requests.get",return_value=response) as get:
+                with self.assertRaises(requests.RequestException):
+                    _exact_issuer_get(url,headers={},timeout=9)
+                response.close.assert_called_once()
+                self.assertFalse(get.call_args.kwargs["allow_redirects"])
+        response=Mock(status_code=200,url=url)
+        with patch("requests.get",return_value=response):
+            self.assertIs(_exact_issuer_get(url,headers={},timeout=9),response)
