@@ -42,7 +42,7 @@ class MagazineMonthlyTests(unittest.TestCase):
     def test_github_archives_monthly_pdf_as_unpublished_draft_only(self):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/msk-magazine-monthly.yml").read_text()
-        self.assertIn('cron: "30 2 * * 1"', workflow)
+        self.assertIn('cron: "30 2 * * *"', workflow)
         self.assertIn("gh release create", workflow)
         self.assertIn("--draft", workflow)
         self.assertIn("contents: write", workflow)

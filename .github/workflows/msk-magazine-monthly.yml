@@ -3,6 +3,8 @@ name: MSK Magazine - Monthly Design 3 Draft and Safety QA
 on:
   pull_request:
     paths:
+      - "scripts/msk_magazine_resume.py"
+      - "tests/test_msk_magazine_resume.py"
       - "scripts/msk_magazine_nse.py"
       - "tests/test_msk_magazine_nse.py"
       - "scripts/msk_magazine_monthly.py"
@@ -12,6 +14,8 @@ on:
   push:
     branches: [main]
     paths:
+      - "scripts/msk_magazine_resume.py"
+      - "tests/test_msk_magazine_resume.py"
       - "scripts/msk_magazine_nse.py"
       - "tests/test_msk_magazine_nse.py"
       - "scripts/msk_magazine_monthly.py"
@@ -24,10 +28,9 @@ on:
         description: "Issue YYYY-MM; blank = current IST month"
         required: false
         type: string
-  # Monday 02:30 UTC = Monday 08:00 IST.
-  # Weekly cron plus first-Monday IST guard avoids cron OR semantics.
+  # Daily at 08:00 IST. Each job applies its own edition gate.
   schedule:
-    - cron: "30 2 * * 1"
+    - cron: "30 2 * * *"
 
 permissions:
   contents: read
@@ -53,6 +56,26 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_magazine_nse.py' -v
       - name: Compile monthly workflow sources
         run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py
+
+      - name: Test daily draft page checkpoints
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_resume.py' -v
+
+  daily-page-progress:
+    if: github.event_name == 'schedule'
+    needs: offline-regression
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install reportlab==4.2.5 "pypdf>=5,<7"
+      - name: Stage the next available page of the current IST edition
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m scripts.msk_magazine_resume
 
   monthly-draft:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -92,21 +115,22 @@ jobs:
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
-          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "magazine_artifacts/$ISSUE/sources"
+          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "$RUNNER_TEMP/msk-sources"
       - name: Create a 16-page UNAPPROVED monthly draft only
         if: steps.schedule.outputs.due == 'true'
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
           SOURCE_ARGS=()
-          if [ -f "magazine_artifacts/$ISSUE/sources/source_pack.json" ]; then
-            SOURCE_ARGS=(--source-pack "magazine_artifacts/$ISSUE/sources/source_pack.json" --source-root "magazine_artifacts/$ISSUE/sources")
+          if [ -f "$RUNNER_TEMP/msk-sources/source_pack.json" ]; then
+            SOURCE_ARGS=(--source-pack "$RUNNER_TEMP/msk-sources/source_pack.json" --source-root "$RUNNER_TEMP/msk-sources")
           fi
           if [ "${{ github.event_name }}" = "schedule" ]; then
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --scheduled --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
           else
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
           fi
+          mv "$RUNNER_TEMP/msk-sources" "magazine_artifacts/$ISSUE/sources"
       - name: Retain PDF and per-page evidence gates as GitHub run artifact
         if: steps.schedule.outputs.due == 'true'
         uses: actions/upload-artifact@v4
