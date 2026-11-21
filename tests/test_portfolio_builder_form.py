@@ -47,7 +47,7 @@ def harness():
         "_portfolio_doctor_waiting": {},
         "_builder_allowed": lambda m: m.chat.type == "private" and m.chat.id == m.from_user.id,
         "_builder_form": {},
-        "portfolio_doctor_builder_command": lambda m, payload_override=None: submitted.append(payload_override),
+        "portfolio_doctor_builder_command": lambda m, payload_override=None, *, form_entry=None: submitted.append((payload_override, form_entry)),
     }
     for name in ("_builder_options", "portfolio_builder_button",
                  "portfolio_builder_option", "portfolio_builder_form_text"):
@@ -81,9 +81,10 @@ class BuilderFormTests(unittest.TestCase):
             self.assertTrue(ns["portfolio_builder_form_text"](msg("SBIN 25\nBHEL 20"), "SBIN 25\nBHEL 20"))
             self.assertTrue(ns["portfolio_builder_form_text"](msg("20000 35 45"), "20000 35 45"))
         self.assertEqual(len(submitted), 1)
-        self.assertEqual(submitted[0].decode(), "/doctor_builder\n"
+        self.assertEqual(submitted[0][0].decode(), "/doctor_builder\n"
             "CAPITAL=1000000 HORIZON=18 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45\nSBIN 25\nBHEL 20")
-        self.assertNotIn(UID, ns["_builder_form"])
+        self.assertIs(submitted[0][1], ns["_builder_form"][UID])
+        self.assertEqual(ns["_builder_form"][UID]["step"], "limits")
         self.assertEqual(len(answers), 2)
 
     def test_invalid_amount_and_limits_do_not_submit(self):
