@@ -226,7 +226,7 @@ def request_index_top5(profile, chat_id, send):
     """Read the completed full-index ledger, never substitute partial Top 5.
 
     Legacy short on-demand review is developer opt-in ONLY; even if enabled
-    it is not certified for 100/150/250 issuer-wide financial coverage.
+    it is not certified for full official index-wide financial coverage.
     """
     if profile not in INDEXES:
         return "❌ Unknown index profile."
