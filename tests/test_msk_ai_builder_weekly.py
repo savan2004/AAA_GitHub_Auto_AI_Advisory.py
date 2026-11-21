@@ -48,6 +48,20 @@ class SourceTests(unittest.TestCase):
             with self.assertRaises(EvidenceError):
                 parse_closes(bad,CLOSE,roster)
 
+    def test_live_roster_variations(self):
+        raw=roster_csv().replace("TEST001,EQ,","TEST001,RR,").replace("TEST002,EQ,","TEST002,BE,")
+        raw += "\nDummy HEG Ltd.,Capital Goods,DUMMYHEG,EQ,DUM545A01024"
+        roster=parse_roster(raw)
+        self.assertEqual(len(roster),500)
+        self.assertEqual(sum(x.series=="RR" for x in roster),1)
+        self.assertEqual(sum(x.series=="BE" for x in roster),1)
+        closes=parse_closes(close_csv(),CLOSE,roster)
+        self.assertEqual(len(closes),498)
+        self.assertNotIn("TEST001",closes)
+        self.assertNotIn("TEST002",closes)
+        with self.assertRaises(EvidenceError):
+            parse_roster(raw.replace("DUM545A01024","DUM545A01025"))
+
 class WeeklyTests(unittest.TestCase):
     def plan(self,previous=(),collector=provider,**kw):
         roster,closes=inputs()
