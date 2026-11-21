@@ -1,0 +1,37 @@
+name: MSK Builder independent filing discovery probe
+on:
+  pull_request:
+    paths:
+      - 'msk_ai_builder_discovery.py'
+      - 'tests/test_msk_ai_builder_discovery.py'
+      - '.github/workflows/msk-ai-builder-filing-discovery-probe.yml'
+permissions:
+  contents: read
+jobs:
+  filing-discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests==2.32.3
+      - run: |
+          python -u - <<'PY'
+          from datetime import date,datetime,timezone
+          from msk_ai_builder_discovery import fetch_listing,parse_listing
+          from msk_ai_builder_filings import download_filing,extract_quarter
+          from msk_ai_builder_primary import IndexMember
+          end=date(2026,9,30)
+          payload=fetch_listing("NIRAJISPAT",end)
+          print("LISTING_SCHEMA",list(payload) if isinstance(payload,dict) else type(payload).__name__)
+          if isinstance(payload,dict):
+              print("LISTING_COUNT",payload.get("totalCount"))
+              for row in payload.get("data",[])[:20]:
+                  print("PUBLIC_METADATA", {k:row.get(k) for k in ("symbol","qe_Date","consolidated","broadcast_Date","revised_Date","ixbrl")})
+          ref=parse_listing(payload,symbol="NIRAJISPAT",period_end=end,scope="standalone",now=datetime.now(timezone.utc))
+          doc=download_filing(ref.url)
+          extracted=extract_quarter(doc,IndexMember("NIRAJISPAT","INE326T01011"),expected_end=end,now=datetime.now(timezone.utc))
+          print("DISCOVERED_DOCUMENT",ref.broadcast_at.isoformat(),ref.revised_at,extracted.digest,extracted.revenue_cr,extracted.profit_cr)
+          PY
