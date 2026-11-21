@@ -133,7 +133,7 @@ class LiveEvidenceGate(unittest.TestCase):
     def test_midcap_owner_returned_public_text_is_isolated(self):
         from unittest.mock import patch
         from msk_live_acceptance import _PROBE, capture_telegram_ack
-        report = "📊 MID CAP | Nifty Midcap 150\\n149/149 checked; no BUY"
+        report = "📊 MID CAP | Nifty Midcap 100\\n100/100 checked; no BUY"
         for action, allowed in (("MidCapTop5", True), ("LargeCapTop5", False),
                                 ("Portfolio", False)):
             probe = {"action": action, "receipts": [], "files": {}, "closed": False}
