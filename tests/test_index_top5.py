@@ -21,7 +21,7 @@ def nse_csv(n):
 
 class OfficialIndexMembershipTests(unittest.TestCase):
     def test_nse_csv_accepts_correct_counts_and_preserves_industry(self):
-        for profile, count in (("conservative", 100), ("moderate", 150), ("aggressive", 250)):
+        for profile, count in (("conservative", 100), ("moderate", 100), ("aggressive", 250)):
             symbols, industries = ic.parse_constituents(nse_csv(count), profile)
             self.assertEqual(len(symbols), count)
             self.assertEqual(symbols[0], "TEST000")
@@ -39,12 +39,12 @@ class OfficialIndexMembershipTests(unittest.TestCase):
 
     def test_fetches_and_caches_official_current_membership(self):
         response = Mock()
-        response.content = nse_csv(150)
+        response.content = nse_csv(100)
         response.raise_for_status.return_value = None
         with patch.object(ic, "_CACHE", {}), patch.object(ic.requests, "get", return_value=response) as get:
             res = ic.get_index_universe("moderate")
-            self.assertEqual(len(res["symbols"]), 150)
-            self.assertEqual(res["name"], "Nifty Midcap 150")
+            self.assertEqual(len(res["symbols"]), 100)
+            self.assertEqual(res["name"], "Nifty Midcap 100")
             self.assertIn("nsearchives.nseindia.com", get.call_args.args[0])
             again = ic.get_index_universe("moderate")
             self.assertTrue(again["cached"])
