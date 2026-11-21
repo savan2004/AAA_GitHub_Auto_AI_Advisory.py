@@ -68,6 +68,87 @@ class BuilderParserTests(unittest.TestCase):
             proc.assert_not_called()
 
 
+class AutomaticSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.payload = ("/doctor_builder\nCAPITAL=1000000 HORIZON=18 RISK=medium "
+                        "CASH=20000 STOCKCAP=35 SECTORCAP=45 AUTO_SELECT=TRUE")
+        self.spec = builder.parse_builder_request(self.payload)
+        self.names = ["SAMPLEA", "SAMPLEB", "SAMPLEC", "SAMPLED", "SAMPLEE"]
+        self.industries = {name: "Sector-" + name for name in self.names}
+        days = pd.bdate_range(end="2026-11-17", periods=250)
+        self.history = {}
+        for i, name in enumerate(self.names):
+            closes = [100 + i * 10 + j * .09 for j in range(250)]
+            self.history[name] = pd.DataFrame(
+                {"Open": closes, "High": [x + 1 for x in closes],
+                 "Low": [x - 1 for x in closes], "Close": closes,
+                 "Volume": [100000] * 250}, index=days)
+
+    def universe(self, _profile):
+        return {"symbols": self.names, "industries": self.industries, "stale": False}
+
+    def history_fetcher(self, symbols, *_args, **_kw):
+        return {sym: self.history[sym] for sym in symbols}
+
+    def assessor(self, symbol, industry, profile, *, today=None):
+        self.assertEqual(profile, "moderate")
+        self.assertEqual(industry, self.industries[symbol])
+        return {"fund_score": 75}, "qualified"
+
+    def test_parse_auto_no_manual_symbols_and_strict_preferences(self):
+        self.assertTrue(self.spec["auto_select"])
+        self.assertEqual(self.spec["targets"], [])
+        for bad in (self.payload + "\nSBIN 25",
+                    self.payload.replace("AUTO_SELECT=TRUE", "AUTO_SELECT=FALSE"),
+                    self.payload.replace("HORIZON=18", "HORIZON=12"),
+                    self.payload.replace("RISK=medium", "RISK=other"),
+                    self.payload.replace("STOCKCAP=35", "STOCKCAP=0"),
+                    self.payload.replace("CASH=20000", "CASH=2000000")):
+            with self.subTest(case=bad[-30:]), self.assertRaises(builder.BuilderError):
+                builder.parse_builder_request(bad)
+
+    def test_verified_diversified_shares_cash_caps_and_no_orders(self):
+        result = builder.build_scenario_current_closes(
+            self.spec, history_fetcher=self.history_fetcher,
+            universe_fetcher=self.universe, assessor=self.assessor, now=TODAY)
+        self.assertEqual(len(result["proposed"]), 5)
+        self.assertEqual(len({r["sector"] for r in result["proposed"]}), 5)
+        self.assertTrue(result["no_automatic_trades"])
+        self.assertGreaterEqual(result["cash"], 20000)
+        self.assertLessEqual(max(r["proposed_total_weight_pct"] for r in result["proposed"]), 35)
+        self.assertTrue(all(r["price_date"] == "2026-11-17" for r in result["proposed"]))
+
+    def test_insufficient_evidence_and_stale_candidates_refuse_picks(self):
+        with self.assertRaises(builder.BuilderError) as caught:
+            builder.build_scenario_current_closes(
+                self.spec, history_fetcher=self.history_fetcher,
+                universe_fetcher=self.universe,
+                assessor=lambda *a, **kw: (None, "quarterly_missing"), now=TODAY)
+        self.assertEqual(caught.exception.code, "NO_QUALIFIED_PICKS")
+        bad = dict(self.history)
+        for sym in self.names[:3]:
+            bad[sym] = bad[sym].iloc[:-1]
+        with self.assertRaises(builder.BuilderError) as caught:
+            builder.build_scenario_current_closes(
+                self.spec, history_fetcher=lambda *a, **kw: bad,
+                universe_fetcher=self.universe, assessor=self.assessor, now=TODAY)
+        self.assertEqual(caught.exception.code, "NO_QUALIFIED_PICKS")
+
+    def test_stale_official_universe_and_limits_fail_closed(self):
+        with self.assertRaises(builder.BuilderError) as caught:
+            builder.build_scenario_current_closes(
+                self.spec, history_fetcher=self.history_fetcher,
+                universe_fetcher=lambda *a: dict(self.universe("moderate"), stale=True),
+                assessor=self.assessor, now=TODAY)
+        self.assertEqual(caught.exception.code, "NO_QUALIFIED_PICKS")
+        constrained = dict(self.spec, stock_cap_pct="10", sector_cap_pct="5")
+        result = builder.build_scenario_current_closes(
+            constrained, history_fetcher=self.history_fetcher,
+            universe_fetcher=self.universe, assessor=self.assessor, now=TODAY)
+        self.assertTrue(all(r["proposed_total_weight_pct"] <= 5 for r in result["proposed"]))
+        self.assertGreaterEqual(result["cash"], 20000)
+
+
 class BuilderVerifiedPriceTests(unittest.TestCase):
     def setUp(self):
         self.spec = builder.parse_builder_request(INPUT)
