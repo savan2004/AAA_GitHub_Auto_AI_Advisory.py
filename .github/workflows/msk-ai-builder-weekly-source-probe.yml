@@ -1,0 +1,28 @@
+name: MSK Builder weekly official sources probe
+on:
+  pull_request:
+    paths:
+      - 'msk_ai_builder_weekly_sources.py'
+      - '.github/workflows/msk-ai-builder-weekly-source-probe.yml'
+permissions:
+  contents: read
+jobs:
+  official-sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests==2.32.3
+      - name: Read public Nifty 500 roster and historical EOD file
+        run: |
+          python - <<'PY'
+          from datetime import date
+          from msk_ai_builder_weekly_sources import fetch_roster, fetch_closes
+          roster=fetch_roster()
+          closes=fetch_closes(date(2026,11,20),roster)
+          print("OFFICIAL_SOURCE_COVERAGE", len(roster), len(closes))
+          print("No financial ranking or publication performed")
+          PY
