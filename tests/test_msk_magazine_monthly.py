@@ -50,7 +50,27 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertNotIn("gh release publish", workflow)
         self.assertNotIn("sendDocument", workflow)
 
-    def test_first_mondays(self):
+    def test_nse_download_failure_does_not_block_unapproved_draft(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/msk-magazine-monthly.yml").read_text()
+        self.assertIn('mkdir -p "$SOURCE_DIR"', workflow)
+        self.assertIn('if python scripts/msk_magazine_nse.py', workflow)
+        self.assertIn('DOWNLOAD_FAILED.txt', workflow)
+        self.assertIn('rm -f "$SOURCE_DIR/source_pack.json"', workflow)
+        self.assertIn('Continue only with an UNAPPROVED, data-withheld draft', workflow)
+        self.assertIn('Create a 16-page UNAPPROVED monthly draft only', workflow)
+        self.assertNotIn('continue-on-error: true', workflow)
+
+    def test_archive_requires_matching_pdf_checksum(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/msk-magazine-monthly.yml").read_text()
+        archive = workflow.split("      - name: Archive each run in a durable PRIVATE GitHub draft release", 1)[1]
+        self.assertIn('gate.get("pdf_sha256")', archive)
+        self.assertIn('hashlib.sha256(pdf.read_bytes()).hexdigest()', archive)
+        self.assertIn('Magazine PDF checksum mismatch or missing: archive blocked', archive)
+        self.assertLess(archive.index('Magazine PDF checksum mismatch or missing: archive blocked'),
+                        archive.index('gh release create'))
+
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
 
@@ -135,6 +155,20 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertFalse(rows)
         self.assertIn("excerpt", errors[0])
 
+    def test_stale_prior_year_figure_rejected(self):
+        row = copy.deepcopy(self.row)
+        row["observed_on"] = "2025-11-13"
+        rows, errors = self.verify(row)
+        self.assertFalse(rows)
+        self.assertIn("freshness", errors[0])
+
+    def test_stale_prior_month_figure_rejected(self):
+        row = copy.deepcopy(self.row)
+        row["observed_on"] = "2026-09-01"
+        rows, errors = self.verify(row)
+        self.assertFalse(rows)
+        self.assertIn("freshness", errors[0])
+
     def test_future_figure_rejected(self):
         row = copy.deepcopy(self.row)
         row["observed_on"] = "2026-12-01"
@@ -157,6 +191,48 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertTrue(pdf.is_file())
         self.assertEqual(hashlib.sha256(pdf.read_bytes()).hexdigest(), output["pdf_sha256"])
         self.assertEqual(len(list(pdf.parent.glob("page_*.json"))), 16)
+
+    def test_missing_explicit_source_pack_keeps_draft_unapproved(self):
+        missing = self.root / "not-downloaded.json"
+        result = generate("2026-12", self.root / "out",
+                          source_pack=missing, source_root=self.source_root,
+                          now=datetime(2026, 12, 7, tzinfo=timezone.utc))
+        self.assertEqual(result["source_consistency_rows"], 0)
+        self.assertFalse(result["publication_allowed"])
+        self.assertTrue(any("Source evidence pack unavailable" in failure
+                            for failure in result["source_failures"]))
+        self.assertTrue((self.root / "out" / "2026-12" /
+                         result["draft_pdf"]).is_file())
+        self.assertEqual(len(list((self.root / "out" / "2026-12").glob("page_*.json"))), 16)
+
+    def test_nse_preflight_sources_directory_allows_draft(self):
+        # The workflow downloader creates this before the PDF generator runs.
+        sources = self.root / "out" / "2026-12" / "sources"
+        sources.mkdir(parents=True)
+        (sources / "download.txt").write_text("original evidence")
+        result = generate("2026-12", self.root / "out",
+                          now=datetime(2026, 12, 7, tzinfo=timezone.utc))
+        self.assertFalse(result["publication_allowed"])
+        self.assertEqual((sources / "download.txt").read_text(), "original evidence")
+        self.assertTrue((sources.parent / result["draft_pdf"]).exists())
+
+    def test_existing_issue_draft_is_never_overwritten(self):
+        dest = self.root / "out" / "2026-12"
+        (dest / "sources").mkdir(parents=True)
+        (dest / "release_gate.json").write_text("preserve")
+        with self.assertRaises(MagazineError):
+            generate("2026-12", self.root / "out",
+                     now=datetime(2026, 12, 7, tzinfo=timezone.utc))
+        self.assertEqual((dest / "release_gate.json").read_text(), "preserve")
+
+    def test_unrelated_preexisting_issue_directory_is_rejected(self):
+        dest = self.root / "out" / "2026-12"
+        dest.mkdir(parents=True)
+        (dest / "other.txt").write_text("preserve")
+        with self.assertRaises(MagazineError):
+            generate("2026-12", self.root / "out",
+                     now=datetime(2026, 12, 7, tzinfo=timezone.utc))
+        self.assertEqual((dest / "other.txt").read_text(), "preserve")
 
     def test_schedule_not_first_monday_blocks_generation(self):
         with self.assertRaises(MagazineError):

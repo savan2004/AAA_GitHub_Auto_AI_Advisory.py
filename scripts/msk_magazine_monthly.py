@@ -138,8 +138,8 @@ def validate_evidence(pack: dict, issue: str, source_root: Path,
                 raise MagazineError("Missing observation unit")
             value = _number(row.get("value"))
             on = date.fromisoformat(row.get("observed_on", ""))
-            if on > as_of or on.year < as_of.year - 1:
-                raise MagazineError("Source observation date outside accepted window")
+            if on > as_of or (as_of - on).days > 45:
+                raise MagazineError("Source observation date outside accepted 45-day freshness window")
             url = row.get("source_url")
             if not isinstance(url, str) or not _official_host(url):
                 raise MagazineError("Evidence must cite an approved HTTPS official domain")
@@ -334,16 +334,28 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     # Check before creating any output; require explicit manual recovery
     # rather than silently overwriting even an incomplete prior attempt.
     if dest.exists():
-        raise MagazineError(
-            f"Issue directory already exists: {dest}; refusing to overwrite "
-            "existing draft, page evidence, or release ledger"
-        )
-    dest.mkdir(parents=True, exist_ok=False)
+        # The NSE downloader runs first and creates <issue>/sources.
+        # Permit only that preflight directory, never an existing draft.
+        if (not dest.is_dir() or
+                {p.name for p in dest.iterdir()} != {"sources"} or
+                not (dest / "sources").is_dir() or
+                (dest / "sources").is_symlink()):
+            raise MagazineError(
+                f"Issue directory already exists: {dest}; refusing to overwrite "
+                "existing draft, page evidence, or release ledger"
+            )
+    else:
+        dest.mkdir(parents=True, exist_ok=False)
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
-        source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
-        by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
+        if not Path(source_pack).is_file():
+            # Keep a visibly unapproved draft even when the source handoff
+            # is absent; never imply that any market figure was checked.
+            by_page, failures = {}, [f"Source evidence pack unavailable: {source_pack}"]
+        else:
+            source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
+            by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
     else:
         by_page, failures = {}, ["No independently retrieved financial source pack supplied"]
     pdf_file = dest / f"MSK_{issue}_EDITORIAL_DRAFT.pdf"

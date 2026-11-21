@@ -88,7 +88,16 @@ jobs:
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
-          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "magazine_artifacts/$ISSUE/sources"
+          set -uo pipefail
+          SOURCE_DIR="magazine_artifacts/$ISSUE/sources"
+          mkdir -p "$SOURCE_DIR"
+          if python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "$SOURCE_DIR"; then
+            echo "NSE source download completed; evidence still requires validation." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "NSE source download FAILED. Continue only with an UNAPPROVED, data-withheld draft." >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' 'NSE source download failed; no source data verified.' > "$SOURCE_DIR/DOWNLOAD_FAILED.txt"
+            rm -f "$SOURCE_DIR/source_pack.json"
+          fi
       - name: Create a 16-page UNAPPROVED monthly draft only
         if: steps.schedule.outputs.due == 'true'
         env:
@@ -121,6 +130,18 @@ jobs:
           ROOT="magazine_artifacts/$ISSUE"
           test -f "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
           test -f "$ROOT/release_gate.json"
+          # Verify actual PDF bytes against the generator's recorded checksum before archiving.
+          python - "$ROOT" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          gate = json.loads((root / "release_gate.json").read_text(encoding="utf-8"))
+          pdf = root / f"MSK_{root.name}_EDITORIAL_DRAFT.pdf"
+          expected = gate.get("pdf_sha256")
+          actual = hashlib.sha256(pdf.read_bytes()).hexdigest()
+          if not isinstance(expected, str) or len(expected) != 64 or actual != expected:
+              raise SystemExit("Magazine PDF checksum mismatch or missing: archive blocked")
+          print(f"Verified draft PDF SHA256: {actual}")
+          PY
           (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources release_gate.json page_*.json)
           TAG="msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}"
           gh release create "$TAG" \
