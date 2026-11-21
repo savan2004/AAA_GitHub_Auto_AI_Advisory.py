@@ -121,6 +121,27 @@ jobs:
           ROOT="magazine_artifacts/$ISSUE"
           test -f "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
           test -f "$ROOT/release_gate.json"
+          # Independently verify the completed PDF and fail-closed release state
+          # before creating any durable archive.
+          python - "$ROOT" "$ISSUE" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+          root, issue = Path(sys.argv[1]), sys.argv[2]
+          gate = json.loads((root / "release_gate.json").read_text(encoding="utf-8"))
+          pdf = root / f"MSK_{issue}_EDITORIAL_DRAFT.pdf"
+          if gate.get("issue") != issue or gate.get("draft_pdf") != pdf.name:
+              raise SystemExit("Magazine archive blocked: issue/PDF mismatch")
+          if gate.get("publication_allowed") is not False or gate.get("editorial_approved") is not False:
+              raise SystemExit("Magazine archive blocked: unsafe release state")
+          if gate.get("page_count") != 16 or gate.get("mechanical_pdf_checks", {}).get("passed") is not True:
+              raise SystemExit("Magazine archive blocked: PDF quality gate failed")
+          if hashlib.sha256(pdf.read_bytes()).hexdigest() != gate.get("pdf_sha256"):
+              raise SystemExit("Magazine archive blocked: PDF checksum mismatch")
+          if len(list(root.glob("page_*.json"))) != 16:
+              raise SystemExit("Magazine archive blocked: incomplete page evidence")
+          PY
           (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources release_gate.json page_*.json)
           TAG="msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}"
           gh release create "$TAG" \

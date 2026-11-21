@@ -319,6 +319,58 @@ def _page(c, number, title, issue, layout, observations):
     _txt(c, 58, 171, "Current status: DRAFT - human editorial approval required.", 9, TEAL)
 
 
+def assess_public_readiness(result: dict) -> dict:
+    """Explain launch blockers; never infer approval from mechanical PDF QA.
+
+    A source-byte match proves consistency only, not market accuracy.
+    Human verification, chart review and Telegram evidence are separate gates.
+    """
+    pages = result.get("pages", [])
+    research = {p.get("page"): p for p in pages if isinstance(p, dict)
+                and type(p.get("page")) is int and 3 <= p["page"] <= 15}
+    missing_research = [
+        n for n in range(3, 16)
+        if not research.get(n, {}).get("observations")
+        or research[n].get("financial_reviewed") is not True
+    ]
+    missing_charts = [
+        n for n in range(3, 16)
+        if research.get(n, {}).get("chart_verified") is not True
+        or research.get(n, {}).get("visual_reviewed") is not True
+    ]
+    checklist = {
+        "verified_financial_research": (
+            not missing_research and not result.get("source_failures")
+        ),
+        "updated_charts_company_analysis_outlook": not missing_charts,
+        "pdf_content_visual_quality": (
+            result.get("page_count") == 16
+            and result.get("mechanical_pdf_checks", {}).get("passed") is True
+            and result.get("logo_asset_provided") is True
+            and len(pages) == 16
+            and all(isinstance(p, dict) and
+                    p.get("visual_reviewed") is True and
+                    p.get("human_approved") is True for p in pages)
+        ),
+        "magazine_button_telegram_delivery": (
+            result.get("telegram_delivery_verified") is True
+            and type(result.get("telegram_message_id")) is int
+            and result["telegram_message_id"] > 0
+        ),
+        "final_publication_approval": (
+            result.get("editorial_approved") is True
+            and result.get("owner_release_approved") is True
+        ),
+    }
+    return {
+        "ready": all(checklist.values()),
+        "checks": checklist,
+        "research_pages_pending": missing_research,
+        "chart_pages_pending": missing_charts,
+        "note": "Checks record evidence status, not independent authentication of market sources.",
+    }
+
+
 def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER,
              source_pack: Path | None = None, source_root: Path | None = None,
              logo_file: Path | None = None, scheduled: bool = False,
@@ -368,7 +420,7 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         page_obj = {"page": n, "locked_title": title, "layout": entry["layout"],
                     "status": "PENDING_EDITORIAL_REVIEW", "observations": by_page.get(n, []),
                     "visual_reviewed": False, "financial_reviewed": False,
-                    "human_approved": False}
+                    "chart_verified": False, "human_approved": False}
         pages.append(page_obj)
         (dest / f"page_{n:02d}.json").write_text(
             json.dumps(page_obj, indent=2) + "\n", encoding="utf-8")
@@ -380,6 +432,7 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
               "source_failures": failures, "logo_asset_provided": bool(logo_file and logo_file.is_file()),
               "mechanical_pdf_checks": qa, "editorial_approved": False,
               "publication_allowed": False, "pages": pages}
+    result["public_readiness"] = assess_public_readiness(result)
     (dest / "release_gate.json").write_text(
         json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if not qa["passed"]:

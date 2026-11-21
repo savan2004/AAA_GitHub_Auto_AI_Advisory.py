@@ -1,5 +1,16 @@
 # MSK Magazine — independent GitHub monthly automation
 
+## One-magazine-per-month production policy
+
+- **Exactly one public edition per calendar issue** (YYYY-MM), and only after all release gates pass. Generating private review drafts does not create an additional magazine.
+- **Days 1–15:** collect dated official finance filings, index, macro and company data; store checksums, source URLs and dates. This is the editorial target, **not** a claim that continuous source collection is already implemented.
+- **Days 16–23:** write current analysis and create charts from verified values; no synthetic numbers or old-month recommendations.
+- **Days 24–27:** assemble the locked 16-page Design 3 PDF; complete title, page count, chart and logo checks.
+- **Days 28–month-end:** independent source comparison, page-by-page visual review, corrections and final candidate.
+- **Following month:** the existing first-Monday workflow may create an **unapproved private draft**, not a public edition. Release is separate and requires complete financial/chart QA, Telegram proof and explicit owner approval. If these fail, remain unpublished rather than issuing a filler magazine.
+- A missing or delayed month **must not** be replaced with an invented edition. Revisions must retain the same issue identity; never send more than one public release for the same issue.
+- Do not claim daily/weekly autonomous collection, public-delivery deduplication or publication readiness until their connected jobs and ledger evidence exist.
+
 ## Schedule and stored results
 - Workflow: .github/workflows/msk-magazine-monthly.yml
 - GitHub cron: Monday 02:30 UTC (08:00 IST); code enforces the **first Monday of each month**. No runs on other Mondays.

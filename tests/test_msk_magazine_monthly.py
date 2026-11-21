@@ -10,6 +10,7 @@ import unittest
 from scripts.msk_magazine_monthly import (
     DEFAULT_MASTER, MagazineError, audit_pdf, first_monday,
     generate, is_monthly_due, issue_for, load_master, validate_evidence,
+    assess_public_readiness,
 )
 
 
@@ -49,10 +50,91 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertIn("GITHUB_RUN_ID", workflow)
         self.assertNotIn("gh release publish", workflow)
         self.assertNotIn("sendDocument", workflow)
+        # Durable archives must not trust a file merely because it exists.
+        self.assertIn('gate.get("publication_allowed") is not False', workflow)
+        self.assertIn('gate.get("editorial_approved") is not False', workflow)
+        self.assertIn('gate.get("page_count") != 16', workflow)
+        self.assertIn('gate.get("pdf_sha256")', workflow)
+        self.assertIn('len(list(root.glob("page_*.json"))) != 16', workflow)
+
+    def test_unapproved_monthly_draft_lists_all_five_launch_blockers(self):
+        output = generate(
+            "2026-11", self.root / "draft",
+            now=datetime(2026, 11, 16, tzinfo=timezone.utc),
+        )
+        gate = output["public_readiness"]
+        self.assertFalse(gate["ready"])
+        self.assertEqual(len(gate["checks"]), 5)
+        self.assertTrue(all(v is False for v in gate["checks"].values()))
+        self.assertEqual(gate["research_pages_pending"], list(range(3, 16)))
+        self.assertEqual(gate["chart_pages_pending"], list(range(3, 16)))
+        saved = json.loads((self.root / "draft" / "2026-11" /
+                            "release_gate.json").read_text())
+        self.assertEqual(saved["public_readiness"], gate)
+        self.assertFalse(saved["publication_allowed"])
+
+    def test_source_consistent_figures_do_not_certify_financial_research(self):
+        pack = self.root / "pack.json"
+        pack.write_text(json.dumps({"issue": "2026-11",
+                                    "observations": [self.row]}))
+        output = generate(
+            "2026-11", self.root / "partial",
+            source_pack=pack, source_root=self.source_root,
+            now=datetime(2026, 11, 16, tzinfo=timezone.utc),
+        )
+        self.assertEqual(output["source_consistency_rows"], 1)
+        self.assertFalse(output["public_readiness"]["checks"]["verified_financial_research"])
+        self.assertFalse(output["public_readiness"]["ready"])
+
+    def test_magazine_readiness_requires_proof_not_a_self_declared_status(self):
+        # Mechanical PDF pass and arbitrary success text cannot replace evidence.
+        fake = {"page_count": 16, "mechanical_pdf_checks": {"passed": True},
+                "logo_asset_provided": True, "source_failures": [],
+                "editorial_approved": True, "owner_release_approved": True,
+                "telegram_delivery_verified": True,
+                "telegram_message_id": 0,
+                "pages": [
+                    {"page": n, "observations": [{"label": "test"}],
+                     "financial_reviewed": True, "chart_verified": True,
+                     "visual_reviewed": True, "human_approved": True}
+                    for n in range(1, 17)
+                ]}
+        gate = assess_public_readiness(fake)
+        self.assertFalse(gate["ready"])
+        self.assertFalse(gate["checks"]["magazine_button_telegram_delivery"])
+        fake["telegram_message_id"] = 123
+        self.assertTrue(assess_public_readiness(fake)["ready"])
+        # Synthetic evidence exercises the function; it is not real approval.
 
     def test_first_mondays(self):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
+
+    def test_recurring_monthly_schedule_has_no_end_year(self):
+        # Regression: all 12 months remain schedulable across many future years.
+        # This checks the scheduling logic, not an external GitHub uptime guarantee.
+        from zoneinfo import ZoneInfo
+        ist = ZoneInfo("Asia/Kolkata")
+        seen = set()
+        for year in range(2027, 2037):
+            for month in range(1, 13):
+                day = first_monday(year, month)
+                scheduled = datetime(year, month, day.day, 8, 0, tzinfo=ist)
+                self.assertTrue(is_monthly_due(scheduled))
+                issue = issue_for(scheduled)
+                self.assertEqual(issue, f"{year:04d}-{month:02d}")
+                self.assertNotIn(issue, seen)
+                seen.add(issue)
+        self.assertEqual(len(seen), 120)
+
+    def test_monthly_workflow_uses_recurring_schedule_and_unique_archives(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/msk-magazine-monthly.yml").read_text()
+        self.assertIn('cron: "30 2 * * 1"', workflow)
+        self.assertIn("is_monthly_due(now)", workflow)
+        self.assertIn("msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}", workflow)
+        self.assertIn("--draft", workflow)
+        self.assertNotIn("gh release publish", workflow)
 
     def test_first_monday_utc_to_ist(self):
         self.assertTrue(is_monthly_due(datetime(2026, 12, 7, 2, 30, tzinfo=timezone.utc)))
