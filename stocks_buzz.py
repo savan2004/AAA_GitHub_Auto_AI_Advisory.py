@@ -517,7 +517,9 @@ def _buzz_data_status(result: dict, now=None):
         if day > expected:
             return "STALE", None
         lag = max(0, len(pd.bdate_range(day, expected)) - 1)
-        return ("STALE" if lag > 1 else "FRESH"), lag
+        # A prior completed NSE session is historical, never trade-ready.
+        # The last completed day must match exactly to claim FRESH.
+        return ("FRESH" if lag == 0 and day == expected else "STALE"), lag
     except (ValueError, TypeError, KeyError):
         return "STALE", None
 
