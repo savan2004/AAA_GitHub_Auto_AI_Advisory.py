@@ -1,0 +1,22 @@
+name: MSK AI Builder V2 offline tests
+on:
+  pull_request:
+    paths:
+      - 'msk_ai_builder_*.py'
+      - 'tests/test_msk_ai_builder_*.py'
+      - 'research_data.py'
+      - 'portfolio_doctor_advanced.py'
+      - '.github/workflows/msk-ai-builder-v2.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests==2.32.3
+      - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_*.py' -v
