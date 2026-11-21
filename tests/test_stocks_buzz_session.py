@@ -164,6 +164,15 @@ class SessionSafety(unittest.TestCase):
         old_scan = dict(scan, breakouts=[dict(row, ext_pct=11., sym="OVER")],
                         extended=2)
         self.assertIn("3 extended", ns["format_buzz"](old_scan)[0])
+        # One missed completed NSE session must suppress old trade-ready
+        # prices and targets; informational research remains visible.
+        ns["_last_completed_session"] = lambda now=None: date(2026, 11, 16)
+        previous = ns["format_buzz"](scan)
+        previous_text = "\\n".join(previous)
+        self.assertIn("DATA STATUS: <b>STALE</b>", previous[0])
+        self.assertIn("No trade-ready calls on stale data", previous_text)
+        self.assertNotIn("Reference Entry", previous_text)
+        self.assertNotIn("T1 ₹", previous_text)
         ns["_last_completed_session"] = lambda now=None: date(2026, 11, 18)
         stale = ns["format_buzz"](scan)
         self.assertIn("DATA STATUS: <b>STALE</b>", stale[0])
@@ -173,9 +182,16 @@ class SessionSafety(unittest.TestCase):
         ns = load_functions("_buzz_data_status", globals_={
             "_last_completed_session": lambda now=None: date(2026, 11, 16)})
         self.assertEqual(ns["_buzz_data_status"]({
-            "data_session": date(2026, 11, 13)}), ("FRESH", 1))
+            "data_session": date(2026, 11, 16)}), ("FRESH", 0))
+        # Friday's report is stale after Monday's completed close.
+        self.assertEqual(ns["_buzz_data_status"]({
+            "data_session": date(2026, 11, 13)}), ("STALE", 1))
         self.assertEqual(ns["_buzz_data_status"]({
             "data_session": date(2026, 11, 12)}), ("STALE", 2))
+        # Weekend before the Monday close still belongs to Friday's session.
+        ns["_last_completed_session"] = lambda now=None: date(2026, 11, 13)
+        self.assertEqual(ns["_buzz_data_status"]({
+            "data_session": date(2026, 11, 13)}), ("FRESH", 0))
 
     def test_after_close_secondary_recovers_only_verified_symbol_history(self):
         universe = {"symbols": ["A", "B", "C", "D", "E"], "source": "Official"}
