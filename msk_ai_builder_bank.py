@@ -200,7 +200,7 @@ class WeeklyResearchBank:
             conn.execute("UPDATE msk_builder_research.head SET version=%s WHERE id=1",(version,))
         return version
 
-    def read_staging(self,*,now=None):
+    def _read_head(self,*,now=None,allow_stale=False):
         now=_aware(now or datetime.now(timezone.utc))
         with self._connect(self._dsn) as conn:
             row=conn.execute("""SELECT s.version,s.reviewed_at,s.close_date,s.payload
@@ -211,9 +211,18 @@ class WeeklyResearchBank:
         version,reviewed,close,raw=row
         if sha256(raw.encode()).hexdigest()!=version:
             raise BankError("SNAPSHOT_CORRUPT")
-        if not timedelta(0)<=now-reviewed<=timedelta(days=8) or not 0<=(now.astimezone(IST).date()-close).days<=8:
+        if reviewed>now or close>now.astimezone(IST).date():
+            raise BankError("BANK_FUTURE")
+        if not allow_stale and (now-reviewed>timedelta(days=8) or (now.astimezone(IST).date()-close).days>8):
             raise BankError("BANK_STALE")
         return version,json.loads(raw)
+
+    def read_staging(self,*,now=None):
+        return self._read_head(now=now)
+
+    def read_for_review(self,*,now=None):
+        # Internal recovery only; stale evidence can identify incumbents, never serve customers.
+        return self._read_head(now=now,allow_stale=True)
 
     def read_for_customer(self):
         raise BankError("PRODUCTION_PUBLICATION_DISABLED")
