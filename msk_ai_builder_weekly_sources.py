@@ -18,6 +18,7 @@ class ListedCompany:
     member: IndexMember
     name: str
     sector: str  # Exchange index industry classification
+    series: str = "EQ"
 
 @dataclass(frozen=True)
 class WeeklyClose:
@@ -60,9 +61,15 @@ def parse_roster(raw):
     try:
         for row in _rows(raw,{"COMPANY NAME","INDUSTRY","SYMBOL","SERIES","ISIN CODE"}):
             s,i=row["SYMBOL"],row["ISIN CODE"]
-            if row["SERIES"]!="EQ" or not SYMBOL.fullmatch(s) or not ISIN.fullmatch(i) or not row["COMPANY NAME"] or not row["INDUSTRY"]:
+            # Actual NSE roster can include temporary index dummy lines.
+            # Skip only the observed, explicitly marked placeholder; all
+            # other malformed rows fail closed. Retain real non-EQ members
+            # in the universe but exclude them from equity-only screening.
+            if (s,i,row["COMPANY NAME"],row["SERIES"])==("DUMMYHEG","DUM545A01024","Dummy HEG Ltd.","EQ"):
+                continue
+            if row["SERIES"] not in ("EQ","BE","RR") or not SYMBOL.fullmatch(s) or not ISIN.fullmatch(i) or not row["COMPANY NAME"] or not row["INDUSTRY"]:
                 raise EvidenceError("INDEX_ROW_INVALID")
-            rows.append(ListedCompany(IndexMember(s,i),row["COMPANY NAME"],row["INDUSTRY"]))
+            rows.append(ListedCompany(IndexMember(s,i),row["COMPANY NAME"],row["INDUSTRY"],row["SERIES"]))
     except csv.Error as exc:
         raise EvidenceError("OFFICIAL_CSV_ROW") from exc
     if len(rows)!=500 or len({r.member.symbol for r in rows})!=500 or len({r.member.isin for r in rows})!=500:
@@ -83,7 +90,7 @@ def _positive(raw):
 
 def parse_closes(raw,day,roster):
     from datetime import datetime
-    wanted={c.member.symbol for c in roster}
+    wanted={c.member.symbol for c in roster if c.series=="EQ"}
     url=CLOSE_CSV.format(d=day.strftime("%d%m%Y"))
     output={}
     eq=0
