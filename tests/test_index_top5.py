@@ -21,7 +21,7 @@ def nse_csv(n):
 
 class OfficialIndexMembershipTests(unittest.TestCase):
     def test_nse_csv_accepts_correct_counts_and_preserves_industry(self):
-        for profile, count in (("conservative", 100), ("moderate", 150), ("aggressive", 250)):
+        for profile, count in (("conservative", 100), ("moderate", 100), ("aggressive", 100)):
             symbols, industries = ic.parse_constituents(nse_csv(count), profile)
             self.assertEqual(len(symbols), count)
             self.assertEqual(symbols[0], "TEST000")
@@ -39,16 +39,41 @@ class OfficialIndexMembershipTests(unittest.TestCase):
 
     def test_fetches_and_caches_official_current_membership(self):
         response = Mock()
-        response.content = nse_csv(150)
+        response.content = nse_csv(100)
         response.raise_for_status.return_value = None
         with patch.object(ic, "_CACHE", {}), patch.object(ic.requests, "get", return_value=response) as get:
             res = ic.get_index_universe("moderate")
-            self.assertEqual(len(res["symbols"]), 150)
-            self.assertEqual(res["name"], "Nifty Midcap 150")
+            self.assertEqual(len(res["symbols"]), 100)
+            self.assertEqual(res["name"], "Nifty Midcap 100")
             self.assertIn("nsearchives.nseindia.com", get.call_args.args[0])
+            self.assertTrue(get.call_args.args[0].endswith("ind_niftymidcap100list.csv"))
             again = ic.get_index_universe("moderate")
             self.assertTrue(again["cached"])
             self.assertEqual(get.call_count, 1)
+
+    def test_old_midcap150_constituents_cannot_be_accepted_as_midcap100(self):
+        self.assertEqual(ic.INDEXES["moderate"]["count"], 100)
+        self.assertEqual(ic.INDEXES["moderate"]["filename"],
+                         "ind_niftymidcap100list.csv")
+        with self.assertRaisesRegex(ValueError, "count outside expected range"):
+            ic.parse_constituents(nse_csv(150), "moderate")
+
+    def test_smallcap100_only_rejects_legacy_250_member_list(self):
+        self.assertEqual(ic.INDEXES["aggressive"]["count"], 100)
+        self.assertEqual(ic.INDEXES["aggressive"]["filename"],
+                         "ind_niftysmallcap100list.csv")
+        with self.assertRaisesRegex(ValueError, "count outside expected range"):
+            ic.parse_constituents(nse_csv(250), "aggressive")
+        response = Mock()
+        response.content = nse_csv(100)
+        response.raise_for_status.return_value = None
+        with patch.object(ic, "_CACHE", {}), patch.object(
+                ic.requests, "get", return_value=response) as get:
+            universe = ic.get_index_universe("aggressive")
+            self.assertEqual(len(universe["symbols"]), 100)
+            self.assertEqual(universe["name"], "Nifty Smallcap 100")
+            self.assertTrue(get.call_args.args[0].endswith(
+                "ind_niftysmallcap100list.csv"))
 
     def test_no_arbitrary_fallback_when_index_unavailable(self):
         with patch.object(ic, "_CACHE", {}), patch.object(ic.requests, "get", side_effect=ic.requests.RequestException):
@@ -96,15 +121,15 @@ class Top5ScoringTests(unittest.TestCase):
 
     def test_full_index_data_not_fixed_20_stock_seed(self):
         histories = {"TEST000": Mock(empty=False)}
-        universe = {"symbols": tuple(f"TEST{i:03d}" for i in range(250)),
-                    "cap": "Small Cap", "name": "Nifty Smallcap 250",
+        universe = {"symbols": tuple(f"TEST{i:03d}" for i in range(100)),
+                    "cap": "Small Cap", "name": "Nifty Smallcap 100",
                     "source": "Official NSE constituent CSV", "industries": {},
                     "asof": "29 Oct 2026"}
         with patch.object(top5, "get_index_universe", return_value=universe), patch(
                 "market_data.bulk_history", return_value=histories) as bulk, patch.object(
                 top5, "technical_candidate", return_value=None) as ev:
             out = top5._build_index_top5("aggressive")
-        self.assertEqual(len(bulk.call_args.args[0]), 250)
+        self.assertEqual(len(bulk.call_args.args[0]), 100)
         self.assertEqual(bulk.call_args.kwargs["chunk_size"], 50)
         self.assertIn("Insufficient price coverage", out)
         ev.assert_called_once()

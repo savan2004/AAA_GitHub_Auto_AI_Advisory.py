@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from contextlib import nullcontext
 from datetime import date, datetime, time
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -10,10 +11,10 @@ import overnight_index_reports as n
 import index_top5 as live
 
 
-def make_universe(profile="moderate",count=150):
+def make_universe(profile="moderate",count=100):
     return {
-        "name":{"conservative":"Nifty 100","moderate":"Nifty Midcap 150",
-                "aggressive":"Nifty Smallcap 250"}[profile],
+        "name":{"conservative":"Nifty 100","moderate":"Nifty Midcap 100",
+                "aggressive":"Nifty Smallcap 100"}[profile],
         "cap":{"conservative":"Large Cap","moderate":"Mid Cap",
                "aggressive":"Small Cap"}[profile],
         "symbols":tuple("TEST%03d"%i for i in range(count)),
@@ -43,8 +44,8 @@ class OvernightLedgerTests(unittest.TestCase):
         self.store.db.close()
         self.t.cleanup()
 
-    def test_mandatory_full_100_150_250_fundamental_attempts(self):
-        for profile,count in (("conservative",100),("moderate",150),("aggressive",250)):
+    def test_mandatory_full_100_100_100_fundamental_attempts(self):
+        for profile,count in (("conservative",100),("moderate",100),("aggressive",100)):
             universe=make_universe(profile,count)
             with patch.object(n,"get_index_universe",return_value=universe), \
                  patch("market_data.bulk_history",return_value={
@@ -70,7 +71,7 @@ class OvernightLedgerTests(unittest.TestCase):
                 repeat.assert_not_called()
 
     def test_official_dummy_constituent_is_recorded_not_quoted_or_ranked(self):
-        universe=make_universe("aggressive",250)
+        universe=make_universe("aggressive",100)
         members=list(universe["symbols"])
         members[-1]="DUMMYHEG"
         universe["symbols"]=tuple(members)
@@ -85,7 +86,7 @@ class OvernightLedgerTests(unittest.TestCase):
                    return_value=evidence("aggressive")) as financial:
             n.collect_profile("aggressive",self.store,self.day,delay_s=0)
         self.assertNotIn("DUMMYHEG",price.call_args.args[0])
-        self.assertEqual(financial.call_count,249)
+        self.assertEqual(financial.call_count,99)
         row=self.store.row(self.day,"aggressive","DUMMYHEG")
         self.assertEqual(row["price_reason"],
                          "official_nse_nonstradable_placeholder")
@@ -93,8 +94,8 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertEqual(row["fund_status"],"REJECTED")
         state,stats,body=n.render_snapshot(
             "aggressive",universe,self.store.rows(self.day,"aggressive"),self.day)
-        self.assertEqual(stats["expected"],250)
-        self.assertEqual(stats["price_fresh"],249)
+        self.assertEqual(stats["expected"],100)
+        self.assertEqual(stats["price_fresh"],99)
         self.assertNotIn("DUMMYHEG</b>",body)
 
     def test_previously_unavailable_fundamentals_get_one_bounded_recovery(self):
@@ -119,7 +120,7 @@ class OvernightLedgerTests(unittest.TestCase):
             self.assertEqual(fetch.call_count,100)
 
     def test_no_ranked_top5_if_even_one_member_not_reviewed(self):
-        universe=make_universe("moderate",150)
+        universe=make_universe("moderate",100)
         digest=n._member_hash(universe)
         for sym in universe["symbols"][:-1]:
             self.store.write_row(self.day,"moderate",sym,{
@@ -130,13 +131,13 @@ class OvernightLedgerTests(unittest.TestCase):
         state,counts,body=n.render_snapshot("moderate",universe,
                                           self.store.rows(self.day,"moderate"),self.day)
         self.assertEqual(state,"PARTIAL")
-        self.assertEqual(counts["reviewed"],149)
+        self.assertEqual(counts["reviewed"],99)
         self.assertIn("TOP 5 WITHHELD",body.upper())
         self.assertNotIn("1. TEST",body)
         self.assertIn("Not reviewed: 1",body)
 
     def test_changed_official_membership_revokes_stale_old_row_evidence(self):
-        universe=make_universe("moderate",150)
+        universe=make_universe("moderate",100)
         digest=n._member_hash(universe)
         old_digest="previous-official-membership"
         for i,sym in enumerate(universe["symbols"]):
@@ -149,15 +150,15 @@ class OvernightLedgerTests(unittest.TestCase):
         state,stats,msg=n.render_snapshot("moderate",universe,
                                           self.store.rows(self.day,"moderate"),self.day)
         self.assertEqual(state,"PARTIAL")
-        self.assertEqual(stats["reviewed"],149)
-        self.assertEqual(stats["price_fresh"],149)
-        self.assertEqual(stats["validated"],149)
+        self.assertEqual(stats["reviewed"],99)
+        self.assertEqual(stats["price_fresh"],99)
+        self.assertEqual(stats["validated"],99)
         self.assertNotIn("1. TEST",msg)
         self.assertIn("TOP 5 WITHHELD",msg.upper())
 
     def test_morning_readiness_checks_all_profiles_and_exact_session(self):
-        for profile,nmembers in (("conservative",100),("moderate",150),
-                                 ("aggressive",250)):
+        for profile,nmembers in (("conservative",100),("moderate",100),
+                                 ("aggressive",100)):
             universe=make_universe(profile,nmembers)
             stats={"expected":nmembers,"reviewed":nmembers,
                    "price_fresh":nmembers,
@@ -175,26 +176,26 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertEqual([row["ready"] for row in state["profiles"]],
                          [True, True, False])
         self.assertEqual([row["expected"] for row in state["profiles"]],
-                         [100,150,250])
+                         [100,100,100])
         # Without any real records on the following session, a healthy DB
         # never promotes the previous reports to current readiness.
         tomorrow=date(2026,10,30)
         self.assertFalse(n.readiness_check(self.store,tomorrow)["ready"])
 
     def test_readiness_rejects_partial_low_coverage_and_wrong_membership(self):
-        u=make_universe("moderate",150)
-        good={"expected":150,"reviewed":150,"price_fresh":140,
+        u=make_universe("moderate",100)
+        good={"expected":100,"reviewed":100,"price_fresh":95,
               "membership_hash":n._member_hash(u)}
         for sym in u["symbols"]:
             self.store.write_row(self.day,"moderate",sym,{
                 "symbol":sym,"membership_hash":good["membership_hash"],
                 "fund_attempted":True,
-                "technical":technical(sym) if int(sym[-3:])<140 else None
+                "technical":technical(sym) if int(sym[-3:])<95 else None
             })
         for status,stat in (
             ("PARTIAL",good),
-            ("READY",{**good,"reviewed":149}),
-            ("READY",{**good,"price_fresh":120}),
+            ("READY",{**good,"reviewed":99}),
+            ("READY",{**good,"price_fresh":80}),
             ("READY",{**good,"expected":28,"reviewed":28}),
             ("READY",{**good,"membership_hash":"MISSING"}),
         ):
@@ -205,6 +206,34 @@ class OvernightLedgerTests(unittest.TestCase):
         self.store.save_report(self.day,"moderate","READY",good,"QA")
         self.assertTrue(n.readiness_check(
             self.store,self.day,("moderate",))["ready"])
+
+    def test_legacy_midcap150_ready_record_is_rejected_after_midcap100_switch(self):
+        # A former index's same-session READY text cannot masquerade as today's
+        # official 100-member universe, even if the DB still holds its rows.
+        old=make_universe("moderate",150)
+        digest=n._member_hash(old)
+        for sym in old["symbols"]:
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "technical":technical(sym)
+            })
+        self.store.save_report(
+            self.day,"moderate","READY",
+            {"expected":150,"reviewed":150,"price_fresh":150,
+             "membership_hash":digest},"OLD MIDCAP150 PICK — NEVER RELEASE")
+        gate=n.readiness_check(self.store,self.day,("moderate",))
+        self.assertFalse(gate["ready"])
+        reply=n.load_prepared_report("moderate",store=self.store,
+                                    now=datetime(2026,10,30,8,5,tzinfo=n.IST))
+        self.assertIn("withheld",reply.lower())
+        self.assertNotIn("OLD MIDCAP150 PICK",reply)
+        # The actual user-facing Mid Cap Top 5 renderer must enforce the gate
+        # too; merely relabeling a 150-stock old row is not acceptable.
+        from msk_daily_reports import render_latest_profile
+        with patch.object(n, "EvidenceStore", return_value=nullcontext(self.store)):
+            with self.assertRaisesRegex(ValueError, "midcap100_index_evidence_not_ready"):
+                render_latest_profile(
+                    "moderate", now=datetime(2026,10,30,8,5,tzinfo=n.IST))
 
     def test_readiness_rejects_orphan_summary_and_ledger_mismatch(self):
         universe=make_universe("conservative",100)
@@ -231,7 +260,7 @@ class OvernightLedgerTests(unittest.TestCase):
             self.store,self.day,("conservative",))["ready"])
 
     def test_repaired_financials_invalidate_outdated_ready_report(self):
-        universe=make_universe("moderate",150)
+        universe=make_universe("moderate",100)
         digest=n._member_hash(universe)
         for sym in universe["symbols"]:
             self.store.write_row(self.day,"moderate",sym,{
@@ -319,7 +348,7 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertIn("Provisional 100",body)
 
     def test_wait_watchlist_contains_reasons_but_never_buy_entries(self):
-        universe=make_universe("moderate",150)
+        universe=make_universe("moderate",100)
         digest=n._member_hash(universe)
         for i,sym in enumerate(universe["symbols"]):
             tech=technical(sym,signal="WAIT",risk=9.2 if i<3 else 17.2)
@@ -364,7 +393,7 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertNotIn("Conditional entry",body)
 
     def test_no_picks_explains_wait_without_fabricating_buy(self):
-        universe=make_universe("moderate",150)
+        universe=make_universe("moderate",100)
         digest=n._member_hash(universe)
         for sym in universe["symbols"]:
             signal=technical(sym,signal="WAIT")
@@ -378,12 +407,76 @@ class OvernightLedgerTests(unittest.TestCase):
         )
         self.assertEqual(state,"READY")
         self.assertEqual(stats["candidate_count"],0)
-        self.assertIn("all 150 financially rule-qualified stocks currently show wait",body.lower())
+        self.assertIn("all 100 financially rule-qualified stocks currently show wait",body.lower())
         self.assertIn("No Top 5 issued",body)
         self.assertNotIn("Conditional entry",body)
 
-    def test_smallcap_complete_but_zero_candidates_is_not_ready(self):
+    def test_old_smallcap250_report_is_blocked_from_smallcap100_button(self):
+        # Even the old index's 250 valid records must not be relabeled 100.
         universe=make_universe("aggressive",250)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"aggressive",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "fund_status":"VALIDATED","technical":technical(sym),
+            })
+        stats={"expected":250,"reviewed":250,"price_fresh":250,
+               "membership_hash":digest,"candidate_count":1}
+        self.store.save_report(self.day,"aggressive","READY",stats,
+                               "OLD SMALLCAP250 PICK -- NEVER RELEASE")
+        self.assertFalse(n.readiness_check(
+            self.store,self.day,("aggressive",))["ready"])
+        from msk_daily_reports import render_latest_profile
+        with patch.object(n,"EvidenceStore",return_value=nullcontext(self.store)):
+            with self.assertRaisesRegex(ValueError,
+                                         "smallcap100_index_evidence_not_ready"):
+                render_latest_profile(
+                    "aggressive",now=datetime(2026,10,30,8,5,tzinfo=n.IST))
+
+    def test_midcap100_full_new_ledger_ignores_old_150_extras(self):
+        universe=make_universe("moderate",100)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"membership_hash":digest,
+                "fund_attempted":True,"fund_status":"VALIDATED",
+                "technical":technical(sym)
+            })
+        self.store.write_row(self.day,"moderate","EXTRAOLD150",{
+            "symbol":"EXTRAOLD150","membership_hash":"old-index-membership",
+            "fund_attempted":True,"fund_status":"VALIDATED",
+            "technical":technical("EXTRAOLD150"),
+        })
+        self.store.save_report(self.day,"moderate","READY",{
+            "expected":100,"reviewed":100,"price_fresh":100,
+            "membership_hash":digest},"CURRENT MIDCAP100")
+        self.assertTrue(n.readiness_check(
+            self.store,self.day,("moderate",))["ready"])
+
+    def test_smallcap100_full_new_ledger_ignores_old_250_extras(self):
+        # Verified new-issuer rows win, old entries do not count toward readiness.
+        current=make_universe("aggressive",100)
+        new_hash=n._member_hash(current)
+        old_hash="old-index-membership"
+        for sym in current["symbols"]:
+            self.store.write_row(self.day,"aggressive",sym,{
+                "symbol":sym,"membership_hash":new_hash,
+                "fund_attempted":True,"fund_status":"VALIDATED",
+                "technical":technical(sym)
+            })
+        self.store.write_row(self.day,"aggressive","EXTRAOLD250",{
+            "symbol":"EXTRAOLD250","membership_hash":old_hash,
+            "fund_attempted":True,"fund_status":"VALIDATED",
+            "technical":technical("EXTRAOLD250"),
+        })
+        stats={"expected":100,"reviewed":100,"price_fresh":100,
+               "membership_hash":new_hash,"candidate_count":1}
+        self.store.save_report(self.day,"aggressive","READY",stats,"CURRENT 100")
+        gate=n.readiness_check(self.store,self.day,("aggressive",))
+        self.assertTrue(gate["ready"])
+
+    def test_smallcap_complete_but_zero_candidates_is_not_ready(self):
+        universe=make_universe("aggressive",100)
         digest=n._member_hash(universe)
         for sym in universe["symbols"]:
             self.store.write_row(self.day,"aggressive",sym,{
@@ -404,7 +497,7 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertNotIn("1. TEST",msg)
 
     def test_current_complete_rule_gated_watchlist_and_risk_limit(self):
-        universe=make_universe("aggressive",250)
+        universe=make_universe("aggressive",100)
         h=n._member_hash(universe)
         for i,sym in enumerate(universe["symbols"]):
             self.store.write_row(self.day,"aggressive",sym,{
@@ -416,8 +509,8 @@ class OvernightLedgerTests(unittest.TestCase):
         state,stats,body=n.render_snapshot("aggressive",universe,
                                          self.store.rows(self.day,"aggressive"),self.day)
         self.assertEqual(state,"READY")
-        self.assertEqual(stats["reviewed"],250)
-        self.assertEqual(stats["price_fresh"],250)
+        self.assertEqual(stats["reviewed"],100)
+        self.assertEqual(stats["price_fresh"],100)
         self.assertGreaterEqual(stats["eligible_count"],7)
         self.assertNotIn("TEST000</b>",body) # 25% stop too wide
         self.assertIn("Conditional entry",body)
@@ -425,8 +518,8 @@ class OvernightLedgerTests(unittest.TestCase):
         self.store.save_report(self.day,"aggressive",state,stats,body)
         shown=n.load_prepared_report("aggressive",store=self.store,
               now=datetime(2026,10,30,8,10,tzinfo=n.IST))
-        self.assertIn("Nifty Smallcap 250",shown)
-        self.assertIn("250/250",shown)
+        self.assertIn("Nifty Smallcap 100",shown)
+        self.assertIn("100/100",shown)
         self.assertEqual(self.store.get_report("aggressive")["state"],"READY")
 
     def test_stale_market_candles_cannot_generate_overnight_ready(self):
@@ -468,7 +561,7 @@ class OvernightLedgerTests(unittest.TestCase):
 
     def test_button_does_not_show_yesterdays_old_quote_as_today(self):
         self.store.save_report("2026-10-28","moderate","READY",
-          {"reviewed":150},"OLD SESSION: DO NOT SHOW AS LIVE")
+          {"reviewed":100},"OLD SESSION: DO NOT SHOW AS LIVE")
         text=n.load_prepared_report("moderate",store=self.store,
             now=datetime(2026,10,30,8,5,tzinfo=n.IST))
         self.assertIn("expected completed NSE session 2026-10-29",text)

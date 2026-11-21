@@ -17,8 +17,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 NAMES = {
     "conservative": ("LARGE CAP", "Nifty 100", 8.0),
-    "moderate": ("MID CAP", "Nifty Midcap 150", 11.0),
-    "aggressive": ("SMALL CAP", "Nifty Smallcap 250", 15.0),
+    "moderate": ("MID CAP", "Nifty Midcap 100", 11.0),
+    "aggressive": ("SMALL CAP", "Nifty Smallcap 100", 12.0),
 }
 WEIGHTS = (0.30, 0.25, 0.20, 0.15, 0.10)
 VERDICT_FIVE = "SCREENING COMPLETE — 5 RESEARCH CANDIDATES"
@@ -431,11 +431,20 @@ def render_latest_profile(profile, *, now=None):
     """Always re-read saved per-company evidence; never replay a 'sent today' flag."""
     if profile not in NAMES:
         raise ValueError("unknown_profile")
-    from overnight_index_reports import EvidenceStore
+    from overnight_index_reports import EvidenceStore, readiness_check, _session
+    now = now or datetime.now(IST)
     with EvidenceStore() as store:
         report = store.get_report(profile)
         if not report:
             raise ValueError("no_completed_market_session")
+        if profile in ("moderate", "aggressive"):
+            # Midcap150 and Smallcap250 old ledgers must never be relabeled
+            # as current official 100-member rankings. Verify exact session,
+            # membership count, issuer hash, full review and fresh coverage.
+            if (str(report.get("day")) != str(_session(now=now)) or
+                    not readiness_check(store, report["day"], (profile,))["ready"]):
+                kind = "midcap100" if profile == "moderate" else "smallcap100"
+                raise ValueError(kind + "_index_evidence_not_ready")
         rows = store.rows(report["day"], profile)
     breadth = None
     try:
