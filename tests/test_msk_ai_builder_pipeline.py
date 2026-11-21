@@ -76,3 +76,30 @@ class DemoTests(unittest.TestCase):
                 text=page.extract_text()
                 self.assertIn("FICTIONAL DEMONSTRATION",text)
                 self.assertGreater(len(text),200)
+
+class StageTests(unittest.TestCase):
+    def test_coverage_and_fail_closed(self):
+        from msk_ai_builder_stage import stage_secondary
+        members=tuple(IndexMember(f"TEST{i:03}",f"INE{i:09}") for i in range(500))
+        def provider(symbol,timeout):
+            if symbol=="TEST001":
+                raise TimeoutError()
+            data=fixture()
+            data["_source_url"]=f"https://www.screener.in/company/{symbol}/consolidated/"
+            return normalize_secondary(symbol,data,now=NOW)
+        result=stage_secondary(index_provider=lambda:members, evidence_provider=provider,
+                               max_symbols=3,clock=lambda:0)
+        self.assertEqual(result.coverage,(2,500))
+        self.assertEqual(result.attempted,3)
+        self.assertEqual(result.failures,(("TEST001","PROVIDER_UNAVAILABLE"),))
+        self.assertEqual(result.publication_status,"WITHHELD")
+        with self.assertRaises(EvidenceError):
+            stage_secondary(index_provider=lambda:members[:-1],evidence_provider=provider)
+    def test_expired_budget(self):
+        from msk_ai_builder_stage import stage_secondary
+        members=tuple(IndexMember(f"TEST{i:03}",f"INE{i:09}") for i in range(500))
+        ticks=iter((0,61))
+        result=stage_secondary(index_provider=lambda:members,evidence_provider=lambda **_:self.fail("not called"),
+                               clock=lambda:next(ticks))
+        self.assertEqual(result.attempted,0)
+        self.assertEqual(result.coverage,(0,500))
