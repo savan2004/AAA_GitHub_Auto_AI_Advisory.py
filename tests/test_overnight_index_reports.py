@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from contextlib import nullcontext
 from datetime import date, datetime, time
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -381,6 +382,28 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertIn("all 150 financially rule-qualified stocks currently show wait",body.lower())
         self.assertIn("No Top 5 issued",body)
         self.assertNotIn("Conditional entry",body)
+
+    def test_old_smallcap250_report_is_blocked_from_smallcap100_button(self):
+        # Even the old index's 250 valid records must not be relabeled 100.
+        universe=make_universe("aggressive",250)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"aggressive",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "fund_status":"VALIDATED","technical":technical(sym),
+            })
+        stats={"expected":250,"reviewed":250,"price_fresh":250,
+               "membership_hash":digest,"candidate_count":1}
+        self.store.save_report(self.day,"aggressive","READY",stats,
+                               "OLD SMALLCAP250 PICK -- NEVER RELEASE")
+        self.assertFalse(n.readiness_check(
+            self.store,self.day,("aggressive",))["ready"])
+        from msk_daily_reports import render_latest_profile
+        with patch.object(n,"EvidenceStore",return_value=nullcontext(self.store)):
+            with self.assertRaisesRegex(ValueError,
+                                         "smallcap100_index_evidence_not_ready"):
+                render_latest_profile(
+                    "aggressive",now=datetime(2026,10,30,8,5,tzinfo=n.IST))
 
     def test_smallcap_complete_but_zero_candidates_is_not_ready(self):
         universe=make_universe("aggressive",100)
