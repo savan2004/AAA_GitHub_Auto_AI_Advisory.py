@@ -206,6 +206,27 @@ class OvernightLedgerTests(unittest.TestCase):
         self.assertTrue(n.readiness_check(
             self.store,self.day,("moderate",))["ready"])
 
+    def test_legacy_midcap150_ready_record_is_rejected_after_midcap100_switch(self):
+        # A former index's same-session READY text cannot masquerade as today's
+        # official 100-member universe, even if the DB still holds its rows.
+        old=make_universe("moderate",150)
+        digest=n._member_hash(old)
+        for sym in old["symbols"]:
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"membership_hash":digest,"fund_attempted":True,
+                "technical":technical(sym)
+            })
+        self.store.save_report(
+            self.day,"moderate","READY",
+            {"expected":150,"reviewed":150,"price_fresh":150,
+             "membership_hash":digest},"OLD MIDCAP150 PICK — NEVER RELEASE")
+        gate=n.readiness_check(self.store,self.day,("moderate",))
+        self.assertFalse(gate["ready"])
+        reply=n.load_prepared_report("moderate",store=self.store,
+                                    now=datetime(2026,10,30,8,5,tzinfo=n.IST))
+        self.assertIn("withheld",reply.lower())
+        self.assertNotIn("OLD MIDCAP150 PICK",reply)
+
     def test_readiness_rejects_orphan_summary_and_ledger_mismatch(self):
         universe=make_universe("conservative",100)
         digest=n._member_hash(universe)
