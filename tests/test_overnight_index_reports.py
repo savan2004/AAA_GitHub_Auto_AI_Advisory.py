@@ -405,6 +405,29 @@ class OvernightLedgerTests(unittest.TestCase):
                 render_latest_profile(
                     "aggressive",now=datetime(2026,10,30,8,5,tzinfo=n.IST))
 
+    def test_smallcap100_full_new_ledger_ignores_old_250_extras(self):
+        # A valid 100-member report should work after a same-session cutover.
+        # Outdated entries are retained but cannot count toward the new hash.
+        current=make_universe("aggressive",100)
+        new_hash=n._member_hash(current)
+        old_hash="old-index-membership"
+        for sym in current["symbols"]:
+            self.store.write_row(self.day,"aggressive",sym,{
+                "symbol":sym,"membership_hash":new_hash,
+                "fund_attempted":True,"fund_status":"VALIDATED",
+                "technical":technical(sym)
+            })
+        self.store.write_row(self.day,"aggressive","EXTRAOLD250",{
+            "symbol":"EXTRAOLD250","membership_hash":old_hash,
+            "fund_attempted":True,"fund_status":"VALIDATED",
+            "technical":technical("EXTRAOLD250"),
+        })
+        stats={"expected":100,"reviewed":100,"price_fresh":100,
+               "membership_hash":new_hash,"candidate_count":1}
+        self.store.save_report(self.day,"aggressive","READY",stats,"CURRENT 100")
+        gate=n.readiness_check(self.store,self.day,("aggressive",))
+        self.assertTrue(gate["ready"])
+
     def test_smallcap_complete_but_zero_candidates_is_not_ready(self):
         universe=make_universe("aggressive",100)
         digest=n._member_hash(universe)
