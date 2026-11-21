@@ -1563,19 +1563,14 @@ def portfolio_doctor_text(m):
     from portfolio_doctor_live import parse_holdings, PortfolioDoctorError
 
     raw = m.text or ""
-    if len(raw.encode("utf-8")) > 2048 or not raw.strip():
-        with _portfolio_doctor_lock:
-            _portfolio_doctor_waiting.pop(m.chat.id, None)
-        safe_send(m.chat.id, "Invalid request. Select Portfolio Doctor again, then enter 1–5 rows.")
-        return
     payload = raw.encode("utf-8")
+    if len(payload) > 2048 or not raw.strip():
+        safe_send(m.chat.id, "Paste up to 5 rows, one per line, for example SBIN 100 840. You can retry in this session.")
+        return
     try:
         parse_holdings("typed_holdings.csv", payload)
     except PortfolioDoctorError:
-        with _portfolio_doctor_lock:
-            _portfolio_doctor_waiting.pop(m.chat.id, None)
-            _portfolio_audit_mode.pop(m.chat.id, None)
-        safe_send(m.chat.id, "Invalid holdings. Select Portfolio Doctor again to retry.")
+        safe_send(m.chat.id, "Invalid holdings. Use Symbol Quantity AverageBuyPrice, for example SBIN 100 840. You can retry in this session.")
         return
     portfolio_doctor_document(m, _typed_payload=payload)
 
@@ -1597,17 +1592,27 @@ def portfolio_doctor_document(m, _typed_payload=None):
             safe_send(uid, "A Portfolio Doctor report is already running.")
             return
         if not _portfolio_doctor_slots.acquire(blocking=False):
-            _portfolio_audit_mode.pop(uid, None)
-            _portfolio_doctor_waiting.pop(uid, None)
-            safe_send(uid, "Portfolio Doctor is busy. Retry shortly; no holdings were saved.")
+            safe_send(uid, "Portfolio Doctor is busy. Resend your holdings shortly.")
             return
-        audit_requested = _portfolio_audit_mode.pop(uid, 0) > time.monotonic()
+        audit_expiry = _portfolio_audit_mode.pop(uid, 0)
+        audit_requested = audit_expiry > time.monotonic()
         _portfolio_doctor_waiting.pop(uid, None)
         _portfolio_doctor_running.add(uid)
+
+    def finish_request(*, allow_retry=False):
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_running.discard(uid)
+            now = time.monotonic()
+            if allow_retry and expiry > now and uid not in _builder_form:
+                _portfolio_doctor_waiting[uid] = expiry
+                if audit_requested and audit_expiry > now:
+                    _portfolio_audit_mode[uid] = audit_expiry
+            _portfolio_doctor_slots.release()
 
     def _run():
         import io
         from portfolio_doctor_live import PortfolioDoctorError, run_isolated_memory
+        allow_retry = False
         try:
             if _typed_payload is not None:
                 name, payload = "typed_holdings.csv", _typed_payload
@@ -1615,15 +1620,18 @@ def portfolio_doctor_document(m, _typed_payload=None):
                 doc = m.document
                 name = (doc.file_name or "").lower()
                 if not name.endswith((".csv", ".xlsx")) or (doc.file_size or 0) > MAX_BYTES:
-                    safe_send(uid, "Only CSV/XLSX up to 5 MB, with 1–5 holdings, are supported.")
+                    allow_retry = True
+                    safe_send(uid, "Only CSV/XLSX up to 5 MB, with 1–5 holdings, are supported. Resend a corrected file or paste your holdings.")
                     return
                 file_info = bot.get_file(doc.file_id)
                 if file_info.file_size and file_info.file_size > MAX_BYTES:
-                    safe_send(uid, "File exceeds the 5 MB limit.")
+                    allow_retry = True
+                    safe_send(uid, "File exceeds the 5 MB limit. Resend a corrected file or paste your holdings.")
                     return
                 payload = bot.download_file(file_info.file_path)
             if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_BYTES:
-                safe_send(uid, "Empty or oversized input. No report generated.")
+                allow_retry = True
+                safe_send(uid, "Empty or oversized input. No report generated. Resend a corrected file or paste your holdings.")
                 return
             safe_send(uid, "Checking recent market prices for your private, one-time report.")
             # PDF and holdings travel through worker stdin/stdout, never a local file.
@@ -1654,7 +1662,8 @@ def portfolio_doctor_document(m, _typed_payload=None):
                     caption=(("MSK Portfolio Audit | Private, on-demand research PDF. "
                               if audit_requested else
                               "MSK Portfolio Doctor | Private educational PDF. ") +
-                             "Tap a stock below for separate detailed company research. "
+                             ("Tap a stock below for separate detailed company research. "
+                              if research_markup else "") +
                              "Educational only; not investment instructions."),
                     timeout=30, protect_content=True, reply_markup=research_markup)
             message_id = getattr(receipt, "message_id", None)
@@ -1667,7 +1676,8 @@ def portfolio_doctor_document(m, _typed_payload=None):
         except PortfolioDoctorError as exc:
             logger.warning("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT error_code=%s", exc.code)
             if exc.code == "BAD_INPUT":
-                safe_send(uid, "Invalid holdings. Send up to 5 rows: Symbol Qty Buy Price.")
+                allow_retry = True
+                safe_send(uid, "Invalid holdings. Send up to 5 rows: Symbol Qty Buy Price. Resend a corrected file or paste your holdings.")
             elif exc.code in ("STALE_PRICES", "NO_PRICES"):
                 safe_send(uid, "Verified recent closing prices unavailable. No estimates or PDF issued. Please retry later.")
             elif exc.code == "TIMEOUT":
@@ -1679,17 +1689,13 @@ def portfolio_doctor_document(m, _typed_payload=None):
                          type(exc).__name__)
             safe_send(uid, "Portfolio Doctor temporarily unavailable. No client holdings were saved.")
         finally:
-            with _portfolio_doctor_lock:
-                _portfolio_doctor_running.discard(uid)
-            _portfolio_doctor_slots.release()
+            finish_request(allow_retry=allow_retry)
 
     try:
         executor.submit(_run)
     except Exception:
-        with _portfolio_doctor_lock:
-            _portfolio_doctor_running.discard(uid)
-        _portfolio_doctor_slots.release()
-        safe_send(uid, "Unable to start Portfolio Doctor. No holdings were saved.")
+        finish_request(allow_retry=True)
+        safe_send(uid, "Unable to start Portfolio Doctor. Resend your holdings shortly.")
 
 
 # Portfolio Doctor's optional new-capital builder is independent of saved holdings.

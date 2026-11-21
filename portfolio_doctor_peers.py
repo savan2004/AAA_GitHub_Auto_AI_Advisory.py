@@ -18,7 +18,8 @@ MIN_MEMBERS = 450
 MAX_MEMBERS = 550
 PEERS_PER_INDUSTRY = 8
 MAX_SCREENED = 36
-MAX_RESULTS = 8
+MAX_RESULTS = 12
+MAX_PER_INDUSTRY = 3
 
 
 def official_nifty500_industries(*, get=None):
@@ -117,6 +118,7 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     from portfolio_doctor_live import verified_completed_daily_frame
     qualified = []
     comparisons = []
+    evidence = {}
     for sym, industry in sampled:
         try:
             checked = verified_completed_daily_frame(histories.get(sym), now=now)
@@ -130,11 +132,14 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
                 day20 = 100 * (closes[-1] / closes[-21] - 1)
                 rsi = _rsi(closes)
                 if rsi is not None and all(math.isfinite(x) for x in (day20, float(rsi))):
-                    comparisons.append({
+                    observation = {
                         "symbol": sym, "industry": industry,
                         "close": closes[-1], "date": checked.index[-1].date().isoformat(),
                         "return20": round(day20, 2), "rsi14": round(float(rsi), 1),
-                    })
+                        "return_window": tuple(day.date().isoformat() for day in checked.index[-21:]),
+                    }
+                    comparisons.append(observation)
+                    evidence[sym] = observation
             scored = evaluator(sym, checked, "moderate", asof=now)
             if not isinstance(scored, dict) or scored.get("sym") != sym:
                 continue
@@ -148,6 +153,8 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
                 "symbol": sym, "industry": industry, "score": score,
                 "close": price, "date": scored["asof"],
                 "rsi": scored.get("rsi"), "adx": scored.get("adx"),
+                "return20": evidence.get(sym, {}).get("return20"),
+                "return_window": evidence.get(sym, {}).get("return_window"),
             })
         except Exception:
             # Never emit customer tickers or provider details in worker logs.
@@ -156,7 +163,7 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     chosen, counts = [], {}
     for row in qualified:
         label = row["industry"]
-        if counts.get(label, 0) >= 2:
+        if counts.get(label, 0) >= MAX_PER_INDUSTRY:
             continue
         chosen.append(row)
         counts[label] = counts.get(label, 0) + 1
@@ -166,11 +173,13 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     out["candidates"] = chosen
     # Price momentum is disclosed only as one comparable measurement; no
     # fundamental-quality ranking is inferred from short-window returns.
+    selected_symbols = {row['symbol'] for row in chosen}
     comparison_rows = []
     for industry in industries:
-        ordered = sorted((row for row in comparisons if row["industry"] == industry),
+        ordered = sorted((row for row in comparisons if row["industry"] == industry
+                          and row["symbol"] not in selected_symbols),
                          key=lambda row: (-row["return20"], row["symbol"]))
-        comparison_rows.extend(ordered[:2])
+        comparison_rows.extend(ordered[:MAX_PER_INDUSTRY])
     out["comparisons"] = comparison_rows[:10]
     out["status"] = "SCREENED"
     return out
