@@ -67,7 +67,7 @@ class CompanyResearchAcceptance(unittest.TestCase):
         for sym in self.frames:
             self.assertIn("COMPANY RESEARCH: " + sym, whole)
         self.assertIn("DAILY PRICE, MOVING AVERAGES AND VOLUME", whole)
-        self.assertIn("Shareholding, news and peer valuation: NOT VERIFIED.", whole)
+        self.assertIn("Peer valuation and financial quality are unverified.", whole)
         self.assertNotIn("High-conviction constructive", whole)
         self.assertIn("Page 10 of 10", pages[-1].extract_text())
 
