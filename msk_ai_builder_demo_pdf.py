@@ -87,7 +87,8 @@ def demo_pdf(profile):
     y=height-168
     for pos in basket.positions:
         y=line(f"{pos.company.label} | {pos.company.sector} | INR {pos.rupees:,} | {100*pos.rupees/capital:.1f}% | {pos.score}/100",y,10)-8
-    line(f"Reserve: INR {basket.reserve:,} | Total: INR {capital:,}",y-12,12,True)
+    y=line(f"Reserve: INR {basket.reserve:,} | Total: INR {capital:,}",y-12,12,True)
+    line("Unallocated capital remains in the reserve; no candidate is forced into the illustrative basket.",y-16,10)
     finish()
     for pos in basket.positions:
         c=pos.company
