@@ -433,6 +433,26 @@ class OvernightLedgerTests(unittest.TestCase):
                 render_latest_profile(
                     "aggressive",now=datetime(2026,10,30,8,5,tzinfo=n.IST))
 
+    def test_midcap100_full_new_ledger_ignores_old_150_extras(self):
+        universe=make_universe("moderate",100)
+        digest=n._member_hash(universe)
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"moderate",sym,{
+                "symbol":sym,"membership_hash":digest,
+                "fund_attempted":True,"fund_status":"VALIDATED",
+                "technical":technical(sym)
+            })
+        self.store.write_row(self.day,"moderate","EXTRAOLD150",{
+            "symbol":"EXTRAOLD150","membership_hash":"old-index-membership",
+            "fund_attempted":True,"fund_status":"VALIDATED",
+            "technical":technical("EXTRAOLD150"),
+        })
+        self.store.save_report(self.day,"moderate","READY",{
+            "expected":100,"reviewed":100,"price_fresh":100,
+            "membership_hash":digest},"CURRENT MIDCAP100")
+        self.assertTrue(n.readiness_check(
+            self.store,self.day,("moderate",))["ready"])
+
     def test_smallcap100_full_new_ledger_ignores_old_250_extras(self):
         # Verified new-issuer rows win, old entries do not count toward readiness.
         current=make_universe("aggressive",100)
