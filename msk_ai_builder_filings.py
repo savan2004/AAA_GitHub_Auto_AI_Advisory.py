@@ -162,7 +162,8 @@ def extract_quarter(document, member, *, expected_end, now):
         raise EvidenceError("FILING_IDENTITY_MISMATCH")
     approved=_date(get("Date of board meeting when results were approved"))
     candidates=[t for t in tables if any(_label(cell)=="revenue from operations" for row in t for cell in row[:2])
-                and any(_label(cell)=="date of start of reporting period" for row in t for cell in row[:2])]
+                and any(_label(cell)=="date of start of reporting period" for row in t for cell in row[:2])
+                and any(_label(cell)=="total profit (loss) for period" for row in t for cell in row[:2])]
     if len(candidates)!=1:
         raise EvidenceError("FILING_FINANCIAL_LAYOUT")
     rows=candidates[0]
