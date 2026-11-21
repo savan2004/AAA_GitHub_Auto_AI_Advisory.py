@@ -138,8 +138,10 @@ def validate_evidence(pack: dict, issue: str, source_root: Path,
                 raise MagazineError("Missing observation unit")
             value = _number(row.get("value"))
             on = date.fromisoformat(row.get("observed_on", ""))
-            if on > as_of or (as_of - on).days > 45:
-                raise MagazineError("Source observation date outside accepted 45-day freshness window")
+            if on > as_of:
+                raise MagazineError("Source observation date outside accepted window")
+            if (as_of - on).days > 45:
+                raise MagazineError("Source observation is older than the 45-day freshness limit")
             url = row.get("source_url")
             if not isinstance(url, str) or not _official_host(url):
                 raise MagazineError("Evidence must cite an approved HTTPS official domain")
