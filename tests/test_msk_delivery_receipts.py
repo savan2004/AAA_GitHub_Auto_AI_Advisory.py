@@ -24,6 +24,14 @@ class FakeLedger:
         self.acks.append((chat_id, message_id, kind))
 
 
+class SimpleTelegramRejection(Exception):
+    def __init__(self, code, description, retry_after=None):
+        self.error_code = code
+        self.result_json = {"ok": False, "error_code": code, "description": description}
+        if retry_after is not None:
+            self.result_json["parameters"] = {"retry_after": retry_after}
+
+
 class FakeBot:
     def __init__(self):
         self.sent = []
@@ -33,7 +41,7 @@ class FakeBot:
     def send_message(self, chat_id, text, **kwargs):
         self.sent.append((chat_id, text, kwargs))
         if self.fail_all or (self.fail_first and len(self.sent) == 1):
-            raise ValueError("bad request: can't parse entities")
+            raise SimpleTelegramRejection(400, "Bad Request: can't parse entities")
         return SimpleNamespace(message_id=1000 + len(self.sent))
 
 
@@ -96,6 +104,33 @@ class TelegramAckTests(unittest.TestCase):
         self.assertFalse(env["_record_telegram_api_ack"](
             200, SimpleNamespace(message_id=None), "text"
         ))
+
+
+class RetrySafetyTests(unittest.TestCase):
+    def test_short_explicit_429_only(self):
+        from unittest.mock import Mock
+        from msk_telegram_text_safety import send_text_once
+        for delay, expected in [(2,2),(45,1),(None,1),(True,1)]:
+            bot=Mock()
+            bot.send_message.side_effect=[SimpleTelegramRejection(429,"rate limit",delay),SimpleNamespace(message_id=9)]
+            waits=[]
+            result=send_text_once(bot,200,"hi","HTML",{},logging.getLogger("test"),pause=waits.append)
+            self.assertEqual(bot.send_message.call_count,expected)
+            self.assertEqual(waits,[2] if expected==2 else [])
+            self.assertEqual(result is not None,expected==2)
+
+    def test_ambiguous_or_missing_receipt_no_retry(self):
+        from unittest.mock import Mock
+        from msk_telegram_text_safety import send_text_once
+        for failure in (TimeoutError("bad request: can't parse entities"),SimpleTelegramRejection(502,"upstream"),SimpleTelegramRejection(400,"chat not found")):
+            bot=Mock()
+            bot.send_message.side_effect=[failure,SimpleNamespace(message_id=9)]
+            self.assertIsNone(send_text_once(bot,200,"hi","HTML",{},logging.getLogger("test")))
+            bot.send_message.assert_called_once()
+        bot=Mock()
+        bot.send_message.return_value=SimpleNamespace(message_id=None)
+        self.assertIsNone(send_text_once(bot,200,"hi","HTML",{},logging.getLogger("test")))
+        bot.send_message.assert_called_once()
 
 
 if __name__ == "__main__":
