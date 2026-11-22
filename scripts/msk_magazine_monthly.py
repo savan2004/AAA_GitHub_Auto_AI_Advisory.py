@@ -391,6 +391,12 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     result = {"issue": issue, "draft_pdf": pdf_file.name,
               "pdf_sha256": hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
               "page_count": 16, "source_consistency_rows": sum(map(len, by_page.values())),
+              "source_authenticity_verified": False,
+              "source_provenance_blocker": (
+                  "Local file hash and official-domain URL do not prove independent "
+                  "retrieval from that URL; external source receipt and human "
+                  "cross-check are required"
+              ),
               "source_failures": failures, "logo_asset_provided": bool(logo_file and logo_file.is_file()),
               "mechanical_pdf_checks": qa, "editorial_approved": False,
               "publication_allowed": False, "pages": pages}
