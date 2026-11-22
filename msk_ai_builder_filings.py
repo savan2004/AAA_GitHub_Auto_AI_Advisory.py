@@ -1,7 +1,8 @@
 """NSE integrated Ind-AS HTML ingestion, research staging only.
 
-Supports standalone discrete quarters in the observed NSE iXBRL display format.
-Consolidated, bank, legacy, annual and changed layouts are explicitly withheld.
+Supports explicit standalone or consolidated discrete quarters when the same
+strict iXBRL table contract is present. Unrecognized bank, legacy, annual and
+changed layouts are withheld; consolidated live coverage requires evidence.
 A downloaded document, digest and matching issuer do not establish publication
 time, revision completeness or regulatory acceptance.
 """
@@ -125,8 +126,11 @@ def _amount(text, divisor):
     except InvalidOperation as exc:
         raise EvidenceError("FILING_AMOUNT_INVALID") from exc
 
-def extract_quarter(document, member, *, expected_end, now):
-    """Extract the quarter column, never the YTD column; strict standalone only."""
+def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
+    """Extract only the discrete quarter and the requested reporting basis."""
+    expected_scope = {"standalone": "Standalone", "consolidated": "Consolidated"}.get(scope)
+    if expected_scope is None:
+        raise EvidenceError("FILING_SCOPE_OR_CURRENCY_UNSUPPORTED")
     if not isinstance(document,DownloadedFiling) or not isinstance(member,IndexMember):
         raise EvidenceError("FILING_INPUT_INVALID")
     check_url(document.url)
@@ -148,7 +152,7 @@ def extract_quarter(document, member, *, expected_end, now):
     get=lambda key:_one(g,key,columns=1)[0]
     if (get("NSE Symbol"),get("ISIN"))!=(member.symbol,member.isin):
         raise EvidenceError("FILING_IDENTITY_MISMATCH")
-    if get("Description of presentation currency")!="INR" or get("Nature of report standalone or consolidated")!="Standalone":
+    if get("Description of presentation currency")!="INR" or get("Nature of report standalone or consolidated")!=expected_scope:
         raise EvidenceError("FILING_SCOPE_OR_CURRENCY_UNSUPPORTED")
     if get("Reporting Type")!="Quarterly":
         raise EvidenceError("FILING_PERIOD_UNSUPPORTED")
@@ -180,7 +184,7 @@ def extract_quarter(document, member, *, expected_end, now):
         or start!=date(end.year,end.month-2,1)
         or not end<=approved<=now.astimezone(timezone(timedelta(hours=5,minutes=30))).date()):
         raise EvidenceError("FILING_PERIOD_MISMATCH")
-    if quarter("Nature of report standalone or consolidated")!="Standalone":
+    if quarter("Nature of report standalone or consolidated")!=expected_scope:
         raise EvidenceError("FILING_SCOPE_OR_CURRENCY_UNSUPPORTED")
     audit=quarter("Whether results are audited or unaudited")
     if audit not in ("Audited","Unaudited"):

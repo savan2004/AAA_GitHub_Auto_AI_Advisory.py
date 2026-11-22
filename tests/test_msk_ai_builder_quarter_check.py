@@ -39,6 +39,17 @@ class QuarterCheckTests(TestCase):
                 listing=listing, download=download, clock=lambda: NOW)
         listing.reset_mock()
         with self.assertRaisesRegex(EvidenceError, "QUARTER_CHECK_SCOPE_UNSUPPORTED"):
-            check_latest_quarter(MEMBER, replace(snap, scope="consolidated"),
+            check_latest_quarter(MEMBER, replace(snap, scope="unknown"),
                 listing=listing, download=download, clock=lambda: NOW)
         listing.assert_not_called()
+
+    def test_consolidated_numeric_match_still_withheld(self):
+        snap, listing, download = self.setup_inputs()
+        snap = replace(snap, scope="consolidated",
+                       source_url="https://www.screener.in/company/FIXTURE/consolidated/")
+        listing.return_value["data"][0]["consolidated"] = "Consolidated"
+        download.return_value = DownloadedFiling(URL, filing().replace(b"Standalone", b"Consolidated"), NOW)
+        result = check_latest_quarter(MEMBER, snap, listing=listing, download=download, clock=lambda: NOW)
+        self.assertEqual(result["status"], "LATEST_QUARTER_MATCHED_ONLY")
+        self.assertEqual(result["publication_status"], "WITHHELD")
+        self.assertIn("not certified", result["limitation"])

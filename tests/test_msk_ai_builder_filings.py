@@ -63,6 +63,18 @@ class FilingTests(unittest.TestCase):
             with self.subTest(old=old,new=new), self.assertRaises(EvidenceError):
                 self.extract(fixture().replace(old,new))
 
+    def test_consolidated_scope_explicit_and_consistent(self):
+        body = fixture().replace(b"Standalone", b"Consolidated")
+        doc = DownloadedFiling(URL, body, NOW)
+        result = extract_quarter(doc, MEMBER, expected_end=END, now=NOW, scope="consolidated")
+        self.assertEqual(result.revenue_cr, Decimal("1234.5678"))
+        self.assertEqual(result.profit_cr, Decimal("-23.4567"))
+        with self.assertRaisesRegex(EvidenceError, "SCOPE_OR_CURRENCY"):
+            self.extract(body)
+        mixed = DownloadedFiling(URL, fixture().replace(b"Standalone", b"Consolidated", 1), NOW)
+        with self.assertRaisesRegex(EvidenceError, "SCOPE_OR_CURRENCY"):
+            extract_quarter(mixed, MEMBER, expected_end=END, now=NOW, scope="consolidated")
+
     def test_segment_table_is_not_income_statement(self):
         # Actual NSE format has a separate segment table with the same
         # period and revenue labels, but no total net profit field.

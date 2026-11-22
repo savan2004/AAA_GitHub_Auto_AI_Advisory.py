@@ -13,7 +13,7 @@ def check_latest_quarter(member, evidence, *, listing=fetch_listing,
             or member.symbol != evidence.symbol or evidence.eligible_for_selection
             or len(evidence.quarterly) != 8):
         raise EvidenceError("QUARTER_CHECK_IDENTITY")
-    if evidence.scope != "standalone":
+    if evidence.scope not in ("standalone", "consolidated"):
         raise EvidenceError("QUARTER_CHECK_SCOPE_UNSUPPORTED")
     now = clock()
     if not 0 <= (now - evidence.retrieved_at).total_seconds() <= 86400:
@@ -25,7 +25,7 @@ def check_latest_quarter(member, evidence, *, listing=fetch_listing,
     doc = download(ref.url)
     if doc.url != ref.url:
         raise EvidenceError("QUARTER_CHECK_DOCUMENT_MISMATCH")
-    result = extract_quarter(doc, member, expected_end=period.end, now=clock())
+    result = extract_quarter(doc, member, expected_end=period.end, now=clock(), scope=evidence.scope)
     if result.board_approval > ref.broadcast_at.date():
         raise EvidenceError("QUARTER_CHECK_PUBLICATION_MISMATCH")
     for primary, secondary in ((result.revenue_cr, period.revenue_cr),
@@ -39,6 +39,8 @@ def check_latest_quarter(member, evidence, *, listing=fetch_listing,
             "revised_at": ref.revised_at.isoformat() if ref.revised_at else None,
             "issuer_revenue_cr": str(result.revenue_cr),
             "issuer_profit_cr": str(result.profit_cr),
+            "issuer_profit_definition": "Total profit (loss) for period",
+            "limitation": "Numeric comparison only; profit definition equivalence and full financial history not certified",
             "secondary_revenue_cr": str(period.revenue_cr),
             "secondary_profit_cr": str(period.profit_cr),
             "status": "LATEST_QUARTER_MATCHED_ONLY", "publication_status": "WITHHELD"}
