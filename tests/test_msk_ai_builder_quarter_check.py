@@ -53,3 +53,17 @@ class QuarterCheckTests(TestCase):
         self.assertEqual(result["status"], "LATEST_QUARTER_MATCHED_ONLY")
         self.assertEqual(result["publication_status"], "WITHHELD")
         self.assertIn("not certified", result["limitation"])
+
+    def test_nbfc_consolidated_filing_matches_only_correct_total(self):
+        snap, listing, download = self.setup_inputs()
+        snap = replace(snap, scope="consolidated",
+                       source_url="https://www.screener.in/company/FIXTURE/consolidated/")
+        url = URL.replace("INTEGRATED_FILING_INDAS_", "INTEGRATED_FILING_NBFC_INDAS_")
+        listing.return_value["data"][0].update(consolidated="Consolidated", ixbrl=url)
+        body = filing().replace(b"Standalone", b"Consolidated").replace(
+            b"Revenue from operations", b"Total Revenue From Operations")
+        download.return_value = DownloadedFiling(url, body, NOW)
+        result = check_latest_quarter(MEMBER, snap, listing=listing, download=download, clock=lambda: NOW)
+        self.assertEqual(result["status"], "LATEST_QUARTER_MATCHED_ONLY")
+        self.assertEqual(result["publication_status"], "WITHHELD")
+        download.assert_called_once_with(url)

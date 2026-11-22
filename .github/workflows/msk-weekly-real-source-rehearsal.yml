@@ -74,7 +74,8 @@ jobs:
           Path("weekly-rehearsal.json").write_text(json.dumps({"first": first}, indent=2))
           assert first["status"] == "INTERNAL_SECONDARY_STAGING"
           assert len(primary_checks) == min(3, first["selected"]), "Primary pilot did not exercise selected issuers"
-          print("PRIMARY_MATCH_COUNT", sum(c["status"] == "LATEST_QUARTER_MATCHED_ONLY" for c in primary_checks))
+          match_count = sum(c["status"] == "LATEST_QUARTER_MATCHED_ONLY" for c in primary_checks)
+          print("PRIMARY_MATCH_COUNT", match_count)
           bank = factory()
           version, rows = bank.read_staging()
           assert version == first["version"]
@@ -96,6 +97,7 @@ jobs:
               raise AssertionError("Unapproved customer publication")
           Path("weekly-rehearsal.json").write_text(json.dumps({"first": first, "replay": again, "primary_checks": primary_checks, "publication_blocked": True}, indent=2))
           print("REPLAY", json.dumps(again, sort_keys=True))
+          assert len(primary_checks) == 3 and match_count == 3, "Three-company numeric reconciliation gate not met"
           PY
       - uses: actions/upload-artifact@v4
         if: always()

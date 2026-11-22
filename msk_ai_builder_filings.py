@@ -1,7 +1,7 @@
 """NSE integrated Ind-AS HTML ingestion, research staging only.
 
 Supports explicit standalone or consolidated discrete quarters when the same
-strict iXBRL table contract is present. Unrecognized bank, legacy, annual and
+strict iXBRL table contract is present. Recognizes the observed NBFC Ind-AS template separately. Unrecognized bank, legacy, annual and
 changed layouts are withheld; consolidated live coverage requires evidence.
 A downloaded document, digest and matching issuer do not establish publication
 time, revision completeness or regulatory acceptance.
@@ -20,7 +20,7 @@ from msk_ai_builder_primary import IndexMember
 from research_data import _tables_in
 
 MAX_BYTES = 2_000_000
-PATH = re.compile(r"/corporate/ixbrl/INTEGRATED_FILING_INDAS_[0-9]+_[0-9]{14}_iXBRL_WEB\.html")
+PATH = re.compile(r"/corporate/ixbrl/INTEGRATED_FILING_(?:NBFC_)?INDAS_[0-9]+_[0-9]{14}_iXBRL_WEB\.html")
 
 @dataclass(frozen=True)
 class DownloadedFiling:
@@ -165,7 +165,13 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
     if not name:
         raise EvidenceError("FILING_IDENTITY_MISMATCH")
     approved=_date(get("Date of board meeting when results were approved"))
-    candidates=[t for t in tables if any(_label(cell)=="revenue from operations" for row in t for cell in row[:2])
+    # NBFC tables have a blank revenue heading followed by the actual total.
+    # Select the exact label by the independently observed exchange template;
+    # never fall back to total income or a component of operating revenue.
+    revenue_label = ("Total Revenue From Operations" if
+                     "/INTEGRATED_FILING_NBFC_INDAS_" in urlsplit(document.url).path
+                     else "Revenue from operations")
+    candidates=[t for t in tables if any(_label(cell)==_label(revenue_label) for row in t for cell in row[:2])
                 and any(_label(cell)=="date of start of reporting period" for row in t for cell in row[:2])
                 and any(_label(cell)=="total profit (loss) for period" for row in t for cell in row[:2])]
     if len(candidates)!=1:
@@ -189,7 +195,7 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
     audit=quarter("Whether results are audited or unaudited")
     if audit not in ("Audited","Unaudited"):
         raise EvidenceError("FILING_AUDIT_UNKNOWN")
-    revenue=_amount(quarter("Revenue from operations"),divisor)
+    revenue=_amount(quarter(revenue_label),divisor)
     profit=_amount(quarter("Total profit (loss) for period"),divisor)
     if revenue<=0:
         raise EvidenceError("NONPOSITIVE_REVENUE")

@@ -85,6 +85,25 @@ class FilingTests(unittest.TestCase):
         self.assertEqual(result.revenue_cr,Decimal("1234.5678"))
         self.assertEqual(result.profit_cr,Decimal("-23.4567"))
 
+    def test_nbfc_total_revenue_not_heading_or_total_income(self):
+        url = URL.replace("INTEGRATED_FILING_INDAS_", "INTEGRATED_FILING_NBFC_INDAS_")
+        body = fixture().replace(b"Revenue from operations", b"Total Revenue From Operations")
+        body = body.replace(b"<tr><td></td><td>Total Revenue From Operations",
+            b"<tr><td></td><td>Revenue from operations</td><td></td><td></td></tr>"
+            b"<tr><td></td><td>Total income</td><td>99999999</td><td>99999999</td></tr>"
+            b"<tr><td></td><td>Total Revenue From Operations")
+        body = body.replace(b"Standalone", b"Consolidated")
+        def extract(raw):
+            return extract_quarter(DownloadedFiling(url, raw, NOW), MEMBER,
+                    expected_end=END, now=NOW, scope="consolidated")
+        self.assertEqual(check_url(url), url)
+        self.assertEqual(extract(body).revenue_cr, Decimal("1234.5678"))
+        self.assertEqual(extract(body).profit_cr, Decimal("-23.4567"))
+        with self.assertRaises(EvidenceError):
+            extract(body.replace(b"Total Revenue From Operations", b"Interest income"))
+        with self.assertRaises(EvidenceError):
+            check_url(url.replace("NBFC_INDAS", "UNKNOWN_INDAS"))
+
     def test_url_allowlist(self):
         self.assertEqual(check_url(URL),URL)
         for url in (URL.replace("https:","http:"), URL.replace("nsearchives.nseindia.com","evil.example"),
