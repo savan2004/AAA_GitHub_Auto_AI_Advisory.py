@@ -25,7 +25,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: msk-allocation-infographic-fictional
-          path: msk-allocation-infographic-fictional.pdf
+          path: |
+            msk-allocation-infographic-fictional.pdf
+            msk-optimized-infographic-fictional.pdf
           if-no-files-found: error
           retention-days: 7
       - name: Produce offline approved-profile PDF
