@@ -977,9 +977,11 @@ def _allow_heavy(m):
 # ── Command Handlers ─────────────────────────────────────────────────────────
 @bot.message_handler(commands=["start"])
 def cmd_start(m):
+    from msk_release_stamp import release_banner
     state.clear(m.chat.id)
     safe_send(m.chat.id,
-              "👋 <b>MSK Bot</b>\n\nType any stock name or symbol for analysis.\n"
+              "👋 <b>MSK Bot</b>\n" + release_banner() + "\n\n" +
+              "Type any stock name or symbol for analysis.\n"
               "🔥 <b>Stocks Buzz</b> scans the top 1000 NSE stocks for fresh breakouts.\n"
               "⚡ <b>Intraday Trade</b> checks Nifty and Bank Nifty 15-minute "
               "setups; no trade if feeds are stale or NSE is closed.\n"              "🏦 Large / ⚖️ Mid / 🚀 Small Cap Top 5: NSE index-based bullish shortlists.\n"
@@ -994,7 +996,7 @@ def cmd_start(m):
 @bot.message_handler(commands=["menu"])
 @bot.message_handler(func=lambda m: (m.text or "").strip() == "🆕 New Version")
 def cmd_menu(m):
-    """New Version button performs the same action as /start."""
+    """Refresh the menu and show the running build version."""
     return cmd_start(m)
 
 
