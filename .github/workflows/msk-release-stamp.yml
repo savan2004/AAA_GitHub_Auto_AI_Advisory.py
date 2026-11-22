@@ -1,0 +1,24 @@
+name: MSK stable release timestamp
+on:
+  pull_request:
+    paths:
+      - 'main.py'
+      - 'builder.sh'
+      - 'msk_release_stamp.py'
+      - 'tests/test_msk_release_stamp.py'
+      - '.github/workflows/msk-release-stamp.yml'
+permissions:
+  contents: read
+jobs:
+  stamp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: bash -n builder.sh
+      - run: python -m py_compile main.py msk_release_stamp.py
+      - run: python -m unittest discover -s tests -p 'test_msk_release_stamp.py' -v
+      - run: python -m msk_release_stamp && python -c 'from msk_release_stamp import release_banner; assert "IST" in release_banner(); print(release_banner())'
