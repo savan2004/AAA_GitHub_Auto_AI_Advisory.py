@@ -19,13 +19,13 @@ def automatic_enabled(environ=None):
     return env.get("MSK_BUILDER_V2_ENABLED") == "1"
 
 
-def approved_plan(profile, raw, *, latest_session):
+def approved_plan(profile, raw, *, latest_session, optimize=False):
     """Check dates and evidence labels before accepting an operator artifact."""
     try:
         if not isinstance(raw, str) or not 0 < len(raw) <= 64_000:
             raise ValueError
         payload = json.loads(raw, parse_float=Decimal)
-        if (payload["schema_version"] != 1 or payload["publication_status"] != "APPROVED"
+        if (payload["schema_version"] != (2 if optimize else 1) or payload["publication_status"] != "APPROVED"
                 or type(latest_session) is not date):
             raise ValueError
         session = date.fromisoformat(payload["close_date"])
@@ -51,7 +51,10 @@ def approved_plan(profile, raw, *, latest_session):
                 row["symbol"], row["isin"], row["sector"], session,
                 Decimal(row["close_rupees"]), Decimal(row["score"]),
             ))
-        return allocate_portfolio(profile, candidates, expected_session=session)
+        history = payload["risk_history"] if optimize else None
+        if optimize and not isinstance(history, dict):
+            raise ValueError
+        return allocate_portfolio(profile, candidates, expected_session=session, risk_history=history)
     except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
         raise ResearchUnavailable("Approved research unavailable") from None
 
@@ -66,7 +69,9 @@ def build_automatic_report(capital, risk, horizon):
     except PortfolioDoctorError:
         raise ResearchUnavailable("Market calendar unavailable") from None
     profile = ResearchProfile(capital, risk, horizon)
-    plan = approved_plan(profile, os.getenv("MSK_BUILDER_V2_APPROVED_RESEARCH"), latest_session=latest)
+    optimize = os.getenv("MSK_BUILDER_V2_OPTIMIZER_ENABLED") == "1"
+    plan = approved_plan(profile, os.getenv("MSK_BUILDER_V2_APPROVED_RESEARCH"),
+                         latest_session=latest, optimize=optimize)
     lines = [
         "<b>Portfolio Builder V2 · Research model</b>",
         f"Capital ₹{capital:,} | {risk.title()} risk preference | {horizon} months",
@@ -80,6 +85,8 @@ def build_automatic_report(capital, risk, horizon):
             f"<b>{escape(row.candidate.symbol)}</b> · {row.shares:,} shares × "
             f"₹{row.candidate.close_rupees:,.2f} · {100 * row.cost / capital:.2f}%"
         )
+    if optimize and plan.positions:
+        lines.append("Method: constrained minimum variance using approved historical returns; not a forecast.")
     lines.extend(["", f"Modeled cash: ₹{plan.cash:,.2f} ({100 * plan.cash / capital:.2f}%)",
                   "Hypothetical allocation at dated closes. No orders are placed."])
     return "\n".join(lines)

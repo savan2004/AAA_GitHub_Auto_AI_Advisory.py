@@ -1,0 +1,2 @@
+PyPortfolioOpt==1.5.6
+cvxpy==1.6.5

@@ -48,7 +48,7 @@ class ModelPortfolio:
     cash: Decimal
 
 
-def allocate_portfolio(profile, candidates, *, expected_session):
+def allocate_portfolio(profile, candidates, *, expected_session, risk_history=None):
     """Select and size approved candidates from one expected market session."""
     if not isinstance(profile, ResearchProfile) or type(expected_session) is not date:
         raise ValueError("Invalid allocation profile or session")
@@ -72,6 +72,11 @@ def allocate_portfolio(profile, candidates, *, expected_session):
         symbols.add(item.symbol)
         identities.add(item.isin)
 
+    returns = None
+    if risk_history is not None:
+        from msk_ai_builder_optimizer import validated_returns
+        returns = validated_returns(risk_history, symbols, expected_session)
+
     capital = Decimal(profile.capital_rupees)
     equity_budget = capital * EQUITY_CAP[profile.risk][profile.months] / 100
     stock_cap = capital * (10 if profile.risk == "low" else 15) / 100
@@ -93,6 +98,14 @@ def allocate_portfolio(profile, candidates, *, expected_session):
         if len(selected) == profile.max_stocks:
             break
 
-    positions = tuple(Position(item, int(per_stock // item.close_rupees)) for item in selected)
+    if returns is not None and selected:
+        from msk_ai_builder_optimizer import minimum_variance_amounts
+        try:
+            amounts = minimum_variance_amounts(selected, per_stock * len(selected), stock_cap, returns)
+        except Exception:
+            raise ValueError("Verified optimization unavailable") from None
+    else:
+        amounts = {item.symbol: per_stock for item in selected}
+    positions = tuple(Position(item, int(amounts[item.symbol] // item.close_rupees)) for item in selected)
     return ModelPortfolio(profile, expected_session, positions,
                           capital - sum((row.cost for row in positions), Decimal(0)))
