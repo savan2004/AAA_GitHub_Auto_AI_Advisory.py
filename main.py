@@ -1130,6 +1130,7 @@ def cmd_daily_report(m):
     # Existing emoji buttons keep their direct scan handler; both paths
     # still invoke deliver_daily_reports() with exactly the same formatter.
     func=lambda m: not str(getattr(m, "text", "")).startswith(("🏦", "⚖️", "🚀")) and
+                   (getattr(m, "text", "") or "").strip() != "🏆 Top 5 Stocks" and
                    bool(parse_daily_report_request(getattr(m, "text", None))),
     content_types=["text"],
 )
