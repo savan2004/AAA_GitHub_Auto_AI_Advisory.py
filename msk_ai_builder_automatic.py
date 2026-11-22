@@ -59,7 +59,8 @@ def approved_plan(profile, raw, *, latest_session, optimize=False):
         raise ResearchUnavailable("Approved research unavailable") from None
 
 
-def build_automatic_report(capital, risk, horizon):
+def load_approved_model(capital, risk, horizon):
+    """Read once, validate once, and retain the matching source artifact."""
     if not automatic_enabled():
         raise ResearchUnavailable("Automatic Builder is disabled")
     from portfolio_doctor_live import PortfolioDoctorError, expected_doctor_session
@@ -70,8 +71,13 @@ def build_automatic_report(capital, risk, horizon):
         raise ResearchUnavailable("Market calendar unavailable") from None
     profile = ResearchProfile(capital, risk, horizon)
     optimize = os.getenv("MSK_BUILDER_V2_OPTIMIZER_ENABLED") == "1"
-    plan = approved_plan(profile, os.getenv("MSK_BUILDER_V2_APPROVED_RESEARCH"),
-                         latest_session=latest, optimize=optimize)
+    raw = os.getenv("MSK_BUILDER_V2_APPROVED_RESEARCH")
+    plan = approved_plan(profile, raw, latest_session=latest, optimize=optimize)
+    return plan, json.loads(raw, parse_float=Decimal), optimize
+
+
+def build_automatic_report(capital, risk, horizon):
+    plan, _, optimize = load_approved_model(capital, risk, horizon)
     lines = [
         "<b>Portfolio Builder V2 · Research model</b>",
         f"Capital ₹{capital:,} | {risk.title()} risk preference | {horizon} months",
