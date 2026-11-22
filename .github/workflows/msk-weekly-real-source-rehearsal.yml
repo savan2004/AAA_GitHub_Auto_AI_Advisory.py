@@ -14,7 +14,7 @@ permissions:
 jobs:
   rehearsal:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     services:
       postgres:
         image: postgres:16
@@ -60,20 +60,22 @@ jobs:
           def diagnosed_refresh(bank, **kwargs):
               result, version = stage_week(bank, **kwargs)
               print("PUBLIC_PERIOD_FAILURES", json.dumps(result.failures, sort_keys=True))
-              # Bounded primary-source pilot: three actual staged issuers irrespective of scope.
-              print("PRIMARY_PILOT_SCOPES", json.dumps({c.member.symbol: c.evidence.scope for c in result.companies[:3]}, sort_keys=True))
-              for company in result.companies[:3]:
+              # Bounded verification: each staged issuer (maximum 20), irrespective of scope.
+              print("PRIMARY_PILOT_SCOPES", json.dumps({c.member.symbol: c.evidence.scope for c in result.companies[:20]}, sort_keys=True))
+              for company in result.companies[:20]:
                   try:
                       primary_checks.append(check_latest_quarter(company.member, company.evidence))
                   except EvidenceError as exc:
                       primary_checks.append({"symbol": company.member.symbol, "status": str(exc), "publication_status": "WITHHELD"})
+                  print("PRIMARY_PROGRESS", json.dumps(primary_checks[-1], sort_keys=True))
+                  Path("weekly-rehearsal.json").write_text(json.dumps({"primary_checks": primary_checks, "publication_blocked": True}, indent=2))
               print("PRIMARY_QUARTER_CHECKS", json.dumps(primary_checks, sort_keys=True))
               return result, version
           first = run_weekly_job(environ=env, bank_factory=factory, refresh=diagnosed_refresh)
           print("FIRST_REFRESH", json.dumps(first, sort_keys=True))
           Path("weekly-rehearsal.json").write_text(json.dumps({"first": first}, indent=2))
           assert first["status"] == "INTERNAL_SECONDARY_STAGING"
-          assert len(primary_checks) == min(3, first["selected"]), "Primary pilot did not exercise selected issuers"
+          assert len(primary_checks) == first["selected"], "Primary verification did not exercise every staged issuer"
           match_count = sum(c["status"] == "LATEST_QUARTER_MATCHED_ONLY" for c in primary_checks)
           print("PRIMARY_MATCH_COUNT", match_count)
           bank = factory()
@@ -97,7 +99,9 @@ jobs:
               raise AssertionError("Unapproved customer publication")
           Path("weekly-rehearsal.json").write_text(json.dumps({"first": first, "replay": again, "primary_checks": primary_checks, "publication_blocked": True}, indent=2))
           print("REPLAY", json.dumps(again, sort_keys=True))
-          assert len(primary_checks) == 3 and match_count == 3, "Three-company numeric reconciliation gate not met"
+          assert len({c["symbol"] for c in primary_checks}) == first["selected"]
+          assert {c["symbol"] for c in primary_checks} == {r["symbol"] for r in rows["companies"]}
+          assert match_count == first["selected"] == 20, "Full 20-company quarterly numeric reconciliation target not met"
           PY
       - uses: actions/upload-artifact@v4
         if: always()
