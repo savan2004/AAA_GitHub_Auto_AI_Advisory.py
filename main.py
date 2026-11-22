@@ -1511,6 +1511,7 @@ def portfolio_audit_start(m):
             safe_send(m.chat.id, "A private report is already running.")
             return
         expiry = time.monotonic() + 180
+        _builder_form.pop(m.chat.id, None)  # Switching modes cancels stale Builder input.
         _portfolio_doctor_waiting[m.chat.id] = expiry
         _portfolio_audit_mode[m.chat.id] = expiry
     safe_send(m.chat.id,
@@ -1532,6 +1533,7 @@ def portfolio_doctor_start(m):
             safe_send(m.chat.id, "A Portfolio Doctor report is already running.")
             return
         _portfolio_audit_mode.pop(m.chat.id, None)
+        _builder_form.pop(m.chat.id, None)  # Holdings must never hit allocation parsing.
         _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 180
     safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\n"
               "Upload CSV/XLSX or paste 1–5 rows: <code>SBIN 100 840</code> then "
@@ -1550,6 +1552,8 @@ def portfolio_doctor_test(m):
         safe_send(m.chat.id, "Portfolio Doctor is not available.")
         return
     with _portfolio_doctor_lock:
+        _builder_form.pop(m.chat.id, None)
+        _portfolio_audit_mode.pop(m.chat.id, None)
         _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 180
     safe_send(m.chat.id, "Private test: upload a CSV or XLSX with Symbol, Qty, Buy Price (maximum 5 MB; 5 stocks).")
 
@@ -1714,22 +1718,25 @@ def _builder_options(stage, choices):
 
 @bot.message_handler(func=lambda m: (m.text or "") == "🏗️ Portfolio Builder")
 def portfolio_builder_button(m):
+    """Fail closed until an actual approved research batch powers automatic selection.
+
+    The legacy customer-facing manual-symbol wizard is retired. The separate
+    owner-only fictional preview remains accessible by its explicit test command.
+    """
     if not _builder_allowed(m):
         safe_send(m.chat.id, "Portfolio Builder is available in private chat only.")
         return
-    if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "1") != "1":
-        safe_send(m.chat.id, "Portfolio Builder is disabled in Render settings.")
-        return
     with _portfolio_doctor_lock:
-        if m.chat.id in _portfolio_doctor_running:
-            safe_send(m.chat.id, "Another private report is already running.")
-            return
+        _builder_form.pop(m.chat.id, None)
         _portfolio_doctor_waiting.pop(m.chat.id, None)
-        _builder_form[m.chat.id] = {"step": "amount", "until": time.monotonic() + 180}
+        _portfolio_audit_mode.pop(m.chat.id, None)
     state.clear(m.chat.id)
-    safe_send(m.chat.id, "🏗️ Portfolio Builder — Step 1/5\n"
-              "Type the amount in rupees, e.g. 1000000.\n"
-              "Next you will choose risk and time frame with buttons. Type /cancel to stop.")
+    safe_send(m.chat.id,
+              "🏗️ Automatic Portfolio Builder is temporarily unavailable. "
+              "A verified, approved stock research basket is not yet connected. "
+              "You will NOT be asked to select symbols or percentages. "
+              "No unverified portfolio will be generated. "
+              "For existing holdings, select 🩺 Portfolio Doctor.")
 
 
 @bot.message_handler(commands=["builder_v2_preview"])
@@ -2443,10 +2450,8 @@ def handle_text(m):
         safe_send(uid, f"⚠️ Rate limited. Wait {RATE_LIMIT_WINDOW}s.")
         return
 
-    if portfolio_builder_form_text(m, text):
-        return
-
     # Never route private holdings or repeated inputs to public stock search.
+    # An active Doctor session has priority over any stale Builder session.
     with _portfolio_doctor_lock:
         doctor_running = uid in _portfolio_doctor_running
         deadline = _portfolio_doctor_waiting.get(uid, 0)
@@ -2466,6 +2471,9 @@ def handle_text(m):
             with _portfolio_doctor_lock:
                 _portfolio_doctor_waiting.pop(uid, None)
             safe_send(uid, "Portfolio Doctor session is unavailable. No holdings were processed.")
+        return
+
+    if portfolio_builder_form_text(m, text):
         return
 
     # Lost in-memory state after a process restart must not strand the
