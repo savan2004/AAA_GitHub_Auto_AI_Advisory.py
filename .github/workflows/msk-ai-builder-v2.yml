@@ -4,6 +4,7 @@ on:
     paths:
       - 'msk_ai_builder_*.py'
       - 'tests/test_msk_ai_builder_*.py'
+      - 'requirements-builder-pdf-evidence.txt'
       - 'research_data.py'
       - 'portfolio_doctor_advanced.py'
       - '.github/workflows/msk-ai-builder-v2.yml'
@@ -18,7 +19,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install requests==2.32.3 pandas==2.2.2 numpy==1.26.4 reportlab==4.2.5 'pypdf>=5.0,<7.0' -r requirements-builder-optimizer.txt
+      - run: python -m pip install requests==2.32.3 pandas==2.2.2 numpy==1.26.4 reportlab==4.2.5 'pypdf>=5.0,<7.0' -r requirements-builder-optimizer.txt -r requirements-builder-pdf-evidence.txt
       - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_*.py' -v
       - name: Produce fictional infographic for visual QA
         run: PYTHONPATH=. python tests/test_msk_ai_builder_infographic.py
