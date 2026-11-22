@@ -15,14 +15,14 @@ def preview_allowed(uid, environ=None):
 def deliver_preview(bot, uid, capital, risk, horizon):
     if not preview_allowed(uid):
         raise PermissionError("Builder V2 preview is disabled for this user")
-    from msk_ai_builder_demo_pdf import demo_pdf
+    from msk_ai_builder_beta import beta_pdf
 
     profile = ResearchProfile(capital, risk, horizon)
-    with io.BytesIO(demo_pdf(profile)) as document:
+    with io.BytesIO(beta_pdf(profile)) as document:
         document.name = "MSK_Builder_V2_Fictional_Preview.pdf"
         receipt = bot.send_document(
             uid, document, protect_content=True, timeout=30,
-            caption="Fictional Portfolio Builder V2 preview. No real stocks or investment recommendations.",
+            caption="TEST MODE — fictional holdings. No real stocks or investment recommendations.",
         )
     message_id = getattr(receipt, "message_id", None)
     if (type(message_id) is not int or message_id <= 0

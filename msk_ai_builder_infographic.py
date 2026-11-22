@@ -53,8 +53,8 @@ def _page(c, title, page, total, plan, fictional):
     _panel(c, L, H-117, R-L, 77, NAVY)
     _label(c, "MSK FINANCIAL INTELLIGENCE", L+16, H-61, size=9, color=WHITE, bold=True)
     _label(c, title, L+16, H-87, size=20, color=WHITE, bold=True)
-    _label(c, ("FICTIONAL QA DEMO | " if fictional else "Research model | ") +
-           "Completed close: " + plan.close_date.isoformat(), L+16, H-105,
+    _label(c, ("FICTIONAL QA DEMO | TEST MODE | Fixture date: " if fictional else "Research model | Completed close: ") +
+           plan.close_date.isoformat(), L+16, H-105,
            size=8, color=WHITE)
     _label(c, "Private | Hypothetical allocation | No automatic orders", L, 32, size=8, color=MUTED)
     _label(c, f"{page} / {total}", R-40, 32, size=8, color=MUTED)
