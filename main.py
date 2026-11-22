@@ -939,26 +939,11 @@ def _record_telegram_api_ack(chat_id, result, kind):
 def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
     if text is None:
         return None
-    try:
-        sent = bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
+    from msk_telegram_text_safety import send_text_once
+    sent = send_text_once(bot, chat_id, text, parse_mode, kwargs, logger)
+    if sent is not None:
         _record_telegram_api_ack(chat_id, sent, "text")
-        return sent
-    except Exception as exc:
-        # Never log bot token or user message content.
-        logger.warning("[Telegram API] text send failed: HTTP %s (%s)",
-                       getattr(exc, "error_code", "unknown"),
-                       type(exc).__name__)
-        if "can't parse" in str(exc).lower() or "bad request" in str(exc).lower():
-            try:
-                plain = re.sub(r"<[^>]+>", "", str(text))
-                sent = bot.send_message(chat_id, plain, **kwargs)
-                _record_telegram_api_ack(chat_id, sent, "text")
-                return sent
-            except Exception as fallback_error:
-                logger.warning("[Telegram API] plain-text fallback failed: HTTP %s (%s)",
-                               getattr(fallback_error, "error_code", "unknown"),
-                               type(fallback_error).__name__)
-    return None
+    return sent
 
 
 def _allow_heavy(m):
