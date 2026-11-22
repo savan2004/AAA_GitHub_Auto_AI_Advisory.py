@@ -1,0 +1,2 @@
+# Offline research extractor, not a live bot dependency.
+pdfplumber==0.11.10

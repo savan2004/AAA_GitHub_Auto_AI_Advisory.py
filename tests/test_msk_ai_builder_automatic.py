@@ -3,7 +3,7 @@ import unittest
 from datetime import date, timedelta
 from decimal import Decimal
 
-from msk_ai_builder_automatic import approved_plan, ResearchUnavailable
+from msk_ai_builder_automatic import approved_plan, ResearchUnavailable, read_approved_artifact
 from msk_ai_builder_profile import ResearchProfile
 
 
@@ -42,3 +42,54 @@ class AutomaticResearchTests(unittest.TestCase):
                              (secondary, SESSION), (sample(), SESSION + timedelta(days=8))):
             with self.assertRaises(ResearchUnavailable):
                 approved_plan(profile, json.dumps(data), latest_session=latest)
+
+
+class ApprovedArtifactSourceTests(unittest.TestCase):
+    def test_exact_digest_file_and_large_history(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from hashlib import sha256
+        from test_msk_ai_builder_optimizer import fixture
+        _,history=fixture()
+        import numpy as np
+        import pandas as pd
+        rng=np.random.default_rng(911)
+        days=pd.bdate_range(end=SESSION,periods=252)
+        payload=sample()
+        template=payload["companies"][0]
+        payload["schema_version"]=2
+        payload["companies"]=[dict(template,symbol=f"TEST{i:02d}",isin=f"IN{i:010d}",
+                                  sector=f"Sector {i}",close_rupees="100",score=95-i)
+                              for i in range(20)]
+        payload["risk_history"]=dict(status="APPROVED_ADJUSTED_DAILY",
+            sessions=[d.date().isoformat() for d in days],
+            returns_by_symbol={row["symbol"]:rng.normal(0,.01,len(days)).tolist()
+                               for row in payload["companies"]})
+        raw=json.dumps(payload).encode()
+        self.assertGreater(len(raw),64000)
+        with TemporaryDirectory() as tmp:
+            path=Path(tmp)/"approved.json"
+            path.write_bytes(raw)
+            env=dict(MSK_BUILDER_V2_APPROVED_RESEARCH_FILE=str(path),
+                     MSK_BUILDER_V2_APPROVED_RESEARCH_SHA256=sha256(raw).hexdigest())
+            loaded=read_approved_artifact(env)
+            plan=approved_plan(ResearchProfile(15000000,"medium",36),loaded,
+                               latest_session=SESSION,optimize=True)
+            self.assertEqual(len(plan.positions),20)
+            self.assertEqual(plan.cash+sum(p.cost for p in plan.positions),15000000)
+            for bad in (dict(env,MSK_BUILDER_V2_APPROVED_RESEARCH="{}"),
+                        dict(env,MSK_BUILDER_V2_APPROVED_RESEARCH_SHA256="0"*64),
+                        dict(env,MSK_BUILDER_V2_APPROVED_RESEARCH_FILE="relative.json")):
+                with self.assertRaises(ResearchUnavailable):
+                    read_approved_artifact(bad)
+            path.write_bytes(raw+b" ")
+            with self.assertRaises(ResearchUnavailable):
+                read_approved_artifact(env)
+
+    def test_env_source_stays_bounded(self):
+        self.assertEqual(read_approved_artifact({"MSK_BUILDER_V2_APPROVED_RESEARCH":"{}"}),"{}")
+        for env in ({},{"MSK_BUILDER_V2_APPROVED_RESEARCH":"x"*64001},
+                    {"MSK_BUILDER_V2_APPROVED_RESEARCH_FILE":"/not-present"},
+                    {"MSK_BUILDER_V2_APPROVED_RESEARCH_SHA256":"0"*64}):
+            with self.assertRaises(ResearchUnavailable):
+                read_approved_artifact(env)

@@ -1816,7 +1816,11 @@ def send_builder_v2_result(uid, entry, horizon):
             if preview:
                 deliver_preview(bot, uid, *arguments)
             else:
-                safe_send(uid, build_automatic_report(*arguments))
+                from msk_ai_builder_telegram import infographic_enabled, deliver_allocation
+                if infographic_enabled():
+                    deliver_allocation(bot, uid, *arguments)
+                else:
+                    safe_send(uid, build_automatic_report(*arguments))
         except ResearchUnavailable:
             safe_send(uid, "Verified research is unavailable. No stocks were selected.")
         except Exception as exc:
