@@ -1,0 +1,80 @@
+name: MSK weekly real-source rehearsal
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/msk-weekly-real-source-rehearsal.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: builder_test
+          POSTGRES_PASSWORD: local_ci_only
+          POSTGRES_DB: builder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U builder_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests==2.32.3 pandas==2.2.2 numpy==1.26.4 yfinance==0.2.61 curl_cffi==0.7.4 'psycopg[binary]>=3.2,<3.4'
+      - name: Rehearse refresh against real public sources and disposable PostgreSQL
+        run: |
+          python -u - <<'PY'
+          import json
+          from pathlib import Path
+          import psycopg
+          from msk_ai_builder_bank import BankError, WeeklyResearchBank
+          from msk_ai_builder_weekly_job import run_weekly_job
+
+          def connect(_):
+              return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
+          def factory(**_):
+              return WeeklyResearchBank("postgresql://test@localhost/test?sslmode=require", connector=connect)
+
+          env = {"MSK_BUILDER_WEEKLY_JOB_ENABLED": "1"}
+          first = run_weekly_job(environ=env, bank_factory=factory)
+          print("FIRST_REFRESH", json.dumps(first, sort_keys=True))
+          Path("weekly-rehearsal.json").write_text(json.dumps({"first": first}, indent=2))
+          assert first["status"] == "INTERNAL_SECONDARY_STAGING"
+          bank = factory()
+          version, rows = bank.read_staging()
+          assert version == first["version"]
+          assert 1 <= len(rows["companies"]) == first["selected"] <= 20
+          assert rows["publication_status"] == "WITHHELD"
+          assert all(r["evidence_status"] == "SECONDARY_ONLY" for r in rows["companies"])
+          assert all(r["price_status"] == "SOURCE_REFERENCE_NOT_RECONCILED" for r in rows["companies"])
+          assert first["attempted"] <= 40
+          again = run_weekly_job(environ=env, bank_factory=factory)
+          assert again["status"] == "SKIPPED_ALREADY_REVIEWED"
+          assert bank.read_staging()[0] == version
+          with connect(None) as conn:
+              assert conn.execute("SELECT count(*) FROM msk_builder_research.snapshots").fetchone()[0] == 1
+          try:
+              bank.read_for_customer()
+          except BankError as exc:
+              assert str(exc) == "PRODUCTION_PUBLICATION_DISABLED"
+          else:
+              raise AssertionError("Unapproved customer publication")
+          Path("weekly-rehearsal.json").write_text(json.dumps({"first": first, "replay": again, "publication_blocked": True}, indent=2))
+          print("REPLAY", json.dumps(again, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: msk-weekly-rehearsal-summary
+          path: weekly-rehearsal.json
+          if-no-files-found: warn
+          retention-days: 7
