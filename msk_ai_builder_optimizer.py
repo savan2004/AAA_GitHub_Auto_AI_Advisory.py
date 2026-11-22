@@ -1,6 +1,6 @@
 """Optional, offline minimum-variance sizing. No price fetch or expected-return forecast."""
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 import math
 
 
@@ -38,7 +38,7 @@ def validated_returns(history, symbols, expected_session):
 
 
 def minimum_variance_amounts(selected, budget, stock_cap, returns):
-    """Use a fixed invested sleeve, stock limits and a one-share minimum.
+    """Use a fixed invested sleeve, stock limits and a meaningful whole-share minimum.
 
     The covariance uses annualized sample returns and 20% diagonal shrinkage.
     No forecast return is supplied to the optimizer. Refuse missing or failed
@@ -56,7 +56,17 @@ def minimum_variance_amounts(selected, budget, stock_cap, returns):
     if not np.isfinite(cov).all() or np.min(np.linalg.eigvalsh(cov)) <= 0:
         raise ValueError("Invalid covariance")
     limit = min(1., float(stock_cap / budget))
-    lower = [float(item.close_rupees / budget) for item in selected]
+    # A selected name must carry a meaningful position rather than a token
+    # share. Each minimum is 25% of equal sleeve weight, rounded UP to a
+    # whole share. Exact integer costs also determine feasibility.
+    floor_costs = []
+    for item in selected:
+        minimum = budget / Decimal(len(selected) * 4)
+        shares = max(1, int((minimum / item.close_rupees).to_integral_value(rounding=ROUND_CEILING)))
+        floor_costs.append(item.close_rupees * shares)
+    if sum(floor_costs, Decimal(0)) > budget or any(v > stock_cap for v in floor_costs):
+        raise ValueError("Infeasible diversified whole-share minimums")
+    lower = [float(cost / budget) for cost in floor_costs]
     if sum(lower) > 1 + 1e-10 or any(v > limit for v in lower):
         raise ValueError("Infeasible whole-share bounds")
     if len(selected) == 1:
@@ -71,16 +81,34 @@ def minimum_variance_amounts(selected, budget, stock_cap, returns):
     if (not np.isfinite(fractions).all() or abs(float(fractions.sum()) - 1) > 1e-6
             or any(w < lo - 1e-7 or w > limit + 1e-7 for w, lo in zip(fractions, lower))):
         raise ValueError("Invalid solver result")
-    # Decimal and conservative rounding ensure the optimizer cannot exceed
-    # either the stock cap or the invested sleeve. Never round up a budget.
-    result = {}
-    remaining = budget
-    for i, (item, weight) in enumerate(zip(selected, fractions)):
-        reserve = sum((row.close_rupees for row in selected[i+1:]), Decimal(0))
-        target = min(stock_cap, remaining - reserve,
-                     max(item.close_rupees, budget * Decimal(str(float(weight)))))
-        if target < item.close_rupees:
-            raise ValueError("Whole-share allocation infeasible")
-        result[item.symbol] = target
-        remaining -= target
-    return result
+    # Convert continuous weights to whole shares exactly. Start with the
+    # required minimums already reserved; solver tolerances cannot violate
+    # them. Reinvest residual cash only when another share reduces tracking
+    # error to the continuous target, with deterministic symbol tie-breaking.
+    targets = [min(stock_cap, max(floor, budget * Decimal(str(float(weight)))))
+               for floor, weight in zip(floor_costs, fractions)]
+    costs = list(floor_costs)
+    remaining = budget - sum(costs, Decimal(0))
+    for i, item in enumerate(selected):
+        extra = max(Decimal(0), min(targets[i] - costs[i], remaining, stock_cap - costs[i]))
+        add = int(extra // item.close_rupees) * item.close_rupees
+        costs[i] += add
+        remaining -= add
+    # Each target has at most one beneficial rounding-up step. The squared
+    # rupee-weight tracking error has the same minimizer as squared weights.
+    choices = []
+    for i, item in enumerate(selected):
+        price = item.close_rupees
+        before = targets[i] - costs[i]
+        gain = before * before - (before - price) * (before - price)
+        if gain > 0:
+            choices.append((gain / price, item.symbol, i))
+    for _, _, i in sorted(choices, key=lambda x: (-x[0], x[1])):
+        price = selected[i].close_rupees
+        if price <= remaining and costs[i] + price <= stock_cap:
+            costs[i] += price
+            remaining -= price
+    if (remaining < 0 or any(cost < floor or cost > stock_cap
+                             for cost, floor in zip(costs, floor_costs))):
+        raise ValueError("Invalid integer allocation")
+    return {item.symbol: cost for item, cost in zip(selected, costs)}

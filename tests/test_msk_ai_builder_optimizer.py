@@ -48,6 +48,41 @@ class OptimizerTest(unittest.TestCase):
         self.assertLess(a @ cov @ a, b @ cov @ b)
         self.assertGreater(plan.positions[0].cost, plan.positions[-1].cost)
 
+    def test_meaningful_weight_floor_cash_and_caps_across_profiles(self):
+        from dataclasses import replace
+        from msk_ai_builder_allocation import EQUITY_CAP
+        candidates, history = fixture()
+        # Varied share prices expose whole-share rounding and tiny positions.
+        candidates = [replace(c, close_rupees=Decimal(price))
+                      for c, price in zip(candidates, ("91.15", "277.20", "499.75", "1530", "675"))]
+        for capital in (100000, 1000000, 5000000, 10000000):
+            for risk in ("low", "medium", "high"):
+                for horizon in (6, 18, 36, 60):
+                    with self.subTest(capital=capital, risk=risk, horizon=horizon):
+                        profile = ResearchProfile(capital, risk, horizon)
+                        plan = allocate_portfolio(profile, candidates, expected_session=SESSION,
+                                                  risk_history=history)
+                        total = sum((p.cost for p in plan.positions), Decimal(0))
+                        cap = Decimal(capital) * (10 if risk == "low" else 15) / 100
+                        equity = Decimal(capital) * EQUITY_CAP[risk][horizon] / 100
+                        self.assertEqual(plan.cash + total, capital)
+                        self.assertLessEqual(total, equity)
+                        self.assertLessEqual(len(plan.positions), profile.max_stocks)
+                        if plan.positions:
+                            sleeve = min(equity, cap * len(plan.positions))
+                            floor = sleeve / (4 * len(plan.positions))
+                            self.assertTrue(all(floor <= p.cost <= cap for p in plan.positions))
+                            self.assertTrue(all(type(p.shares) is int and p.shares >= 1 for p in plan.positions))
+
+    def test_expensive_shares_do_not_break_or_relax_the_floor(self):
+        from dataclasses import replace
+        from msk_ai_builder_optimizer import minimum_variance_amounts
+        candidates, history = fixture()
+        pair = [replace(c, close_rupees=Decimal("60")) for c in candidates[:2]]
+        returns = validated_returns(history, [c.symbol for c in candidates], SESSION)
+        with self.assertRaisesRegex(ValueError, "Infeasible diversified"):
+            minimum_variance_amounts(pair, Decimal("100"), Decimal("70"), returns)
+
     def test_missing_stale_constant_and_bad_observations_rejected(self):
         candidates, history = fixture()
         profile = ResearchProfile(100000, "medium", 18)
