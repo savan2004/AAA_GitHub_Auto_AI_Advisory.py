@@ -24,7 +24,7 @@ class PortfolioMessageIdempotencyPostgresTests(unittest.TestCase):
                 or p.hostname not in ("localhost", "127.0.0.1")
                 or p.port != 5432
                 or p.path != "/msk_idempotency_test"
-                or p.username != "msk_test"):
+                or p.username != "msk_test" or p.query or p.fragment):
             raise RuntimeError("Refusing database outside the isolated local test target")
         import psycopg
         cls.psycopg = psycopg
@@ -114,6 +114,53 @@ class PortfolioMessageIdempotencyPostgresTests(unittest.TestCase):
             {"applied": True, "duplicate": False},
         )
         self.assertEqual(self.store.get(100)["SBIN"]["qty"], 2.0)
+
+    def test_failed_sell_replay_never_removes_later_buy(self):
+        first = self.store.remove(100, "SBIN", telegram_message_id=701)
+        self.assertEqual(first, {"removed": False, "duplicate": False})
+        self.store.add(100, "SBIN", 1, 501, telegram_message_id=702)
+        reopened = PostgresPortfolioStore(self.app_dsn, connector=self.connector)
+        retry = reopened.remove(100, "SBIN", telegram_message_id=701)
+        self.assertEqual(retry, {"removed": False, "duplicate": True})
+        self.assertEqual(reopened.get(100)["SBIN"]["qty"], 1.0)
+
+    def test_lost_ack_after_commit_does_not_duplicate_buy(self):
+        psycopg = self.psycopg
+        raw = self.raw_dsn
+
+        class LostCommitAck:
+            def __init__(self):
+                self.conn = psycopg.connect(raw)
+                self.changed = False
+
+            def __enter__(self):
+                self.conn.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                result = self.conn.__exit__(*exc)
+                if self.changed and exc[0] is None:
+                    raise RuntimeError("simulated lost acknowledgment after commit")
+                return result
+
+            def execute(self, sql, params=None):
+                result = self.conn.execute(sql, params)
+                if "INSERT INTO portfolio_message_operations" in sql:
+                    self.changed = True
+                return result
+
+        failing_store = PostgresPortfolioStore(
+            self.app_dsn, connector=lambda _: LostCommitAck()
+        )
+        with self.assertRaisesRegex(RuntimeError, "lost acknowledgment"):
+            failing_store.add(100, "SBIN", 3, 500, telegram_message_id=801)
+        reopened = PostgresPortfolioStore(self.app_dsn, connector=self.connector)
+        self.assertEqual(reopened.get(100)["SBIN"]["qty"], 3.0)
+        self.assertEqual(
+            reopened.add(100, "SBIN", 3, 500, telegram_message_id=801),
+            {"applied": False, "duplicate": True},
+        )
+        self.assertEqual(reopened.get(100)["SBIN"]["qty"], 3.0)
 
     def test_parallel_duplicate_buy_applies_once(self):
         def operation(_):
