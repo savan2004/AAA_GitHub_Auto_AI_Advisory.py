@@ -173,10 +173,10 @@ class SwingInvestorTests(unittest.TestCase):
 
     def test_profile_caps_apply_at_boundary(self):
         data = dict(self.data, rows=[
-            candidate("SAFEAT", score=9, risk=4, sector="Banking"),
-            candidate("SAFEOVER", score=8, risk=4.01, sector="Technology"),
-            candidate("AGGRAT", score=8, risk=7, sector="Materials"),
-            candidate("AGGROVER", score=9, risk=7.01, sector="Pharma"),
+            candidate("SAFEAT", score=9, risk=4, atr=60, sector="Banking"),
+            candidate("SAFEOVER", score=8, risk=4.01, atr=60, sector="Technology"),
+            candidate("AGGRAT", score=8, risk=7, atr=60, sector="Materials"),
+            candidate("AGGROVER", score=9, risk=7.01, atr=60, sector="Pharma"),
         ])
         safe = scope_for(data=data)["get_swing_trades"]("conservative")
         aggressive = scope_for(data=data)["get_swing_trades"]("aggressive")
