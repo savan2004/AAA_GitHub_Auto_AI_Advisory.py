@@ -521,17 +521,23 @@ def _verified_swing_row(p):
         return None
 
 
-def _swing_watch_candidates(data, thr):
-    """At most five real qualified technical setups; never pad with examples."""
-    rows = data.get("rows") or []
-    longs = _pick(rows, "LONG", thr["LONG"], MAX_LONG)
-    shorts = _pick(rows, "SHORT", thr["SHORT"], MAX_SHORT)
-    ranked = sorted(longs + shorts,
-                    key=lambda r: (-r["score"], -r["rr1"], r["sym"]))
-    picks, used_symbols, per_sector = [], set(), Counter()
-    for candidate in ranked:
+def _swing_watch_candidates(data, thr, max_stop=4.0):
+    """Only qualifying setups may enter ranking (SAFE default: 4% risk)."""
+    eligible = []
+    for candidate in data.get("rows") or []:
         row = _verified_swing_row(candidate)
-        if row is None or row["sym"] in used_symbols:
+        if row is None or row["risk_pct"] > max_stop:
+            continue
+        eligible.append(row)
+    # Reject over-limit candidates BEFORE side quotas and sector ranking,
+    # so another genuinely eligible stock can fill the released slot.
+    longs = _pick(eligible, "LONG", thr["LONG"], MAX_LONG)
+    shorts = _pick(eligible, "SHORT", thr["SHORT"], MAX_SHORT)
+    ranked = sorted(longs + shorts,
+                    key=lambda r: (-r["score"], -r["rr1_calc"], r["sym"]))
+    picks, used_symbols, per_sector = [], set(), Counter()
+    for row in ranked:
+        if row["sym"] in used_symbols:
             continue
         sector = str(row.get("sector") or "Unclassified")
         if per_sector[sector] >= MAX_PER_SECTOR:
@@ -570,7 +576,7 @@ def _format_swing_watchlist(mode, data, thr):
     icon = "🛡️" if safe else "🚀"
     max_stop = 4.0 if safe else 7.0
     account_risk = 1.0 if safe else 0.5
-    picks = _swing_watch_candidates(data, thr)
+    picks = _swing_watch_candidates(data, thr, max_stop=max_stop)
     title = "SWING WATCHLIST" if safe else "MOMENTUM WATCHLIST"
     lines = [
         f"{icon} <b>MSK SWING TRADE | {label}</b>",
