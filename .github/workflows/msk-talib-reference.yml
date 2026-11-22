@@ -1,0 +1,28 @@
+name: MSK isolated TA-Lib indicator reference
+on:
+  pull_request:
+    paths:
+      - 'msk_talib_reference_audit.py'
+      - 'technical_indicators.py'
+      - 'tests/test_msk_talib_reference_audit.py'
+      - '.github/workflows/msk-talib-reference.yml'
+permissions:
+  contents: read
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --only-binary=:all: numpy==2.2.6 pandas==2.2.3 TA-Lib==0.6.8
+      - run: python -m unittest discover -s tests -p 'test_msk_talib_reference_audit.py' -v
+      - run: python msk_talib_reference_audit.py > msk-talib-synthetic-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msk-talib-synthetic-audit
+          path: msk-talib-synthetic-audit.json
+          if-no-files-found: error
+          retention-days: 7
