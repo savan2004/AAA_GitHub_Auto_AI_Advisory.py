@@ -1718,26 +1718,35 @@ def _builder_options(stage, choices):
 
 @bot.message_handler(func=lambda m: (m.text or "") == "🏗️ Portfolio Builder")
 def portfolio_builder_button(m):
-    """Fail closed until an actual approved research batch powers automatic selection.
-
-    The legacy customer-facing manual-symbol wizard is retired. The separate
-    owner-only fictional preview remains accessible by its explicit test command.
-    """
+    """Only offer the three-input wizard when approved real research is ready."""
+    from msk_ai_builder_automatic import automatic_available
     if not _builder_allowed(m):
         safe_send(m.chat.id, "Portfolio Builder is available in private chat only.")
         return
+    uid = m.chat.id
     with _portfolio_doctor_lock:
-        _builder_form.pop(m.chat.id, None)
-        _portfolio_doctor_waiting.pop(m.chat.id, None)
-        _portfolio_audit_mode.pop(m.chat.id, None)
-    state.clear(m.chat.id)
-    safe_send(m.chat.id,
-              "🏗️ Automatic Portfolio Builder is temporarily unavailable. "
-              "A verified, approved stock research basket is not yet connected. "
-              "You will NOT be asked to select symbols or percentages. "
-              "No unverified portfolio will be generated. "
-              "For existing holdings, select 🩺 Portfolio Doctor.")
-
+        _builder_form.pop(uid, None)
+        _portfolio_doctor_waiting.pop(uid, None)
+        _portfolio_audit_mode.pop(uid, None)
+    state.clear(uid)
+    if not automatic_available():
+        safe_send(uid,
+                  "🏗️ Automatic Portfolio Builder is temporarily unavailable. "
+                  "A verified, approved stock research basket is not yet connected. "
+                  "You will NOT be asked to select symbols or percentages. "
+                  "No unverified portfolio will be generated. "
+                  "For existing holdings, select 🩺 Portfolio Doctor.")
+        return
+    with _portfolio_doctor_lock:
+        if uid in _portfolio_doctor_running:
+            safe_send(uid, "Another private report is already running.")
+            return
+        _builder_form[uid] = {"mode": "automatic", "step": "amount",
+                              "until": time.monotonic() + 180}
+    safe_send(uid, "🏗️ Automatic Portfolio Builder — Step 1/3\n"
+              "Enter investment amount in rupees (₹1 to ₹1.5 crore). "
+              "Stocks and allocations are selected from approved research. "
+              "Type /cancel to stop.")
 
 @bot.message_handler(commands=["builder_v2_preview"])
 def portfolio_builder_private_beta(m):
@@ -1796,6 +1805,56 @@ def send_private_builder_beta(uid, entry, horizon):
         safe_send(uid, "Beta request could not start. Use /builder_v2_preview.")
 
 
+
+def send_automatic_builder_pdf(uid, entry, horizon):
+    """Consume a valid session exactly once before attempting one PDF send."""
+    from msk_ai_builder_automatic import automatic_available, ResearchUnavailable
+    from msk_ai_builder_telegram import deliver_automatic_pdf
+
+    if not automatic_available():
+        with _portfolio_doctor_lock:
+            if _builder_form.get(uid) is entry:
+                _builder_form.pop(uid, None)
+        safe_send(uid, "NO VERIFIED PORTFOLIO AVAILABLE. Approved research or prices are missing.")
+        return
+    with _portfolio_doctor_lock:
+        if _builder_form.get(uid) is not entry or entry["until"] <= time.monotonic():
+            notice = "Builder session expired. Tap Portfolio Builder to restart."
+        elif uid in _portfolio_doctor_running or not _portfolio_doctor_slots.acquire(blocking=False):
+            notice = "Portfolio Builder is busy. Tap your horizon again shortly."
+        else:
+            notice = None
+            _builder_form.pop(uid, None)
+            _portfolio_doctor_running.add(uid)
+    if notice:
+        safe_send(uid, notice)
+        return
+
+    def release():
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_running.discard(uid)
+            _portfolio_doctor_slots.release()
+
+    def run():
+        try:
+            receipt = deliver_automatic_pdf(
+                bot, uid, int(entry["amount"]), entry["risk"], int(horizon))
+            logger.info("MSK_AUTO_BUILDER_DELIVERY state=SENT receipt_verified=true message_id=%s",
+                        receipt.message_id)
+        except ResearchUnavailable as exc:
+            logger.warning("MSK_AUTO_BUILDER_WITHHELD code=%s", str(exc))
+            safe_send(uid, "NO VERIFIED PORTFOLIO AVAILABLE. No stocks or invented figures were sent.")
+        except Exception as exc:
+            logger.error("MSK_AUTO_BUILDER_DELIVERY_UNVERIFIED type=%s", type(exc).__name__)
+            safe_send(uid, "Builder PDF delivery is unverified. Check this chat before trying again.")
+        finally:
+            release()
+    try:
+        executor.submit(run)
+    except Exception:
+        release()
+        safe_send(uid, "Builder request could not start. No portfolio was sent.")
+
 def portfolio_builder_option(call, value):
     uid = getattr(getattr(call, "from_user", None), "id", None)
     chat = getattr(getattr(call, "message", None), "chat", None)
@@ -1813,6 +1872,8 @@ def portfolio_builder_option(call, value):
         elif stage == "horizon" and entry["step"] == "horizon" and option in ("6", "18", "36", "60"):
             if entry.get("mode") == "private_beta":
                 next_step = "private_beta"
+            elif entry.get("mode") == "automatic":
+                next_step = "automatic"
             else:
                 entry.update(horizon=option, step="stocks", until=time.monotonic() + 180)
                 next_step = "stocks"
@@ -1824,8 +1885,10 @@ def portfolio_builder_option(call, value):
         pass
     if next_step == "private_beta":
         send_private_builder_beta(uid, entry, option)
+    elif next_step == "automatic":
+        send_automatic_builder_pdf(uid, entry, option)
     elif next_step == "horizon":
-        steps = 3 if entry.get("mode") == "private_beta" else 5
+        steps = 3 if entry.get("mode") in ("private_beta", "automatic") else 5
         safe_send(uid, f"Step 3/{steps} — Select time frame:",
                   reply_markup=_builder_options("horizon", [
                       ("6 months", "6"), ("18 months", "18"),
@@ -1865,6 +1928,15 @@ def portfolio_builder_form_text(m, text):
         safe_send(uid, "Builder cancelled. No details saved.")
         return True
     beta = entry.get("mode") == "private_beta"
+    automatic = entry.get("mode") == "automatic"
+    if automatic:
+        from msk_ai_builder_automatic import automatic_available
+        if not automatic_available():
+            with _portfolio_doctor_lock:
+                if _builder_form.get(uid) is entry:
+                    _builder_form.pop(uid, None)
+            safe_send(uid, "NO VERIFIED PORTFOLIO AVAILABLE. Approved research became unavailable.")
+            return True
     if beta:
         from msk_ai_builder_telegram import preview_allowed
         if not _builder_allowed(m) or not preview_allowed(uid):
@@ -1876,12 +1948,12 @@ def portfolio_builder_form_text(m, text):
     step = entry["step"]
     if step == "amount":
         amount = text.strip().replace(",", "")
-        maximum = 15000000 if beta else 1000000000000
+        maximum = 15000000 if (beta or automatic) else 1000000000000
         if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= maximum:
             safe_send(uid, "Enter a valid rupee amount, like 1000000.")
             return True
         entry.update(amount=amount, step="risk", until=time.monotonic() + 180)
-        steps = 3 if beta else 5
+        steps = 3 if (beta or automatic) else 5
         safe_send(uid, f"Step 2/{steps} — Tap your risk preference (not an AI risk assessment):",
                   reply_markup=_builder_options("risk", [
                       ("Low", "low"), ("Mid", "medium"), ("High", "high")]))
