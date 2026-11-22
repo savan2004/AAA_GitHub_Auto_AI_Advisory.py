@@ -257,6 +257,21 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertFalse(output["publication_allowed"])
         self.assertFalse(output["pages"][2]["financial_reviewed"])
 
+    def test_consistent_source_does_not_claim_independent_authenticity(self):
+        # Matching local bytes and an official-looking URL are not download proof.
+        pack = self.root / "pack.json"
+        pack.write_text(json.dumps({"issue": "2026-11", "observations": [self.row]}))
+        result = generate("2026-11", self.root / "out",
+                          source_pack=pack, source_root=self.source_root,
+                          now=datetime(2026, 11, 16, tzinfo=timezone.utc))
+        self.assertEqual(result["source_consistency_rows"], 1)
+        self.assertIs(result["source_authenticity_verified"], False)
+        self.assertIn("independent", result["source_provenance_blocker"])
+        gate = json.loads((self.root / "out" / "2026-11" /
+                           "release_gate.json").read_text())
+        self.assertIs(gate["source_authenticity_verified"], False)
+        self.assertIs(gate["publication_allowed"], False)
+
     def test_issue_mismatch_never_enters_pdf(self):
         pack = self.root / "pack.json"
         pack.write_text(json.dumps({"issue":"2026-10","observations":[self.row]}))
