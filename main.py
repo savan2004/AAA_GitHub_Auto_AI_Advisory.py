@@ -1745,6 +1745,63 @@ def portfolio_builder_button(m):
               "Next you will choose risk and time frame with buttons. Type /cancel to stop.")
 
 
+@bot.message_handler(commands=["builder_v2_preview"])
+def portfolio_builder_private_beta(m):
+    from msk_ai_builder_telegram import preview_allowed
+    if not _builder_allowed(m) or not preview_allowed(m.chat.id):
+        safe_send(m.chat.id, "Private Portfolio Builder Beta is unavailable.")
+        return
+    uid = m.chat.id
+    with _portfolio_doctor_lock:
+        if uid in _portfolio_doctor_running:
+            safe_send(uid, "Another private report is already running.")
+            return
+        _portfolio_doctor_waiting.pop(uid, None)
+        _builder_form[uid] = {"mode": "private_beta", "step": "amount",
+                              "until": time.monotonic() + 180}
+    state.clear(uid)
+    safe_send(uid, "TEST MODE — Portfolio Builder Step 1/3. Enter capital in rupees (1 to 1.5 crore). Fictional stocks only.")
+
+
+def send_private_builder_beta(uid, entry, horizon):
+    from msk_ai_builder_telegram import preview_allowed, deliver_preview
+    if not preview_allowed(uid):
+        safe_send(uid, "Private Beta is unavailable.")
+        return
+    with _portfolio_doctor_lock:
+        if _builder_form.get(uid) is not entry or entry["until"] <= time.monotonic():
+            notice = "Beta session expired. Use /builder_v2_preview."
+        elif uid in _portfolio_doctor_running or not _portfolio_doctor_slots.acquire(blocking=False):
+            notice = "Report busy. Tap your horizon again shortly."
+        else:
+            notice = None
+            _builder_form.pop(uid)
+            _portfolio_doctor_running.add(uid)
+    if notice:
+        safe_send(uid, notice)
+        return
+
+    def release():
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_running.discard(uid)
+            _portfolio_doctor_slots.release()
+
+    def run():
+        try:
+            receipt = deliver_preview(bot, uid, int(entry["amount"]), entry["risk"], int(horizon))
+            logger.info("MSK_PRIVATE_BETA_DELIVERED message_id=%s", receipt.message_id)
+        except Exception as exc:
+            logger.warning("MSK_PRIVATE_BETA_UNCONFIRMED kind=%s", type(exc).__name__)
+            safe_send(uid, "Beta delivery not confirmed. Check your chat before starting another request.")
+        finally:
+            release()
+    try:
+        executor.submit(run)
+    except Exception:
+        release()
+        safe_send(uid, "Beta request could not start. Use /builder_v2_preview.")
+
+
 def portfolio_builder_option(call, value):
     uid = getattr(getattr(call, "from_user", None), "id", None)
     chat = getattr(getattr(call, "message", None), "chat", None)
@@ -1760,16 +1817,22 @@ def portfolio_builder_option(call, value):
             entry.update(risk=option, step="horizon", until=time.monotonic() + 180)
             next_step = "horizon"
         elif stage == "horizon" and entry["step"] == "horizon" and option in ("6", "18", "36", "60"):
-            entry.update(horizon=option, step="stocks", until=time.monotonic() + 180)
-            next_step = "stocks"
+            if entry.get("mode") == "private_beta":
+                next_step = "private_beta"
+            else:
+                entry.update(horizon=option, step="stocks", until=time.monotonic() + 180)
+                next_step = "stocks"
         else:
             next_step = "invalid"
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-    if next_step == "horizon":
-        safe_send(uid, "Step 3/5 — Select time frame:",
+    if next_step == "private_beta":
+        send_private_builder_beta(uid, entry, option)
+    elif next_step == "horizon":
+        steps = 3 if entry.get("mode") == "private_beta" else 5
+        safe_send(uid, f"Step 3/{steps} — Select time frame:",
                   reply_markup=_builder_options("horizon", [
                       ("6 months", "6"), ("18 months", "18"),
                       ("36 months", "36"), ("60 months", "60")]))
@@ -1807,14 +1870,25 @@ def portfolio_builder_form_text(m, text):
             _builder_form.pop(uid, None)
         safe_send(uid, "Builder cancelled. No details saved.")
         return True
+    beta = entry.get("mode") == "private_beta"
+    if beta:
+        from msk_ai_builder_telegram import preview_allowed
+        if not _builder_allowed(m) or not preview_allowed(uid):
+            with _portfolio_doctor_lock:
+                if _builder_form.get(uid) is entry:
+                    _builder_form.pop(uid, None)
+            safe_send(uid, "Private Beta is unavailable.")
+            return True
     step = entry["step"]
     if step == "amount":
         amount = text.strip().replace(",", "")
-        if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= 1000000000000:
+        maximum = 15000000 if beta else 1000000000000
+        if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= maximum:
             safe_send(uid, "Enter a valid rupee amount, like 1000000.")
             return True
         entry.update(amount=amount, step="risk", until=time.monotonic() + 180)
-        safe_send(uid, "Step 2/5 — Tap your risk preference (not an AI risk assessment):",
+        steps = 3 if beta else 5
+        safe_send(uid, f"Step 2/{steps} — Tap your risk preference (not an AI risk assessment):",
                   reply_markup=_builder_options("risk", [
                       ("Low", "low"), ("Mid", "medium"), ("High", "high")]))
         return True
