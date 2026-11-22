@@ -1,0 +1,43 @@
+name: MSK weekly research staging verification
+on:
+  pull_request:
+    paths:
+      - 'msk_ai_builder_weekly*.py'
+      - 'msk_ai_builder_bank.py'
+      - 'msk_ai_builder_evidence.py'
+      - 'msk_ai_builder_primary.py'
+      - 'tests/test_msk_ai_builder_weekly*.py'
+      - 'tests/test_msk_ai_builder_bank.py'
+      - 'tests/test_msk_ai_builder_evidence.py'
+      - '.github/workflows/msk-ai-builder-weekly-qa.yml'
+permissions:
+  contents: read
+jobs:
+  verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: builder_test
+          POSTGRES_PASSWORD: local_ci_only
+          POSTGRES_DB: builder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U builder_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MSK_BUILDER_TEST_POSTGRES: postgresql://builder_test:local_ci_only@localhost:5432/builder_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests==2.32.3 'psycopg[binary]>=3.2,<3.4'
+      - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_evidence.py' -v
+      - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_bank.py' -v
+      - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_weekly*.py' -v
