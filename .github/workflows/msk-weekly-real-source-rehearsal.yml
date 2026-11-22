@@ -4,6 +4,9 @@ on:
     paths:
       - '.github/workflows/msk-weekly-real-source-rehearsal.yml'
       - 'msk_ai_builder_evidence.py'
+      - 'msk_ai_builder_quarter_check.py'
+      - 'msk_ai_builder_discovery.py'
+      - 'msk_ai_builder_filings.py'
       - 'msk_ai_builder_weekly*.py'
   workflow_dispatch:
 permissions:
@@ -32,6 +35,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install requests==2.32.3 pandas==2.2.2 numpy==1.26.4 yfinance==0.2.61 curl_cffi==0.7.4 'psycopg[binary]>=3.2,<3.4'
+      - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_quarter_check.py' -v
       - name: Rehearse refresh against real public sources and disposable PostgreSQL
         run: |
           python -u - <<'PY'
@@ -41,6 +45,8 @@ jobs:
           from msk_ai_builder_bank import BankError, WeeklyResearchBank
           from msk_ai_builder_weekly_job import run_weekly_job
           from msk_ai_builder_weekly import stage_week
+          from msk_ai_builder_quarter_check import check_latest_quarter
+          from msk_ai_builder_evidence import EvidenceError
 
           def connect(_):
               return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
@@ -48,9 +54,17 @@ jobs:
               return WeeklyResearchBank("postgresql://test@localhost/test?sslmode=require", connector=connect)
 
           env = {"MSK_BUILDER_WEEKLY_JOB_ENABLED": "1"}
+          primary_checks = []
           def diagnosed_refresh(bank, **kwargs):
               result, version = stage_week(bank, **kwargs)
               print("PUBLIC_PERIOD_FAILURES", json.dumps(result.failures, sort_keys=True))
+              # Bounded initial primary-source pilot: up to three actual staged standalone issuers.
+              for company in [c for c in result.companies if c.evidence.scope == "standalone"][:3]:
+                  try:
+                      primary_checks.append(check_latest_quarter(company.member, company.evidence))
+                  except EvidenceError as exc:
+                      primary_checks.append({"symbol": company.member.symbol, "status": str(exc), "publication_status": "WITHHELD"})
+              print("PRIMARY_QUARTER_CHECKS", json.dumps(primary_checks, sort_keys=True))
               return result, version
           first = run_weekly_job(environ=env, bank_factory=factory, refresh=diagnosed_refresh)
           print("FIRST_REFRESH", json.dumps(first, sort_keys=True))
@@ -75,7 +89,7 @@ jobs:
               assert str(exc) == "PRODUCTION_PUBLICATION_DISABLED"
           else:
               raise AssertionError("Unapproved customer publication")
-          Path("weekly-rehearsal.json").write_text(json.dumps({"first": first, "replay": again, "publication_blocked": True}, indent=2))
+          Path("weekly-rehearsal.json").write_text(json.dumps({"first": first, "replay": again, "primary_checks": primary_checks, "publication_blocked": True}, indent=2))
           print("REPLAY", json.dumps(again, sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
