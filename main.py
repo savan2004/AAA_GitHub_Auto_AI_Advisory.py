@@ -2087,15 +2087,6 @@ def swing_btn(m):
     mode = "conservative" if "Safe" in m.text else "aggressive"
     safe_send(m.chat.id, f"⏳ Swing scanning… (~25s)")
 
-    def _ping(chat_id=m.chat.id):
-        time.sleep(15)
-        try:
-            safe_send(chat_id, "⏳ Still scanning…")
-        except Exception:
-            pass
-
-    threading.Thread(target=_ping, daemon=True).start()
-
     def _run(chat_id=m.chat.id, md=mode):
         try:
             res = get_swing_trades(mode=md)
