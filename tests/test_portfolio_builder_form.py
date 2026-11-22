@@ -45,6 +45,7 @@ def harness():
         "_portfolio_doctor_lock": threading.Lock(),
         "_portfolio_doctor_running": set(),
         "_portfolio_doctor_waiting": {},
+        "_portfolio_audit_mode": {},
         "_builder_allowed": lambda m: m.chat.type == "private" and m.chat.id == m.from_user.id,
         "_builder_form": {},
         "portfolio_doctor_builder_command": lambda m, payload_override=None, *, form_entry=None: submitted.append((payload_override, form_entry)),
@@ -69,7 +70,9 @@ class BuilderFormTests(unittest.TestCase):
     def test_complete_manual_input_flow_and_payload(self):
         ns, sent, submitted, answers, msg, click, clock = harness()
         with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}):
-            ns["portfolio_builder_button"](msg("🏗️ Portfolio Builder"))
+            # Legacy input parser is retained only for compatibility tests; the
+            # customer-facing button must never initiate this manual wizard.
+            ns["_builder_form"][UID] = {"step": "amount", "until": clock.t + 180}
             self.assertEqual(ns["_builder_form"][UID]["step"], "amount")
             self.assertTrue(ns["portfolio_builder_form_text"](msg("1000000"), "1000000"))
             self.assertEqual([b.text for b in sent[-1][2]["reply_markup"].buttons],
@@ -87,10 +90,25 @@ class BuilderFormTests(unittest.TestCase):
         self.assertEqual(ns["_builder_form"][UID]["step"], "limits")
         self.assertEqual(len(answers), 2)
 
+    def test_public_builder_button_never_asks_for_symbols_or_percentages(self):
+        for enabled in ("0", "1"):
+            with self.subTest(legacy_flag=enabled):
+                ns, sent, submitted, _, msg, _, clock = harness()
+                ns["_builder_form"][UID] = {"step": "stocks", "until": clock.t + 180}
+                ns["_portfolio_doctor_waiting"][UID] = clock.t + 180
+                with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": enabled}):
+                    ns["portfolio_builder_button"](msg("🏗️ Portfolio Builder"))
+                self.assertEqual(ns["_builder_form"], {})
+                self.assertEqual(ns["_portfolio_doctor_waiting"], {})
+                self.assertIn("verified, approved", sent[-1][1])
+                self.assertNotIn("Step 4", sent[-1][1])
+                self.assertNotIn("SBIN 25", sent[-1][1])
+                self.assertEqual(submitted, [])
+
     def test_invalid_amount_and_limits_do_not_submit(self):
-        ns, sent, submitted, _, msg, click, _ = harness()
+        ns, sent, submitted, _, msg, click, clock = harness()
         with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}):
-            ns["portfolio_builder_button"](msg("🏗️ Portfolio Builder"))
+            ns["_builder_form"][UID] = {"step": "amount", "until": clock.t + 180}
             ns["portfolio_builder_form_text"](msg("abc"), "abc")
             self.assertEqual(ns["_builder_form"][UID]["step"], "amount")
             ns["portfolio_builder_form_text"](msg("100000"), "100000")
@@ -108,6 +126,8 @@ class BuilderFormTests(unittest.TestCase):
         self.assertEqual(ns["_builder_form"], {})
         with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}):
             ns["portfolio_builder_button"](msg("🏗️ Portfolio Builder"))
+            self.assertEqual(ns["_builder_form"], {})
+            ns["_builder_form"][UID] = {"step": "amount", "until": clock.t + 180}
             clock.t += 181
             self.assertTrue(ns["portfolio_builder_form_text"](msg("100000"), "100000"))
         self.assertEqual(ns["_builder_form"], {})
