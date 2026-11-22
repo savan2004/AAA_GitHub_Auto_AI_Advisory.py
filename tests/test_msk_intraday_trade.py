@@ -11,7 +11,7 @@ import pandas as pd
 
 from msk_intraday_trade import (
     IST, _completed, _fetch_yahoo_15m, _indicators,
-    build_intraday_trade_report, evaluate_instrument,
+    build_intraday_trade_report, build_nifty200_report, evaluate_instrument, nifty200_members,
     format_intraday, market_session_open,
 )
 
@@ -68,6 +68,32 @@ def bearish_indicators(data):
 
 
 class Intraday15mRules(TestCase):
+    def test_equity_window_and_unverified_membership(self):
+        members = Mock(side_effect=ValueError())
+        download = Mock()
+        self.assertIn("Outside", build_nifty200_report(clock=lambda: SUNDAY, members=members, download=download))
+        members.assert_not_called()
+        self.assertIn("Scan withheld", build_nifty200_report(clock=lambda: TRADING, members=members, download=download))
+        download.assert_not_called()
+
+    def test_partial_equity_scan_uses_stock_volume_and_escapes_symbol(self):
+        frame = candles()
+        frame.loc[frame.index[-2], "Volume"] = 2000.
+        bars = pd.concat({"A&B.NS": frame}, axis=1)
+        with patch("msk_intraday_trade._indicators", bullish_indicators):
+            report = build_nifty200_report(clock=lambda: TRADING, members=lambda: ["A&B", "BBB"],
+                                           download=lambda symbols: bars)
+        self.assertIn("1/2", report)
+        self.assertIn("A&amp;B · BUY watch", report)
+        self.assertIn("Win rate unverified", report)
+        self.assertNotIn("ETF", report)
+
+    def test_repeated_constituent_cannot_fill_universe(self):
+        with patch("msk_intraday_trade.requests.get") as get:
+            get.return_value.content = ("Symbol,Series\n" + "ABC,EQ\n" * 200).encode()
+            with self.assertRaises(ValueError):
+                nifty200_members()
+
     def test_closed_sunday_never_fetches_or_issues_trade(self):
         provider = Mock(side_effect=AssertionError("no Sunday price fetch"))
         report = build_intraday_trade_report(now=SUNDAY, fetcher=provider)

@@ -168,6 +168,7 @@ class MarketHealthFactorsTest(unittest.TestCase):
     def test_invalid_participation_withholds_verdict(self):
         factors = {"session": SESSION.isoformat()}
         for invalid in (dict(BREADTH, advances=999), dict(BREADTH, unchanged=0),
+                        dict(BREADTH, advances=162.5, declines=335.5),
                         dict(BREADTH, ma20={"pct": 101})):
             report = h.format_market_health(invalid, factors)
             self.assertIn("inconsistent", report)
