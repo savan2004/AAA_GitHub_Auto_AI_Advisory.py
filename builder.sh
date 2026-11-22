@@ -32,4 +32,5 @@ print("MSK_CHART_DEPS_OK six=" + six.__version__ +
       " python=" + sys.version.split()[0])
 PY
 
+python -m msk_release_stamp
 echo "==> Build completed successfully"
