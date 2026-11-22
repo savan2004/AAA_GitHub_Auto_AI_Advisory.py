@@ -78,8 +78,19 @@ def _periods(rows, *, as_of, count, cadence):
         if not isinstance(row, dict) or not isinstance(row.get("label"), str):
             raise EvidenceError("INVALID_PERIOD")
         end = period_end(row["label"])
-        if end is None or end > as_of or end in dated:
-            raise EvidenceError("INVALID_OR_DUPLICATE_PERIOD")
+        if end is None:
+            raise EvidenceError("INVALID_PERIOD_LABEL")
+        if end > as_of:
+            raise EvidenceError("FUTURE_REPORTING_PERIOD")
+        if end in dated:
+            # Only collapse identical rows from the same issuer page and
+            # reporting basis. Never combine conflicting revisions or count
+            # a duplicate as an additional reporting period.
+            prior = dated[end]
+            if (prior != row or _number(prior.get("revenue")) != _number(row.get("revenue"))
+                    or _number(prior.get("net_profit")) != _number(row.get("net_profit"))):
+                raise EvidenceError("CONFLICTING_DUPLICATE_PERIOD")
+            continue
         dated[end] = row
     ends = sorted(dated)[-count:]
     if len(ends) != count:

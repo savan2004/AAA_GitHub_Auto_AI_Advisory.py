@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/msk-weekly-real-source-rehearsal.yml'
+      - 'msk_ai_builder_evidence.py'
+      - 'msk_ai_builder_weekly*.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -38,6 +40,7 @@ jobs:
           import psycopg
           from msk_ai_builder_bank import BankError, WeeklyResearchBank
           from msk_ai_builder_weekly_job import run_weekly_job
+          from msk_ai_builder_weekly import stage_week
 
           def connect(_):
               return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
@@ -45,7 +48,11 @@ jobs:
               return WeeklyResearchBank("postgresql://test@localhost/test?sslmode=require", connector=connect)
 
           env = {"MSK_BUILDER_WEEKLY_JOB_ENABLED": "1"}
-          first = run_weekly_job(environ=env, bank_factory=factory)
+          def diagnosed_refresh(bank, **kwargs):
+              result, version = stage_week(bank, **kwargs)
+              print("PUBLIC_PERIOD_FAILURES", json.dumps(result.failures, sort_keys=True))
+              return result, version
+          first = run_weekly_job(environ=env, bank_factory=factory, refresh=diagnosed_refresh)
           print("FIRST_REFRESH", json.dumps(first, sort_keys=True))
           Path("weekly-rehearsal.json").write_text(json.dumps({"first": first}, indent=2))
           assert first["status"] == "INTERNAL_SECONDARY_STAGING"

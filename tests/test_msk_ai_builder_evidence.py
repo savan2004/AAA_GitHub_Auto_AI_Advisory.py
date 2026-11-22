@@ -40,7 +40,7 @@ class SecondaryTests(unittest.TestCase):
     def test_missing_duplicates_and_gaps(self):
         for transform in (
             lambda d: d["years"].pop(),
-            lambda d: d["quarters"].append(d["quarters"][0]),
+            lambda d: d["quarters"].append(dict(d["quarters"][0], net_profit=999)),
             lambda d: d["years"][0].update(label="Mar 2021"),
             lambda d: d["quarters"][-1].update(label="Dec 2026"),
             lambda d: d["quarters"][0].update(label="TTM"),
@@ -49,6 +49,35 @@ class SecondaryTests(unittest.TestCase):
             transform(d)
             with self.assertRaises(EvidenceError):
                 self.validate(d)
+
+    def test_exact_duplicate_is_one_period_not_extra_history(self):
+        original = fixture()
+        data = fixture()
+        data["quarters"].append(dict(data["quarters"][0]))
+        data["years"].append(dict(data["years"][0]))
+        self.assertEqual(self.validate(data), self.validate(original))
+        data["quarters"] = data["quarters"][1:-1]
+        data["quarters"].append(dict(data["quarters"][0]))
+        with self.assertRaisesRegex(EvidenceError, "INSUFFICIENT_HISTORY"):
+            self.validate(data)
+
+    def test_distinct_period_failure_codes_and_no_conflict_recovery(self):
+        for label, expected in (("unknown", "INVALID_PERIOD_LABEL"),
+                                ("Dec 2026", "FUTURE_REPORTING_PERIOD")):
+            data = fixture()
+            data["quarters"][0]["label"] = label
+            with self.assertRaisesRegex(EvidenceError, expected):
+                self.validate(data)
+        for key in ("revenue", "net_profit", "op_profit"):
+            data = fixture()
+            data["quarters"].append(dict(data["quarters"][0], **{key: 999}))
+            with self.assertRaisesRegex(EvidenceError, "CONFLICTING_DUPLICATE_PERIOD"):
+                self.validate(data)
+        data = fixture()
+        data["quarters"][0]["revenue"] = None
+        data["quarters"].append(dict(data["quarters"][0]))
+        with self.assertRaises(EvidenceError):
+            self.validate(data)
 
     def test_bad_numeric_fields(self):
         for value in (None, True, "100", float("nan"), float("inf"), -1, 0):
