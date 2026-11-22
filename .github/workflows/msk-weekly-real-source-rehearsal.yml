@@ -49,6 +49,7 @@ jobs:
           from msk_ai_builder_weekly import stage_week
           from msk_ai_builder_quarter_check import check_latest_quarter
           from msk_ai_builder_evidence import EvidenceError
+          from msk_ai_builder_discovery import fetch_listing
 
           def connect(_):
               return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
@@ -57,6 +58,23 @@ jobs:
 
           env = {"MSK_BUILDER_WEEKLY_JOB_ENABLED": "1"}
           primary_checks = []
+          diagnostics = {}
+          focus = {"COFORGE", "ICICIBANK", "BANKBARODA", "MCX", "RELIANCE"}
+          def diagnosed_listing(symbol, period):
+              payload = fetch_listing(symbol, period)
+              if symbol in focus:
+                  rows = payload.get("data") if isinstance(payload, dict) else None
+                  keys = ("symbol", "qe_Date", "consolidated", "broadcast_Date", "revised_Date", "ixbrl")
+                  diagnostics[symbol] = {"totalCount": payload.get("totalCount") if isinstance(payload, dict) else None,
+                      "data_type": type(rows).__name__, "row_count": len(rows) if isinstance(rows, list) else None,
+                      "rows": [{k:r.get(k) for k in keys} for r in rows[:20] if isinstance(r, dict)] if isinstance(rows, list) else []}
+                  print("FOCUS_METADATA", symbol, json.dumps(diagnostics[symbol], sort_keys=True))
+              return payload
+          def record_numeric(data):
+              symbol = data["symbol"]
+              if symbol in focus:
+                  diagnostics.setdefault(symbol, {})["numeric_comparison"] = data
+                  print("FOCUS_NUMERIC", json.dumps(data, sort_keys=True))
           def diagnosed_refresh(bank, **kwargs):
               result, version = stage_week(bank, **kwargs)
               print("PUBLIC_PERIOD_FAILURES", json.dumps(result.failures, sort_keys=True))
@@ -64,11 +82,11 @@ jobs:
               print("PRIMARY_PILOT_SCOPES", json.dumps({c.member.symbol: c.evidence.scope for c in result.companies[:20]}, sort_keys=True))
               for company in result.companies[:20]:
                   try:
-                      primary_checks.append(check_latest_quarter(company.member, company.evidence))
+                      primary_checks.append(check_latest_quarter(company.member, company.evidence, listing=diagnosed_listing, audit=record_numeric))
                   except EvidenceError as exc:
                       primary_checks.append({"symbol": company.member.symbol, "status": str(exc), "publication_status": "WITHHELD"})
                   print("PRIMARY_PROGRESS", json.dumps(primary_checks[-1], sort_keys=True))
-                  Path("weekly-rehearsal.json").write_text(json.dumps({"primary_checks": primary_checks, "publication_blocked": True}, indent=2))
+                  Path("weekly-rehearsal.json").write_text(json.dumps({"primary_checks": primary_checks, "focus_diagnostics": diagnostics, "publication_blocked": True}, indent=2))
               print("PRIMARY_QUARTER_CHECKS", json.dumps(primary_checks, sort_keys=True))
               return result, version
           first = run_weekly_job(environ=env, bank_factory=factory, refresh=diagnosed_refresh)
@@ -97,7 +115,7 @@ jobs:
               assert str(exc) == "PRODUCTION_PUBLICATION_DISABLED"
           else:
               raise AssertionError("Unapproved customer publication")
-          Path("weekly-rehearsal.json").write_text(json.dumps({"first": first, "replay": again, "primary_checks": primary_checks, "publication_blocked": True}, indent=2))
+          Path("weekly-rehearsal.json").write_text(json.dumps({"first": first, "replay": again, "primary_checks": primary_checks, "focus_diagnostics": diagnostics, "publication_blocked": True}, indent=2))
           print("REPLAY", json.dumps(again, sort_keys=True))
           assert len({c["symbol"] for c in primary_checks}) == first["selected"]
           assert {c["symbol"] for c in primary_checks} == {r["symbol"] for r in rows["companies"]}

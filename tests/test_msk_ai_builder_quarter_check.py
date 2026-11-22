@@ -67,3 +67,16 @@ class QuarterCheckTests(TestCase):
         self.assertEqual(result["status"], "LATEST_QUARTER_MATCHED_ONLY")
         self.assertEqual(result["publication_status"], "WITHHELD")
         download.assert_called_once_with(url)
+
+    def test_mismatch_audit_retains_both_sources_without_approval(self):
+        snap, listing, download = self.setup_inputs()
+        seen = []
+        changed = replace(snap, quarterly=snap.quarterly[:-1] + (
+            replace(snap.quarterly[-1], revenue_cr=999),))
+        with self.assertRaisesRegex(EvidenceError, "QUARTER_CHECK_VALUE_MISMATCH"):
+            check_latest_quarter(MEMBER, changed, listing=listing, download=download,
+                                 clock=lambda: NOW, audit=seen.append)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["issuer_revenue_cr"], "1234.5678")
+        self.assertEqual(seen[0]["secondary_revenue_cr"], "999")
+        self.assertEqual(seen[0]["publication_status"], "WITHHELD")

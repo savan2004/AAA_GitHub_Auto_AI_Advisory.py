@@ -8,7 +8,8 @@ from msk_ai_builder_filings import download_filing, extract_quarter
 
 
 def check_latest_quarter(member, evidence, *, listing=fetch_listing,
-                         download=download_filing, clock=lambda: datetime.now(timezone.utc)):
+                         download=download_filing, clock=lambda: datetime.now(timezone.utc),
+                         audit=None):
     if (not isinstance(member, IndexMember) or not isinstance(evidence, SecondarySnapshot)
             or member.symbol != evidence.symbol or evidence.eligible_for_selection
             or len(evidence.quarterly) != 8):
@@ -28,6 +29,15 @@ def check_latest_quarter(member, evidence, *, listing=fetch_listing,
     result = extract_quarter(doc, member, expected_end=period.end, now=clock(), scope=evidence.scope)
     if result.board_approval > ref.broadcast_at.date():
         raise EvidenceError("QUARTER_CHECK_PUBLICATION_MISMATCH")
+    if audit is not None:
+        audit({"symbol": member.symbol, "period": period.end.isoformat(),
+               "scope": evidence.scope, "filing_url": ref.url,
+               "document_sha256": result.digest,
+               "issuer_revenue_cr": str(result.revenue_cr),
+               "issuer_profit_cr": str(result.profit_cr),
+               "secondary_revenue_cr": str(period.revenue_cr),
+               "secondary_profit_cr": str(period.profit_cr),
+               "publication_status": "WITHHELD"})
     for primary, secondary in ((result.revenue_cr, period.revenue_cr),
                                (result.profit_cr, period.profit_cr)):
         if abs(primary - Decimal(str(secondary))) > Decimal("0.51"):
