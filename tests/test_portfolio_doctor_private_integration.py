@@ -90,7 +90,7 @@ class SessionTests(unittest.TestCase):
         self.assertGreater(env["_portfolio_doctor_waiting"][101], time.monotonic())
         self.assertIn("Portfolio Doctor", notices[-1][1])
 
-        raw = "Sbin 100 609\\nBhel 124 90\\nVedl 68 120"
+        raw = "Sbin 100 609\nBhel 124 90\nVedl 68 120"
         routed, builder_calls = [], []
         env.update(
             API_RATE_LIMITER=SimpleNamespace(is_allowed=lambda _uid: True),
