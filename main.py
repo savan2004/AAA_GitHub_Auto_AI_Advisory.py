@@ -46,7 +46,7 @@ from ai_engine import (
     test_ai_providers,
 )
 from swing_trades import get_swing_trades
-from msk_intraday_trade import build_intraday_trade_report
+from msk_intraday_trade import build_nifty200_report
 from chart_integration import get_chart_generator
 from report_generator import generate_stock_report_pdf
 import stocks_buzz
@@ -988,7 +988,7 @@ def cmd_menu(m):
 @bot.message_handler(commands=["help"])
 def cmd_help(m):
     safe_send(m.chat.id,
-              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIntraday Nifty/Bank Nifty: tap ⚡ Intraday Trade or <code>/intraday</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>")
+              "📖 <b>Help</b>\n\nType symbol: <code>RELIANCE</code>\nChart: <code>/chart INFY 3mo</code>\nResearch PDF: <code>/report DLF</code>\nBreakouts: tap 🔥 Stocks Buzz or <code>/buzz</code>\nIntraday Nifty 200 stocks: tap ⚡ Intraday Trade or <code>/intraday</code>\nIndex &amp; sector PDF: tap 🏭 Sector Report or <code>/sectors</code>\nBuy: <code>/buy RELIANCE 10 2500</code>\nSell: <code>/sell RELIANCE</code>")
 
 
 def run_report(chat_id, query):
@@ -2118,9 +2118,11 @@ def intraday_btn(m):
         safe_send(m.chat.id, "⚠️ Intraday reports are available in private bot chat.")
         return
 
+    safe_send(m.chat.id, "Checking Nifty 200 stocks for intraday setups…")
+
     def _run(chat_id=m.chat.id):
         try:
-            report = build_intraday_trade_report()
+            report = build_nifty200_report()
             if not isinstance(report, str) or not report.strip():
                 raise ValueError("intraday_report_empty")
             safe_send(chat_id, report)
