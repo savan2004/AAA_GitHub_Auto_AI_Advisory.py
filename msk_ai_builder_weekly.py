@@ -5,7 +5,7 @@ fundamental rubric is intentionally small and does not establish suitability,
 valuation, governance, primary-source authentication or future returns.
 """
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import math
 import time
 
@@ -140,8 +140,10 @@ def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=Non
                         "INTERNAL_SECONDARY_STAGING" if selected else "WITHHELD_NO_QUALIFIERS")
 
 def stage_week(bank,*,now=None,roster_provider=fetch_roster,close_provider=fetch_closes,
-               evidence_provider=None,max_attempts=40,deadline_seconds=300):
-    """Operator entry point; no Telegram, no customer publication, no auto scheduler."""
+               evidence_provider=None,max_attempts=40,deadline_seconds=300,once_per_week=False):
+    """Internal staging refresh; optional one successful review per ISO session week."""
+    if type(once_per_week) is not bool:
+        raise BankError('INVALID_WEEKLY_MODE')
     utc_clock=(lambda: datetime.now(timezone.utc)) if now is None else (lambda: now)
     now=utc_clock()
     if now.utcoffset() is None:
@@ -155,6 +157,15 @@ def stage_week(bank,*,now=None,roster_provider=fetch_roster,close_provider=fetch
         if str(exc)!="BANK_EMPTY":
             raise
         version,old=None,{"companies":[]}
+    if once_per_week and version is not None:
+        try:
+            old_close=date.fromisoformat(old["close_date"])
+        except (KeyError,TypeError,ValueError):
+            raise BankError("BANK_CLOSE_DATE_INVALID") from None
+        if old_close>close_date:
+            raise BankError("REVIEW_ROLLBACK")
+        if old_close.isocalendar()[:2]==close_date.isocalendar()[:2]:
+            return WeeklyReview(0,0,(),(),(),{},{},"SKIPPED_ALREADY_REVIEWED"),None
     previous=[x["symbol"] for x in old["companies"]]
     roster=roster_provider()
     old_ids={x['symbol']:x['isin'] for x in old['companies']}
