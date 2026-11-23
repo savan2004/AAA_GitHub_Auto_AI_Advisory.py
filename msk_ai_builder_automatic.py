@@ -11,7 +11,7 @@ from datetime import date
 from decimal import Decimal
 from urllib.parse import urlsplit
 
-from msk_ai_builder_allocation import ApprovedCandidate, allocate_portfolio
+from msk_ai_builder_allocation import ApprovedCandidate, allocate_portfolio, EQUITY_CAP
 from msk_ai_builder_profile import ResearchProfile
 from msk_ai_builder_research_release import require_reviewed_research
 
@@ -116,7 +116,10 @@ def approved_plan(profile, raw, *, latest_session):
         require_reviewed_research(raw, latest_session=latest_session, companies=rows)
         candidates = [_candidate(row, session) for row in rows]
         plan = allocate_portfolio(profile, candidates, expected_session=session)
-        if not plan.positions:
+        # The approved low-risk six-month policy deliberately carries 100%
+        # modeled cash. Produce a clearly labelled cash-only research PDF
+        # instead of an error or inventing a stock merely to fill the basket.
+        if not plan.positions and EQUITY_CAP[profile.risk][profile.months] != 0:
             raise ValueError("no eligible positions under this risk preference")
         if plan.cash + sum((p.cost for p in plan.positions), Decimal(0)) != Decimal(profile.capital_rupees):
             raise ValueError("capital reconciliation failed")
