@@ -16,8 +16,7 @@ from portfolio_doctor_live import IST
 OFFICIAL_ROSTER = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
 MIN_MEMBERS = 450
 MAX_MEMBERS = 550
-PEERS_PER_INDUSTRY = 8
-MAX_SCREENED = 36
+MAX_SCREENED = 180  # Cover a typical 151-peer pool, while bounding free-tier resources.
 MAX_RESULTS = 12
 MAX_PER_INDUSTRY = 3
 
@@ -59,10 +58,11 @@ def official_nifty500_industries(*, get=None):
 
 def research_industry_peers(holdings, *, members=None, history_fetcher=None,
                             evaluator=None, now=None):
-    """Rank a DISCLOSED sample of same-industry constituents, not all 500.
+    """Screen every same-industry member up to a bounded 180-stock cap.
 
-    Fail closed on unknown membership, unavailable history or stale daily bars.
-    All rows must qualify under the existing moderate technical screener.
+    Prioritize the *highest current portfolio exposure* first. An incomplete
+    public download never turns an unchecked stock into a failed candidate.
+    Evidence is informational, not a personalized replacement recommendation.
     """
     now = now or datetime.now(IST)
     if members is None:
@@ -70,116 +70,152 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     out = {"status": "UNAVAILABLE", "universe": len(members or {}),
            "pool": 0, "screened": 0, "fresh": 0, "qualified": 0,
            "candidates": [], "comparisons": [], "held_industries": {},
-           "scope": "same-industry sampled peers only"}
+           "industry_coverage": [], "failure_counts": {},
+           "scope": "same-industry peer pool; weighted industry priority"}
     if not isinstance(members, dict) or not MIN_MEMBERS <= len(members) <= MAX_MEMBERS:
         return out
+
     held = {str(row.get("symbol", "")).upper() for row in holdings}
     out["held_industries"] = {sym: members[sym] for sym in held if sym in members}
-    industries = list(dict.fromkeys(members[sym] for row in holdings
-                                    if (sym := str(row.get("symbol", "")).upper()) in members))
+    # Row values are verified holdings-only figures. Do not persist or log them.
+    weights = {}
+    for row in holdings:
+        sym = str(row.get("symbol", "")).upper()
+        if sym not in members:
+            continue
+        try:
+            value = float(row.get("value", 0))
+        except (ValueError, TypeError, OverflowError):
+            value = 0
+        if not math.isfinite(value) or value < 0:
+            value = 0
+        industry = members[sym]
+        weights[industry] = weights.get(industry, 0) + value
+    industries = sorted(weights, key=lambda group: (-weights[group], group))
     if not industries:
         return out
-    pool = [(sym, industry) for sym, industry in members.items()
-            if sym not in held and industry in industries]
+
+    pool = [(sym, industry) for industry in industries for sym, label
+            in members.items() if sym not in held and label == industry]
     out["pool"] = len(pool)
-    # Spread the bounded sample across each represented industry rather than
-    # always choosing the first members of the official CSV. Each industry
-    # receives a fair quota even when five holdings span five industries.
-    sampled = []
-    base, extra = divmod(MAX_SCREENED, len(industries))
-    for i, industry in enumerate(industries):
-        matches = [(sym, label) for sym, label in pool if label == industry]
-        quota = min(PEERS_PER_INDUSTRY, base + (1 if i < extra else 0), len(matches))
-        if quota <= 0:
-            continue
-        if quota == 1:
-            positions = [len(matches) // 2]
-        else:
-            positions = [round(j * (len(matches) - 1) / (quota - 1)) for j in range(quota)]
-        sampled.extend(matches[j] for j in positions)
+    coverage = {industry: {"industry": industry, "pool": 0, "attempted": 0,
+                           "fresh": 0, "compared": 0, "qualified": 0}
+                for industry in industries}
+    for _, industry in pool:
+        coverage[industry]["pool"] += 1
+    sampled = pool[:MAX_SCREENED]
+    for _, industry in sampled:
+        coverage[industry]["attempted"] += 1
+    out["screened"] = len(sampled)
+    out["industry_coverage"] = [coverage[industry] for industry in industries]
     if not sampled:
         out["status"] = "NO_SAME_INDUSTRY_PEERS"
         return out
-    out["screened"] = len(sampled)
+
     if history_fetcher is None:
         from market_data import bulk_history
+        # Three 60-symbol bounded chunks cover a typical 151-stock peer pool;
+        # no per-symbol retries, giant concurrent job or synthetic candles.
         history_fetcher = lambda symbols: bulk_history(
-            symbols, "1y", chunk_size=36, retries=0, max_fallbacks=0,
-            download_timeout=15)
+            symbols, "1y", chunk_size=60, retries=0,
+            max_fallbacks=0, download_timeout=9)
     if evaluator is None:
         from investment_screener import evaluate_candidate
         evaluator = evaluate_candidate
     try:
         histories = history_fetcher([sym for sym, _ in sampled])
     except Exception:
+        out["failure_counts"] = {"PRICE_PROVIDER_UNAVAILABLE": len(sampled)}
         return out
     if not isinstance(histories, dict):
+        out["failure_counts"] = {"PRICE_PROVIDER_UNAVAILABLE": len(sampled)}
         return out
+
     from portfolio_doctor_live import verified_completed_daily_frame
-    qualified = []
-    comparisons = []
-    evidence = {}
+    from portfolio_doctor_calculations import _rsi
+    qualified, comparisons, evidence = [], [], {}
+    failures = {}
+    def rejected(reason):
+        failures[reason] = failures.get(reason, 0) + 1
+
     for sym, industry in sampled:
         try:
             checked = verified_completed_daily_frame(histories.get(sym), now=now)
-            out["fresh"] += 1
-            # Show independently verified industry peers even when strict
-            # moderate entry/volume/risk gates don't produce a candidate.
-            # These are comparison observations, NOT qualified replacements.
+        except Exception:
+            rejected("MISSING_OR_STALE_COMPLETED_OHLCV")
+            continue
+        out["fresh"] += 1
+        coverage[industry]["fresh"] += 1
+        try:
             closes = [float(x) for x in checked["Close"].tolist()]
-            if len(closes) >= 51 and all(math.isfinite(x) and x > 0 for x in closes):
-                from portfolio_doctor_calculations import _rsi
-                day20 = 100 * (closes[-1] / closes[-21] - 1)
-                rsi = _rsi(closes)
-                if rsi is not None and all(math.isfinite(x) for x in (day20, float(rsi))):
-                    observation = {
-                        "symbol": sym, "industry": industry,
-                        "close": closes[-1], "date": checked.index[-1].date().isoformat(),
-                        "return20": round(day20, 2), "rsi14": round(float(rsi), 1),
-                        "return_window": tuple(day.date().isoformat() for day in checked.index[-21:]),
-                    }
-                    comparisons.append(observation)
-                    evidence[sym] = observation
+            if len(closes) < 51 or not all(math.isfinite(x) and x > 0 for x in closes):
+                rejected("INSUFFICIENT_51_SESSION_HISTORY")
+                continue
+            change20 = 100 * (closes[-1] / closes[-21] - 1)
+            rsi = _rsi(closes)
+            if rsi is None or not all(math.isfinite(x) for x in (change20, float(rsi))):
+                rejected("INVALID_TECHNICAL_HISTORY")
+                continue
+            observation = {
+                "symbol": sym, "industry": industry,
+                "close": closes[-1], "date": checked.index[-1].date().isoformat(),
+                "return20": round(change20, 2), "rsi14": round(float(rsi), 1),
+                "return_window": tuple(day.date().isoformat()
+                                       for day in checked.index[-21:]),
+            }
+            comparisons.append(observation)
+            evidence[sym] = observation
+            coverage[industry]["compared"] += 1
             scored = evaluator(sym, checked, "moderate", asof=now)
-            if not isinstance(scored, dict) or scored.get("sym") != sym:
+            if not isinstance(scored, dict):
+                rejected("MODERATE_TREND_MOMENTUM_LIQUIDITY_RISK")
                 continue
-            if scored.get("asof") != checked.index[-1].date().isoformat():
+            if scored.get("sym") != sym or scored.get("asof") != observation["date"]:
+                rejected("SCORE_SOURCE_OR_DATE_MISMATCH")
                 continue
-            score = float(scored["score"])
-            price = float(scored["ltp"])
-            if not math.isfinite(score) or not math.isfinite(price) or not 0 <= score <= 100 or price <= 0:
+            score, price = float(scored["score"]), float(scored["ltp"])
+            if not all(math.isfinite(x) for x in (score, price)) or not (
+                    0 <= score <= 100 and price > 0):
+                rejected("INVALID_MODERATE_SCORE")
                 continue
             qualified.append({
                 "symbol": sym, "industry": industry, "score": score,
                 "close": price, "date": scored["asof"],
                 "rsi": scored.get("rsi"), "adx": scored.get("adx"),
-                "return20": evidence.get(sym, {}).get("return20"),
-                "return_window": evidence.get(sym, {}).get("return_window"),
+                "return20": evidence[sym]["return20"],
+                "return_window": evidence[sym]["return_window"],
             })
+            coverage[industry]["qualified"] += 1
+        except (ValueError, TypeError, KeyError, IndexError, OverflowError,
+                ArithmeticError, AttributeError):
+            rejected("INVALID_TECHNICAL_OR_SCORE_DATA")
         except Exception:
-            # Never emit customer tickers or provider details in worker logs.
-            continue
+            # No symbols, user inputs, holdings or provider text enter logs.
+            rejected("MODERATE_EVALUATOR_UNAVAILABLE")
+
     qualified.sort(key=lambda row: (-row["score"], row["symbol"]))
     chosen, counts = [], {}
     for row in qualified:
-        label = row["industry"]
-        if counts.get(label, 0) >= MAX_PER_INDUSTRY:
+        industry = row["industry"]
+        if counts.get(industry, 0) >= MAX_PER_INDUSTRY:
             continue
         chosen.append(row)
-        counts[label] = counts.get(label, 0) + 1
+        counts[industry] = counts.get(industry, 0) + 1
         if len(chosen) >= MAX_RESULTS:
             break
+
     out["qualified"] = len(qualified)
     out["candidates"] = chosen
-    # Price momentum is disclosed only as one comparable measurement; no
-    # fundamental-quality ranking is inferred from short-window returns.
-    selected_symbols = {row['symbol'] for row in chosen}
-    comparison_rows = []
+    selected = {row["symbol"] for row in chosen}
+    observations = []
+    # Show nonqualifying comparisons first from the highest-weight industry,
+    # rather than exhausting the page with the first roster industry.
     for industry in industries:
-        ordered = sorted((row for row in comparisons if row["industry"] == industry
-                          and row["symbol"] not in selected_symbols),
+        ordered = sorted((row for row in comparisons
+                          if row["industry"] == industry and row["symbol"] not in selected),
                          key=lambda row: (-row["return20"], row["symbol"]))
-        comparison_rows.extend(ordered[:MAX_PER_INDUSTRY])
-    out["comparisons"] = comparison_rows[:10]
+        observations.extend(ordered[:MAX_PER_INDUSTRY])
+    out["comparisons"] = observations[:MAX_RESULTS]
+    out["failure_counts"] = failures
     out["status"] = "SCREENED"
     return out
