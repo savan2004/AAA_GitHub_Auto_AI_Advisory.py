@@ -83,7 +83,8 @@ jobs:
             python scripts/msk_magazine_monthly.py --issue 2026-11 \
               --output-dir editorial_proof \
               --editorial-pack docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json \
-              --market-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json
+              --market-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json \
+              --nse-proof-dir editorial_evidence/2026-11
             mkdir -p editorial_proof/2026-11/source_verification
             cp -a editorial_evidence/2026-11/. editorial_proof/2026-11/source_verification/
           fi
@@ -166,6 +167,7 @@ jobs:
           METRICS="docs/msk_magazine/ISSUE_${ISSUE}_OFFICIAL_RESEARCH_METRICS.json"
           if [ -f "$METRICS" ]; then
             SOURCE_ARGS+=(--market-pack "$METRICS")
+            SOURCE_ARGS+=(--nse-proof-dir "editorial_source_inputs/$ISSUE/source_verification")
           fi
           if [ "${{ github.event_name }}" = "schedule" ]; then
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --scheduled --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
