@@ -454,6 +454,13 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             for group in exposures:
                 line('{} | {:.1f}% of current value'.format(
                     group['industry'], group['weight']), 8, leading=14)
+        coverage = peers.get('industry_coverage') or []
+        if coverage:
+            subhead('SCREEN COVERAGE BY CURRENT PORTFOLIO EXPOSURE')
+            for group in coverage[:5]:
+                line('{} | attempted {}/{} | fresh {} | qualified {}'.format(
+                    group['industry'], group['attempted'], group['pool'],
+                    group['fresh'], group['qualified']), 8, leading=13)
         subhead('QUALIFIED TECHNICAL WATCHLIST')
         candidates = peers.get('candidates') or []
         if candidates:
@@ -462,7 +469,18 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                     row['symbol'], row['industry'], float(row['score']),
                     money(row['close']), row['date']), 8.3, leading=13)
         else:
-            line('No candidate passed all fresh-price, trend, liquidity and risk gates.', 9)
+            line('No candidate passed the full moderate technical screen.', 9)
+            counts = peers.get('failure_counts') or {}
+            if counts:
+                line('Gate failures: {} moderate rules, {} missing/stale OHLCV, {} short histories.'.format(
+                    counts.get('MODERATE_TREND_MOMENTUM_LIQUIDITY_RISK', 0),
+                    counts.get('MISSING_OR_STALE_COMPLETED_OHLCV', 0),
+                    counts.get('INSUFFICIENT_51_SESSION_HISTORY', 0)), 8, color=RED)
+                if any(k not in ('MODERATE_TREND_MOMENTUM_LIQUIDITY_RISK',
+                                 'MISSING_OR_STALE_COMPLETED_OHLCV',
+                                 'INSUFFICIENT_51_SESSION_HISTORY') for k in counts):
+                    line('Other failures: unverified scores, dates or technical inputs.',
+                         7.8, color=RED)
         subhead('OTHER VERIFIED INDUSTRY COMPARISONS (NOT QUALIFIED)')
         comparisons = peers.get('comparisons') or []
         names = {c['symbol'] for c in candidates}
@@ -484,7 +502,8 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     else:
         line('Unavailable: official membership, same-industry peers or fresh data not verified.', 9)
     subhead('INTERPRETING THE SHORTLIST')
-    line('Sample screen only; NOT a ranking of all 500 companies.', 8)
+    line('NOT a ranking of all 500 companies; {} of {} same-industry peers attempted.'.format(
+        peers.get('screened', 0), peers.get('pool', 0)), 8)
     line('Technical strength is not fundamental quality, suitability or expected returns.', 8)
     line('Candidates are for further research; no automatic replacement or order.', 8)
 
@@ -509,7 +528,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         if row.get('ema50') and row['close'] < row['ema50']:
             flags.append('{} close below its 50-session exponential moving average'.format(row['symbol']))
     for message in flags or ['No threshold flags from this limited price-only check.']:
-        line('- ' + message, 8.8, leading=19, color=RED if 'concentration' in message else INK)
+        risk_bullet(message, color=RED if 'concentration' in message else INK)
     subhead('LIMITS & DISCLAIMER')
     for message in (
         'Last close is not a tradeable live price. Prices can change after the last session.',
@@ -528,7 +547,14 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     subhead('DATA QUALITY CHECKLIST')
     line('Market prices: dated completed OHLCV, checked for missing/stale/nonfinite values.', 8)
     line('Constituents: official Nifty 500 membership verified before peer comparison.', 8)
-    line('Company fundamentals, valuation, governance: NOT VERIFIED in the basic report.', 8)
+    secondary = sum(1 for item in companies
+                    if (item.get('financial') or {}).get('status') == 'SECONDARY')
+    if secondary:
+        line('Fundamentals: Screener.in secondary data for {}/{} holdings; filings NOT reconciled.'.format(
+            secondary, len(holdings)), 8)
+    else:
+        line('Fundamentals: issuer and secondary financial facts unavailable.', 8)
+    line('Company governance: NOT independently verified.', 8)
     line('Sector target weights, tax impact, health score and replacements: NOT CALCULATED.', 8)
     line('Privacy: PDF created in memory for one request; MSK does not store holdings.', 8)
 
