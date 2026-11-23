@@ -721,9 +721,13 @@ _local_sessions = [
     for t in pd.DatetimeIndex(data.index)
 ]
 data = data.loc[[day <= expected_eod for day in _local_sessions]].copy()
-if data.empty or str(pd.DatetimeIndex(data.index)[-1].tz_convert("Asia/Kolkata").date()
-                     if pd.DatetimeIndex(data.index).tz is not None
-                     else pd.DatetimeIndex(data.index)[-1].date()) != expected_eod:
+_latest_session = pd.Timestamp(data.index[-1]) if not data.empty else None
+_latest_date = (
+    (_latest_session.tz_convert("Asia/Kolkata")
+     if _latest_session.tzinfo else _latest_session).strftime("%Y-%m-%d")
+    if _latest_session is not None else None
+)
+if _latest_date != expected_eod:
     print(f"[ERROR] Latest completed NSE session {expected_eod} unavailable", file=sys.stderr)
     sys.exit(1)
 if len(data) < 55:
