@@ -6,6 +6,7 @@ on:
       - "scripts/msk_magazine_monthly.py"
       - "scripts/msk_magazine_nse.py"
       - "scripts/msk_magazine_editorial.py"
+      - "scripts/msk_magazine_charts.py"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
@@ -17,6 +18,7 @@ on:
       - "scripts/msk_magazine_monthly.py"
       - "scripts/msk_magazine_nse.py"
       - "scripts/msk_magazine_editorial.py"
+      - "scripts/msk_magazine_charts.py"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
@@ -58,14 +60,15 @@ jobs:
       - name: Check complete authored magazine and all 16 rendered pages
         run: python -m unittest discover -s tests -p 'test_msk_magazine_editorial.py' -v
       - name: Compile monthly workflow sources
-        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py
+        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py
       - name: Build a private 16-page November editorial visual proof
         if: github.event_name == 'pull_request'
         run: |
           if [ -f docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json ]; then
             python scripts/msk_magazine_monthly.py --issue 2026-11 \
               --output-dir editorial_proof \
-              --editorial-pack docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json
+              --editorial-pack docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json \
+              --market-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json
           fi
       - name: Store the UNAPPROVED PDF for manual visual review
         if: github.event_name == 'pull_request'
@@ -127,6 +130,10 @@ jobs:
           EDITORIAL="docs/msk_magazine/ISSUE_${ISSUE}_SOURCE_CITED_WORKING_DRAFT.json"
           if [ -f "$EDITORIAL" ]; then
             SOURCE_ARGS+=(--editorial-pack "$EDITORIAL")
+          fi
+          METRICS="docs/msk_magazine/ISSUE_${ISSUE}_OFFICIAL_RESEARCH_METRICS.json"
+          if [ -f "$METRICS" ]; then
+            SOURCE_ARGS+=(--market-pack "$METRICS")
           fi
           if [ "${{ github.event_name }}" = "schedule" ]; then
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --scheduled --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
