@@ -37,7 +37,7 @@ def banking_fixture(interest=("55,99,191.00","1,08,23,276.00"),
         return (prefix, name) + tuple(values)
     head = table([
         ("NSE Symbol", MEMBER.symbol), ("ISIN", MEMBER.isin),
-        ("Name of company", "Fictional Bank"),
+        ("Name of bank", "Fictional Bank"),
         ("Description of presentation currency", "INR"),
         ("Nature of report standalone or consolidated", "Consolidated"),
         ("Reporting Type", "Quarterly"),
@@ -119,6 +119,8 @@ class BankFilingAccountingTests(unittest.TestCase):
             with self.subTest(code=code, source=source):
                 with self.assertRaisesRegex(EvidenceError, code):
                     self.extract_bank(clean.replace(source, altered))
+        with self.assertRaises(EvidenceError):
+            self.extract_bank(clean.replace(b"Name of bank",b"Name of company"))
         with self.assertRaises(EvidenceError):
             check_url(BANK_URL.replace("BANKING", "BANKING_FAKE"))
 
