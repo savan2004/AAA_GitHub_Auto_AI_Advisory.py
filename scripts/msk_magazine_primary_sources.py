@@ -183,3 +183,17 @@ def recheck_primary_sources(root: Path) -> dict:
         if receipt["source_sha256"] != record.get("source_sha256"):
             raise PrimarySourceError("Original HTML bytes changed since verification")
     return ledger
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-dir", required=True, type=Path)
+    args = parser.parse_args()
+    result = archive_primary_sources(args.output_dir)
+    print(json.dumps({"sources_checked": result["sources_checked"],
+                      "status": result["status"]}, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
