@@ -73,6 +73,20 @@ class NSEQuarterEvidenceTests(unittest.TestCase):
         self.assertIsNone(secondary_trailing_eps(qs, last_price=3406.8,
                                                 trailing_pe=71.2))
 
+    def test_nse_basic_industry_peers_are_not_broad_retail_stocks(self):
+        from research_peer_identity import verified_industry_candidates
+        identities = verified_industry_candidates("DMART", today=date(2026, 11, 23))
+        self.assertEqual(identities["industry"], "Diversified Retail")
+        self.assertEqual([x[0] for x in identities["candidates"]],
+                         ["VMM", "EMIL", "SHOPERSTOP"])
+        self.assertNotIn("TRENT", [x[0] for x in identities["candidates"]])
+        self.assertFalse(identities["expired"])
+        self.assertTrue(verified_industry_candidates(
+            "DMART", today=date(2027, 2, 1))["expired"])
+        self.assertEqual(verified_industry_candidates(
+            "DMART", today=date(2027, 2, 1))["candidates"], ())
+        self.assertIsNone(verified_industry_candidates("STRONGCO"))
+
     def test_benchmark_returns_share_exact_completed_closing_dates(self):
         dates = pd.bdate_range(end="2026-11-20", periods=247)
         stock = pd.Series([100 + x for x in range(247)], index=dates)
