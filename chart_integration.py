@@ -39,9 +39,14 @@ class ChartGenerator:
         # ── Cache check ───────────────────────────────────────────────────────
         cache_key = None
         if symbol:
-            cache_key = symbol.upper().replace(".NS","") + (period or "")
-            cached    = self.cache.get(cache_key)
-            if cached and time.time() - cached["ts"] < CHART_CACHE_TTL:
+            # Cross-session reuse could serve yesterday's pre-close PNG for up
+            # to an hour after a new completed EOD becomes available.
+            from market_breadth import expected_completed_session
+            cache_key = "|".join((symbol.upper(), period or "6mo",
+                                  str(expected_completed_session())))
+            cached = self.cache.get(cache_key)
+            if (cached and os.path.isfile(cached["path"]) and
+                    time.time() - cached["ts"] < CHART_CACHE_TTL):
                 logger.info(f"[Chart] Cache hit: {cache_key}")
                 return True, cached["meta"], cached["path"]
 
