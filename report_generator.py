@@ -692,7 +692,7 @@ def _risk(R, story):
     rk = R["rk"]
     if not rk.get("ann_vol"):
         return
-    story += section("Risk & Relative Performance", "How much the stock moves, how deep it falls, and how it tracks the market")
+    story += section("Risk & Relative Performance", "How much the stock moves, how deep it falls, and how it tracks the market", min_space_mm=115)
     if R["ch"].get("rel"):
         im = img(R["ch"]["rel"], W)
         if im:
