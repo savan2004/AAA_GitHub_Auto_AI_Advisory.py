@@ -193,8 +193,8 @@ def img(path, width=W):
         return None
 
 
-def section(title, sub=None):
-    out = [CondPageBreak(60 * mm), P(esc(title), "h1"),
+def section(title, sub=None, *, min_space_mm=60):
+    out = [CondPageBreak(min_space_mm * mm), P(esc(title), "h1"),
            HRFlowable(width="100%", thickness=1.2, color=NAVY, spaceAfter=5)]
     if sub:
         out += [P(esc(sub), "small"), Spacer(1, 3)]
@@ -326,24 +326,27 @@ def _find_peers(sym: str, max_peers: int = 5, timeout: int = 25):
 
 
 def _real_news(sym: str) -> List[str]:
-    """Headlines only — drops the generic placeholder text market_news falls back to."""
-    from market_news import get_stock_news
-    try:
-        from market_news import _STOCK_NEWS_FALLBACK as FB
-        fb_vals = {str(v).strip() for v in FB.values()}
-    except Exception:
-        fb_vals = set()
-    raw = get_stock_news(sym, 5) or ""
-    out = []
-    for line in raw.split("\n"):
-        line = _html.unescape(re.sub(r"<[^>]+>", "", line))
-        line = strip_emoji(line).lstrip("• ").strip()
-        if (not line or "Recommend checking company announcements" in line
-                or line.startswith("Latest market conditions") or line in fb_vals):
-            continue
-        out.append(line)
-    return out[:5]
+    """Fail closed: plain-text search results are not dated, attributable news.
 
+    Keep news out of client PDFs until the provider supplies individually
+    verified article URLs, publisher names and publication timestamps.
+    """
+    logger.info("[Report] unsourced text headlines withheld for %s", sym)
+    return []
+
+
+def _require_latest_completed_eod(market: dict, expected_session) -> str:
+    """Reject current intraday and stale daily bars before publishing an EOD PDF.
+
+    The central market_breadth calendar helper applies the 16:00 IST buffer
+    and conservative weekend/holiday treatment. Never relabel an incomplete
+    same-day candle as a completed close.
+    """
+    observed = market.get("candle_date") if isinstance(market, dict) else None
+    expected = expected_session.isoformat() if hasattr(expected_session, "isoformat") else None
+    if not expected or observed != expected:
+        raise ValueError("Research report withheld: latest completed NSE EOD session not verified")
+    return observed
 
 def collect_inputs(sym: str) -> dict:
     from data_engine import get_hist, get_info
@@ -369,6 +372,8 @@ def collect_inputs(sym: str) -> dict:
     market = technical_price_context(df)
     if market is None:
         raise ValueError("Research report withheld: historical price session stale or unverified")
+    from market_breadth import expected_completed_session
+    _require_latest_completed_eod(market, expected_completed_session())
     ltp = market["historical_close"]
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -459,7 +464,7 @@ def _cover(R, story):
     banner = Table([
         [P(esc(R["name"]), "title"), P(inr(t["ltp"]), "px")],
         [P(f"NSE: {esc(R['sym'])}" + (f"  ·  {esc(R['sector'])}" if R["sector"] else "") + "  ·  Equity Research", "sub"),
-         P(f"<font color='{chg_hex}'>{t['chg']:+.2f}% today</font>", "pxs")],
+         P(f"<font color='{chg_hex}'>{t['chg']:+.2f}% session change</font>", "pxs")],
     ], colWidths=[W * 0.66, W * 0.34])
     banner.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), NAVY), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                 ("TOPPADDING", (0, 0), (-1, 0), 13), ("BOTTOMPADDING", (0, 1), (-1, 1), 12),
@@ -541,7 +546,7 @@ def _investment_view(R, story):
     last_date = setup.get("date") or "last available closing candle"
     combined = ("RESEARCH ONLY - insufficient verified financial evidence"
                 if evidence_warning else
-                "WATCHLIST / independent due diligence before any transaction")
+                "EDUCATIONAL RESEARCH / independent source verification pending")
     story += [P("FUNDAMENTAL + TECHNICAL | ONE-PAGE DECISION SNAPSHOT", "h2"),
               table([[P("Dimension", "th"), P("Evidence", "th")],
                      [P("Business quality", "cellb"), P(_pillar("Quality"), "cell")],
@@ -615,7 +620,7 @@ def _investment_view(R, story):
 
 def _technical(R, story):
     t = R["t"]
-    story += section("Technical Analysis", "Multi-timeframe trend, momentum, volume and key price levels")
+    story += section("Technical Analysis", "Multi-timeframe trend, momentum, volume and key price levels", min_space_mm=115)
     # The standalone Telegram chart does its own download and is not safe to
     # embed: both views MUST be calculated from the report's same OHLCV.
     if R["ch"].get("tech_price") and R["ch"].get("tech_momentum"):
@@ -751,9 +756,11 @@ def _fundamentals(R, story):
     if R["ch"].get("quarters"):
         im = img(R["ch"]["quarters"], W)
         if im:
-            story += [Spacer(1, 6), P("Verified quarterly visual trends", "h2"),
-                      im, P("Charts show reported periods only. Quarterly figures are "
-                            "not management guidance or forward projections.", "tiny")]
+            story.append(KeepTogether([
+                Spacer(1, 6), P("Quarterly trends (provider-reported; not independently reconciled)", "h2"),
+                im, P("Quarterly values and periods are secondary-source observations, "
+                      "not independently matched to exchange filings or forecasts.", "tiny")
+            ]))
 
     years = (stm or {}).get("years") or []
     if len(years) >= 3:
@@ -789,7 +796,7 @@ def _fundamentals(R, story):
 def _ownership_peers(R, story):
     sh, peers, fv = R["sh"], R["peers"], R["fv"]
     if len(sh) >= 3:
-        story += section("Ownership Pattern", "Who owns the stock and which way the institutional money is moving")
+        story += section("Ownership Pattern", "Who owns the stock and which way the institutional money is moving", min_space_mm=110)
         if R["ch"].get("sh"):
             im = img(R["ch"]["sh"], W)
             if im:
@@ -808,6 +815,9 @@ def _ownership_peers(R, story):
                          P(colored(f"{d:+.1f}", GREEN_H if good else RED_H), "cellr")])
         story += [Spacer(1, 4), table([hdr] + rows, [50 * mm, 40 * mm, 40 * mm, 48 * mm])]
 
+    if not peers:
+        story.append(P("Peer comparison withheld: no comparable peers with usable sourced "
+                       "financial data were supplied; no peer valuation conclusion is made.", "tiny"))
     if peers:
         story += section(f"Peer Comparison — {R['sector']}" if R["sector"] else "Peer Comparison",
                          "Same-sector companies ranked by market capitalisation")
@@ -939,9 +949,10 @@ def _plan(R, story):
     r1 = plan.get("range_1m")
     if r1:
         story += [Spacer(1, 6), P("One-month statistical range (from realised volatility)", "h2"),
-                  P(f"±1σ ({r1['sigma_pct']}%): <b>{inr(r1['s1_lo'])} – {inr(r1['s1_hi'])}</b> (about 68% of outcomes)  ·  "
-                    f"±2σ: <b>{inr(r1['s2_lo'])} – {inr(r1['s2_hi'])}</b> (about 95%). "
-                    f"This is a volatility-implied range, not a forecast.", "just")]
+                  P(f"±1σ ({r1['sigma_pct']}%): <b>{inr(r1['s1_lo'])} – {inr(r1['s1_hi'])}</b>  ·  "
+                    f"±2σ: <b>{inr(r1['s2_lo'])} – {inr(r1['s2_hi'])}</b>. "
+                    "These arithmetic volatility bands are not forecasts or validated "
+                    "probability/coverage intervals; returns can be non-normal.", "just")]
 
 
 def _risks_catalysts(R, story):
@@ -953,10 +964,8 @@ def _risks_catalysts(R, story):
         story.append(table([[P("Severity", "th"), P("Risk", "th"), P("Evidence", "th")]] + rows, [22 * mm, 46 * mm, 110 * mm]))
     else:
         story.append(callout("No major red flags were triggered by the available price, risk and fundamental data.", GREEN_H, "#F1FAF5"))
-    if R["news"]:
-        story += [Spacer(1, 8), P("Recent headlines", "h2")]
-        story += bullets([esc(x) for x in R["news"]])
-        story.append(P("Headlines are listed for context only and have not been used in the scoring.", "tiny"))
+    # Do not render undated search pages as news. Verified article provenance
+    # must precede a future structured headline feature.
 
 
 def _appendix(R, story):
@@ -1010,6 +1019,7 @@ def _appendix(R, story):
         ("Commentary: " +
          ("AI-assisted; financial facts require independent confirmation."
           if R["ai_note"] else "rule-generated, no AI text.")),
+        ("News headlines: withheld unless individually sourced, dated and linked."),
         ("Financial figures and ratios were not independently reconciled "
          "to stock-exchange filings; verify consolidated/standalone scope, "
          "fiscal period and restatements before any client use."),
