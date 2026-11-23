@@ -51,7 +51,7 @@ from reportlab.platypus import (
 
 import research_engine as eng
 from research_reasoning import build_reasoning
-from research_filing_evidence import reconcile_official_quarter
+from research_filing_evidence import (reconcile_official_quarter, annual_exchange_comparison, official_four_quarter_eps)
 import report_charts as charts
 from pdf_technical_setup import build_setup_charts
 from report_quarterly_charts import render_quarterly_chart
@@ -453,10 +453,26 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     t = eng.compute_technicals(df, nifty)
     rk = eng.compute_risk(df, nifty)
     fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
+    filing_evidence = reconcile_official_quarter(sym, inp.get("stm"))
+    annual_evidence = annual_exchange_comparison(sym, inp.get("stm"))
+    if filing_evidence.get("status") == "partial_match":
+        exchange_ttm = official_four_quarter_eps(sym, filing_evidence.get("period_end"))
+        if exchange_ttm is not None and fv.get("pe") and t["ltp"] > 0:
+            if abs(exchange_ttm * float(fv["pe"]) / t["ltp"] - 1) <= 0.15:
+                old_eps = fv.get("eps")
+                fv["eps"] = exchange_ttm
+                fv["eps_basis"] = (
+                    "sum of four reported basic quarterly EPS from dated issuer filings; "
+                    "weighted-average shares may differ"
+                )
+                fv["eps_secondary"] = old_eps
+                # Previously derived peer equivalents (if any) used the old EPS.
+                # Suppress rather than leave a mismatched mixed-source value.
+                fv["implied_peer_value"] = None
+                fv["implied_upside"] = None
     sc = eng.compute_scores(t, rk, fv)
     plan = eng.build_trade_plan(t, rk, sc)
     reasoning = build_reasoning(nifty, t, fv, sc, inp.get("sector"))
-    filing_evidence = reconcile_official_quarter(sym, inp.get("stm"))
     fl = eng.build_flags(t, rk, fv, sh, inp.get("consensus"))
     if filing_evidence.get("status") == "partial_match":
         h1_cf = filing_evidence.get("h1_operating_cash_flow_crore")
@@ -502,7 +518,7 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
-                filing_evidence=filing_evidence,
+                filing_evidence=filing_evidence, annual_evidence=annual_evidence,
                 news=inp.get("news") or [], fund=fund, price_session=price_session,
                 generated=datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M IST"))
 
@@ -802,9 +818,9 @@ def _fundamentals(R, story):
         official_de, vendor_de = proof.get("exchange_debt_equity"), fv.get("de")
         if official_de is not None and vendor_de is not None and abs(official_de-vendor_de) > 0.02:
             story.append(P(
-                f"<b>Ratio discrepancy:</b> NSE reports debt/equity {official_de:.2f}×; "
-                f"the secondary-source calculation is {vendor_de:.2f}×. "
-                "Methods and scope require investigation; neither is substituted.", "tiny"))
+                f"<b>Debt/equity period difference:</b> Sep 2026 filing {official_de:.2f}× "
+                f"versus secondary provider {vendor_de:.2f}× (FY26 year-end filing: 0.10×). "
+                "Current and annual periods must not be presented as identical.", "tiny"))
         half_cf, half_pat = proof.get("h1_operating_cash_flow_crore"), proof.get("h1_profit_crore")
         if half_cf is not None and half_pat and half_pat > 0:
             story.append(P(
@@ -841,6 +857,12 @@ def _fundamentals(R, story):
     if fv.get("eps_basis") and fv["eps_basis"].startswith("four consecutive"):
         story.append(P("TTM EPS is derived from four consecutive secondary-source quarters; "
                        "its price/P-E reconciliation is a consistency check, not independent audit.", "tiny"))
+    elif fv.get("eps_basis") and fv["eps_basis"].startswith("sum of four"):
+        story.append(P(
+            "TTM EPS is the sum of four reported consolidated basic quarterly EPS "
+            "(Dec 2025–Sep 2026) from two issuer filings. "
+            "It is an approximation, not weighted-average 12-month basic EPS. "
+            "P/E and market price are separate provider observations.", "tiny"))
 
     if fv["has_statements"] or fv["has_quarters"]:
         story += [Spacer(1, 6), P("Growth & earnings quality", "h2"), kv([
@@ -868,14 +890,34 @@ def _fundamentals(R, story):
             ]))
 
     years = (stm or {}).get("years") or []
+    annual = R.get("annual_evidence") or {}
     if len(years) >= 3:
-        ann_head = [Spacer(1, 6), P(f"Annual financials ({stm['unit']}; source: {esc(stm['source'])})", "h2")]
+        # Correct only an audited FY26 EPS if revenue and net profit match.
+        # This is a presentation copy, not mutation of cached source statements.
+        years_display = [dict(row) for row in years]
+        replaced_annual_eps = None
+        if annual.get("status") == "core_match":
+            for row in years_display:
+                if row.get("label") == "Mar 2026":
+                    replaced_annual_eps = row.get("eps")
+                    row["eps"] = annual["eps"]
+        ann_head = [Spacer(1, 6), P(f"Annual financials ({stm['unit']}; source: {esc(stm['source'])}; FY26 EPS NSE-audited where reconciled)", "h2")]
         data, widths = _fin_table([("Revenue", "revenue", cr), ("Operating profit", "op_profit", cr),
                                    ("OPM %", "opm", lambda v: n(v, 1)), ("Net profit", "net_profit", cr),
                                    ("EPS (₹)", "eps", lambda v: n(v, 2)), ("Operating cash flow", "ocf", cr),
                                    ("Borrowings", "borrowings", cr), ("Net worth", "networth", cr),
-                                   ("ROCE %", "roce", lambda v: n(v, 1))], years[-6:])
+                                   ("ROCE %", "roce", lambda v: n(v, 1))], years_display[-6:])
         story.append(KeepTogether(ann_head + [table(data, widths)]))
+        if annual.get("status") == "core_match":
+            secondary = n(replaced_annual_eps, 2)
+            story.append(P(
+                f"FY26 consolidated audited revenue ₹{annual['revenue']:,.2f} Cr and "
+                f"PAT ₹{annual['net_profit']:,.2f} Cr agree after rounding. "
+                f"Audited FY26 basic EPS ₹{annual['eps']:.2f} replaces "
+                f"secondary figure ₹{secondary}. "
+                '<link href="' + esc(annual["source_url"]) +
+                '" color="#0B2545">Official 2 May 2026 audited results</link>.',
+                "tiny"))
 
     qs = (stm or {}).get("quarters") or []
     if len(qs) >= 4:
@@ -1196,6 +1238,10 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             raise ValueError(
                 "Research report withheld: secondary quarter does not reconcile "
                 "to the dated NSE issuer filing")
+        if (R.get("annual_evidence") or {}).get("status") == "mismatch":
+            raise ValueError(
+                "Research report withheld: FY26 secondary statement does not "
+                "reconcile to audited issuer filing")
         # CI-only provenance of the exact inputs used to draw the report.
         # Normal Telegram callers continue receiving the unchanged 3-tuple.
         if evidence_out is not None:
