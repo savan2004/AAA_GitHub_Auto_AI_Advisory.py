@@ -334,6 +334,13 @@ def _page(c, number, title, issue, layout, observations, editorial=None, market_
     else:
         for i in range(4):
             _rect(c, 46 + 126 * i, 263, 118, 205, LIGHT if i % 2 else "#EAF1F7")
+    # The five master layout families remain visible around the article;
+    # a continuous opaque reading surface prevents body text crossing
+    # alternating colour blocks (caught during real PDF visual inspection).
+    if editorial:
+        _rect(c, 55, 273, 478, 185, WHITE)
+        _rect(c, 55, 273, 4, 185, TEAL)
+        _rect(c, 63, 275, 468, 2, "#D8E6EB")
     _rect(c, 46, 102, 496, 140, LIGHT)
     if editorial:
         _wrapped(c, 58, 445, editorial["headline"], size=11,
