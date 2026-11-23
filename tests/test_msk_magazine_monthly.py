@@ -205,6 +205,20 @@ class MagazineMonthlyTests(unittest.TestCase):
                          result["draft_pdf"]).is_file())
         self.assertEqual(len(list((self.root / "out" / "2026-12").glob("page_*.json"))), 16)
 
+    def test_corrupt_source_pack_produces_data_withheld_draft(self):
+        pack = self.root / "corrupt.json"
+        pack.write_text("{broken JSON", encoding="utf-8")
+        result = generate("2026-11", self.root / "out",
+                          source_pack=pack, source_root=self.source_root,
+                          now=datetime(2026, 11, 16, tzinfo=timezone.utc))
+        self.assertEqual(result["source_consistency_rows"], 0)
+        self.assertFalse(result["publication_allowed"])
+        self.assertTrue(any("invalid source evidence pack" in item
+                            for item in result["source_failures"]))
+        self.assertTrue((self.root / "out" / "2026-11" /
+                         result["draft_pdf"]).is_file())
+        self.assertEqual(len(list((self.root / "out" / "2026-11").glob("page_*.json"))), 16)
+
     def test_nse_preflight_sources_directory_allows_draft(self):
         # The workflow downloader creates this before the PDF generator runs.
         sources = self.root / "out" / "2026-12" / "sources"
