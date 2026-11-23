@@ -356,8 +356,12 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
             # is absent; never imply that any market figure was checked.
             by_page, failures = {}, [f"Source evidence pack unavailable: {source_pack}"]
         else:
-            source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
-            by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
+            try:
+                source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                by_page, failures = {}, [f"Unreadable or invalid source evidence pack: {type(exc).__name__}"]
+            else:
+                by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
     else:
         by_page, failures = {}, ["No independently retrieved financial source pack supplied"]
     pdf_file = dest / f"MSK_{issue}_EDITORIAL_DRAFT.pdf"
