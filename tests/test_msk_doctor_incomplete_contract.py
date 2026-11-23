@@ -43,6 +43,9 @@ class DoctorIncompleteDiagnosticContract(unittest.TestCase):
         self.assertEqual(decode_incomplete_diagnostic(
             encode_incomplete_diagnostic({"SBIN":"NO_PRICES"}),
             [{"symbol":"<script>"}]), {})
+        self.assertEqual(decode_incomplete_diagnostic(
+            encode_incomplete_diagnostic({"SBIN":"NO_PRICES"}),
+            [{"symbol":"SBIN"}, {"symbol":"SBIN"}]), {})
 
 
 if __name__ == "__main__":
