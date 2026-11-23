@@ -727,7 +727,7 @@ def _technical(R, story):
         ["EMA 20 / 50", f"{inr(t['ema20'])} / {inr(t['ema50'])}", "EMA 200", inr(t.get("ema200"))],
         ["Bollinger band", f"{inr(t['bb_lo'])} – {inr(t['bb_up'])}", "%B / bandwidth", f"{n(t.get('pct_b'), 0)}%  /  {n(t.get('bandwidth'), 1)}%"],
         ["52W position", f"{n(t.get('pos52'), 0)}% of range  ({t['dist_high']:+.1f}% from high)", "Volume vs 20D avg", f"{n(t.get('vol_ratio'), 2)}×"],
-        ["Up/down volume (20D)", f"{n(t.get('updown_vol'), 2)}  —  {t['accumulation'].title()}", "Avg daily turnover", f"₹{n(t.get('traded_cr'), 1)} Cr"],
+        ["Up/down volume (20D)", f"{n(t.get('updown_vol'), 2)}× (up/down sessions)", "Avg daily turnover", f"₹{n(t.get('traded_cr'), 1)} Cr"],
     ]))
 
     rets = t.get("returns") or {}
