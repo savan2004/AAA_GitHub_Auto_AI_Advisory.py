@@ -78,7 +78,12 @@ class TechnicalChartRegression(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             pdf = Path(td) / "full_research.pdf"
             rg.build_pdf(r, str(pdf))
-            text = " ".join((page.extract_text() or "") for page in PdfReader(str(pdf)).pages)
+            by_page = [(page.extract_text() or "") for page in PdfReader(str(pdf)).pages]
+            text = " ".join(by_page)
+            risk_page = next(i for i, content in enumerate(by_page)
+                             if "Risk & Relative Performance" in content)
+            self.assertIn("Annualised volatility", by_page[risk_page],
+                          "Risk chapter header must not be orphaned from its data")
             self.assertIn("Technical Analysis", text)
             self.assertIn("ONE-PAGE DECISION SNAPSHOT", text)
             self.assertIn("Quarterly trends (provider-reported; not independently reconciled)", text)
