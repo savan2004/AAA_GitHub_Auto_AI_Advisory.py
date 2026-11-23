@@ -1521,6 +1521,40 @@ def portfolio_audit_start(m):
               "The existing /doctor report remains unchanged.")
 
 
+def _send_doctor_csv_template(uid):
+    """Public, editable blank CSV; no real portfolio, server files or market IO."""
+    import io
+    from portfolio_doctor_input import blank_doctor_csv_template
+    with io.BytesIO(blank_doctor_csv_template()) as document:
+        document.name = "MSK_Portfolio_Doctor_10_Stocks_Template.csv"
+        receipt = bot.send_document(
+            uid, document,
+            caption=("📥 Blank MSK Portfolio Doctor template (up to 10 stocks). "
+                     "Fill Symbol, Qty and Buy Price in the rows you use; "
+                     "leave other rows blank. Example: SBIN,10,800 is "
+                     "illustrative only, not investment advice. "
+                     "Upload the edited CSV in this private chat. "
+                     "No personal holdings are contained in this file."),
+            timeout=20, protect_content=False)
+    return isinstance(getattr(receipt, "message_id", None), int)
+
+
+@bot.message_handler(commands=["doctor_format", "doctor_template"])
+def portfolio_doctor_format(m):
+    """Allow customers to request their blank editable CSV at any time."""
+    if not _doctor_allowed(m):
+        safe_send(m.chat.id, "The Portfolio Doctor template is available in enabled private chats.")
+        return
+    try:
+        if not _send_doctor_csv_template(m.chat.id):
+            safe_send(m.chat.id, "Template delivery was not confirmed. Use /doctor to reopen the form.")
+    except Exception as exc:
+        logger.warning("MSK_DOCTOR_TEMPLATE_UNAVAILABLE error_type=%s",
+                       type(exc).__name__)
+        safe_send(m.chat.id, "Template unavailable. Use the format Symbol,Qty,Buy Price "
+                  "(one holding per row, up to 10 stocks).")
+
+
 @bot.message_handler(commands=["doctor", "portfolio_doctor"])
 @bot.message_handler(func=lambda m: m.text == "🩺 Portfolio Doctor")
 def portfolio_doctor_start(m):
@@ -1534,16 +1568,27 @@ def portfolio_doctor_start(m):
             return
         _portfolio_audit_mode.pop(m.chat.id, None)
         _builder_form.pop(m.chat.id, None)  # Holdings must never hit allocation parsing.
-        _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 180
+        _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 900
     safe_send(m.chat.id, "🩺 <b>Portfolio Doctor</b>\n"
-              "Upload CSV/XLSX or paste 1–5 rows: <code>SBIN 100 840</code> then "
+              "A blank 10-row CSV template is attached; fill only the rows you need. "
+              "Upload CSV/XLSX or paste 1–10 rows: <code>SBIN 100 840</code> then "
               "<code>BHEL 150 150</code> on a new line. Numbered rows such as "
               "<code>1. SBIN 100 840</code> also work; upper/lower case is accepted. "
               "Use Symbol Quantity AverageBuyPrice; .NS/.BO is optional. "
               "NSE is preferred; BSE requires an exact verified match. "
-              "(maximum 5 stocks / 5 MB). A private educational PDF is sent only with "
+              "(maximum 10 stocks / 5 MB; session open for 15 minutes). "
+              "Use /doctor_format to receive the blank CSV again. "
+              "A private educational PDF is sent only with "
               "verified recent closing prices. MSK does not save your holdings or report. "
               "Telegram retains chat messages and files under its own rules.")
+    # A blank CSV is public information: unlike the private PDF it must be
+    # downloadable/editable. Never retry an uncertain Telegram send.
+    try:
+        _send_doctor_csv_template(m.chat.id)
+    except Exception as exc:
+        logger.warning("MSK_DOCTOR_TEMPLATE_UNAVAILABLE error_type=%s",
+                       type(exc).__name__)
+        safe_send(m.chat.id, "If the sample file was not received, use /doctor_format.")
 
 @bot.message_handler(commands=["portfolio_doctor_test"])
 def portfolio_doctor_test(m):
@@ -1555,7 +1600,7 @@ def portfolio_doctor_test(m):
         _builder_form.pop(m.chat.id, None)
         _portfolio_audit_mode.pop(m.chat.id, None)
         _portfolio_doctor_waiting[m.chat.id] = time.monotonic() + 180
-    safe_send(m.chat.id, "Private test: upload a CSV or XLSX with Symbol, Qty, Buy Price (maximum 5 MB; 5 stocks).")
+    safe_send(m.chat.id, "Private test: upload a CSV or XLSX with Symbol, Qty, Buy Price (maximum 5 MB; 10 stocks).")
 
 
 def portfolio_doctor_text(m):
@@ -1565,7 +1610,7 @@ def portfolio_doctor_text(m):
     raw = m.text or ""
     payload = raw.encode("utf-8")
     if len(payload) > 2048 or not raw.strip():
-        safe_send(m.chat.id, "Paste up to 5 rows, one per line, for example SBIN 100 840. You can retry in this session.")
+        safe_send(m.chat.id, "Paste up to 10 rows, one per line, for example SBIN 100 840. You can retry in this session.")
         return
     try:
         parse_holdings("typed_holdings.csv", payload)
@@ -1621,7 +1666,7 @@ def portfolio_doctor_document(m, _typed_payload=None):
                 name = (doc.file_name or "").lower()
                 if not name.endswith((".csv", ".xlsx")) or (doc.file_size or 0) > MAX_BYTES:
                     allow_retry = True
-                    safe_send(uid, "Only CSV/XLSX up to 5 MB, with 1–5 holdings, are supported. Resend a corrected file or paste your holdings.")
+                    safe_send(uid, "Only CSV/XLSX up to 5 MB, with 1–10 holdings, are supported. Resend a corrected file or paste your holdings.")
                     return
                 file_info = bot.get_file(doc.file_id)
                 if file_info.file_size and file_info.file_size > MAX_BYTES:
@@ -1677,7 +1722,7 @@ def portfolio_doctor_document(m, _typed_payload=None):
             logger.warning("MSK_PORTFOLIO_DOCTOR_HEALTH_ALERT error_code=%s", exc.code)
             if exc.code == "BAD_INPUT":
                 allow_retry = True
-                safe_send(uid, "Invalid holdings. Send up to 5 rows: Symbol Qty Buy Price. Resend a corrected file or paste your holdings.")
+                safe_send(uid, "Invalid holdings. Send up to 10 rows: Symbol Qty Buy Price. Resend a corrected file or paste your holdings.")
             elif exc.code in ("STALE_PRICES", "NO_PRICES"):
                 safe_send(uid, "Verified recent closing prices unavailable. No estimates or PDF issued. Please retry later.")
             elif exc.code == "TIMEOUT":
