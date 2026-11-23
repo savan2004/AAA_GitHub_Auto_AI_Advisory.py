@@ -75,6 +75,43 @@ class SessionSafety(unittest.TestCase):
         ns["_last_completed_session"] = lambda: date(2026, 11, 16)
         self.assertIsNone(ns["get_cached"]())
 
+    def test_missing_snapshot_queries_neon_only_once_per_minute(self):
+        """Repeated button clicks never stampede Neon on a cache miss."""
+        from unittest.mock import Mock
+        load = Mock(return_value=None)
+        fake = types.SimpleNamespace(load_verified_scan=load)
+        tick = [1000.0]
+        clock = types.SimpleNamespace(monotonic=lambda: tick[0], time=lambda: tick[0])
+        state = {"result": None, "ts": 0.0}
+        ns = load_functions("get_cached", globals_={
+            "_state_lock": threading.Lock(), "_state": state,
+            "_last_completed_session": lambda: date(2026, 11, 20),
+            "time": clock, "logger": Mock()
+        })
+        with patch.dict(sys.modules, {"stocks_buzz_snapshot": fake}):
+            for _ in range(20):
+                self.assertIsNone(ns["get_cached"]())
+            self.assertEqual(load.call_count, 1)
+            tick[0] += 61
+            self.assertIsNone(ns["get_cached"]())
+        self.assertEqual(load.call_count, 2)
+
+    def test_new_session_retries_failed_snapshot_immediately(self):
+        load = Mock(return_value=None)
+        fake = types.SimpleNamespace(load_verified_scan=load)
+        session = [date(2026, 11, 20)]
+        ns = load_functions("get_cached", globals_={
+            "_state_lock": threading.Lock(),
+            "_state": {"result": None, "ts": 0.0},
+            "_last_completed_session": lambda: session[0],
+            "logger": Mock()
+        })
+        with patch.dict(sys.modules, {"stocks_buzz_snapshot": fake}):
+            self.assertIsNone(ns["get_cached"]())
+            session[0] = date(2026, 11, 23)
+            self.assertIsNone(ns["get_cached"]())
+        self.assertEqual(load.call_count, 2)
+
     def test_ranking_refuses_partial_sample_before_analyzing(self):
         universe = {"symbols": ["A", "B", "C", "D", "E"], "source": "Official"}
         good = series()
