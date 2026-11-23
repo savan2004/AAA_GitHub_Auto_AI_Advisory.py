@@ -64,6 +64,88 @@ OFFICIAL_QUARTERS = {
 }
 
 
+# Authenticated issuer filing submitted 2 May 2026 with audited consolidated
+# FY26 result; see page 'Audited consolidated financial results' (not the
+# standalone statements earlier in the same PDF).
+OFFICIAL_ANNUAL = {
+    "DMART": {
+        "period_end": "2026-03-31",
+        "source_date": "2026-05-02",
+        "scope": "consolidated",
+        "assurance": "audited",
+        "source_url": (
+            "https://api.dmartindia.com/corporate/content/file/v1/2/"
+            "jZtJ4gV9JIDY9CjsdXXbQxhE1777722483/"
+            "Outcome%20of%20the%20Board%20Meeting%20held%20on%20May%202%2C%202026.pdf"
+        ),
+        "revenue": 68820.74,
+        "net_profit": 2969.86,
+        "eps": 45.65,
+        "de": 0.10,
+    }
+}
+
+# Basic per-quarter reported consolidated EPS. Each number is tied to the
+# 2 May 2026 audited FY26 filing and 10 Oct 2026 reviewed FY27 H1 filing.
+# Adding quarterly EPS is an approximation to TTM basic EPS when the weighted-
+# average share count changes; this must be visibly labelled as a SUM.
+DMART_QUARTERLY_BASIC_EPS = {
+    "2025-12-31": 13.15,
+    "2026-03-31": 10.09,
+    "2026-06-30": 13.20,
+    "2026-09-30": 11.40,
+}
+
+
+def annual_exchange_comparison(symbol, statements):
+    """Check FY26 audited annual revenue/PAT, report any EPS discrepancy.
+
+    Core FY26 revenue and PAT must both agree within half a crore, tolerating
+    rounding by secondary providers; audited EPS wins only as a separately
+    sourced display field, not silently rewritten in raw source input.
+    """
+    key = str(symbol or "").upper().replace(".NS", "")
+    official = OFFICIAL_ANNUAL.get(key)
+    if official is None:
+        return {"status": "not_registered"}
+    base = dict(official)
+    years = (statements or {}).get("years") or []
+    same = [row for row in years
+            if isinstance(row, dict) and _period(row.get("label")) == official["period_end"]]
+    if len(same) != 1:
+        return {**base, "status": "period_not_comparable"}
+    row = same[0]
+    for field in ("revenue", "net_profit"):
+        try:
+            observed = float(row[field])
+        except (KeyError, ValueError, TypeError):
+            return {**base, "status": "missing_core", "missing": field}
+        if not math.isfinite(observed) or abs(observed - official[field]) > 0.55:
+            return {**base, "status": "mismatch", "field": field,
+                    "observed": observed}
+    try:
+        vendor_eps = float(row["eps"])
+    except (KeyError, ValueError, TypeError):
+        vendor_eps = None
+    if vendor_eps is not None and not math.isfinite(vendor_eps):
+        vendor_eps = None
+    return {
+        **base, "status": "core_match",
+        "secondary_eps": vendor_eps,
+        "eps_difference": (
+            round(vendor_eps - official["eps"], 2) if vendor_eps is not None else None
+        ),
+    }
+
+
+def official_four_quarter_eps(symbol, latest_quarter_end):
+    """Return documented basic EPS sum; NOT audited full-year TTM EPS."""
+    if (str(symbol or "").upper().replace(".NS", "") != "DMART" or
+            latest_quarter_end != "2026-09-30"):
+        return None
+    return round(sum(DMART_QUARTERLY_BASIC_EPS.values()), 2)
+
+
 def _period(label):
     """Parse only explicit completed Indian financial-quarter end labels."""
     if not isinstance(label, str):
