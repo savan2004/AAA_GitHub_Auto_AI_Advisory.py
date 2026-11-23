@@ -283,7 +283,7 @@ def score_symbol_weighted(sym, name, df=None):
         checks, score, max_score, signal, _ = compute_full_score(
             data, weekly_data, pivots, rsi_last, hist, macd,
             ema9, ema21, sma20, sma50, bb_upper, bb_lower, bb_pct,
-            float(close_s.iloc[-1]), volume, volume.rolling(20).mean())
+            float(close_s.iloc[-1]), volume, volume.shift(1).rolling(20, min_periods=20).mean())
         if max_score != 20 or not np.isfinite(score):
             return None
 
