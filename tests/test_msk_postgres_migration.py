@@ -374,6 +374,40 @@ class PostgresPortfolioOfflineTests(unittest.TestCase):
         self.assertIn("portfolio = build_portfolio_backend(PortfolioManager)", source)
         self.assertIn("from postgres_portfolio import build_portfolio_backend", source)
 
+    def test_postgres_driver_errors_are_wrapped_without_leaking_details(self):
+        from postgres_portfolio import (
+            PostgresPortfolioStore, PortfolioStorageError,
+            import_legacy_to_postgres,
+        )
+        import_legacy_to_postgres(
+            self.source, self.dsn, connector=self.connector, apply=True
+        )
+        store = PostgresPortfolioStore(self.dsn, connector=self.connector)
+
+        class RawDriverError(Exception):
+            pass
+
+        def failing_connector(_dsn):
+            raise RawDriverError("private host and password must not appear")
+
+        with self.assertRaises(PortfolioStorageError) as init_error:
+            PostgresPortfolioStore(self.dsn, connector=failing_connector)
+        self.assertNotIn("password", str(init_error.exception).lower())
+        self.assertNotIn("private host", str(init_error.exception).lower())
+
+        store._connector = failing_connector
+        for operation in ("read", "buy", "sell"):
+            with self.subTest(operation=operation):
+                with self.assertRaises(PortfolioStorageError) as error:
+                    if operation == "read":
+                        store.get(100)
+                    elif operation == "buy":
+                        store.add(100, "NEW", 1, 500, telegram_message_id=901)
+                    else:
+                        store.remove(100, "SBIN", telegram_message_id=902)
+                self.assertNotIn("password", str(error.exception).lower())
+                self.assertNotIn("private host", str(error.exception).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
