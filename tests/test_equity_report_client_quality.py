@@ -79,6 +79,33 @@ class EquityReportQuality(unittest.TestCase):
         self.assertIn("price as of {esc(R.get('price_session')",REPORT)
         self.assertIn("availability is not independent accuracy verification",REPORT)
 
+    def test_eod_gate_rejects_partial_current_candle_and_stale_series(self):
+        from datetime import date
+        check = fn(REPORT, "_require_latest_completed_eod", {})
+        expected = date(2026, 11, 20)
+        self.assertEqual(check({"candle_date": "2026-11-20"}, expected), "2026-11-20")
+        for invalid in (None, {}, {"candle_date": "2026-11-23"},
+                        {"candle_date": "2026-11-19"}):
+            with self.subTest(market=invalid), self.assertRaisesRegex(ValueError, "latest completed"):
+                check(invalid, expected)
+        self.assertIn("_require_latest_completed_eod(market, expected_completed_session())", REPORT)
+
+    def test_unsourced_headlines_and_unverified_probability_are_suppressed(self):
+        news = fn(REPORT, "_real_news", {"List": list, "logger": type("Log", (), {"info": lambda *a: None})()})
+        self.assertEqual(news("DMART"), [])
+        self.assertNotIn('if R["news"]:', REPORT)
+        self.assertNotIn("about 68% of outcomes", REPORT)
+        self.assertNotIn("Verified quarterly visual trends", REPORT)
+        self.assertIn("no comparable peers with usable sourced", REPORT)
+
+    def test_technical_veto_does_not_claim_valuation_is_safe(self):
+        scores = test_scores({"Trend":10, "Momentum":52, "Quality":82,
+                              "Valuation":12, "Growth":68, "Risk":66})
+        self.assertEqual(scores["stance"], "NEUTRAL / WAIT")
+        self.assertTrue(scores["veto"])
+        self.assertIn("valuation is scored separately", scores["action"])
+        self.assertNotIn("valuation are not the problem", scores["action"])
+
 
 if __name__=="__main__":
     unittest.main()

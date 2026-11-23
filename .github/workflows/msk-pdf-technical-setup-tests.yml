@@ -6,6 +6,10 @@ on:
     paths:
       - 'pdf_technical_setup.py'
       - 'report_generator.py'
+      - 'research_engine.py'
+      - 'research_filing_evidence.py'
+      - 'research_peer_identity.py'
+      - 'tests/test_research_filing_evidence.py'
       - 'pdf_release_gate.py'
       - 'tests/test_pdf_release_gate.py'
       - 'tests/emit_pdf_qa_fixture.py'
@@ -18,6 +22,10 @@ on:
     paths:
       - 'pdf_technical_setup.py'
       - 'report_generator.py'
+      - 'research_engine.py'
+      - 'research_filing_evidence.py'
+      - 'research_peer_identity.py'
+      - 'tests/test_research_filing_evidence.py'
       - 'pdf_release_gate.py'
       - 'tests/test_pdf_release_gate.py'
       - 'tests/emit_pdf_qa_fixture.py'
@@ -53,6 +61,8 @@ jobs:
       # Full legacy fundamental suite currently fails against main because
       # report_generator.assemble() lacks 'asof'/'completeness'; tracked separately
       # in the daily fundamental research workstream (PR #39).
+      - name: Verify primary filing comparison, trailing EPS and matched benchmark sessions
+        run: python -m unittest discover -s tests -p test_research_filing_evidence.py -v
       - name: Require eight-page readable disclaimer-verified research PDF
         run: python -m unittest discover -s tests -p test_pdf_release_gate.py -v
       - name: Render every sample research page and check visible ink
