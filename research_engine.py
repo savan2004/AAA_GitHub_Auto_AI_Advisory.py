@@ -495,15 +495,15 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
                              not has_statements or not has_valuation_basis)
     fund_missing = fundamental_pillars == 0
     if display_comp >= 75:
-        stance, action = "HIGH-CONVICTION CONSTRUCTIVE", "Accumulate on dips; add on confirmed breakouts above resistance."
+        stance, action = "HIGH-CONVICTION CONSTRUCTIVE", "High relative model score; independently check valuation, downside risk and source evidence."
     elif display_comp >= 62:
-        stance, action = "CONSTRUCTIVE", "Accumulate in tranches near support; avoid chasing extended moves."
+        stance, action = "CONSTRUCTIVE", "Constructive model evidence; source and market confirmation remain necessary."
     elif display_comp >= 48:
-        stance, action = "NEUTRAL / WAIT", "Hold existing exposure; wait for trend or valuation to improve before adding."
+        stance, action = "NEUTRAL / WAIT", "Mixed evidence; review trend and valuation independently before drawing conclusions."
     elif display_comp >= 35:
-        stance, action = "CAUTIOUS", "Avoid fresh longs; protect gains and respect stop-losses."
+        stance, action = "CAUTIOUS", "Weak model evidence; examine trend, financials and downside sensitivity."
     else:
-        stance, action = "NEGATIVE", "Avoid; reduce exposure into strength."
+        stance, action = "NEGATIVE", "Adverse model evidence; independent review of risks is required."
 
     veto = False
     if insufficient_evidence:
@@ -513,8 +513,9 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
             True,
         )
     elif s["Trend"] is not None and s["Trend"] < 35 and display_comp >= 48:
-        stance, action, veto = "NEUTRAL / WAIT", ("Fundamentals/valuation are not the problem — price trend is. "
-                                                  "Wait for a reclaim of the 50-day EMA before committing."), True
+        stance, action, veto = "NEUTRAL / WAIT", ("Weak price trend overrides the composite score; "
+                                                  "valuation is scored separately and may also be expensive. "
+                                                  "No confirmed technical setup."), True
 
     def hz(vals, hi, lo, names):
         a = _avg([s[k] for k in vals])
