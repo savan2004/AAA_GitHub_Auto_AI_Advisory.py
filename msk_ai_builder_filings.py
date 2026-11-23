@@ -167,15 +167,17 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
              "Rupees":Decimal(10000000)}.get(unit)
     if divisor is None:
         raise EvidenceError("FILING_UNIT_UNSUPPORTED")
-    name=get("Name of company")
+    path = urlsplit(document.url).path
+    banking = "/INTEGRATED_FILING_BANKING_" in path
+    # The NSE BANKING issuer header uses "Name of bank", unlike INDAS.
+    # Do not accept either synonym on the other template.
+    name=get("Name of bank" if banking else "Name of company")
     if not name:
         raise EvidenceError("FILING_IDENTITY_MISMATCH")
     approved=_date(get("Date of board meeting when results were approved"))
     # Bank Screener "Revenue" corresponds to interest earned, not total income.
     # Bank "Net Profit" corresponds to period PAT + associates *before* minority,
     # not the parent-only attributable result. Verify both identities below.
-    path = urlsplit(document.url).path
-    banking = "/INTEGRATED_FILING_BANKING_" in path
     revenue_label = ("Total interest earned" if banking else
                      "Total Revenue From Operations" if "/INTEGRATED_FILING_NBFC_INDAS_" in path
                      else "Revenue from operations")
