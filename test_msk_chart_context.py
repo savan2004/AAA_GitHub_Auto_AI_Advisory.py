@@ -37,7 +37,7 @@ class MSKChartContextTests(unittest.TestCase):
         self.assertEqual(set(info["windows"]), {20, 50})
 
     def test_negative_breakout_with_volume_confirmation(self):
-        h, l, c, v = sample(80, trend=-1.0)
+        h, l, c, v = sample(80, trend=-2.0)
         v[-1] = 2500.0
         info = summarize_chart(h, l, c, v, c[-1] + 1, c[-1] + 5, -1.0)
         self.assertEqual(info["level"], "20D DOWNSIDE CLOSE")
