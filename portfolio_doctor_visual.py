@@ -1,5 +1,6 @@
 """Four-page, evidence-bounded private Portfolio Doctor PDF. RAM only."""
 import io
+import math
 from datetime import datetime, timedelta, timezone
 
 from reportlab.lib.colors import HexColor
@@ -7,7 +8,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
-from portfolio_doctor_diagnostics import diagnose_portfolio, industry_exposure
+from portfolio_doctor_diagnostics import (diagnose_portfolio, industry_exposure,
+                                          weighted_secondary_portfolio_ratios)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 NAVY = HexColor('#132338')
@@ -19,6 +21,72 @@ BORDER = HexColor('#DDE5ED')
 GREEN = HexColor('#168257')
 RED = HexColor('#BD4040')
 WHITE = HexColor('#FFFFFF')
+
+
+
+def _trend_label(close, ema20, ema50=None, ema200=None):
+    """Describe independently verified price/EMA relationships; no trade signal."""
+    try:
+        close, ema20 = float(close), float(ema20)
+        if not all(math.isfinite(v) and v > 0 for v in (close, ema20)):
+            return "Trend levels unavailable"
+        def position(short, level):
+            if level is None:
+                return None
+            value = float(level)
+            if not math.isfinite(value) or value <= 0:
+                return None
+            return ("above " if close > value else "below " if close < value else "at ") + short
+        e50 = float(ema50) if ema50 is not None else None
+        if e50 is not None and math.isfinite(e50) and e50 > 0:
+            if close > ema20 and close > e50:
+                parts = ["Above EMA20/50"]
+            elif close < ema20 and close < e50:
+                parts = ["Below EMA20/50"]
+            else:
+                parts = [position("EMA20", ema20).capitalize(),
+                         position("EMA50", e50)]
+            parts.append("EMA20" + (">" if ema20 > e50 else "<" if ema20 < e50 else "=") + "EMA50")
+        else:
+            parts = [position("EMA20", ema20).capitalize()]
+        e200 = position("EMA200", ema200)
+        if e200 is not None:
+            parts.append("Close " + e200)
+        return " | ".join(parts)
+    except (TypeError, ValueError, OverflowError):
+        return "Trend levels unavailable"
+
+
+def _financial_metric_label(metric):
+    """A null or 'not supplied' period is not a financial reporting date."""
+    base = '{}: {:,.2f} {}'.format(metric["label"], metric["value"], metric["unit"])
+    period = metric.get("period")
+    if period is None or str(period).strip().lower() in (
+            "", "not supplied", "unknown", "none", "null", "n/a"):
+        return base
+    return base + " ({})".format(str(period).strip()[:22])
+
+
+def _flag_reason(row, details):
+    """Compact, factual explanation adjacent to each technical flag badge."""
+    weight = float(details.get("weight", row["weight"]))
+    close, ema20 = float(row["close"]), float(row["ema20"])
+    ema50 = row.get("ema50")
+    if weight > 40:
+        return "HIGH FLAG: {:.1f}% concentration".format(weight)
+    if weight > 25 and ema50 is not None and close < float(ema50):
+        return "HIGH FLAG: {:.1f}% concentration; below EMA50".format(weight)
+    if row.get("rsi14") is not None and float(row["rsi14"]) > 70:
+        return "WATCH FLAG: RSI14 > 70"
+    if weight > 25:
+        return "WATCH FLAG: {:.1f}% concentration".format(weight)
+    if ema50 is not None and close < float(ema50):
+        return "WATCH FLAG: Close < EMA50"
+    if close < ema20:
+        return "WATCH FLAG: Close < EMA20"
+    if float(row["pnl"]) < 0:
+        return "WATCH FLAG: Unrealised loss"
+    return "No threshold flag"
 
 
 def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 1024 * 1024):
@@ -92,6 +160,15 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             pdf.drawString(left, y, item)
             y -= leading
 
+
+    def risk_bullet(value, *, color=INK):
+        """Identical dot geometry, indentation and baseline for every risk row."""
+        nonlocal y
+        pdf.setFillColor(color)
+        pdf.circle(left + 4, y + 2.5, 1.7, stroke=0, fill=1)
+        text_fit(value, left + 14, y, right - left - 15, 8.5, color=color)
+        y -= 19
+
     def subhead(value):
         nonlocal y
         y -= 7
@@ -155,46 +232,88 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                      150, 8, True, MUTED)
         y = bot_y - 35
 
-    def company_price_chart(details):
+    def company_price_chart(details, *, average_buy):
+        """Four verified series and a price-axis-aware dotted cost reference."""
         nonlocal y
         dates = details.get('chart_dates') or []
-        rows = [(details.get('chart') or [], BLUE),
-                (details.get('chart_ema20') or [], HexColor('#CB8B22')),
-                (details.get('chart_ema50') or [], HexColor('#8066AE'))]
-        valid = [(series, color) for series, color in rows
-                 if len(series) == len(dates) and len(series) >= 2]
+        rows = [
+            ('Close', details.get('chart') or [], BLUE, None),
+            ('EMA20', details.get('chart_ema20') or [], HexColor('#CB8B22'), None),
+            ('EMA50', details.get('chart_ema50') or [], HexColor('#8066AE'), None),
+            ('EMA200', details.get('chart_ema200') or [], MUTED, [4, 3]),
+        ]
+        valid = [(name, series, color, dash) for name, series, color, dash in rows
+                 if len(series) == len(dates) and len(series) >= 2
+                 and all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0
+                         for v in series)]
         if not valid:
             line('Chart unavailable: insufficient dated historical candles.', 8)
             return
-        points = [float(v) for series, _ in valid for v in series]
+        points = [float(v) for _, series, _, _ in valid for v in series]
         low, high = min(points), max(points)
-        gap = max(0.01, (high-low)*.08)
+        gap = max(0.01, (high - low) * .08)
         low -= gap
         high += gap
-        x0, x1 = left+48, right-10
-        ytop, ybottom = y-28, y-145
+        try:
+            buy = float(average_buy)
+            if not math.isfinite(buy) or buy <= 0:
+                buy = None
+        except (ValueError, TypeError, OverflowError):
+            buy = None
+        # Expand for a nearby cost line but do NOT compress a useful trend
+        # chart by 50% for a remote historic cost. Mark out-of-range lines.
+        if buy is not None:
+            span = max(.01, high - low)
+            if low - .20 * span <= buy <= high + .20 * span:
+                low, high = min(low, buy - gap), max(high, buy + gap)
+        x0, x1 = left + 48, right - 10
+        ytop, ybottom = y - 28, y - 145
         pdf.setFillColor(PANEL)
         pdf.roundRect(x0, ybottom, x1 - x0, ytop - ybottom, 4, stroke=0, fill=1)
         for gridline in range(4):
-            yy = ybottom + (ytop-ybottom)*gridline/3
+            yy = ybottom + (ytop - ybottom) * gridline / 3
             pdf.setStrokeColor(BORDER)
             pdf.setLineWidth(.55)
             pdf.line(x0, yy, x1, yy)
-            text_fit('{:,.0f}'.format(low+(high-low)*gridline/3),
-                     left, yy-3, 43, 7, color=MUTED)
-        for values, color in valid:
+            text_fit('{:,.0f}'.format(low + (high - low) * gridline / 3),
+                     left, yy - 3, 43, 7, color=MUTED)
+
+        for name, values, color, dash in valid:
             pdf.setStrokeColor(color)
-            pdf.setLineWidth(1.45)
+            pdf.setLineWidth(1.3 if name == 'EMA200' else 1.45)
+            pdf.setDash(dash or [])
             last = None
             for j, v in enumerate(values):
-                pt = (x0+(x1-x0)*j/(len(values)-1),
-                      ybottom+(ytop-ybottom)*(float(v)-low)/(high-low))
-                if last:
-                    pdf.line(last[0],last[1],pt[0],pt[1])
+                pt = (x0 + (x1 - x0) * j / (len(values) - 1),
+                      ybottom + (ytop - ybottom) * (float(v) - low) / (high - low))
+                if last is not None:
+                    pdf.line(last[0], last[1], pt[0], pt[1])
                 last = pt
-        text_fit('Close', x0, ytop+10, 50, 8, True, BLUE)
-        text_fit('EMA20', x0+72, ytop+10, 60, 8, True, HexColor('#CB8B22'))
-        text_fit('EMA50', x0+157, ytop+10, 60, 8, True, HexColor('#8066AE'))
+            pdf.setDash([])
+
+        if buy is not None:
+            offscale = ' (above range)' if buy > high else (
+                ' (below range)' if buy < low else '')
+            yy = (ytop - 2 if buy > high else ybottom + 2 if buy < low else
+                  ybottom + (ytop - ybottom) * (buy - low) / (high - low))
+            pdf.setStrokeColor(HexColor('#7A5960'))
+            pdf.setLineWidth(.9)
+            pdf.setDash([1.5, 3])
+            pdf.line(x0, yy, x1, yy)
+            pdf.setDash([])
+            buy_label = 'Avg buy Rs {:,.0f}{}'.format(buy, offscale)
+        else:
+            buy_label = 'Avg buy unavailable'
+
+        for offset, title, color in (
+                (0, 'Close', BLUE), (60, 'EMA20', HexColor('#CB8B22')),
+                (123, 'EMA50', HexColor('#8066AE')),
+                (190, 'EMA200' if any(z[0] == 'EMA200' for z in valid) else
+                 'EMA200 N/A', MUTED)):
+            text_fit(title, x0 + offset, ytop + 10, 61, 7.8, True, color)
+        text_fit(buy_label, x0 + 286, ytop + 10, x1 - x0 - 286,
+                 7.1, True, HexColor('#7A5960'))
+
         volume = details.get('chart_volume') or []
         axis_y = ybottom
         if len(volume) == len(dates) and max(volume) > 0:
@@ -207,9 +326,9 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                 pdf.rect(x0 + i * step - bar_width / 2, axis_y, bar_width,
                          26 * value / tallest, stroke=0, fill=1)
             text_fit('Volume', left, axis_y + 16, 43, 7, True, MUTED)
-        text_fit(dates[0], x0, axis_y-15, 96, 7, color=MUTED)
-        text_fit(dates[len(dates)//2], (x0+x1)/2-20, axis_y-15, 96, 7, color=MUTED)
-        text_fit(dates[-1], x1-60, axis_y-15, 60, 7, color=MUTED)
+        text_fit(dates[0], x0, axis_y - 15, 96, 7, color=MUTED)
+        text_fit(dates[len(dates)//2], (x0+x1)/2-20, axis_y - 15, 96, 7, color=MUTED)
+        text_fit(dates[-1], x1-75, axis_y-15, 75, 7, color=MUTED)
         y = axis_y-24
 
     invested = sum(row['invested'] for row in holdings)
