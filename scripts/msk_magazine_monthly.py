@@ -23,8 +23,10 @@ from reportlab.lib.utils import simpleSplit
 
 if __package__:
     from .msk_magazine_editorial import load_editorial_pack
+    from .msk_magazine_charts import draw_research_chart, load_metrics
 else:
     from msk_magazine_editorial import load_editorial_pack
+    from msk_magazine_charts import draw_research_chart, load_metrics
 from reportlab.pdfgen import canvas
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -296,13 +298,15 @@ def _index(c, issue, index):
         _txt(c, 514, y, f"{row['page']:02d}", 9, GRAY)
 
 
-def _page(c, number, title, issue, layout, observations, editorial=None):
+def _page(c, number, title, issue, layout, observations, editorial=None, market_data=None):
     w, h = A4
     _rect(c, 46, h - 74, 44, 4, TEAL)
     _txt(c, 46, h - 103, title, 19 if len(title) < 31 else 15, NAVY, True)
     _txt(c, 46, h - 125, f"{issue}  |  Design 3 : {layout}", 9, GRAY)
     _rect(c, 46, 494, 496, 174, LIGHT)
-    if observations:
+    if market_data:
+        draw_research_chart(c, number, market_data)
+    elif observations:
         _txt(c, 58, 642, "SOURCE-MATCHED DATA (EDITORIAL REVIEW REQUIRED)", 10, TEAL, True)
         for i, row in enumerate(observations[:5]):
             y = 615 - i * 28
@@ -362,7 +366,8 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
              source_pack: Path | None = None, source_root: Path | None = None,
              logo_file: Path | None = None, scheduled: bool = False,
              now: datetime | None = None,
-             editorial_pack: Path | None = None) -> dict:
+             editorial_pack: Path | None = None,
+             market_pack: Path | None = None) -> dict:
     now = now or datetime.now(IST)
     if not MONTH_RE.fullmatch(issue):
         raise MagazineError("Issue must be YYYY-MM")
@@ -381,6 +386,9 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     editorial = (load_editorial_pack(editorial_pack, issue,
                                    as_of=now.astimezone(IST).date())
                  if editorial_pack is not None else {})
+    market_data = load_metrics(market_pack, issue) if market_pack is not None else None
+    if market_data and date.fromisoformat(market_data["as_of"]) > now.astimezone(IST).date():
+        raise MagazineError("Future-dated market research is prohibited")
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
@@ -403,10 +411,11 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         elif n == 2:
             _index(c, issue, index)
         elif n == 16:
-            _page(c, n, title, issue, entry["layout"], [], editorial.get(n))
+            _page(c, n, title, issue, entry["layout"], [], editorial.get(n),
+                  market_data)
         else:
             _page(c, n, title, issue, entry["layout"], by_page.get(n, []),
-                  editorial.get(n))
+                  editorial.get(n), market_data)
         _footer(c, n, issue)
         c.showPage()
         page_obj = {"page": n, "locked_title": title, "layout": entry["layout"],
@@ -424,6 +433,9 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
               "pdf_sha256": hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
               "page_count": 16, "source_consistency_rows": sum(map(len, by_page.values())),
               "editorial_pages_authored": len(editorial),
+              "chart_pages_with_dated_evidence": 14 if market_data else 0,
+              "market_reference_url": market_data["market_source"]["url"] if market_data else None,
+              "market_reference_date": market_data["market_source"]["report_date"] if market_data else None,
               "source_failures": failures, "logo_asset_provided": bool(logo_file and logo_file.is_file()),
               "mechanical_pdf_checks": qa, "editorial_approved": False,
               "publication_allowed": False, "pages": pages}
@@ -463,6 +475,7 @@ def main(argv=None):
     p.add_argument("--source-root")
     p.add_argument("--approved-logo")
     p.add_argument("--editorial-pack", help="Complete 03-16 dated editorial JSON; never publication approval")
+    p.add_argument("--market-pack", help="Dated official-market research evidence for real charts")
     p.add_argument("--scheduled", action="store_true",
                    help="Enforce first Monday and current IST issue")
     a = p.parse_args(argv)
@@ -472,6 +485,7 @@ def main(argv=None):
         source_root=Path(a.source_root) if a.source_root else None,
         logo_file=Path(a.approved_logo) if a.approved_logo else None,
         editorial_pack=Path(a.editorial_pack) if a.editorial_pack else None,
+        market_pack=Path(a.market_pack) if a.market_pack else None,
         scheduled=a.scheduled,
     )
     print(json.dumps({"issue": result["issue"], "pdf_sha256": result["pdf_sha256"],
