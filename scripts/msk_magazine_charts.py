@@ -137,7 +137,7 @@ def draw_research_chart(c, page: int, pack: dict):
     """Draw one real-data vector chart within the locked A4 top evidence panel."""
     indices={x["name"]:x for x in pack["market_indices"]}
     def group(names,key="m1"):
-        return [{"name":name.replace("Nifty ",""),"value":indices[name][key]} for name in names]
+        return [{"name":name,"value":indices[name][key]} for name in names]
     if page==3:
         _bars(c,group(["Nifty 50","Nifty Bank","Nifty 500","Nifty Midcap 150","Nifty Smallcap 250"]),
               title="OCTOBER 2026 INDEX TOTAL RETURNS - 1 MONTH")
@@ -162,7 +162,7 @@ def draw_research_chart(c, page: int, pack: dict):
         _bars(c,group(["Nifty 500","Nifty 500 Equal Weight"]),
               title="NIFTY 500 WEIGHTED VS EQUAL WEIGHT - BREADTH PROXY ONLY")
     elif page==8:
-        _bars(c,[{"name":r["name"].replace("Nifty ",""),"value":r["m1"]}
+        _bars(c,[{"name":r["name"],"value":r["m1"]}
                  for r in pack["sectors"]],
               title="SECTOR INDEX RETURNS - OCTOBER 2026")
     elif page in (9,10,11):
