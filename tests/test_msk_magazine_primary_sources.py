@@ -13,7 +13,7 @@ TEXTS = {
     "rbi_repo": "Monetary Policy Resolution October 7 2026. The policy repo rate was increased by 25 basis points to 5.50 per cent.",
     "mospi_cpi": "Consumer Price Index October 2026. Headline inflation 6.09%. Food inflation 8.94%.",
     "mospi_iip": "Index of Industrial Production September 2026 quick estimate showed 6.7 percent growth.",
-    "tcs_q2": "TCS Q2 FY27 October 8, 2026. Quarterly Revenue 7,642 million, up 2.4% YoY; operating margin 24.0%.",
+    "tcs_q2": "TCS quarterly consolidated Q2 FY27 filing. Start 01-07-2026 end 30-09-2026. Revenue from operations 73,18,800.00. NSE Symbol TCS.",
     "persistent_q2": "Persistent Q2 FY27 October 15, 2026: USD revenue 487.6M, year over year 20.0%, EBIT 15.0%.",
     "coforge_q2": "Coforge Q2 FY 27 October 23, 2026: Revenue USD 652.2M, growth 40.1%; EBIT margin guidance 16%.",
     "mospi_gdp_calendar": "Quarterly GDP second quarter of 2026-27 is scheduled for 30 November 2026.",
@@ -41,6 +41,18 @@ class PrimarySourceEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(PrimarySourceError, "coforge_q2"):
             verify_source_html("coforge_q2", SOURCES["coforge_q2"]["url"],
                                html_for("coforge_q2", text))
+
+    def test_tcs_previous_usd_press_release_not_accepted_as_nse_filing(self):
+        stale = "TCS Q2 FY27 October 8, 2026. Revenue USD 7,642, growth 2.4% YoY; operating margin 24.0%."
+        with self.assertRaisesRegex(PrimarySourceError, "tcs_q2"):
+            verify_source_html("tcs_q2", SOURCES["tcs_q2"]["url"],
+                               html_for("tcs_q2", stale))
+
+    def test_tcs_wrong_inr_revenue_rejected(self):
+        wrong = TEXTS["tcs_q2"].replace("73,18,800.00", "72,18,800.00")
+        with self.assertRaisesRegex(PrimarySourceError, "tcs_q2"):
+            verify_source_html("tcs_q2", SOURCES["tcs_q2"]["url"],
+                               html_for("tcs_q2", wrong))
 
     def test_unapproved_host_and_url_rejected(self):
         with self.assertRaisesRegex(PrimarySourceError, "URL"):
