@@ -18,9 +18,11 @@ CODES = {"BAD_INPUT", "NO_PRICES", "STALE_PRICES", "PDF_FAILED", "TIMEOUT",
          "WORKER_FAILED", "NO_CAPACITY"}
 
 class PortfolioDoctorError(RuntimeError):
-    def __init__(self, code="WORKER_FAILED"):
+    def __init__(self, code="WORKER_FAILED", *, incomplete=None):
         super().__init__(code)
         self.code = code if code in CODES else "WORKER_FAILED"
+        # Private structured context only. str(exc), stderr and logs stay code-only.
+        self.incomplete = incomplete if self.code in ("NO_PRICES", "STALE_PRICES") else None
 
 
 from portfolio_doctor_input import (
@@ -293,7 +295,8 @@ def price_holdings(holdings, *, include_frames=False):
     if failures:
         code = ("STALE_PRICES" if "STALE_PRICES" in failures.values()
                 else "NO_PRICES")
-        raise PortfolioDoctorError(code)
+        # Keep the full-report fail-closed gate; diagnostic NEVER contains partial values.
+        raise PortfolioDoctorError(code, incomplete=failures)
 
     out = []
     for holding in holdings:
@@ -318,10 +321,10 @@ def price_holdings(holdings, *, include_frames=False):
                         "high20": max(values[-20:]), "low20": min(values[-20:]),
                 "return20": round(100 * (close / values[-21] - 1), 2)
                 if len(values) >= 21 else None})
-        except PortfolioDoctorError:
-            raise
-        except (TypeError, ValueError, IndexError, OverflowError, AttributeError) as exc:
-            raise PortfolioDoctorError("NO_PRICES") from exc
+        except PortfolioDoctorError as exc:
+            raise PortfolioDoctorError(exc.code, incomplete={holding["symbol"]: exc.code}) from None
+        except (TypeError, ValueError, IndexError, OverflowError, AttributeError):
+            raise PortfolioDoctorError("NO_PRICES", incomplete={holding["symbol"]: "NO_PRICES"}) from None
     try:
         weights = portfolio_weights(out)
     except (ValueError, TypeError, ArithmeticError):
@@ -383,7 +386,17 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
                 candidate = text_line.partition("=")[2].strip()
                 if candidate in CODES:
                     code = candidate
-        raise PortfolioDoctorError(code)
+        incomplete = None
+        if code in ("NO_PRICES", "STALE_PRICES") and child.stdout:
+            # The worker may disclose only validated symbols + failure codes
+            # through private stdout. Never emit the diagnostic to logs.
+            try:
+                from portfolio_doctor_incomplete import decode_incomplete_diagnostic
+                requested = parse_holdings(filename, payload)
+                incomplete = decode_incomplete_diagnostic(child.stdout, requested)
+            except Exception:
+                incomplete = None
+        raise PortfolioDoctorError(code, incomplete=incomplete)
     raw = child.stdout
     if not (1000 <= len(raw) <= MAX_BYTES and raw.startswith(b"%PDF-")):
         raise PortfolioDoctorError("PDF_FAILED")
@@ -612,6 +625,11 @@ def worker_main(filename):
             result = build_pdf_bytes(recs, peers=peers, risk=risk, companies=companies)
         sys.stdout.buffer.write(result)
     except PortfolioDoctorError as exc:
+        if exc.code in ("NO_PRICES", "STALE_PRICES") and exc.incomplete:
+            from portfolio_doctor_incomplete import encode_incomplete_diagnostic
+            details = encode_incomplete_diagnostic(exc.incomplete)
+            if details:
+                sys.stdout.buffer.write(details)
         sys.stderr.write("\nMSK_DOCTOR_CODE=" + exc.code + "\n")
         raise SystemExit(1)
     except Exception:
