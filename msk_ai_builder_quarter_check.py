@@ -36,7 +36,9 @@ def check_latest_quarter(member, evidence, *, listing=fetch_listing,
     # in extract_quarter(); never invent an adjustment or edit vendor data.
     reported_revenue = Decimal(str(period.revenue_cr))
     raw_diff = abs(result.revenue_cr - reported_revenue)
-    matched_basis = "ISSUER_REVENUE_FROM_OPERATIONS"
+    matched_basis = ("BANK_TOTAL_INTEREST_EARNED" if
+                     result.revenue_definition == "Total interest earned" else
+                     "ISSUER_REVENUE_FROM_OPERATIONS")
     comparable_revenue = result.revenue_cr
     if raw_diff > Decimal("0.51") and result.excise_cr is not None:
         comparable_revenue = result.revenue_cr - result.excise_cr
