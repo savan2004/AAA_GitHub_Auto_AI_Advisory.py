@@ -4,14 +4,18 @@ on:
   pull_request:
     paths:
       - "scripts/msk_magazine_monthly.py"
+      - "scripts/msk_magazine_nse.py"
       - "tests/test_msk_magazine_monthly.py"
+      - "tests/test_msk_magazine_nse.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   push:
     branches: [main]
     paths:
       - "scripts/msk_magazine_monthly.py"
+      - "scripts/msk_magazine_nse.py"
       - "tests/test_msk_magazine_monthly.py"
+      - "tests/test_msk_magazine_nse.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   workflow_dispatch:
