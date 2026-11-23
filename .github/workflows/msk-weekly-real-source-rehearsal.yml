@@ -7,6 +7,8 @@ on:
       - 'msk_ai_builder_quarter_check.py'
       - 'msk_ai_builder_discovery.py'
       - 'msk_ai_builder_filings.py'
+      - 'msk_ai_builder_diagnostics.py'
+      - 'tests/test_msk_ai_builder_diagnostics.py'
       - 'tests/test_msk_ai_builder_bank_accounting.py'
       - 'msk_ai_builder_weekly*.py'
   workflow_dispatch:
@@ -41,10 +43,13 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_ai_builder_bank_accounting.py' -v
       - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_discovery.py' -v
       - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_quarter_check.py' -v
+      - name: Test machine-readable failure diagnosis without full market refresh
+        run: python -m unittest discover -s tests -p 'test_msk_ai_builder_diagnostics.py' -v
       - name: Rehearse refresh against real public sources and disposable PostgreSQL
         run: |
           python -u - <<'PY'
           import json
+          import os
           from pathlib import Path
           import psycopg
           from msk_ai_builder_bank import BankError, WeeklyResearchBank
@@ -53,6 +58,8 @@ jobs:
           from msk_ai_builder_quarter_check import check_latest_quarter
           from msk_ai_builder_evidence import EvidenceError
           from msk_ai_builder_discovery import fetch_listing
+          from msk_ai_builder_diagnostics import (
+              diagnose_quarter, diagnostic_summary, diagnostic_markdown)
 
           def connect(_):
               return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
@@ -63,6 +70,26 @@ jobs:
           primary_checks = []
           diagnostics = {}
           focus = {"COFORGE", "ICICIBANK", "BANKBARODA", "MCX", "RELIANCE"}
+          # Persist the entire investigation after every company; never
+          # overwrite 20-company data with just the later first/replay result.
+          report = {"primary_checks": primary_checks,
+                    "focus_diagnostics": diagnostics,
+                    "publication_blocked": True}
+          def persist(**updates):
+              report.update(updates)
+              Path("weekly-rehearsal.json").write_text(
+                  json.dumps(report, indent=2, sort_keys=True))
+          def publish_diagnostic():
+              summary = diagnostic_summary(primary_checks, requested=20)
+              persist(source_failure_diagnostic=summary)
+              Path("weekly-rehearsal-summary.md").write_text(
+                  diagnostic_markdown(summary))
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as output:
+                      output.write(diagnostic_markdown(summary))
+              print("SOURCE_FAILURE_DIAGNOSTIC", json.dumps(summary, sort_keys=True))
+              return summary
           def diagnosed_listing(symbol, period):
               payload = fetch_listing(symbol, period)
               if symbol in focus:
@@ -84,17 +111,18 @@ jobs:
               # Bounded verification: each staged issuer (maximum 20), irrespective of scope.
               print("PRIMARY_PILOT_SCOPES", json.dumps({c.member.symbol: c.evidence.scope for c in result.companies[:20]}, sort_keys=True))
               for company in result.companies[:20]:
-                  try:
-                      primary_checks.append(check_latest_quarter(company.member, company.evidence, listing=diagnosed_listing, audit=record_numeric))
-                  except EvidenceError as exc:
-                      primary_checks.append({"symbol": company.member.symbol, "status": str(exc), "publication_status": "WITHHELD"})
-                  print("PRIMARY_PROGRESS", json.dumps(primary_checks[-1], sort_keys=True))
-                  Path("weekly-rehearsal.json").write_text(json.dumps({"primary_checks": primary_checks, "focus_diagnostics": diagnostics, "publication_blocked": True}, indent=2))
+                  observation = diagnose_quarter(
+                      company.member, company.evidence,
+                      listing=diagnosed_listing, audit=record_numeric)
+                  primary_checks.append(observation)
+                  print("PRIMARY_PROGRESS", json.dumps(observation, sort_keys=True))
+                  persist()
               print("PRIMARY_QUARTER_CHECKS", json.dumps(primary_checks, sort_keys=True))
               return result, version
           first = run_weekly_job(environ=env, bank_factory=factory, refresh=diagnosed_refresh)
           print("FIRST_REFRESH", json.dumps(first, sort_keys=True))
-          Path("weekly-rehearsal.json").write_text(json.dumps({"first": first}, indent=2))
+          persist(first=first)
+          diagnostic = publish_diagnostic()
           assert first["status"] == "INTERNAL_SECONDARY_STAGING"
           assert len(primary_checks) == first["selected"], "Primary verification did not exercise every staged issuer"
           match_count = sum(c["status"] == "LATEST_QUARTER_MATCHED_ONLY" for c in primary_checks)
@@ -118,16 +146,19 @@ jobs:
               assert str(exc) == "PRODUCTION_PUBLICATION_DISABLED"
           else:
               raise AssertionError("Unapproved customer publication")
-          Path("weekly-rehearsal.json").write_text(json.dumps({"first": first, "replay": again, "primary_checks": primary_checks, "focus_diagnostics": diagnostics, "publication_blocked": True}, indent=2))
+          persist(replay=again)
           print("REPLAY", json.dumps(again, sort_keys=True))
           assert len({c["symbol"] for c in primary_checks}) == first["selected"]
           assert {c["symbol"] for c in primary_checks} == {r["symbol"] for r in rows["companies"]}
-          assert match_count == first["selected"] == 20, "Full 20-company quarterly numeric reconciliation target not met"
+          assert match_count == first["selected"] == 20 and diagnostic["rehearsal_passed"], (
+              "Full 20-company latest-quarter match not met; see SOURCE_FAILURE_DIAGNOSTIC and attached report")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: msk-weekly-rehearsal-summary
-          path: weekly-rehearsal.json
+          path: |
+            weekly-rehearsal.json
+            weekly-rehearsal-summary.md
           if-no-files-found: warn
           retention-days: 7
