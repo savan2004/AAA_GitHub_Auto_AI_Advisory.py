@@ -1,8 +1,9 @@
 """NSE integrated Ind-AS HTML ingestion, research staging only.
 
-Supports explicit standalone or consolidated discrete quarters when the same
-strict iXBRL table contract is present. Recognizes the observed NBFC Ind-AS template separately. Unrecognized bank, legacy, annual and
-changed layouts are withheld; consolidated live coverage requires evidence.
+Supports standalone/consolidated discrete quarters under observed NSE IndAS,
+NBFC IndAS and BANKING iXBRL contracts. Banks explicitly reconcile interest
+income, other income, associate profit and minority interests. Missing or
+changed layouts, annual and unobserved formats are withheld.
 A downloaded document, digest and matching issuer do not establish publication
 time, revision completeness or regulatory acceptance.
 """
@@ -20,7 +21,7 @@ from msk_ai_builder_primary import IndexMember
 from research_data import _tables_in
 
 MAX_BYTES = 2_000_000
-PATH = re.compile(r"/corporate/ixbrl/INTEGRATED_FILING_(?:NBFC_)?INDAS_[0-9]+_[0-9]{14}_iXBRL_WEB\.html")
+PATH = re.compile(r"/corporate/ixbrl/INTEGRATED_FILING_(?:(?:NBFC_)?INDAS|BANKING)_[0-9]+_[0-9]{14}_iXBRL_WEB\.html")
 
 @dataclass(frozen=True)
 class DownloadedFiling:
@@ -45,6 +46,11 @@ class QuarterExtract:
     url: str
     digest: str
     retrieved_at: datetime
+    # From the *same* unique NSE income statement, never a segment table.
+    # Optional for issuers without a separately filed excise expense.
+    excise_cr: Decimal | None = None
+    revenue_definition: str = "Revenue from operations"
+    profit_definition: str = "Total profit (loss) for period"
 
     @property
     def status(self):
@@ -165,15 +171,19 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
     if not name:
         raise EvidenceError("FILING_IDENTITY_MISMATCH")
     approved=_date(get("Date of board meeting when results were approved"))
-    # NBFC tables have a blank revenue heading followed by the actual total.
-    # Select the exact label by the independently observed exchange template;
-    # never fall back to total income or a component of operating revenue.
-    revenue_label = ("Total Revenue From Operations" if
-                     "/INTEGRATED_FILING_NBFC_INDAS_" in urlsplit(document.url).path
+    # Bank Screener "Revenue" corresponds to interest earned, not total income.
+    # Bank "Net Profit" corresponds to period PAT + associates *before* minority,
+    # not the parent-only attributable result. Verify both identities below.
+    path = urlsplit(document.url).path
+    banking = "/INTEGRATED_FILING_BANKING_" in path
+    revenue_label = ("Total interest earned" if banking else
+                     "Total Revenue From Operations" if "/INTEGRATED_FILING_NBFC_INDAS_" in path
                      else "Revenue from operations")
+    profit_label = ("Net profit (loss) for the period" if banking
+                    else "Total profit (loss) for period")
     candidates=[t for t in tables if any(_label(cell)==_label(revenue_label) for row in t for cell in row[:2])
                 and any(_label(cell)=="date of start of reporting period" for row in t for cell in row[:2])
-                and any(_label(cell)=="total profit (loss) for period" for row in t for cell in row[:2])]
+                and any(_label(cell)==_label(profit_label) for row in t for cell in row[:2])]
     if len(candidates)!=1:
         raise EvidenceError("FILING_FINANCIAL_LAYOUT")
     rows=candidates[0]
@@ -196,8 +206,67 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
     if audit not in ("Audited","Unaudited"):
         raise EvidenceError("FILING_AUDIT_UNKNOWN")
     revenue=_amount(quarter(revenue_label),divisor)
-    profit=_amount(quarter("Total profit (loss) for period"),divisor)
+    profit=_amount(quarter(profit_label),divisor)
+    excise = None
+    revenue_definition = revenue_label
+    profit_definition = profit_label
+    if banking:
+        # Compare BOTH the discrete quarter and YTD, so a wrong column or
+        # different accounting basis cannot accidentally match the vendor.
+        interest=_one(rows,"Total interest earned",columns=2)
+        other=_one(rows,"Other income",columns=2)
+        total=_one(rows,"Total income",columns=2)
+        period_profit=_one(rows,"Net profit (loss) for the period",columns=2)
+        associates=_one(rows,"Share of profit (loss) of associates",columns=2)
+        minority=_one(rows,"Profit (loss) of minority interest",columns=2)
+        attributable=_one(rows,
+            "Net Profit (loss) after taxes minority interest and share of profit (loss) of associates",
+            columns=2)
+        for k in (0,1):
+            earned=_amount(interest[k],divisor)
+            others=_amount(other[k],divisor)
+            reported_total=_amount(total[k],divisor)
+            if abs(earned+others-reported_total)>Decimal("0.02"):
+                raise EvidenceError("BANK_INCOME_RECONCILIATION")
+            # Blank cells are allowed ONLY where the reported attributable
+            # profit reconciles with a mathematically zero missing share.
+            share=_amount(associates[k],divisor) if associates[k].strip() else Decimal(0)
+            noncontrolling=_amount(minority[k],divisor) if minority[k].strip() else Decimal(0)
+            reported_attributable=_amount(attributable[k],divisor)
+            gross_profit=_amount(period_profit[k],divisor)
+            if abs(gross_profit+share-noncontrolling-reported_attributable)>Decimal("0.02"):
+                raise EvidenceError("BANK_PROFIT_RECONCILIATION")
+            if k==0:
+                # Screener's consolidated Net Profit includes share of associates
+                # before deduction of non-controlling interest.
+                profit=gross_profit+share
+        profit_definition="Net profit for period plus share of associates, before minority"
+    else:
+        # Disclosed excise is an expense, not arbitrary data massaging. A
+        # secondary vendor may report sales net of excise, but this adjustment
+        # is allowed only if the audited financial table reconciles that exact
+        # excise line to its other-expenses subtotal in BOTH source columns.
+        excise_rows=[row for row in rows if any(_label(c)=="excise duty"
+                                                  for c in row[:2])]
+        if excise_rows:
+            if len(excise_rows)!=1:
+                raise EvidenceError("EXCISE_AMBIGUOUS")
+            duties=_one(rows,"Excise Duty",columns=2)
+            other=_one(rows,"Other Expenses",columns=2)
+            subtotal=_one(rows,"Total other expenses",columns=2)
+            for k in (0,1):
+                duty=_amount(duties[k],divisor)
+                extra=_amount(other[k],divisor)
+                reported=_amount(subtotal[k],divisor)
+                if duty<0 or abs(duty+extra-reported)>Decimal("0.02"):
+                    raise EvidenceError("EXCISE_EXPENSE_RECONCILIATION")
+                if k==0:
+                    excise=duty
+            if excise>=revenue:
+                raise EvidenceError("EXCISE_EXCEEDS_REVENUE")
     if revenue<=0:
         raise EvidenceError("NONPOSITIVE_REVENUE")
     return QuarterExtract(member,name,start,end,approved,audit=="Audited",revenue,profit,
-                          document.url,document.digest,document.retrieved_at)
+                          document.url,document.digest,document.retrieved_at,
+                          excise_cr=excise, revenue_definition=revenue_definition,
+                          profit_definition=profit_definition)
