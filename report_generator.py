@@ -298,10 +298,28 @@ def _find_peers(sym: str, max_peers: int = 5, timeout: int = 25):
     from nifty500_collector import get_stock_sector, SECTOR_STOCKS
     from fundamentals import get_fundamentals
     from market_data import bulk_history
+    from research_peer_identity import verified_industry_candidates
+
     sector = get_stock_sector(sym)
-    if not sector or "Others" in sector:
+    exact = verified_industry_candidates(sym)
+    if exact is not None:
+        # A time-limited official basic-industry identity screen takes priority
+        # over the old heterogeneous "Retail & Lifestyle" hardcoded group.
+        if exact["expired"]:
+            logger.warning("[Report] official basic-industry peer identities expired for %s", sym)
+            return sector, []
+        candidates = list(exact["candidates"])[:max_peers]
+        cands = [symbol for symbol, _name, _url in candidates]
+        identities = {symbol: (name, url) for symbol, name, url in candidates}
+    else:
+        if not sector or "Others" in sector:
+            return sector, []
+        cands = [s for s in SECTOR_STOCKS.get(sector, []) if s != sym][:max_peers + 4]
+        identities = {}
+
+    if not cands:
         return sector, []
-    cands = [s for s in SECTOR_STOCKS.get(sector, []) if s != sym][: max_peers + 4]
+
     peers = []
     pool = ThreadPoolExecutor(max_workers=min(6, max(1, len(cands))))
     try:
@@ -309,22 +327,48 @@ def _find_peers(sym: str, max_peers: int = 5, timeout: int = 25):
         done, _ = wait(futs.keys(), timeout=timeout)
         for f in done:
             c = futs[f]
-            d = f.result()
-            if d and d.get("mcap"):
-                peers.append({"sym": c, "name": d.get("name") or c, "mcap": d["mcap"],
-                              "pe": d.get("pe"), "roe": d.get("roe")})
+            d = f.result() or {}
+            label, url = identities.get(c, (None, None))
+            # Exact peers retain identity even when a downstream financial
+            # provider fails: missing numbers are shown as dashes, not invented.
+            if d.get("mcap") or label:
+                peers.append({
+                    "sym": c,
+                    "name": d.get("name") or label or c,
+                    "mcap": d.get("mcap"),
+                    "pe": d.get("pe"),
+                    "roe": d.get("roe"),
+                    **({"industry": exact["industry"],
+                        "industry_asof": exact["observed_date"],
+                        "industry_source": url} if label else {}),
+                })
     finally:
         pool.shutdown(wait=False)
+
+    # Even a timed-out request has a documented industry identity; it may
+    # appear with N/A metrics rather than silently disappearing.
+    if identities:
+        found = {p["sym"] for p in peers}
+        for c in cands:
+            if c not in found:
+                label, url = identities[c]
+                peers.append({
+                    "sym": c, "name": label, "mcap": None, "pe": None, "roe": None,
+                    "industry": exact["industry"],
+                    "industry_asof": exact["observed_date"],
+                    "industry_source": url,
+                })
     peers.sort(key=lambda p: p["mcap"] or 0, reverse=True)
     peers = peers[:max_peers]
     if peers:
         hist = _safe(bulk_history, [p["sym"] for p in peers], "1y", default={}) or {}
         for p in peers:
             df = hist.get(p["sym"])
-            p["ret_1y"] = (round((float(df["Close"].iloc[-1]) / float(df["Close"].iloc[0]) - 1) * 100, 1)
-                           if df is not None and len(df) > 100 else None)
+            p["ret_1y"] = (
+                round((float(df["Close"].iloc[-1]) / float(df["Close"].iloc[0]) - 1) * 100, 1)
+                if df is not None and len(df) > 100 else None
+            )
     return sector, peers
-
 
 def _real_news(sym: str) -> List[str]:
     """Fail closed: plain-text search results are not dated, attributable news.
@@ -847,14 +891,25 @@ def _ownership_peers(R, story):
         story.append(P("Peer comparison withheld: no comparable peers with usable sourced "
                        "financial data were supplied; no peer valuation conclusion is made.", "tiny"))
     if peers:
-        story += section(f"Peer Comparison — {R['sector']}" if R["sector"] else "Peer Comparison",
-                         "Same-sector companies ranked by market capitalisation")
+        industry = next((p.get("industry") for p in peers if p.get("industry")), None)
+        source_asof = next((p.get("industry_asof") for p in peers if p.get("industry_asof")), None)
+        story += section(
+            f"Peer Comparison — NSE {esc(industry)}" if industry else
+            (f"Peer Comparison — {R['sector']}" if R["sector"] else "Peer Comparison"),
+            (f"Basic-industry identities checked {source_asof}; provider financials may be missing."
+             if industry else "Same broad-sector companies ranked by market capitalisation")
+        )
         hdr = [P("Company", "th"), P("Mkt cap", "thr"), P("P/E", "thr"), P("ROE %", "thr"), P("1Y return", "thr")]
         r1 = (R["t"].get("returns") or {}).get("1Y") or {}
         me = [P(f"<b>{esc(R['name'])}</b> (this stock)", "cell"), P(mcap_txt(fv.get("mcap")), "cellrb"),
               P(n(fv.get("pe"), 1), "cellrb"), P(n(fv.get("roe"), 1), "cellrb"),
               P(f"{r1['stock']:+.1f}%" if r1.get("stock") is not None else "—", "cellrb")]
         rows = [me]
+        if industry:
+            story.append(P(
+                "Peer identities follow NSE basic-industry classification, not market-cap "
+                "or business-model equivalence. Missing provider prices or ratios remain blank.",
+                "tiny"))
         for p in peers:
             rows.append([P(esc(p["name"]), "cell"), P(mcap_txt(p["mcap"]), "cellr"), P(n(p.get("pe"), 1), "cellr"),
                          P(n(p.get("roe"), 1), "cellr"), P(f"{p['ret_1y']:+.1f}%" if p.get("ret_1y") is not None else "—", "cellr")])
