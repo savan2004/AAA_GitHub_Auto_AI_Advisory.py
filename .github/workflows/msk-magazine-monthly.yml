@@ -9,12 +9,14 @@ on:
       - "scripts/msk_magazine_charts.py"
       - "scripts/msk_magazine_source_archive.py"
       - "scripts/msk_magazine_primary_sources.py"
+      - "scripts/msk_magazine_private_pilot.py"
       - "assets/msk_ai_bot_logo_recreated.png"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
       - "tests/test_msk_magazine_source_archive.py"
       - "tests/test_msk_magazine_primary_sources.py"
+      - "tests/test_msk_magazine_private_pilot.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   push:
@@ -26,12 +28,14 @@ on:
       - "scripts/msk_magazine_charts.py"
       - "scripts/msk_magazine_source_archive.py"
       - "scripts/msk_magazine_primary_sources.py"
+      - "scripts/msk_magazine_private_pilot.py"
       - "assets/msk_ai_bot_logo_recreated.png"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
       - "tests/test_msk_magazine_source_archive.py"
       - "tests/test_msk_magazine_primary_sources.py"
+      - "tests/test_msk_magazine_private_pilot.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   workflow_dispatch:
@@ -73,8 +77,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_magazine_source_archive.py' -v
       - name: Run macro and issuer source integrity tests
         run: python -m unittest discover -s tests -p 'test_msk_magazine_primary_sources.py' -v
+      - name: Test private Telegram staging gate without real sends
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_private_pilot.py' -v
       - name: Compile monthly workflow sources
-        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_source_archive.py scripts/msk_magazine_primary_sources.py
+        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_source_archive.py scripts/msk_magazine_primary_sources.py scripts/msk_magazine_private_pilot.py
       - name: Fetch and reconcile original NSE dashboard bytes
         if: github.event_name == 'pull_request'
         run: |
