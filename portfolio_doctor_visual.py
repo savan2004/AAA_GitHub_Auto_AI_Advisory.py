@@ -464,7 +464,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         subhead('QUALIFIED TECHNICAL WATCHLIST')
         candidates = peers.get('candidates') or []
         if candidates:
-            for row in candidates[:12]:
+            for row in candidates[:6]:
                 line('{} | {} | Technical score {:.0f}/100 | Close {} ({})'.format(
                     row['symbol'], row['industry'], float(row['score']),
                     money(row['close']), row['date']), 8.3, leading=13)
@@ -485,10 +485,13 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         comparisons = peers.get('comparisons') or []
         names = {c['symbol'] for c in candidates}
         shown = 0
+        # Preserve page 3 at one page even when 12+ stocks qualify; the
+        # matched peer evidence remains available to the appendix pages.
+        visible_limit = max(0, 11 - min(len(candidates), 6))
         for row in comparisons:
             if row.get('symbol') in names:
                 continue
-            if shown >= 8:
+            if shown >= visible_limit:
                 break
             line('{} | {} | Close {} | 20D {:+.1f}% | RSI14 {:.1f} ({})'.format(
                 row['symbol'], row['industry'], money(row['close']),
