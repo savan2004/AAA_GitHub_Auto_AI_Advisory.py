@@ -2121,11 +2121,14 @@ def portfolio_builder_form_text(m, text):
             safe_send(uid, "Enter a valid rupee amount, for example 1000000 (maximum 1.5 crore).")
             return True
         with _portfolio_doctor_lock:
-            if _builder_form.get(uid) is not entry or entry.get("step") != "amount":
-                safe_send(uid, "Builder session changed. Use the current form.")
-                return True
-            entry.update(amount=amount, step="risk",
-                         until=time.monotonic() + (180 if mode == "private_beta" else 300))
+            changed = (_builder_form.get(uid) is not entry
+                       or entry.get("step") != "amount")
+            if not changed:
+                entry.update(amount=amount, step="risk",
+                             until=time.monotonic() + (180 if mode == "private_beta" else 300))
+        if changed:
+            safe_send(uid, "Builder session changed. Use the current form.")
+            return True
         safe_send(uid, ("TEST MODE — " if mode == "private_beta" else "") +
                   "Step 2/3. Choose risk preference (not a suitability assessment):",
                   reply_markup=_builder_options("risk", [
