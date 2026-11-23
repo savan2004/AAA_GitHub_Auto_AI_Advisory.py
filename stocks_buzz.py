@@ -334,29 +334,37 @@ def _completed_session_frame(frame, session):
 
 
 def get_cached() -> Optional[dict]:
+    """Reuse a verified completed-session result; coalesce Neon cache misses.
+
+    Only one reader per process may query Neon at a time. Missing or failed
+    lookups are throttled for 60 seconds, never treated as valid stock data.
+    A new completed NSE session bypasses the previous session's miss.
+    """
+    completed = _last_completed_session()
+    now = time.monotonic()
     with _state_lock:
         result = _state["result"]
-        # Completed candles do not age inside the same NSE session.
-        if (result and result.get("data_session") == _last_completed_session() and
+        if (result and result.get("data_session") == completed and
                 result.get("coverage", 0) >= MIN_SCAN_COVERAGE):
             return result
-    # Render restarts wipe RAM. Reuse ONLY a verified completed-session scan
-    # produced after market close by the independent research Neon worker.
-    try:
-        from stocks_buzz_snapshot import load_verified_scan
-        result = load_verified_scan()
-        if result is not None:
-            result["coverage"] = result["downloaded"] / result["universe_size"]
-            with _state_lock:
-                _state.update(result=result, ts=time.time())
-            return result
-    except Exception as exc:
-        logger.warning("Stocks Buzz durable snapshot unavailable: %s",
-                       type(exc).__name__)
-    return None
+        if (_state.get("buzz_miss_session") == completed and
+                now - _state.get("buzz_miss_checked", -1e12) < 60):
+            return None
+        try:
+            from stocks_buzz_snapshot import load_verified_scan
+            result = load_verified_scan()
+            if result is not None:
+                result["coverage"] = result["downloaded"] / result["universe_size"]
+                _state.update(result=result, ts=time.time(), buzz_miss_session=None)
+                return result
+        except Exception as exc:
+            logger.warning("Stocks Buzz durable snapshot unavailable: %s",
+                           type(exc).__name__)
+        _state.update(buzz_miss_session=completed, buzz_miss_checked=now)
+        return None
 
-
-def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
+def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None, *,
+             save_snapshot: bool = True) -> dict:
     t0 = time.time()
     uni = get_universe()
     symbols: List[str] = uni["symbols"]
@@ -439,13 +447,16 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
         _state["ts"] = time.time()
     logger.info(f"[buzz] scan done in {result['elapsed']:.0f}s: {len(hist)}/{len(symbols)} "
                 f"downloaded, {liquid} liquid, {len(breakouts)} breakouts, {len(watch)} watch")
-    # Save only after the genuine index-wide scan passed all coverage gates.
-    try:
-        from stocks_buzz_snapshot import save_verified_scan
-        if save_verified_scan(result):
-            logger.info("MSK_BUZZ_SCAN_DURABLE session=%s", completed)
-    except Exception as exc:
-        logger.warning("MSK_BUZZ_SCAN_DURABLE_FAILED type=%s", type(exc).__name__)
+    # Live callers retain the legacy optional durable save. The scheduled
+    # worker saves once explicitly and must surface a failed Neon write.
+    if save_snapshot:
+        try:
+            from stocks_buzz_snapshot import save_verified_scan
+            if save_verified_scan(result):
+                logger.info("MSK_BUZZ_SCAN_DURABLE session=%s", completed)
+        except Exception as exc:
+            logger.warning("MSK_BUZZ_SCAN_DURABLE_FAILED type=%s",
+                           type(exc).__name__)
     return result
 
 
