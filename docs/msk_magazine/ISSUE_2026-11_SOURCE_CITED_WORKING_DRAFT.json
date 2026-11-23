@@ -131,7 +131,7 @@
       "lead": "Nifty 50 traded at an index P/E of 19.30 and price-to-book of 2.83 as at 31 October, with a reported dividend yield of 1.42%.",
       "analysis": [
         "The same dashboard reports 13.90% annualized one-year volatility and a 1.95% total-return advance in October.",
-        "TCS reported Q2 FY27 USD revenue of $7.642 billion, 2.4% higher year on year, with a 24.0% operating margin."
+        "TCS reported consolidated Q2 FY27 revenue from operations of Rs 73,188 crore in its NSE iXBRL filing, on an INR reporting basis."
       ],
       "risk_note": "TCS is an illustrative issuer filing, not a ranked recommendation; company valuation needs audited price and share-count inputs.",
       "sources": [
@@ -141,8 +141,8 @@
           "published_on": "2026-10-31"
         },
         {
-          "title": "TCS Q2 FY27 consolidated earnings release",
-          "url": "https://www.tcs.com/who-we-are/newsroom/press-release/tcs-financial-results-q2-fy-2027",
+          "title": "TCS Q2 FY27 consolidated NSE iXBRL financial filing",
+          "url": "https://nsearchives.nseindia.com/corporate/ixbrl/INTEGRATED_FILING_INDAS_200121_08102026220810_iXBRL_WEB.html",
           "published_on": "2026-10-08"
         }
       ]
@@ -188,17 +188,17 @@
     },
     {
       "page": 12,
-      "headline": "Three technology issuers, three growth paths",
-      "lead": "Q2 FY27 issuer disclosures show year-on-year USD revenue growth of 2.4% for TCS, 20.0% for Persistent Systems and 40.1% for Coforge.",
+      "headline": "Three technology issuers, different reporting bases",
+      "lead": "TCS filed Q2 FY27 consolidated revenue of Rs 73,188 crore in INR, while Persistent and Coforge reported USD revenue growth of 20.0% and 40.1% respectively.",
       "analysis": [
-        "TCS reported 24.0% operating margin; Persistent reported 15.0% EBIT margin. These are not directly comparable accounting metrics.",
-        "Coforge reported USD revenue of $652.2 million and 16.0% EBIT margin; differences in scale, acquisitions and reporting matter."
+        "NSE's TCS iXBRL filing gives INR revenue, so TCS is excluded from the USD growth comparison chart; no cross-currency growth ranking is asserted.",
+        "Persistent's USD revenue was $487.6 million; Coforge reported $652.2 million. Their margins and growth bases require separate checks."
       ],
-      "risk_note": "Company-reported figures are period-specific and not normalized for inorganic growth; this is cross-issuer research, not stock advice.",
+      "risk_note": "Different issuer reporting currencies and acquisition effects prevent a directly comparable three-stock revenue-growth ranking.",
       "sources": [
         {
-          "title": "TCS Q2 FY27 consolidated earnings release",
-          "url": "https://www.tcs.com/who-we-are/newsroom/press-release/tcs-financial-results-q2-fy-2027",
+          "title": "TCS Q2 FY27 consolidated NSE iXBRL financial filing",
+          "url": "https://nsearchives.nseindia.com/corporate/ixbrl/INTEGRATED_FILING_INDAS_200121_08102026220810_iXBRL_WEB.html",
           "published_on": "2026-10-08"
         },
         {
@@ -289,7 +289,7 @@
       "headline": "Methods, sources and publication limitations",
       "lead": "All index figures in this draft come from the NSE Indices October 2026 total-return dashboard; CPI, IIP and repo data cite official releases.",
       "analysis": [
-        "Issuer growth figures come from TCS, Persistent and Coforge's Q2 FY27 communications; they have different growth bases and currencies.",
+        "TCS consolidated INR revenue is supported by an NSE iXBRL filing; Persistent and Coforge USD figures come from separate issuer Q2 communications.",
         "Market dates, data types and source identities are disclosed; official website citations do not replace saved source bytes or human approval."
       ],
       "risk_note": "No issuer financial assessment substitutes personalized advice. Release requires logo, visual, source-byte, editorial and Telegram proof.",
