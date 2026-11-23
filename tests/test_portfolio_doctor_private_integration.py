@@ -213,6 +213,23 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(routed, [101])
 
 
+    def test_retired_capital_settings_never_reach_stock_search(self):
+        for text in ("CAPITAL=1000000 HORIZON=36", "HORIZON=36",
+                     "RISK=low", "CASH=20000", "STOCKCAP=35", "SECTORCAP=45"):
+            with self.subTest(text=text):
+                env, bot, notices = self._env(user_ids=())
+                env["API_RATE_LIMITER"] = SimpleNamespace(is_allowed=lambda uid: True)
+                env["state"] = SimpleNamespace(get=lambda uid: "analysis")
+                env["re"] = __import__("re")
+                env["os"] = os
+                env["send_symbol_menu"] = lambda *args: self.fail("retired inputs searched")
+                env["executor"] = SimpleNamespace(
+                    submit=lambda *args: self.fail("retired inputs submitted"))
+                _function("handle_text", env)(_message(101, text))
+                self.assertTrue(notices)
+                self.assertIn("retired Builder settings", notices[-1][1])
+                self.assertFalse(bot.sent)
+
     def test_missing_owner_session_recovers_only_authorized_private_tester(self):
         """A restart-lost session must not redirect the owner's five holdings."""
         raw = "BEL 10 100\\nreliance 50 800\\nsbin 150 865.5\\nDLF 500 458\\nSJVN 40000 15"
