@@ -206,7 +206,7 @@ class BuilderRetirementTests(unittest.TestCase):
         }):
             ns2["handle_text"](msg2("CAPITAL=100000 HORIZON=36 RISK=medium"))
         self.assertIn("automatic Builder is not yet available", sent2[-1][1])
-        self.assertNotIn("stock search was started", sent2[-1][1]) is False
+        self.assertIn("No stock search was started.", sent2[-1][1])
 
     def test_production_source_contains_no_customer_step_four_or_manual_worker(self):
         self.assertNotIn("Step 4/5 — Type 1–5 symbols", SOURCE)
