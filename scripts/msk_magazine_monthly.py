@@ -31,6 +31,7 @@ from reportlab.pdfgen import canvas
 
 IST = ZoneInfo("Asia/Kolkata")
 DEFAULT_MASTER = Path(__file__).resolve().parents[1] / "docs/msk_magazine/LOCKED_DESIGN3_INDEX_MASTER.json"
+RECREATED_LOGO = Path(__file__).resolve().parents[1] / "assets/msk_ai_bot_logo_recreated.png"
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 SHA_RE = re.compile(r"^[a-f0-9]{64}$")
 OFFICIAL_HOSTS = {
@@ -232,7 +233,7 @@ def _wrapped(c, x, y, value, *, size=9, max_width=465,
 
 def _logo(c, x=45, y=777, logo_file: Path | None = None):
     if logo_file is not None and logo_file.is_file():
-        c.drawImage(str(logo_file), x, y - 7, width=95, height=40,
+        c.drawImage(str(logo_file), x, y - 7, width=177, height=59,
                     preserveAspectRatio=True, anchor="c", mask="auto")
         return True
     # Do not pretend a substitute logo is an approved original logo.
@@ -400,6 +401,13 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     editorial = (load_editorial_pack(editorial_pack, issue,
                                    as_of=now.astimezone(IST).date())
                  if editorial_pack is not None else {})
+    # Use the user's clean recreated MSK logo in authored previews, without
+    # falsely claiming that a recovered original asset was authenticated.
+    rendered_logo = logo_file
+    logo_source = "EXPLICIT_LOGO_FILE" if logo_file is not None else "NONE"
+    if rendered_logo is None and editorial and RECREATED_LOGO.is_file():
+        rendered_logo = RECREATED_LOGO
+        logo_source = "RECREATED_FROM_USER_REFERENCE_NOT_FINAL_APPROVED"
     market_data = load_metrics(market_pack, issue) if market_pack is not None else None
     if market_data and date.fromisoformat(market_data["as_of"]) > now.astimezone(IST).date():
         raise MagazineError("Future-dated market research is prohibited")
@@ -421,7 +429,7 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         c.setFillColor(HexColor(WHITE))
         c.rect(0, 0, *A4, fill=1, stroke=0)
         if n == 1:
-            _cover(c, issue, logo_file, market_data)
+            _cover(c, issue, rendered_logo, market_data)
         elif n == 2:
             _index(c, issue, index, market_data)
         elif n == 16:
@@ -466,7 +474,9 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
               "chart_pages_with_dated_evidence": 14 if market_data else 0,
               "market_reference_url": market_data["market_source"]["url"] if market_data else None,
               "market_reference_date": market_data["market_source"]["report_date"] if market_data else None,
-              "source_failures": failures, "logo_asset_provided": bool(logo_file and logo_file.is_file()),
+              "source_failures": failures, "logo_asset_provided": bool(rendered_logo and rendered_logo.is_file()),
+              "logo_source": logo_source,
+              "original_logo_authenticated": False,
               "mechanical_pdf_checks": qa, "editorial_approved": False,
               "publication_allowed": False, "pages": pages}
     (dest / "release_gate.json").write_text(
