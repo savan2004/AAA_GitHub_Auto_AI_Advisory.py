@@ -1746,10 +1746,13 @@ def portfolio_doctor_document(m, _typed_payload=None):
 # The public automatic Builder is gated on approved research evidence.
 # Its only active input flow is the owner-only, fictional V2 preview.
 def _builder_allowed(m):
-    """Only private one-to-one Telegram chats; no permission escalation for /doctor."""
-    uid = getattr(getattr(m, "from_user", None), "id", None)
-    return (getattr(getattr(m, "chat", None), "type", None) == "private"
-            and type(uid) is int and uid > 0 and uid == m.chat.id)
+    """Only private one-to-one Telegram chats; safely reject malformed updates."""
+    chat = getattr(m, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    actor_id = getattr(getattr(m, "from_user", None), "id", None)
+    return (getattr(chat, "type", None) == "private"
+            and type(chat_id) is int and chat_id > 0
+            and type(actor_id) is int and actor_id == chat_id)
 
 
 _builder_form = {}
