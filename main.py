@@ -1986,59 +1986,90 @@ def send_private_builder_beta(uid, entry, horizon):
 
 
 def portfolio_builder_option(call, value):
-    """Only the owner-only fictional preview may consume Builder callbacks.
+    """Consume only an active, session-bound private Builder risk/horizon click.
 
-    Old inline keyboards can live indefinitely in Telegram chats.  Never
-    interpret a callback without an active authorized V2 preview session.
+    Preview callbacks have no session token, while approved customer callbacks
+    require the current random token; never revive an old manual wizard.
     """
     uid = getattr(getattr(call, "from_user", None), "id", None)
     chat = getattr(getattr(call, "message", None), "chat", None)
-    if chat is None or chat.type != "private" or type(uid) is not int or uid != chat.id:
+    if (chat is None or getattr(chat, "type", None) != "private"
+            or type(uid) is not int or uid != getattr(chat, "id", None)):
         return
 
     from msk_ai_builder_telegram import preview_allowed
-    stage, _, option = value.partition("|")
+    stage, _, tail = value.partition("|")
+    option, _, token = tail.partition("|")
     with _portfolio_doctor_lock:
         entry = _builder_form.get(uid)
-        if (not entry or entry.get("mode") != "private_beta"
-                or entry.get("until", 0) <= time.monotonic()
-                or not preview_allowed(uid)):
+        mode = entry.get("mode") if entry else None
+        if not entry or entry.get("until", 0) <= time.monotonic():
             _builder_form.pop(uid, None)
             next_step = "retired"
-        elif stage == "risk" and entry.get("step") == "risk" and option in ("low", "medium", "high"):
-            entry.update(risk=option, step="horizon", until=time.monotonic() + 180)
-            next_step = "horizon"
-        elif stage == "horizon" and entry.get("step") == "horizon" and option in ("6", "18", "36", "60"):
-            next_step = "private_beta"
+        elif mode == "automatic":
+            if not token or token != entry.get("token"):
+                # Do not allow a stale Telegram button to cancel a new session.
+                next_step = "stale"
+            elif stage == "risk" and entry.get("step") == "risk" and option in ("low", "medium", "high"):
+                entry.update(risk=option, step="horizon", until=time.monotonic() + 300)
+                next_step = "horizon"
+            elif stage == "horizon" and entry.get("step") == "horizon" and option in ("6", "18", "36", "60"):
+                next_step = "automatic"
+            else:
+                next_step = "invalid"
+        elif mode == "private_beta" and preview_allowed(uid):
+            if token:
+                next_step = "stale"
+            elif stage == "risk" and entry.get("step") == "risk" and option in ("low", "medium", "high"):
+                entry.update(risk=option, step="horizon", until=time.monotonic() + 180)
+                next_step = "horizon"
+            elif stage == "horizon" and entry.get("step") == "horizon" and option in ("6", "18", "36", "60"):
+                next_step = "private_beta"
+            else:
+                next_step = "invalid"
         else:
-            next_step = "invalid"
+            _builder_form.pop(uid, None)
+            next_step = "retired"
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-    if next_step == "private_beta":
+    if next_step == "automatic":
+        send_automatic_builder(uid, entry, option)
+    elif next_step == "private_beta":
         send_private_builder_beta(uid, entry, option)
     elif next_step == "horizon":
-        safe_send(uid, "TEST MODE — Step 3/3. Select time frame:",
+        testing = mode == "private_beta"
+        safe_send(uid, ("TEST MODE — " if testing else "") +
+                  "Step 3/3. Select investment horizon:",
                   reply_markup=_builder_options("horizon", [
                       ("6 months", "6"), ("18 months", "18"),
-                      ("36 months", "36"), ("60 months", "60")]))
+                      ("36 months", "36"), ("60 months", "60")],
+                      token=None if testing else entry["token"]))
+    elif next_step == "stale":
+        safe_send(uid, "That Builder button belongs to an earlier session. "
+                  "Use the latest risk/horizon buttons or /cancel.")
     elif next_step == "retired":
         safe_send(uid, "This old Builder button has expired. Automatic research baskets "
-                  "are not yet available. Use Portfolio Doctor for existing holdings.")
+                  "are not yet available without approved source evidence. "
+                  "Use Portfolio Doctor for existing holdings.")
     else:
-        safe_send(uid, "Invalid preview choice. Tap the current preview buttons or /cancel.")
-
+        safe_send(uid, "Invalid Builder choice. Tap the current buttons or /cancel.")
 
 
 def portfolio_builder_form_text(m, text):
-    """Consume only authorized fictional V2 preview input; retire legacy state."""
+    """Only amount is typed; risk/horizon arrive via authenticated buttons.
+
+    Never accept stock symbols, percentage allocations, hand-entered risk
+    scores, or retired multi-field Builder commands.
+    """
     uid = m.chat.id
     with _portfolio_doctor_lock:
         entry = _builder_form.get(uid)
         if entry is None:
             return False
-        retired = entry.get("mode") != "private_beta"
+        mode = entry.get("mode")
+        retired = mode not in ("private_beta", "automatic")
         expired = entry.get("until", 0) <= time.monotonic()
         if retired or expired:
             _builder_form.pop(uid, None)
@@ -2049,50 +2080,68 @@ def portfolio_builder_form_text(m, text):
                   "Do not send symbols or allocation percentages.")
         return True
     if expired:
-        safe_send(uid, "Preview session expired. Use /builder_v2_preview if authorized.")
+        safe_send(uid, ("Preview" if mode == "private_beta" else "Builder") +
+                  " session expired. Open a fresh session.")
         return True
     if processing:
         safe_send(uid, "A private report is already being processed.")
         return True
-
-    from msk_ai_builder_telegram import preview_allowed
-    if not _builder_allowed(m) or not preview_allowed(uid):
+    if not _builder_allowed(m):
         with _portfolio_doctor_lock:
             if _builder_form.get(uid) is entry:
                 _builder_form.pop(uid, None)
-        safe_send(uid, "Private Beta is unavailable.")
+        safe_send(uid, "The Builder session is unavailable outside private chat.")
+        return True
+
+    if mode == "private_beta":
+        from msk_ai_builder_telegram import preview_allowed
+        allowed = preview_allowed(uid)
+    else:
+        from msk_ai_builder_automatic import automatic_available
+        allowed = automatic_available()
+    if not allowed:
+        with _portfolio_doctor_lock:
+            if _builder_form.get(uid) is entry:
+                _builder_form.pop(uid, None)
+        safe_send(uid, "Private Beta is unavailable." if mode == "private_beta" else
+                  "Verified research is no longer available. No portfolio was generated.")
         return True
 
     if text.strip().lower() in ("/cancel", "cancel"):
         with _portfolio_doctor_lock:
             if _builder_form.get(uid) is entry:
                 _builder_form.pop(uid, None)
-        safe_send(uid, "Preview cancelled. No details saved.")
+        safe_send(uid, "Builder session cancelled. No details saved.")
         return True
 
     step = entry.get("step")
     if step == "amount":
         amount = text.strip().replace(",", "")
         if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= 15000000:
-            safe_send(uid, "Enter a valid rupee amount, like 1000000.")
+            safe_send(uid, "Enter a valid rupee amount, for example 1000000 (maximum 1.5 crore).")
             return True
-        entry.update(amount=amount, step="risk", until=time.monotonic() + 180)
-        safe_send(uid, "TEST MODE — Step 2/3. Choose risk preference (not a suitability assessment):",
+        with _portfolio_doctor_lock:
+            if _builder_form.get(uid) is not entry or entry.get("step") != "amount":
+                safe_send(uid, "Builder session changed. Use the current form.")
+                return True
+            entry.update(amount=amount, step="risk",
+                         until=time.monotonic() + (180 if mode == "private_beta" else 300))
+        safe_send(uid, ("TEST MODE — " if mode == "private_beta" else "") +
+                  "Step 2/3. Choose risk preference (not a suitability assessment):",
                   reply_markup=_builder_options("risk", [
-                      ("Low", "low"), ("Medium", "medium"), ("High", "high")]))
+                      ("Low", "low"), ("Medium", "medium"), ("High", "high")],
+                      token=None if mode == "private_beta" else entry["token"]))
         return True
     if step in ("risk", "horizon"):
-        safe_send(uid, "Please tap a choice on the previous preview message.")
+        safe_send(uid, "Please tap a choice on the latest risk/horizon message.")
         return True
 
-    # Includes all old stocks/limits states: never parse or generate a PDF.
     with _portfolio_doctor_lock:
         if _builder_form.get(uid) is entry:
             _builder_form.pop(uid, None)
     safe_send(uid, "This old Builder step is no longer available. "
-              "No stocks or allocations were processed.")
+              "No stock symbols or allocations were processed.")
     return True
-
 
 
 @bot.message_handler(commands=["doctor_builder"])
