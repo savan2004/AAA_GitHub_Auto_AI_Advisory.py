@@ -46,7 +46,9 @@ def decode_incomplete_diagnostic(raw, requested_holdings):
             not 1 <= len(requested_holdings) <= 5):
         return {}
     allowed = [h.get("symbol") for h in requested_holdings if isinstance(h, dict)]
-    if len(allowed) != len(requested_holdings):
+    if (len(allowed) != len(requested_holdings)
+            or any(not isinstance(symbol, str) for symbol in allowed)
+            or len(set(allowed)) != len(allowed)):
         return {}
     try:
         data = json.loads(raw)
