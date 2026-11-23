@@ -68,7 +68,7 @@ class ResearchFailureDiagnostics(unittest.TestCase):
             MEMBER, snap, listing=listing, download=download, clock=lambda: NOW)
         self.assertEqual(result["status"], "FILING_FINANCIAL_LAYOUT")
         self.assertEqual(result["stage"], "PARSER_LAYOUT")
-        self.assertIn("source", result["next_action"])
+        self.assertIn("income-statement", result["next_action"])
 
     def test_reason_codes_never_echo_secrets_or_raw_exceptions(self):
         suspect = EvidenceError("https://example.org/private?api_key=should-never-print")
