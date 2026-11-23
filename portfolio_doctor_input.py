@@ -52,8 +52,6 @@ def looks_like_holdings_text(text):
                 continue
             symbol = cells[0].strip().upper().removeprefix("NSE:").removeprefix("BSE:")
             symbol = symbol.removesuffix(".NS").removesuffix(".BO")
-            if not bse:
-                symbol = _NSE_CANONICAL_ALIASES.get(symbol, symbol)
             if not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol):
                 continue
             # Either numeric column is enough to recognise malformed holdings.
@@ -165,6 +163,8 @@ def decode_holdings(filename, payload):
                 raise InputRejected()
             symbol = raw_symbol.removeprefix("NSE:").removeprefix("BSE:")
             symbol = symbol.removesuffix(".NS").removesuffix(".BO")
+            if not bse:
+                symbol = _NSE_CANONICAL_ALIASES.get(symbol, symbol)
             if not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol) or symbol in seen:
                 raise InputRejected()
             item = {"symbol": symbol, "qty": _positive(row[1]), "buy": _positive(row[2])}
