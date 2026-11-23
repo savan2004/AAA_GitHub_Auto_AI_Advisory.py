@@ -36,6 +36,8 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install requests==2.32.3 pandas==2.2.2 numpy==1.26.4 yfinance==0.2.61 curl_cffi==0.7.4 'psycopg[binary]>=3.2,<3.4'
       - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_filings.py' -v
+      - name: Verify issuer BANKING source arithmetic and disclosed-excise reconciliation
+        run: python -m unittest discover -s tests -p 'test_msk_ai_builder_bank_accounting.py' -v
       - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_discovery.py' -v
       - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_quarter_check.py' -v
       - name: Rehearse refresh against real public sources and disposable PostgreSQL
