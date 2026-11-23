@@ -8,7 +8,10 @@ import unittest
 
 import pandas as pd
 
-from research_filing_evidence import _period, reconcile_official_quarter
+from research_filing_evidence import (
+    _period, reconcile_official_quarter, annual_exchange_comparison,
+    official_four_quarter_eps,
+)
 from research_engine import _date_aligned_returns, secondary_trailing_eps
 
 
@@ -69,6 +72,34 @@ class NSEQuarterEvidenceTests(unittest.TestCase):
         self.assertEqual(reconcile_official_quarter(
             "STRONGCO", {"quarters": qs})["status"], "not_registered")
 
+    def test_audited_fy26_annual_three_field_cross_check(self):
+        source = {"years": [
+            {"label": "Mar 2026", "revenue": 68821, "net_profit": 2970,
+             "eps": 45.56}
+        ]}
+        audited = annual_exchange_comparison("DMART", source)
+        self.assertEqual(audited["status"], "core_match")
+        self.assertEqual(audited["revenue"], 68820.74)
+        self.assertEqual(audited["net_profit"], 2969.86)
+        self.assertEqual(audited["eps"], 45.65)
+        self.assertEqual(audited["secondary_eps"], 45.56)
+        self.assertAlmostEqual(audited["eps_difference"], -0.09, places=2)
+        self.assertEqual(audited["assurance"], "audited")
+        self.assertEqual(audited["de"], 0.10)
+        self.assertIn("api.dmartindia.com", audited["source_url"])
+        bad = {"years": [
+            {"label": "Mar 2026", "revenue": 68821, "net_profit": 111, "eps": 45.56}
+        ]}
+        self.assertEqual(annual_exchange_comparison("DMART", bad)["status"], "mismatch")
+        self.assertEqual(annual_exchange_comparison(
+            "DMART", {"years": []})["status"], "period_not_comparable")
+        self.assertEqual(annual_exchange_comparison("STRONGCO", source)["status"], "not_registered")
+
+    def test_four_official_quarterly_basic_eps_are_primary_sourced(self):
+        self.assertEqual(official_four_quarter_eps("DMART", "2026-09-30"), 47.84)
+        self.assertIsNone(official_four_quarter_eps("DMART", "2026-12-31"))
+        self.assertIsNone(official_four_quarter_eps("STRONGCO", "2026-09-30"))
+
     def test_trailing_eps_from_four_consecutive_reported_quarters(self):
         eps = secondary_trailing_eps(self.quarters(), last_price=3406.80,
                                     trailing_pe=71.20)
@@ -109,7 +140,15 @@ class NSEQuarterEvidenceTests(unittest.TestCase):
         data = strong(sym="DMART", name="Avenue Supermarts Limited")
         data["sector"] = "Retail & Lifestyle"
         data["stm"]["quarters"][-1].update(self.quarters()[-1])
+        data["stm"]["years"][-1].update({
+            "revenue": 68821, "net_profit": 2970, "eps": 45.56
+        })
+        last_close = float(data["df"]["Close"].iloc[-1])
+        data["fund"]["pe"] = round(last_close / 47.84, 2)
         assembled = rg.assemble(data, use_ai=False)
+        self.assertEqual(assembled["annual_evidence"]["status"], "core_match")
+        self.assertEqual(assembled["fv"]["eps"], 47.84)
+        self.assertIn("sum of four reported basic", assembled["fv"]["eps_basis"])
         self.assertEqual(assembled["filing_evidence"]["status"], "partial_match")
         self.assertTrue(any("cash conversion" in r["title"].lower()
                             for r in assembled["flags"]["risks"]))
@@ -124,6 +163,9 @@ class NSEQuarterEvidenceTests(unittest.TestCase):
             self.assertIn("Operating KPIs, Sep 2026", content)
             self.assertIn("Half-year cash flow", content)
             self.assertIn("field-level comparison", content)
+            self.assertIn("Audited FY26 basic EPS", content)
+            self.assertIn("47.84", content)
+            self.assertIn("45.65", content)
 
     def test_benchmark_returns_share_exact_completed_closing_dates(self):
         dates = pd.bdate_range(end="2026-11-20", periods=247)
