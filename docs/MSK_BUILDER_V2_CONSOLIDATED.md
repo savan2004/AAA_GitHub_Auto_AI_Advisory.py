@@ -62,3 +62,32 @@ production registry. The sample tests deliberately mock the trusted release
 boundary to exercise the mathematical/PDF implementation.
 
 Step 1 remains **BLOCKED on real issuer-primary audits**, not complete.
+
+## Real-data audit: former weekly collector PR #233
+
+The GitHub Actions `rehearsal` run
+[`45001236453`](https://github.com/savan2004/AAA_GitHub_Auto_AI_Advisory.py/actions/runs/45001236453)
+produced the following **nonpublishable** evidence on 22 November 2026:
+
+- 40 symbols attempted; 20 companies saved as **INTERNAL_SECONDARY_STAGING**.
+- **15 / 20** had a latest-September-quarter *numeric comparison only*
+  against a fetched NSE iXBRL filing.
+- The other **5** were withheld with the following exact failure reasons:
+  `COFORGE=FILING_METADATA_TIME` (revised filing),
+  `ICICIBANK=FILING_URL_INVALID` (banking iXBRL layout),
+  `MCX=FILING_METADATA_COVERAGE`,
+  `BANKBARODA=FILING_URL_INVALID` (banking iXBRL layout), and
+  `RELIANCE=QUARTER_CHECK_VALUE_MISMATCH`.
+- Four nonselected symbols (`ETERNAL`, `KALYANKJIL`, `LICI`,
+  `MEESHO`) separately reported `INVALID_PERIOD_LABEL`.
+- The run failed the enforced all-20 comparison target:
+  `AssertionError: Full 20-company quarterly numeric reconciliation target not met`.
+
+**Do not weaken or bypass these failures.** Banking-specific and revised
+filings require template-aware extraction and latest-revision checks; numeric
+mismatches require a source-definition reconciliation. More importantly,
+**15 numerical matches do not equal 15 verified stock recommendations**:
+the collector explicitly says profit-definition equivalence, five annual and
+eight quarterly primary periods, full adjusted EOD prices, corporate actions
+and regulatory publication approval are not certified. No approved batch or
+customer-eligible recommendations have been created.
