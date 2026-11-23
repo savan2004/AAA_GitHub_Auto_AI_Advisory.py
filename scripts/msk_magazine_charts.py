@@ -63,10 +63,19 @@ def load_metrics(path: Path, issue: str) -> dict:
         if not isinstance(v, (float, int)) or not math.isfinite(v) or abs(v)>100:
             raise ResearchMetricError("Invalid sector return")
     for row in issuers:
-        if not isinstance(row.get("usd_revenue_yoy_pct"),(int,float)):
-            raise ResearchMetricError("Invalid issuer revenue growth")
         if urlsplit(row.get("url","")).scheme != "https":
             raise ResearchMetricError("Issuer source must use HTTPS")
+        if row.get("name") == "TCS":
+            if (row.get("reporting_currency") != "INR"
+                    or row.get("reported_revenue_inr_crore") != 73188
+                    or row.get("usd_comparable") is not False
+                    or "nsearchives.nseindia.com/corporate/ixbrl/" not in row["url"]):
+                raise ResearchMetricError("TCS requires official consolidated INR-only NSE figures")
+        elif (row.get("reporting_currency") != "USD"
+              or not isinstance(row.get("usd_revenue_yoy_pct"), (int, float))
+              or isinstance(row.get("usd_revenue_yoy_pct"), bool)
+              or not math.isfinite(row["usd_revenue_yoy_pct"])):
+            raise ResearchMetricError("Invalid comparable USD issuer revenue growth")
     return pack
 
 
@@ -175,9 +184,11 @@ def draw_research_chart(c, page: int, pack: dict):
             ("Dividend yield",f'{r["dy"]:.2f}%',"As at 31 Oct")],
             title=name.upper()+" - VALUATION & RISK SNAPSHOT")
     elif page==12:
+        # TCS original NSE filing is INR-only; comparing it against
+        # USD YoY growth would silently mix currencies and conventions.
         _bars(c,[{"name":r["name"],"value":r["usd_revenue_yoy_pct"]}
-                 for r in pack["issuer_results"]],
-              title="ISSUER Q2 FY27 REVENUE GROWTH YOY - USD REPORTED")
+                 for r in pack["issuer_results"] if r.get("reporting_currency") == "USD"],
+              title="Q2 FY27 USD YOY GROWTH - TCS INR FILING EXCLUDED")
     elif page==13:
         m={x["name"]:x for x in pack["macro"]}
         _tiles(c,[
