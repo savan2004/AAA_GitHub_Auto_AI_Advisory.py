@@ -256,9 +256,8 @@ def score_symbol_weighted(sym, name, df=None):
         df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
         if len(df) < 55:
             return None
-        weekly_close = df["Close"].resample("W-FRI").last().dropna()
-        weekly_data = (pd.DataFrame({"Close": weekly_close})
-                       if len(weekly_close) >= 10 else None)
+        from msk_chart_context import completed_weekly_reference
+        weekly_data = completed_weekly_reference(df)
         cutoff = df.index.max() - pd.DateOffset(months=6)
         data = df.loc[df.index >= cutoff].copy()
         if len(data) < 55:
@@ -734,26 +733,13 @@ if len(data) < 55:
     print(f"[ERROR] Insufficient completed daily data for {symbol}", file=sys.stderr)
     sys.exit(1)
 
-# Weekly trend derives from genuine DAILY closes using Friday week-end; a
-# manual chart keeps its existing 1-year weekly provider request.
-if auto_history is not None:
-    weekly_close = data["Close"].resample("W-FRI").last().dropna()
-    weekly_data = (pd.DataFrame({"Close": weekly_close})
-                   if len(weekly_close) >= 10 else None)
-    if CHART_PERIOD == "6mo":
-        cutoff = data.index.max() - pd.DateOffset(months=6)
-        data = data.loc[data.index >= cutoff].copy()
-else:
-    try:
-        weekly_data = yf.download(symbol, period="1y", interval="1wk",
-                                  progress=False, auto_adjust=True)
-        if isinstance(weekly_data.columns, pd.MultiIndex):
-            weekly_data.columns = weekly_data.columns.get_level_values(0)
-        weekly_data = weekly_data.dropna(subset=["Close"])
-        if len(weekly_data) < 5:
-            weekly_data = None
-    except Exception:
-        weekly_data = None
+# Reuse the same source-validated daily history for the weekly picture.
+# A still-forming Mon-Thu weekly candle must never count as completed.
+from msk_chart_context import completed_weekly_reference
+weekly_data = completed_weekly_reference(data)
+if auto_history is not None and CHART_PERIOD == "6mo":
+    cutoff = data.index.max() - pd.DateOffset(months=6)
+    data = data.loc[data.index >= cutoff].copy()
 
 # Auto-chart uses verified price-derived metrics instead of blocking on
 # optional, potentially slow company-info HTTP requests. Manual behavior
