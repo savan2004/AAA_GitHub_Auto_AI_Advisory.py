@@ -899,7 +899,7 @@ tv_style = mpf.make_mpf_style(
 hc = [TV_GREEN if v >= 0 else TV_RED for v in hist.fillna(0)]
 
 from datetime import datetime
-today    = datetime.now().strftime("%d %b %Y")
+today    = expected_eod  # Explicitly the completed EOD candle, not wall-clock today.
 ticker   = symbol.replace(".NS","").replace(".BO","")
 chg_icon = "▲" if change_pct >= 0 else "▼"
 title    = f"{ticker}  |  {company_name}  |  ₹{last_close:,.2f}  {chg_icon} {change_pct:+.2f}%  |  {today}"
@@ -1056,7 +1056,7 @@ try:
     header.add_patch(FancyBboxPatch((0.15,0.15), 0.22, 0.70,
         boxstyle="round,pad=0.02", fc=price_bg, ec=price_col, lw=1.0, zorder=5))
     header.text(0.17, 0.58, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center", zorder=8)
-    header.text(0.17, 0.24, f"{chg_icon} {change_pct:+.2f}%  Today", fontsize=7.5, color=price_col, va="center", zorder=8)
+    header.text(0.17, 0.24, f"{chg_icon} {change_pct:+.2f}%  vs prior EOD", fontsize=7.5, color=price_col, va="center", zorder=8)
     pills = []
     if _mcap_str: pills.append(("MCap", _mcap_str))
     if _pe_str:   pills.append(("",     _pe_str))
