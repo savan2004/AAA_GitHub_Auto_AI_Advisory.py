@@ -32,9 +32,9 @@ class DeepRepairTests(unittest.TestCase):
         self.assertEqual(doctor._rsi(list(range(1,31))), 100)
         self.assertEqual(doctor._rsi(list(range(30,0,-1))), 0)
 
-    def test_xlsx_extra_holding_below_old_row_limit_is_rejected(self):
+    def test_xlsx_eleventh_holding_below_row_limit_is_rejected(self):
         rows = [["Symbol","Qty","Buy Price"]]
-        rows += [["SAMPLE" + str(i), 2, 100] for i in range(5)]
+        rows += [["SAMPLE" + str(i), 2, 100] for i in range(10)]
         rows += [[None,None,None]] * 5
         rows += [["EXTRA",1,100]]
         with self.assertRaises(doctor.PortfolioDoctorError) as error:
@@ -52,7 +52,7 @@ class DeepRepairTests(unittest.TestCase):
     def test_xlsx_undeclared_dimensions_do_not_hide_rows(self):
         from zipfile import ZipFile, ZIP_DEFLATED
         import re
-        original = xlsx([["SAMPLE" + str(i),1,100] for i in range(6)])
+        original = xlsx([["SAMPLE" + str(i),1,100] for i in range(11)])
         output = io.BytesIO()
         with ZipFile(io.BytesIO(original)) as source, ZipFile(output,"w",ZIP_DEFLATED) as target:
             for name in source.namelist():

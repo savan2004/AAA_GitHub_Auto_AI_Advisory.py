@@ -9,7 +9,7 @@ from datetime import datetime
 from portfolio_doctor_calculations import _ema, _rsi
 from portfolio_doctor_live import IST, verified_completed_daily_frame
 
-MAX_COMPANIES = 5
+MAX_COMPANIES = 10
 MAX_CHART_DAYS = 160
 
 

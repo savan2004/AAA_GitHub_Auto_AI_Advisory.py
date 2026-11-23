@@ -57,7 +57,7 @@ class InputTests(unittest.TestCase):
             b"SAMPLEA -2 120",
             b"SAMPLEA 7 nan",
             b"SAMPLEA 7 0",
-            b"SAMPLEA 7 120\nSAMPLEB 8 230\nSAMPLEC 9 340\nA 1 2\nB 2 3\nC 3 4",
+            b"\n".join("SAMPLE{:02d} 1 100".format(i).encode() for i in range(11)),
             b"Symbol,Qty,Buy Price\nINVALID? 2 3",
         ]
         for raw in cases:

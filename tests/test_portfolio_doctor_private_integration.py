@@ -73,6 +73,7 @@ class SessionTests(unittest.TestCase):
             "_doctor_allowed": lambda m: True,
             "_builder_form": {},
             "portfolio_builder_form_text": lambda m, text: False,
+            "_send_doctor_csv_template": lambda uid: True,
             "safe_send": lambda uid, msg: notices.append((uid, msg)),
             "bot": bot, "executor": executor or SimpleNamespace(submit=lambda fn: fn()),
             "logger": logging.getLogger("doctor-private-test"),
