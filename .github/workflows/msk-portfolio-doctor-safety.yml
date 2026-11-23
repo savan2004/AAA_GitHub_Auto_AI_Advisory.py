@@ -24,6 +24,7 @@ on:
       - 'portfolio_doctor_visual.py'
       - 'tests/test_portfolio_doctor_diagnostics.py'
       - 'tests/test_portfolio_doctor_peers.py'
+      - 'tests/test_portfolio_doctor_v3_upgrades.py'
       - 'tests/test_portfolio_doctor_rewrite.py'
       - 'tests/test_portfolio_doctor_cleanup.py'
       - 'tests/test_portfolio_doctor_deep_repair.py'
@@ -69,6 +70,8 @@ jobs:
 
       - name: Test redesigned four-page report and verified peers
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_visual.py' -v
+      - name: Test private 10-page handoff, weighted data, exact flags and high-weight peer coverage
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_v3_upgrades.py' -v
 
       - name: Test complete standalone audit metrics and 10-14 page PDF offline
         run: python portfolio_audit_report.py --test
