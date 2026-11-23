@@ -139,10 +139,11 @@
     {
       "name": "TCS",
       "quarter": "Q2 FY27",
-      "usd_revenue_yoy_pct": 2.4,
-      "reported_revenue_usd_m": 7642,
       "published_on": "2026-10-08",
-      "url": "https://www.tcs.com/who-we-are/newsroom/press-release/tcs-financial-results-q2-fy-2027"
+      "url": "https://nsearchives.nseindia.com/corporate/ixbrl/INTEGRATED_FILING_INDAS_200121_08102026220810_iXBRL_WEB.html",
+      "reporting_currency": "INR",
+      "reported_revenue_inr_crore": 73188,
+      "usd_comparable": false
     },
     {
       "name": "Persistent Systems",
@@ -150,7 +151,8 @@
       "usd_revenue_yoy_pct": 20,
       "reported_revenue_usd_m": 487.6,
       "published_on": "2026-10-15",
-      "url": "https://www.persistent.com/media/press-releases/q2-fy27-results/"
+      "url": "https://www.persistent.com/media/press-releases/q2-fy27-results/",
+      "reporting_currency": "USD"
     },
     {
       "name": "Coforge",
@@ -158,7 +160,8 @@
       "usd_revenue_yoy_pct": 40.1,
       "reported_revenue_usd_m": 652.2,
       "published_on": "2026-10-23",
-      "url": "https://news.coforge.com/newsroom/press-release/coforge-delivers-an-outstanding-performance-revenue-growth-536-yoy-raises-ebit-margin-guidance-for-the-year?hs_amp=true"
+      "url": "https://news.coforge.com/newsroom/press-release/coforge-delivers-an-outstanding-performance-revenue-growth-536-yoy-raises-ebit-margin-guidance-for-the-year?hs_amp=true",
+      "reporting_currency": "USD"
     }
   ],
   "calendar": [
@@ -177,5 +180,6 @@
       "event": "November CPI release (scheduled)",
       "source": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3"
     }
-  ]
+  ],
+  "issuer_comparison_basis": "Only Persistent Systems and Coforge have USD YoY growth plotted; TCS NSE iXBRL is INR-only and excluded from USD bars."
 }
