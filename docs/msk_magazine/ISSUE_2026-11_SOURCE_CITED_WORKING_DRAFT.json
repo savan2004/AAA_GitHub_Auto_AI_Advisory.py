@@ -5,14 +5,19 @@
   "pages": [
     {
       "page": 3,
-      "headline": "Higher inflation raises the bar for market conviction",
-      "lead": "October consumer inflation and the RBI's policy tightening require investors to separate headline price moves from verified earnings and cash flows.",
+      "headline": "October index performance diverged sharply",
+      "lead": "NSE Indices' October total-return dashboard records Nifty 50 up 1.95%, Nifty 500 down 0.75%, Midcap 150 down 3.69% and Smallcap 250 down 5.78%.",
       "analysis": [
-        "An interest-rate increase changes the discount-rate backdrop; sector conclusions still need dated valuations and company disclosures.",
-        "The October CPI release is provisional. Any claimed market reaction must be backed by actual NSE close-to-close data."
+        "The 2.70 percentage-point gap between Nifty 50 and Nifty 500 suggests weaker performance beyond the headline large-cap index.",
+        "RBI raised its repo rate to 5.50% on 7 October; October CPI later reached 6.09% year on year, complicating the equity discount-rate backdrop."
       ],
-      "risk_note": "Do not interpret this macro summary as a market direction forecast or portfolio instruction.",
+      "risk_note": "October data are completed-month returns, not November-to-date or forecast returns. None of these figures is an investment signal.",
       "sources": [
+        {
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
+        },
         {
           "title": "RBI monetary policy resolution 7 October 2026",
           "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
@@ -27,13 +32,13 @@
     },
     {
       "page": 4,
-      "headline": "Growth and inflation must be read together",
-      "lead": "MoSPI reported October CPI inflation of 6.09% and September industrial-production growth of 6.7%; the periods are different and must not be mixed.",
+      "headline": "Price pressure and policy tightening meet",
+      "lead": "MoSPI's October CPI showed 6.09% year-on-year inflation, with food inflation at 8.94%; September industrial production grew 6.7%.",
       "analysis": [
-        "October food-price inflation was 8.94%, raising household cost pressure; consumer-company margins need issuer-level checks.",
-        "The RBI raised the policy repo rate to 5.50% in October; review borrowing costs alongside demand and industrial output."
+        "The RBI's October MPC raised the policy repo rate from 5.25% to 5.50%. That is a 25-basis-point change, not a 25% rate increase.",
+        "Compare CPI, IIP and repo-rate readings on their own dates; their frequency, definitions and base years are not interchangeable."
       ],
-      "risk_note": "These figures are from separately dated releases, not a same-period composite indicator.",
+      "risk_note": "Food inflation is provisional, and IIP estimates may be revised. The indicators do not establish a certain stock-market reaction.",
       "sources": [
         {
           "title": "MoSPI October 2026 consumer-price release",
@@ -54,155 +59,175 @@
     },
     {
       "page": 5,
-      "headline": "Nifty 50: validate the price series before charting",
-      "lead": "The NSE supplies a dated 30 October snapshot, but one observation does not support a trendline, momentum score or monthly technical forecast.",
+      "headline": "Nifty 50 gained 1.95% in October",
+      "lead": "Official NSE Indices total-return data show Nifty 50 +1.95% over one month, -5.29% over three months and -9.45% over one year as at 31 October.",
       "analysis": [
-        "Build the chart only from matched trading-date closes with audited units, adjustment rules and no missing sessions.",
-        "Separate market breadth from index-weighted price action; the leading constituents can move the benchmark without broad participation."
+        "The index's reported 1-year volatility is 13.90%, with a P/E of 19.30 and price-to-book of 2.83 on the dashboard's as-of date.",
+        "The one-month advance alongside negative longer-period returns argues against extrapolating a trend from a single positive month."
       ],
-      "risk_note": "Support and resistance, RSI and trend conclusions are withheld until a complete verified time series is available.",
+      "risk_note": "Returns shown are total-return-period summaries; they are not a verified daily candlestick series, support level or trading forecast.",
       "sources": [
         {
-          "title": "NSE equity market snapshot as on 30 October 2026",
-          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
-          "published_on": "2026-10-30"
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
         }
       ]
     },
     {
       "page": 6,
-      "headline": "Bank Nifty and major indices require comparable dates",
-      "lead": "An index comparison is meaningful only when every benchmark has the same valuation date, observation frequency and return calculation.",
+      "headline": "Bank Nifty stabilised while smaller stocks fell",
+      "lead": "October total-return readings: Nifty Bank +0.10%, Nifty 50 +1.95%, Nifty 500 -0.75%, Nifty Midcap 150 -3.69% and Smallcap 250 -5.78%.",
       "analysis": [
-        "Use official close-to-close series for Nifty 50, Nifty Bank, Midcap 150 and Smallcap 250 rather than mixing live and EOD values.",
-        "Show both percentage change and absolute index levels with correct units; a point difference is not comparable across indices."
+        "Nifty Bank's October P/E is 12.23 versus 19.30 for Nifty 50; industry composition makes a direct valuation conclusion inappropriate.",
+        "On a matched 31 October dashboard basis, large-cap leadership did not extend uniformly into the broader market."
       ],
-      "risk_note": "No relative-performance ranking is approved without all official matched-date observations.",
+      "risk_note": "An index comparison is not a stock-selection rule. All returns use the NSE dashboard's stated total-return convention.",
       "sources": [
         {
-          "title": "NSE equity market snapshot as on 30 October 2026",
-          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
-          "published_on": "2026-10-30"
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
         }
       ]
     },
     {
       "page": 7,
-      "headline": "Institutional flows need instrument-specific context",
-      "lead": "Foreign and domestic investor flow totals must be sourced by segment and settlement date; cash trades and derivatives cannot be summed as one signal.",
+      "headline": "Index concentration is not the same as breadth",
+      "lead": "Nifty 500 lost 0.75% in October while its equal-weight variant lost 5.12%, a gap of 4.37 percentage points on the official dashboard.",
       "analysis": [
-        "Compare verified cash-market FII and DII figures with turnover and price reaction for the same session.",
-        "Describe breadth using reproducible advancing, declining and unchanged constituent counts, not market anecdotes."
+        "The equal-weight measure gives smaller constituents more impact than capitalization-weighted Nifty 500, offering a concentration proxy.",
+        "Actual NSE advance-decline counts, cash-market FII/DII flows and individual-stock breadth require their own dated source tables."
       ],
-      "risk_note": "FII/DII totals and market-breadth claims remain withheld until official dated tables are captured.",
+      "risk_note": "Do not label equal-weight underperformance an official advance-decline breadth statistic; institutional flow numbers are withheld.",
       "sources": [
         {
-          "title": "NSE equity market snapshot as on 30 October 2026",
-          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
-          "published_on": "2026-10-30"
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
         }
       ]
     },
     {
       "page": 8,
-      "headline": "Sector rotation: distinguish returns from narratives",
-      "lead": "Sector leadership requires a consistent index universe and matched start and end dates; a high daily move is not monthly leadership.",
+      "headline": "IT outperformed as metals and capital goods fell",
+      "lead": "October NSE sector-index total returns showed Nifty IT +18.06%, Nifty Pharma +2.60%, Nifty PSU Bank +2.73% and Nifty Metal -7.51%.",
       "analysis": [
-        "Use total-return and price-return conventions explicitly, with comparability checks before sorting sector rankings.",
-        "Concentration, earnings cycles and policy sensitivity deserve separate commentary after source confirmation."
+        "Nifty Capital Goods fell 7.23%, Auto fell 3.31%, while the Nifty Healthcare Index gained 1.93% over the same published month.",
+        "The wide sector dispersion is consistent with heterogeneous earnings and risk expectations; actual catalysts need issuer evidence."
       ],
-      "risk_note": "Sector performance winners, laggards and percentages are not stated without official matching series.",
+      "risk_note": "These are index returns rather than individual stock returns. Sector index composition and reporting convention can differ.",
       "sources": [
         {
-          "title": "NSE equity market snapshot as on 30 October 2026",
-          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
-          "published_on": "2026-10-30"
-        },
-        {
-          "title": "RBI monetary policy resolution 7 October 2026",
-          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
-          "published_on": "2026-10-07"
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
         }
       ]
     },
     {
       "page": 9,
-      "headline": "Large-cap research starts with issuer evidence",
-      "lead": "Large-cap company pages should connect audited operating results, balance sheets and cash generation to valuation, not only index weight.",
+      "headline": "Large-cap valuation reference: Nifty 50",
+      "lead": "Nifty 50 traded at an index P/E of 19.30 and price-to-book of 2.83 as at 31 October, with a reported dividend yield of 1.42%.",
       "analysis": [
-        "Use the issuer's own latest filed consolidated results before secondary estimates or headline news.",
-        "Compare operating margin, cash conversion and leverage only after units and accounting periods align."
+        "The same dashboard reports 13.90% annualized one-year volatility and a 1.95% total-return advance in October.",
+        "TCS reported Q2 FY27 USD revenue of $7.642 billion, 2.4% higher year on year, with a 24.0% operating margin."
       ],
-      "risk_note": "No company-specific results or recommendations are certified in this draft pending issuer-filing review.",
+      "risk_note": "TCS is an illustrative issuer filing, not a ranked recommendation; company valuation needs audited price and share-count inputs.",
       "sources": [
         {
-          "title": "NSE equity market snapshot as on 30 October 2026",
-          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
-          "published_on": "2026-10-30"
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
+        },
+        {
+          "title": "TCS Q2 FY27 consolidated earnings release",
+          "url": "https://www.tcs.com/who-we-are/newsroom/press-release/tcs-financial-results-q2-fy-2027",
+          "published_on": "2026-10-08"
         }
       ]
     },
     {
       "page": 10,
-      "headline": "Mid-cap research demands stronger liquidity checks",
-      "lead": "Mid-cap company research should test earnings quality, working-capital cycles and liquidity rather than extrapolating past share-price returns.",
+      "headline": "Mid-cap valuation requires cash-flow discipline",
+      "lead": "The Nifty Midcap 150 returned -3.69% in October; its published 31 October P/E is 26.27 and one-year volatility is 16.75%.",
       "analysis": [
-        "Confirm the current Midcap 150 universe and free-float liquidity using dated NSE information.",
-        "Separate unusually strong quarterly profit from recurring operating cash flow and sustainable margins."
+        "That P/E exceeds the Nifty 50's 19.30 by 6.97 points, but business mix and growth expectations differ across constituents.",
+        "Persistent Systems reported Q2 FY27 revenue of $487.6 million, 20.0% year-on-year USD growth and 15.0% EBIT margin."
       ],
-      "risk_note": "Individual mid-cap company conclusions are withheld until dated issuer financials and price records are reconciled.",
+      "risk_note": "Persistent is an illustrative issuer, not proof of Nifty Midcap 150 membership or a mid-cap stock recommendation.",
       "sources": [
         {
-          "title": "NSE equity market snapshot as on 30 October 2026",
-          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
-          "published_on": "2026-10-30"
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
+        },
+        {
+          "title": "Persistent Q2 FY27 audited results release",
+          "url": "https://www.persistent.com/media/press-releases/q2-fy27-results/",
+          "published_on": "2026-10-15"
         }
       ]
     },
     {
       "page": 11,
-      "headline": "Small-cap analysis must price in execution risk",
-      "lead": "Small-cap research requires explicit trading-liquidity and balance-sheet checks because unstable pricing can magnify sizing mistakes.",
+      "headline": "Small-cap multiples remain sensitive to risk",
+      "lead": "The Nifty Smallcap 250 index lost 5.78% in October; its P/E was 31.28 and one-year volatility 18.14% in the official dashboard.",
       "analysis": [
-        "Validate the Smallcap 250 universe and identify low-volume names before any peer or valuation comparison.",
-        "Reject comparisons across different fiscal periods, standalone versus consolidated accounts and inconsistent sector groupings."
+        "Compared with Nifty 50, the small-cap proxy shows higher P/E and one-year volatility, with a deeper one-month loss.",
+        "Liquidity, free-float market capitalization, debt coverage and cash conversion remain mandatory tests for individual companies."
       ],
-      "risk_note": "No qualifying small-cap stock list is established by these broad-market data sources alone.",
+      "risk_note": "Index ratios describe the segment aggregate only. No verified top-five small-cap ranking or issuer-specific valuation is asserted.",
       "sources": [
         {
-          "title": "NSE equity market snapshot as on 30 October 2026",
-          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
-          "published_on": "2026-10-30"
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
         }
       ]
     },
     {
       "page": 12,
-      "headline": "Fundamentals: reconcile statements before valuation",
-      "lead": "An issuer research spotlight needs filing dates, auditor scope, income-statement units, cash flow and share-count consistency.",
+      "headline": "Three technology issuers, three growth paths",
+      "lead": "Q2 FY27 issuer disclosures show year-on-year USD revenue growth of 2.4% for TCS, 20.0% for Persistent Systems and 40.1% for Coforge.",
       "analysis": [
-        "Treat exceptional gains and accounting reclassifications separately from recurring operating earnings.",
-        "Cross-check debt, related-party notes, dilution and contingent liabilities before any comparative multiples."
+        "TCS reported 24.0% operating margin; Persistent reported 15.0% EBIT margin. These are not directly comparable accounting metrics.",
+        "Coforge reported USD revenue of $652.2 million and 16.0% EBIT margin; differences in scale, acquisitions and reporting matter."
       ],
-      "risk_note": "Stock-specific valuation ratios cannot be published without original filings and a dated share-price reference.",
+      "risk_note": "Company-reported figures are period-specific and not normalized for inorganic growth; this is cross-issuer research, not stock advice.",
       "sources": [
         {
-          "title": "RBI monetary policy resolution 7 October 2026",
-          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
-          "published_on": "2026-10-07"
+          "title": "TCS Q2 FY27 consolidated earnings release",
+          "url": "https://www.tcs.com/who-we-are/newsroom/press-release/tcs-financial-results-q2-fy-2027",
+          "published_on": "2026-10-08"
+        },
+        {
+          "title": "Persistent Q2 FY27 audited results release",
+          "url": "https://www.persistent.com/media/press-releases/q2-fy27-results/",
+          "published_on": "2026-10-15"
+        },
+        {
+          "title": "Coforge Q2 FY27 earnings release",
+          "url": "https://news.coforge.com/newsroom/press-release/coforge-delivers-an-outstanding-performance-revenue-growth-536-yoy-raises-ebit-margin-guidance-for-the-year?hs_amp=true",
+          "published_on": "2026-10-23"
         }
       ]
     },
     {
       "page": 13,
-      "headline": "Strategy Lab: test a rate-and-inflation scenario",
-      "lead": "Use October's RBI tightening and November's CPI release to define conditional monitoring rules, not automatic market trades.",
+      "headline": "Strategy Lab: inflation meets market dispersion",
+      "lead": "The observed combination is a 5.50% repo rate, 6.09% October CPI inflation, +1.95% Nifty 50 October return and -5.78% Smallcap 250 return.",
       "analysis": [
-        "Scenario A: inflation persists; review credit sensitivity and valuation assumptions once actual issuer figures are confirmed.",
-        "Scenario B: price pressure moderates; compare earnings revisions against the same risk controls and liquidity requirements."
+        "Scenario 1: sticky inflation could raise financing costs; investigate real interest sensitivity and working-capital exposure.",
+        "Scenario 2: easing inflation could lower discount-rate pressure, but earnings and valuations must independently support conclusions."
       ],
-      "risk_note": "These are analytical scenarios, not forecasts or personalized buy/sell instructions.",
+      "risk_note": "These conditional scenarios are educational stress tests, not predicted future returns, price targets or trade entries.",
       "sources": [
+        {
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
+        },
         {
           "title": "RBI monetary policy resolution 7 October 2026",
           "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
@@ -217,13 +242,13 @@
     },
     {
       "page": 14,
-      "headline": "Upcoming data calendar and policy checkpoints",
-      "lead": "The next monthly research update must distinguish a scheduled release date from an already published observation.",
+      "headline": "Data calendar: next checks before December",
+      "lead": "MoSPI scheduled FY27 Q2 GDP data for 30 November 2026, and the September IIP release said October IIP is due the same day.",
       "analysis": [
-        "MoSPI has scheduled the FY27 second-quarter GDP estimate for 30 November 2026; do not quote it before release.",
-        "The RBI MPC's next scheduled meeting is 2-4 December 2026; policy outcomes must remain unfilled until announced."
+        "The RBI's next scheduled MPC meeting is 2-4 December 2026; the November CPI release is scheduled for 14 December.",
+        "Treat calendar events as checkpoints for updating scenario assumptions, never prefill a future result or policy decision."
       ],
-      "risk_note": "Future outcomes, final statistics and policy decisions are unknown as of 23 November 2026.",
+      "risk_note": "Schedule dates can change; confirm each event from the issuing authority before any automatic issue publication.",
       "sources": [
         {
           "title": "MoSPI advance schedule for FY27 Q2 GDP release",
@@ -239,41 +264,41 @@
     },
     {
       "page": 15,
-      "headline": "Next month: focus on evidence and risk limits",
-      "lead": "Policy tightening and inflation risk argue for disciplined scenario analysis rather than a single unsupported market forecast.",
+      "headline": "Risk map: protect against false certainty",
+      "lead": "October's 1.95% Nifty 50 gain coexisted with declines of 0.75% for Nifty 500, 3.69% for Midcap 150 and 5.78% for Smallcap 250.",
       "analysis": [
-        "Review sector concentration, balance-sheet interest sensitivity and high-frequency volatility only with verified histories.",
-        "Monitor revised inflation, quarterly GDP and the next RBI resolution as distinct dated events."
+        "Compare company liquidity, leverage and earnings revisions within matched reporting periods, not one-month price movements.",
+        "Monitor whether index leadership broadens, and re-check after GDP, inflation and RBI policy releases rather than precommitting."
       ],
-      "risk_note": "Neither a target index level nor investment allocation is approved from this evidence set.",
+      "risk_note": "No customer allocation, target return or index level is recommended from these limited observations.",
       "sources": [
+        {
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
+        },
         {
           "title": "RBI monetary policy resolution 7 October 2026",
           "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
           "published_on": "2026-10-07"
-        },
-        {
-          "title": "MoSPI October 2026 consumer-price release",
-          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3",
-          "published_on": "2026-11-12"
-        },
-        {
-          "title": "MoSPI advance schedule for FY27 Q2 GDP release",
-          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2304949&lang=1&reg=3",
-          "published_on": "2026-08-31"
         }
       ]
     },
     {
       "page": 16,
-      "headline": "Research method, omissions and source discipline",
-      "lead": "This draft separates source-cited macro facts from unverified market prices and issuer claims; missing values are explicitly withheld.",
+      "headline": "Methods, sources and publication limitations",
+      "lead": "All index figures in this draft come from the NSE Indices October 2026 total-return dashboard; CPI, IIP and repo data cite official releases.",
       "analysis": [
-        "NSE data are not authenticated merely by a matching URL; original bytes, SHA-256 and field-level reconciliation remain necessary.",
-        "Company pages require original exchange filings, calendar alignment, independent calculation checks and owner sign-off."
+        "Issuer growth figures come from TCS, Persistent and Coforge's Q2 FY27 communications; they have different growth bases and currencies.",
+        "Market dates, data types and source identities are disclosed; official website citations do not replace saved source bytes or human approval."
       ],
-      "risk_note": "Not investment advice. This editorial draft is not approved for customer distribution or Telegram delivery.",
+      "risk_note": "No issuer financial assessment substitutes personalized advice. Release requires logo, visual, source-byte, editorial and Telegram proof.",
       "sources": [
+        {
+          "title": "NSE Indices Index Dashboard October 2026",
+          "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+          "published_on": "2026-10-31"
+        },
         {
           "title": "RBI monetary policy resolution 7 October 2026",
           "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
@@ -283,11 +308,6 @@
           "title": "MoSPI October 2026 consumer-price release",
           "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3",
           "published_on": "2026-11-12"
-        },
-        {
-          "title": "NSE equity market snapshot as on 30 October 2026",
-          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
-          "published_on": "2026-10-30"
         }
       ]
     }
