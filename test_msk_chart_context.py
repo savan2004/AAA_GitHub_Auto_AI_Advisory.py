@@ -60,6 +60,43 @@ class MSKChartContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "55"):
             summarize_chart(h[:20], l[:20], c[:20], v[:20], 200, 199, 1)
 
+    def test_manual_chart_cache_cannot_cross_session_or_reuse_deleted_png(self):
+        import subprocess
+        import tempfile
+        import time
+        from unittest.mock import patch
+        from chart_integration import ChartGenerator
+
+        with tempfile.TemporaryDirectory() as root:
+            generator = ChartGenerator(output_dir=root)
+            saved = Path(root) / "cached.png"
+            saved.write_bytes(b"test-only")
+            generator.cache["SBIN.NS|6mo|2026-11-20"] = {
+                "ts": time.time(), "path": str(saved), "meta": "prior-session"}
+            failed = subprocess.CompletedProcess(
+                args=["offline"], returncode=1, stdout="",
+                stderr="[ERROR] Expected offline stop")
+            with patch("market_breadth.expected_completed_session",
+                       return_value="2026-11-20"), patch("subprocess.run",
+                                                       return_value=failed) as runner:
+                ok, meta, path = generator.generate("SBIN.NS", "SBI", "6mo")
+                self.assertTrue(ok)
+                self.assertEqual(meta, "prior-session")
+                runner.assert_not_called()
+            with patch("market_breadth.expected_completed_session",
+                       return_value="2026-11-23"), patch("subprocess.run",
+                                                       return_value=failed) as runner:
+                ok, _, _ = generator.generate("SBIN.NS", "SBI", "6mo")
+                self.assertFalse(ok)
+                runner.assert_called_once()
+            saved.unlink()
+            with patch("market_breadth.expected_completed_session",
+                       return_value="2026-11-20"), patch("subprocess.run",
+                                                       return_value=failed) as runner:
+                ok, _, _ = generator.generate("SBIN.NS", "SBI", "6mo")
+                self.assertFalse(ok)
+                runner.assert_called_once()
+
     def test_production_generator_uses_safe_helper_and_completed_session(self):
         # Ensures a standalone helper isn't "tested but never called".
         source = (Path(__file__).with_name("gen_smart_stock_chart.py")
