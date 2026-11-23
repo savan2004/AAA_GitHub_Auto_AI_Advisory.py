@@ -37,8 +37,9 @@ class CompleteEditorialDraftTests(unittest.TestCase):
             self.assertFalse(result["editorial_approved"])
             reader = PdfReader(str(Path(temp) / "2026-11" / result["draft_pdf"]))
             self.assertEqual(len(reader.pages), 16)
-            self.assertIn("October index performance diverged sharply", reader.pages[2].extract_text())
-            self.assertIn("Research method, omissions", reader.pages[15].extract_text())
+            authored = json.loads(PACK.read_text(encoding="utf-8"))["pages"]
+            self.assertIn(authored[0]["headline"], reader.pages[2].extract_text())
+            self.assertIn(authored[-1]["headline"], reader.pages[15].extract_text())
             self.assertIn("Nifty 50", reader.pages[4].extract_text())
             self.assertIn("TCS", reader.pages[11].extract_text())
             self.assertIn("+18.06%", reader.pages[7].extract_text())
