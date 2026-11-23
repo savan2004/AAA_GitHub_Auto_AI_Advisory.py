@@ -12,6 +12,31 @@ class ResearchPDFRefused(ValueError):
     pass
 
 
+def verify_eod_cover_timestamp(cover_text):
+    """Reject reports that claim a completed NSE close before 16:00 IST.
+
+    This is a second, offline guard if a caller bypasses collect_inputs.
+    It checks the PDF's own publication and price-session labels; it does
+    not establish exchange or provider provenance.
+    """
+    from datetime import datetime
+
+    normalized = " ".join((cover_text or "").split())
+    issue = re.search(r"(\\d{2}-[A-Za-z]{3}-\\d{4})\\s+(\\d{2}):(\\d{2})\\s+IST\\b", normalized)
+    session = re.search(r"Price:\\s*EOD\\s+session\\s+(\\d{2}-[A-Za-z]{3}-\\d{4})", normalized, re.I)
+    if not issue or not session:
+        return
+    try:
+        created_day = datetime.strptime(issue.group(1), "%d-%b-%Y").date()
+        session_day = datetime.strptime(session.group(1), "%d-%b-%Y").date()
+        issue_hour, issue_minute = int(issue.group(2)), int(issue.group(3))
+    except ValueError as exc:
+        raise ResearchPDFRefused("Research PDF invalid date metadata") from exc
+    if session_day > created_day or (
+            session_day == created_day and (issue_hour, issue_minute) < (16, 0)):
+        raise ResearchPDFRefused("Research PDF EOD timestamp before verified session completion")
+
+
 def validate_research_pdf(path, *, expected_symbol=None, min_pages=8):
     from pypdf import PdfReader
 
@@ -35,6 +60,7 @@ def validate_research_pdf(path, *, expected_symbol=None, min_pages=8):
     except Exception as exc:
         raise ResearchPDFRefused("Research PDF parse or page extraction failed") from exc
 
+    verify_eod_cover_timestamp(text_by_page[0])
     text = " ".join(" ".join(page.split()) for page in text_by_page)
     if any(len(page) < 24 for page in text_by_page):
         raise ResearchPDFRefused("Empty or unreadable report page")
