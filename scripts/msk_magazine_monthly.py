@@ -248,7 +248,7 @@ def _footer(c, number, issue):
     _txt(c, 45, 44, UNAPPROVED, 7.4, TEAL, True)
 
 
-def _cover(c, issue, logo_file):
+def _cover(c, issue, logo_file, market_data=None):
     w, h = A4
     _rect(c, 0, 0, w, h, WHITE)
     p = c.beginPath()
@@ -279,16 +279,24 @@ def _cover(c, issue, logo_file):
     c.setStrokeColor(HexColor("#62D5C5"))
     c.setLineWidth(4)
     c.drawPath(p, stroke=1)
-    _txt(c, 48, 185, "Markets  |  Economy  |  Sectors  |  Companies  |  Strategy", 11, NAVY)
+    if market_data:
+        _txt(c, 48, 185, "OCTOBER 2026 | NIFTY 50 +1.95% | MIDCAP 150 -3.69%", 9.5, NAVY, True)
+        _txt(c, 48, 164, "MACRO | RBI REPO 5.50% | OCT CPI 6.09% | Q2 EARNINGS", 9.5, NAVY)
+    else:
+        _txt(c, 48, 185, "Markets  |  Economy  |  Sectors  |  Companies  |  Strategy", 11, NAVY)
     _txt(c, 48, 113, "DESIGN 3 / DESIGN C - FIXED MONTHLY MASTER", 9, TEAL, True)
 
 
-def _index(c, issue, index):
+def _index(c, issue, index, market_data=None):
     _txt(c, 46, 741, "EDITOR'S NOTE & INDEX", 22, NAVY, True)
     _txt(c, 46, 714, issue + "  |  Approved page order, editorial draft only", 10, GRAY)
     _rect(c, 46, 683, 498, 3, TEAL)
-    _txt(c, 46, 662, "Monthly research is rebuilt with current dated sources.", 10, NAVY)
-    _txt(c, 46, 646, "The Design 3 cover, page titles and index do not change.", 9, GRAY)
+    if market_data:
+        _txt(c, 46, 662, "EDITOR'S NOTE | October's Nifty 50 gain masked weak smaller indices.", 9.2, NAVY)
+        _txt(c, 46, 646, "RBI tightening, CPI inflation and Q2 filings frame this source-led edition.", 8.8, GRAY)
+    else:
+        _txt(c, 46, 662, "Monthly research is rebuilt with current dated sources.", 10, NAVY)
+        _txt(c, 46, 646, "The Design 3 cover, page titles and index do not change.", 9, GRAY)
     for i, row in enumerate(index):
         y = 615 - i * 34
         if i % 2 == 0:
@@ -354,13 +362,12 @@ def _page(c, number, title, issue, layout, observations, editorial=None, market_
         _txt(c, 58, 215, "RISK / EVIDENCE LIMITATION", 10, NAVY, True)
         _wrapped(c, 58, 193, editorial["risk_note"], size=8.5,
                  max_width=460, max_lines=3, leading=13)
-        sources = " | ".join(
-            urlsplit(src["url"]).hostname + " (" + src["published_on"] + ")"
-            for src in editorial["sources"]
-        )
-        _wrapped(c, 58, 139, "Sources: " + sources, size=7.4,
-                 max_width=460, max_lines=2, leading=11, color=TEAL)
-        _txt(c, 58, 111, "Source-linked draft; figures require independent reconciliation.", 7.5, GRAY)
+        for i, src in enumerate(editorial["sources"]):
+            yy = 146 - i * 13
+            caption = f'[{i+1}] {urlsplit(src["url"]).hostname} | {src["published_on"]}'
+            _txt(c, 58, yy, caption, 7.2, TEAL)
+            c.linkURL(src["url"], (57, yy-2, 504, yy+9), relative=0)
+        _txt(c, 58, 109, "Click source links; original bytes still require acceptance.", 7.5, GRAY)
     else:
         _txt(c, 58, 435, "Analysis / chart workspace", 10, NAVY, True)
         _txt(c, 58, 416, "Populate only after source verification.", 8, GRAY)
@@ -414,9 +421,9 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         c.setFillColor(HexColor(WHITE))
         c.rect(0, 0, *A4, fill=1, stroke=0)
         if n == 1:
-            _cover(c, issue, logo_file)
+            _cover(c, issue, logo_file, market_data)
         elif n == 2:
-            _index(c, issue, index)
+            _index(c, issue, index, market_data)
         elif n == 16:
             _page(c, n, title, issue, entry["layout"], [], editorial.get(n),
                   market_data)
