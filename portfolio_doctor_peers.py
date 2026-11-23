@@ -16,7 +16,7 @@ from portfolio_doctor_live import IST
 OFFICIAL_ROSTER = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
 MIN_MEMBERS = 450
 MAX_MEMBERS = 550
-MAX_SCREENED = 200  # Full typical same-industry pool; never imply all 500 screened.
+MAX_SCREENED = 180  # Cover a typical 151-peer pool, while bounding free-tier resources.
 MAX_RESULTS = 12
 MAX_PER_INDUSTRY = 3
 
@@ -58,7 +58,7 @@ def official_nifty500_industries(*, get=None):
 
 def research_industry_peers(holdings, *, members=None, history_fetcher=None,
                             evaluator=None, now=None):
-    """Screen every same-industry member up to a bounded 200-stock cap.
+    """Screen every same-industry member up to a bounded 180-stock cap.
 
     Prioritize the *highest current portfolio exposure* first. An incomplete
     public download never turns an unchecked stock into a failed candidate.
@@ -114,11 +114,11 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
 
     if history_fetcher is None:
         from market_data import bulk_history
-        # A single bounded bulk request covers a typical 151-stock peer pool;
-        # no slow single-symbol retries or fabricated missing daily candles.
+        # Three 60-symbol bounded chunks cover a typical 151-stock peer pool;
+        # no per-symbol retries, giant concurrent job or synthetic candles.
         history_fetcher = lambda symbols: bulk_history(
-            symbols, "1y", chunk_size=MAX_SCREENED, retries=0,
-            max_fallbacks=0, download_timeout=15)
+            symbols, "1y", chunk_size=60, retries=0,
+            max_fallbacks=0, download_timeout=9)
     if evaluator is None:
         from investment_screener import evaluate_candidate
         evaluator = evaluate_candidate
