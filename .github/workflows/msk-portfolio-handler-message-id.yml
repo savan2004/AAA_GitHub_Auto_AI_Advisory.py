@@ -1,0 +1,27 @@
+name: MSK Portfolio Telegram Handler Message-ID Safety
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "main.py"
+      - "tests/test_msk_portfolio_handler_message_id.py"
+      - ".github/workflows/msk-portfolio-handler-message-id.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  handler-message-id:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile real bot handlers
+        run: python -m py_compile main.py tests/test_msk_portfolio_handler_message_id.py
+      - name: Run synthetic handler contract tests
+        run: python -m unittest discover -s tests -p 'test_msk_portfolio_handler_message_id.py' -v
