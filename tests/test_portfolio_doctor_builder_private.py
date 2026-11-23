@@ -198,9 +198,9 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
         m = SimpleNamespace(chat=SimpleNamespace(id=101, type="private"),
                             from_user=SimpleNamespace(id=101), text=INPUT)
         env["_builder_form"][101] = {"step": "stocks", "until": 99999}
-        with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}), \\
-             patch.object(builder, "run_isolated_builder",
-                          side_effect=AssertionError("retired worker called")) as worker:
+        with (patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}),
+              patch.object(builder, "run_isolated_builder",
+                           side_effect=AssertionError("retired worker called")) as worker):
             handler(m)
         worker.assert_not_called()
         self.assertEqual(sent, [])
