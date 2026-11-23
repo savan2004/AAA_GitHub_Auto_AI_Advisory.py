@@ -81,6 +81,21 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_magazine_private_pilot.py' -v
       - name: Compile monthly workflow sources
         run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_source_archive.py scripts/msk_magazine_primary_sources.py scripts/msk_magazine_private_pilot.py
+      - name: Retrieve the exact November PDF approved by owner for safe dry-run
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@v4
+        with:
+          name: MSK-MAGAZINE-NOV2026-VISUAL-PROOF-45238995335
+          run-id: 45238995335
+          github-token: ${{ github.token }}
+          path: owner_approved_proof/2026-11
+      - name: Prove the approved PDF passes private Telegram preflight (ZERO sends)
+        if: github.event_name == 'pull_request'
+        run: |
+          python scripts/msk_magazine_private_pilot.py \
+            --issue-dir owner_approved_proof/2026-11 \
+            --receipt owner_approved_proof/no-send-preflight.json
+
       - name: Fetch and reconcile original NSE dashboard bytes
         if: github.event_name == 'pull_request'
         run: |
