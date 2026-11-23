@@ -11,6 +11,8 @@ from pypdf import PdfReader
 from scripts.msk_magazine_editorial import EditorialPackError, load_editorial_pack
 from scripts.msk_magazine_monthly import generate
 from scripts.msk_magazine_charts import load_metrics, ResearchMetricError
+from scripts.msk_magazine_source_archive import verify_nse_dashboard
+from test_msk_magazine_source_archive import synthetic_pdf
 
 ROOT = Path(__file__).resolve().parents[1]
 PACK = ROOT / "docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json"
@@ -67,6 +69,43 @@ class CompleteEditorialDraftTests(unittest.TestCase):
                          market_pack=METRICS,
                          now=datetime(2026, 11, 20, tzinfo=timezone.utc))
             self.assertFalse((Path(temp) / "2026-11").exists())
+
+    def test_actual_original_pdf_proof_is_rechecked_during_assembly(self):
+        metrics = json.loads(METRICS.read_text(encoding="utf-8"))
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_dir = root / "external_sources"
+            source_dir.mkdir()
+            pdf_bytes = synthetic_pdf(metrics)
+            (source_dir / "Index_Dashboard_OCT2026.pdf").write_bytes(pdf_bytes)
+            receipt = verify_nse_dashboard(pdf_bytes, metrics)
+            (source_dir / "nse_dashboard_reconciliation.json").write_text(
+                json.dumps(receipt), encoding="utf-8")
+            output = generate("2026-11", root / "out",
+                              editorial_pack=PACK, market_pack=METRICS,
+                              nse_proof_dir=source_dir, now=NOW)
+            self.assertTrue(output["nse_original_pdf_reconciled"])
+            self.assertEqual(output["nse_reconciled_named_rows"], 14)
+            self.assertEqual(output["nse_original_pdf_sha256"], receipt["sha256"])
+            self.assertFalse(output["publication_allowed"])
+
+    def test_tampered_original_pdf_blocks_magazine_before_output(self):
+        metrics = json.loads(METRICS.read_text(encoding="utf-8"))
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_dir = root / "external_sources"
+            source_dir.mkdir()
+            pdf_bytes = synthetic_pdf(metrics)
+            (source_dir / "Index_Dashboard_OCT2026.pdf").write_bytes(pdf_bytes)
+            receipt = verify_nse_dashboard(pdf_bytes, metrics)
+            (source_dir / "nse_dashboard_reconciliation.json").write_text(
+                json.dumps(receipt), encoding="utf-8")
+            # The PDF is readable, but the original downloaded bytes changed.
+            (source_dir / "Index_Dashboard_OCT2026.pdf").write_bytes(pdf_bytes + b"ALTERED")
+            with self.assertRaisesRegex(ValueError, "NSE source receipt"):
+                generate("2026-11", root / "out", editorial_pack=PACK,
+                         market_pack=METRICS, nse_proof_dir=source_dir, now=NOW)
+            self.assertFalse((root / "out" / "2026-11").exists())
 
     def test_missing_page_rejected_before_output_creation(self):
         pack = json.loads(PACK.read_text(encoding="utf-8"))
