@@ -182,6 +182,7 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
             "bot": FakeBot(), "_doctor_allowed": lambda _m: True, "_builder_allowed": lambda _m: True,
             "safe_send": lambda uid, txt: notices.append((uid, txt)),
             "_portfolio_doctor_lock": threading.Lock(),
+            "_builder_form": {},
             "_portfolio_doctor_running": state,
             "_portfolio_doctor_slots": threading.BoundedSemaphore(2),
             "executor": SimpleNamespace(submit=lambda fn: fn()),
@@ -191,33 +192,31 @@ class PdfAndPrivateHandlerTests(unittest.TestCase):
                      str(source), "exec"), env)
         return env["portfolio_doctor_builder_command"], env, notices
 
-    def test_actual_command_send_and_cleanup_with_no_storage(self):
+    def test_retired_command_never_sends_pdf_even_if_flag_enabled(self):
         sent = []
         handler, env, notices = self._isolated_handler(sent)
         m = SimpleNamespace(chat=SimpleNamespace(id=101, type="private"),
                             from_user=SimpleNamespace(id=101), text=INPUT)
-        raw = builder.builder_pdf_bytes(self.spec, self.data)
-        with (patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}),
-              patch.object(builder, "run_isolated_builder", return_value=raw)):
+        env["_builder_form"][101] = {"step": "stocks", "until": 99999}
+        with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "1"}), \\
+             patch.object(builder, "run_isolated_builder",
+                          side_effect=AssertionError("retired worker called")) as worker:
             handler(m)
-        self.assertEqual(len(sent), 1)
-        self.assertEqual(sent[0][0], 101)
-        self.assertTrue(sent[0][1].startswith(b"%PDF-"))
+        worker.assert_not_called()
+        self.assertEqual(sent, [])
+        self.assertEqual(env["_builder_form"], {})
+        self.assertIn("retired", notices[-1][1].lower())
         self.assertEqual(env["_portfolio_doctor_running"], set())
-        self.assertTrue(env["_portfolio_doctor_slots"].acquire(blocking=False))
-        self.assertTrue(env["_portfolio_doctor_slots"].acquire(blocking=False))
-        self.assertFalse(env["_portfolio_doctor_slots"].acquire(blocking=False))
-        self.assertEqual(notices, [])
 
-    def test_builder_flag_off_sends_no_document(self):
+    def test_retired_command_remains_disabled_with_flag_off(self):
         sent = []
-        handler, _, notices = self._isolated_handler(sent)
+        handler, env, notices = self._isolated_handler(sent)
         m = SimpleNamespace(chat=SimpleNamespace(id=101, type="private"),
                             from_user=SimpleNamespace(id=101), text=INPUT)
         with patch.dict(os.environ, {"MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED": "0"}):
             handler(m)
         self.assertEqual(sent, [])
-        self.assertIn("disabled", notices[-1][1].lower())
+        self.assertIn("retired", notices[-1][1].lower())
 
     def test_source_contains_no_holdings_files_or_db_operations(self):
         text = Path(builder.__file__).read_text()
