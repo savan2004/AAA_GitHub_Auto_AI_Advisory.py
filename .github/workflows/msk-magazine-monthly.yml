@@ -7,10 +7,12 @@ on:
       - "scripts/msk_magazine_nse.py"
       - "scripts/msk_magazine_editorial.py"
       - "scripts/msk_magazine_charts.py"
+      - "scripts/msk_magazine_source_archive.py"
       - "assets/msk_ai_bot_logo_recreated.png"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
+      - "tests/test_msk_magazine_source_archive.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   push:
@@ -20,10 +22,12 @@ on:
       - "scripts/msk_magazine_nse.py"
       - "scripts/msk_magazine_editorial.py"
       - "scripts/msk_magazine_charts.py"
+      - "scripts/msk_magazine_source_archive.py"
       - "assets/msk_ai_bot_logo_recreated.png"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
+      - "tests/test_msk_magazine_source_archive.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   workflow_dispatch:
@@ -61,8 +65,17 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_magazine_nse.py' -v
       - name: Check complete authored magazine and all 16 rendered pages
         run: python -m unittest discover -s tests -p 'test_msk_magazine_editorial.py' -v
+      - name: Run source-PDF provenance regression tests
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_source_archive.py' -v
       - name: Compile monthly workflow sources
-        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py
+        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_source_archive.py
+      - name: Fetch and reconcile original NSE dashboard bytes
+        if: github.event_name == 'pull_request'
+        run: |
+          python scripts/msk_magazine_source_archive.py \
+            --metrics-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json \
+            --output-dir editorial_proof/2026-11/source_verification
+
       - name: Build a private 16-page November editorial visual proof
         if: github.event_name == 'pull_request'
         run: |
@@ -114,6 +127,21 @@ jobs:
               out.write(f"due={'true' if due else 'false'}\nissue={issue}\n")
           print(f"Issue={issue}; due={due}; manual={manual}")
           PY
+      - name: Require complete month-matched research material
+        if: steps.schedule.outputs.due == 'true'
+        env:
+          ISSUE: ${{ steps.schedule.outputs.issue }}
+        run: |
+          test -f "docs/msk_magazine/ISSUE_${ISSUE}_SOURCE_CITED_WORKING_DRAFT.json" || { echo "::error::MONTHLY_EDITORIAL_PACK_MISSING"; exit 1; }
+          test -f "docs/msk_magazine/ISSUE_${ISSUE}_OFFICIAL_RESEARCH_METRICS.json" || { echo "::error::MONTHLY_MARKET_PACK_MISSING"; exit 1; }
+          if [ "$ISSUE" = "2026-11" ]; then
+            python scripts/msk_magazine_source_archive.py \
+              --metrics-pack "docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json" \
+              --output-dir "magazine_artifacts/$ISSUE/source_verification"
+          else
+            echo "::error::NEW_MONTH_REQUIRES_MONTH_SPECIFIC_VERIFIED_SOURCE_ARCHIVE"
+            exit 1
+          fi
       - name: Retrieve month-end official NSE index CSV (fail closed on HTTP errors)
         if: steps.schedule.outputs.due == 'true'
         env:
