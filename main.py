@@ -1805,34 +1805,64 @@ def _builder_allowed(m):
 
 _builder_form = {}
 
-def _builder_options(stage, choices):
+def _builder_options(stage, choices, token=None):
+    """Session-bound callback buttons prevent replay from earlier customer forms."""
     kb = types.InlineKeyboardMarkup(row_width=len(choices))
-    kb.add(*[types.InlineKeyboardButton(label, callback_data="builder|" + stage + "|" + val)
-             for label, val in choices])
+    kb.add(*[types.InlineKeyboardButton(
+        label, callback_data="builder|" + stage + "|" + val +
+        (("|" + token) if token else ""))
+        for label, val in choices])
     return kb
 
 
 @bot.message_handler(func=lambda m: (m.text or "") == "🏗️ Portfolio Builder")
 def portfolio_builder_button(m):
-    """Fail closed until an actual approved research batch powers automatic selection.
+    """Three customer inputs ONLY when issuer-reviewed research is publishable.
 
-    The legacy customer-facing manual-symbol wizard is retired. The separate
-    owner-only fictional preview remains accessible by its explicit test command.
+    Do not ask customers for symbols/weights, make a synthetic recommendation,
+    or invite data entry if the release registry/close-date gate is closed.
     """
     if not _builder_allowed(m):
         safe_send(m.chat.id, "Portfolio Builder is available in private chat only.")
         return
+    from msk_ai_builder_automatic import automatic_available
+    import secrets
+
+    uid = m.chat.id
     with _portfolio_doctor_lock:
-        _builder_form.pop(m.chat.id, None)
-        _portfolio_doctor_waiting.pop(m.chat.id, None)
-        _portfolio_audit_mode.pop(m.chat.id, None)
-    state.clear(m.chat.id)
-    safe_send(m.chat.id,
-              "🏗️ Automatic Portfolio Builder is temporarily unavailable. "
-              "A verified, approved stock research basket is not yet connected. "
-              "You will NOT be asked to select symbols or percentages. "
-              "No unverified portfolio will be generated. "
-              "For existing holdings, select 🩺 Portfolio Doctor.")
+        _builder_form.pop(uid, None)
+        _portfolio_doctor_waiting.pop(uid, None)
+        _portfolio_audit_mode.pop(uid, None)
+        busy = uid in _portfolio_doctor_running
+    state.clear(uid)
+    if busy:
+        safe_send(uid, "A private portfolio report is already processing.")
+        return
+    if not automatic_available():
+        safe_send(uid,
+                  "🏗️ Automatic Portfolio Builder is temporarily unavailable. "
+                  "A verified, approved stock research basket is not yet connected. "
+                  "You will NOT be asked to select symbols or percentages. "
+                  "No unverified portfolio will be generated. "
+                  "For existing holdings, select 🩺 Portfolio Doctor.")
+        return
+    with _portfolio_doctor_lock:
+        if uid in _portfolio_doctor_running:
+            ready = False
+        else:
+            _builder_form[uid] = {
+                "mode": "automatic", "step": "amount",
+                "token": secrets.token_hex(6),
+                "until": time.monotonic() + 300,
+            }
+            ready = True
+    if not ready:
+        safe_send(uid, "A private report is already processing.")
+        return
+    safe_send(uid, "🏗️ Portfolio Builder — Step 1/3. Enter investment amount "
+              "in rupees (up to ₹1.5 crore). The system selects qualifying "
+              "research stocks; you never enter symbols or percentages. "
+              "Dated research model only, not a suitability assessment.")
 
 
 @bot.message_handler(commands=["builder_v2_preview"])
@@ -1852,6 +1882,68 @@ def portfolio_builder_private_beta(m):
                               "until": time.monotonic() + 180}
     state.clear(uid)
     safe_send(uid, "TEST MODE — Portfolio Builder Step 1/3. Enter capital in rupees (1 to 1.5 crore). Fictional stocks only.")
+
+
+def send_automatic_builder(uid, entry, horizon):
+    """Atomically consume a validated customer request before one PDF send.
+
+    A verified release is checked again in the background job; a missing
+    delivery acknowledgement is NEVER retried automatically.
+    """
+    from msk_ai_builder_automatic import automatic_available, ResearchUnavailable
+    if not automatic_available():
+        with _portfolio_doctor_lock:
+            if _builder_form.get(uid) is entry:
+                _builder_form.pop(uid, None)
+        safe_send(uid, "Approved research prices are no longer current. "
+                  "No PDF was issued. Open Portfolio Builder after the next verified release.")
+        return
+
+    with _portfolio_doctor_lock:
+        if (_builder_form.get(uid) is not entry
+                or entry.get("mode") != "automatic"
+                or entry.get("step") != "horizon"
+                or entry.get("until", 0) <= time.monotonic()):
+            notice = "Builder session expired. Select Portfolio Builder again."
+        elif uid in _portfolio_doctor_running or not _portfolio_doctor_slots.acquire(blocking=False):
+            notice = "Another report is running. Tap your current horizon once later."
+        else:
+            notice = None
+            _builder_form.pop(uid, None)
+            _portfolio_doctor_running.add(uid)
+    if notice:
+        safe_send(uid, notice)
+        return
+
+    def release():
+        with _portfolio_doctor_lock:
+            _portfolio_doctor_running.discard(uid)
+            _portfolio_doctor_slots.release()
+
+    def run():
+        try:
+            from msk_ai_builder_telegram import deliver_automatic_pdf
+            receipt = deliver_automatic_pdf(
+                bot, uid, int(entry["amount"]), entry["risk"], int(horizon))
+            if type(getattr(receipt, "message_id", None)) is not int:
+                raise RuntimeError("AUTOMATIC_PDF_RECEIPT_UNCONFIRMED")
+            logger.info("MSK_BUILDER_VERIFIED_PDF_DELIVERED receipt_confirmed=true")
+        except ResearchUnavailable:
+            safe_send(uid, "The verified research release is unavailable or stale. "
+                      "No portfolio PDF was issued.")
+        except Exception as exc:
+            logger.warning("MSK_BUILDER_PDF_DELIVERY_UNCONFIRMED kind=%s", type(exc).__name__)
+            safe_send(uid, "Builder PDF delivery could not be confirmed. "
+                      "Check this chat before starting another request; "
+                      "the bot will not retry an uncertain send.")
+        finally:
+            release()
+    try:
+        executor.submit(run)
+    except Exception:
+        release()
+        safe_send(uid, "Builder processing could not start. "
+                  "No report attempt was queued. Open Portfolio Builder again.")
 
 
 def send_private_builder_beta(uid, entry, horizon):
