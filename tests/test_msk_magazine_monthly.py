@@ -10,6 +10,7 @@ import unittest
 from scripts.msk_magazine_monthly import (
     DEFAULT_MASTER, MagazineError, audit_pdf, first_monday,
     generate, is_monthly_due, issue_for, load_master, validate_evidence,
+    validate_source_receipts,
 )
 
 
@@ -281,10 +282,74 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertEqual(result["source_consistency_rows"], 1)
         self.assertIs(result["source_authenticity_verified"], False)
         self.assertIn("independent", result["source_provenance_blocker"])
+        self.assertFalse(result["source_receipt_structurally_valid"])
+        self.assertIn("No source_receipts", " ".join(result["source_receipt_validation"]["failures"]))
         gate = json.loads((self.root / "out" / "2026-11" /
                            "release_gate.json").read_text())
         self.assertIs(gate["source_authenticity_verified"], False)
         self.assertIs(gate["publication_allowed"], False)
+
+    def _receipt(self, row=None, *, reviewed=True, fetch_time="2026-11-15T10:00:00Z",
+                  review_time="2026-11-15T10:15:00Z"):
+        row = row or self.row
+        return {
+            "issue": "2026-11",
+            "source_url": row["source_url"],
+            "source_file": row["source_file"],
+            "source_sha256": row["source_sha256"],
+            "fetched_at_utc": fetch_time,
+            "http_status": 200,
+            "reviewer_verified": reviewed,
+            "reviewer": "Independent reviewer",
+            "reviewed_at_utc": review_time,
+            "review_notes": "Cross-checked original source and figure against the official release.",
+        }
+
+    def test_source_receipt_structure_requires_match_and_review(self):
+        accepted, errors = self.verify()
+        self.assertFalse(errors)
+        pack = {"issue": "2026-11", "source_receipts": [self._receipt()]}
+        result = validate_source_receipts(
+            pack, accepted, self.source_root, "2026-11", date(2026, 11, 16))
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["schema_only"])
+        self.assertTrue(result["human_independent_authentication_required"])
+
+        unreviewed = self._receipt(reviewed=False)
+        result = validate_source_receipts(
+            {"issue": "2026-11", "source_receipts": [unreviewed]},
+            accepted, self.source_root, "2026-11", date(2026, 11, 16))
+        self.assertFalse(result["passed"])
+        self.assertIn("reviewer confirmation", " ".join(result["failures"]))
+
+        wrong_hash = self._receipt()
+        wrong_hash["source_sha256"] = "0" * 64
+        result = validate_source_receipts(
+            {"issue": "2026-11", "source_receipts": [wrong_hash]},
+            accepted, self.source_root, "2026-11", date(2026, 11, 16))
+        self.assertFalse(result["passed"])
+        self.assertIn("does not match", " ".join(result["failures"]))
+
+        future = self._receipt(fetch_time="2026-11-17T10:00:00Z",
+                               review_time="2026-11-17T10:15:00Z")
+        result = validate_source_receipts(
+            {"issue": "2026-11", "source_receipts": [future]},
+            accepted, self.source_root, "2026-11", date(2026, 11, 16))
+        self.assertFalse(result["passed"])
+        self.assertIn("after issue evidence cutoff", " ".join(result["failures"]))
+
+    def test_receipt_schema_pass_does_not_claim_source_authenticity(self):
+        pack = {"issue": "2026-11", "observations": [self.row],
+                "source_receipts": [self._receipt()]}
+        pack_path = self.root / "pack_with_receipt.json"
+        pack_path.write_text(json.dumps(pack))
+        result = generate("2026-11", self.root / "out",
+                         source_pack=pack_path, source_root=self.source_root,
+                         now=datetime(2026, 11, 16, tzinfo=timezone.utc))
+        self.assertTrue(result["source_receipt_structurally_valid"])
+        self.assertTrue(result["source_receipt_validation"]["schema_only"])
+        self.assertIs(result["source_authenticity_verified"], False)
+        self.assertIs(result["publication_allowed"], False)
 
     def test_issue_mismatch_never_enters_pdf(self):
         pack = self.root / "pack.json"
