@@ -5,8 +5,10 @@ on:
     paths:
       - "scripts/msk_magazine_monthly.py"
       - "scripts/msk_magazine_nse.py"
+      - "scripts/msk_magazine_editorial.py"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
+      - "tests/test_msk_magazine_editorial.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   push:
@@ -14,8 +16,10 @@ on:
     paths:
       - "scripts/msk_magazine_monthly.py"
       - "scripts/msk_magazine_nse.py"
+      - "scripts/msk_magazine_editorial.py"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
+      - "tests/test_msk_magazine_editorial.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   workflow_dispatch:
@@ -51,8 +55,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_magazine_monthly.py' -v
       - name: Run NSE archive downloader and integrated PDF regression tests
         run: python -m unittest discover -s tests -p 'test_msk_magazine_nse.py' -v
+      - name: Check complete authored magazine and all 16 rendered pages
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_editorial.py' -v
       - name: Compile monthly workflow sources
-        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py
+        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py
 
   monthly-draft:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -101,6 +107,10 @@ jobs:
           SOURCE_ARGS=()
           if [ -f "magazine_artifacts/$ISSUE/sources/source_pack.json" ]; then
             SOURCE_ARGS=(--source-pack "magazine_artifacts/$ISSUE/sources/source_pack.json" --source-root "magazine_artifacts/$ISSUE/sources")
+          fi
+          EDITORIAL="docs/msk_magazine/ISSUE_${ISSUE}_SOURCE_CITED_WORKING_DRAFT.json"
+          if [ -f "$EDITORIAL" ]; then
+            SOURCE_ARGS+=(--editorial-pack "$EDITORIAL")
           fi
           if [ "${{ github.event_name }}" = "schedule" ]; then
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --scheduled --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
