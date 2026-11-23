@@ -125,10 +125,20 @@ class ApprovedBuilderTests(unittest.TestCase):
             approved_plan(ResearchProfile(1_000_000, "medium", 36),
                           json.dumps(fixture()), latest_session=SESSION+timedelta(days=1))
 
-    def test_low_risk_short_horizon_never_invents_positions(self):
-        with self.assertRaises(ResearchUnavailable):
-            approved_plan(ResearchProfile(1_000_000, "low", 6),
-                          json.dumps(fixture()), latest_session=SESSION)
+    def test_low_risk_short_horizon_is_honest_cash_only_report(self):
+        plan, artifact = approved_plan(ResearchProfile(1_000_000, "low", 6),
+                                       json.dumps(fixture()), latest_session=SESSION)
+        self.assertEqual(len(plan.positions), 0)
+        self.assertEqual(plan.cash, Decimal(1_000_000))
+        self.assertEqual(artifact["publication_status"], "APPROVED")
+        pdf = build_automatic_pdf(1_000_000, "low", 6,
+                                  environ=flags(), latest_session=SESSION)
+        pages = PdfReader(io.BytesIO(pdf), strict=True).pages
+        self.assertEqual(len(pages), 3)
+        content = "\\n".join(p.extract_text() or "" for p in pages)
+        self.assertIn("No stock positions", content)
+        self.assertIn("cash", content.lower())
+        self.assertNotIn("QA00", content)
 
     def test_exact_source_whitelist_blocks_lookalikes(self):
         for url in (
