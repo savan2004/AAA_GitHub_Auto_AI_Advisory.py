@@ -135,7 +135,8 @@ class NseCollectorTests(unittest.TestCase):
         self.assertIn("125100.25", rows[0]["excerpt"])
 
     def test_duplicate_identical_evidence_row_rejected(self):
-        duplicated = DATA + DATA.splitlines()[1] + b"\\n"
+        duplicated = DATA + DATA.splitlines()[1] + b"\n"
+        self.assertEqual(duplicated.splitlines().count(DATA.splitlines()[1]), 2)
         with self.assertRaisesRegex(ValueError, "unique exact CSV row"):
             _decode_source(duplicated)
 
