@@ -19,6 +19,25 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(parse([first]).url,URL)
         self.assertEqual(parse([first,revised]).url,revised["ixbrl"])
         self.assertIsNotNone(parse([first,revised]).revised_at)
+    def test_nse_revision_without_broadcast_requires_exact_original(self):
+        original = row()
+        revised = row(broadcast_Date=None,
+                      revised_Date="13-Nov-2026 12:00:00",
+                      ixbrl=URL.replace("212819", "212821"))
+        checked = parse([original, revised])
+        self.assertEqual(checked.url, revised["ixbrl"])
+        self.assertEqual(checked.broadcast_at,
+                         datetime(2026, 11, 12, 17, 22, tzinfo=checked.broadcast_at.tzinfo))
+        self.assertIsNotNone(checked.revised_at)
+        with self.assertRaisesRegex(EvidenceError, "REVISION_UNLINKED"):
+            parse([revised])
+        with self.assertRaisesRegex(EvidenceError, "REVISION_UNLINKED"):
+            parse([original, row(ixbrl=URL.replace("212819", "212822")), revised])
+        with self.assertRaisesRegex(EvidenceError, "METADATA_TIME"):
+            parse([original, row(broadcast_Date=None,
+                                 revised_Date="11-Nov-2026 12:00:00",
+                                 ixbrl=revised["ixbrl"])])
+
     def test_incomplete_or_bad_identity(self):
         for rows,kw in [([row()],{"totalCount":21}),([row(symbol="OTHER")],{}),
            ([row(qe_Date="30-JUN-2026")],{}),([row(consolidated="Consolidated")],{}),
