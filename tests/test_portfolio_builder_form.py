@@ -46,11 +46,10 @@ def harness():
         "_portfolio_doctor_running": set(),
         "_portfolio_doctor_waiting": {},
         "_portfolio_audit_mode": {},
-        "_builder_allowed": lambda m: m.chat.type == "private" and m.chat.id == m.from_user.id,
         "_builder_form": {},
         "portfolio_doctor_builder_command": lambda m, payload_override=None, *, form_entry=None: submitted.append((payload_override, form_entry)),
     }
-    for name in ("_builder_options", "portfolio_builder_button",
+    for name in ("_builder_allowed", "_builder_options", "portfolio_builder_button",
                  "portfolio_builder_option", "portfolio_builder_form_text"):
         node = next(x for x in TREE.body if isinstance(x, ast.FunctionDef) and x.name == name)
         node = copy.deepcopy(node)
@@ -67,6 +66,18 @@ def harness():
 
 
 class BuilderFormTests(unittest.TestCase):
+    def test_builder_guard_rejects_missing_and_mismatched_chat_safely(self):
+        ns, sent, submitted, answers, msg, click, clock = harness()
+        self.assertTrue(ns["_builder_allowed"](msg("hi")))
+        self.assertFalse(ns["_builder_allowed"](SimpleNamespace(chat=None,
+            from_user=SimpleNamespace(id=UID))))
+        self.assertFalse(ns["_builder_allowed"](SimpleNamespace(chat=SimpleNamespace(
+            id=UID, type="group"), from_user=SimpleNamespace(id=UID))))
+        self.assertFalse(ns["_builder_allowed"](SimpleNamespace(chat=SimpleNamespace(
+            id=UID, type="private"), from_user=SimpleNamespace(id=UID+1))))
+        self.assertFalse(ns["_builder_allowed"](SimpleNamespace(chat=SimpleNamespace(
+            id="bad", type="private"), from_user=SimpleNamespace(id=UID))))
+
     def test_public_builder_never_opens_manual_steps(self):
         for flag in ("0", "1"):
             ns, sent, submitted, _, msg, _, clock = harness()
