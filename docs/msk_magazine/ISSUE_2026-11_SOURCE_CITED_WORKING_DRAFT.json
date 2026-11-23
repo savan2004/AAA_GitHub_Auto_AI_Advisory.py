@@ -1,0 +1,295 @@
+{
+  "issue": "2026-11",
+  "as_of": "2026-11-23",
+  "editorial_status": "SOURCE-CITED WORKING DRAFT; NOT FINANCIALLY RECONCILED OR PUBLICATION APPROVED",
+  "pages": [
+    {
+      "page": 3,
+      "headline": "Higher inflation raises the bar for market conviction",
+      "lead": "October consumer inflation and the RBI's policy tightening require investors to separate headline price moves from verified earnings and cash flows.",
+      "analysis": [
+        "An interest-rate increase changes the discount-rate backdrop; sector conclusions still need dated valuations and company disclosures.",
+        "The October CPI release is provisional. Any claimed market reaction must be backed by actual NSE close-to-close data."
+      ],
+      "risk_note": "Do not interpret this macro summary as a market direction forecast or portfolio instruction.",
+      "sources": [
+        {
+          "title": "RBI monetary policy resolution 7 October 2026",
+          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
+          "published_on": "2026-10-07"
+        },
+        {
+          "title": "MoSPI October 2026 consumer-price release",
+          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3",
+          "published_on": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "page": 4,
+      "headline": "Growth and inflation must be read together",
+      "lead": "MoSPI reported October CPI inflation of 6.09% and September industrial-production growth of 6.7%; the periods are different and must not be mixed.",
+      "analysis": [
+        "October food-price inflation was 8.94%, raising household cost pressure; consumer-company margins need issuer-level checks.",
+        "The RBI raised the policy repo rate to 5.50% in October; review borrowing costs alongside demand and industrial output."
+      ],
+      "risk_note": "These figures are from separately dated releases, not a same-period composite indicator.",
+      "sources": [
+        {
+          "title": "MoSPI October 2026 consumer-price release",
+          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3",
+          "published_on": "2026-11-12"
+        },
+        {
+          "title": "MoSPI September 2026 industrial-output release",
+          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2329475&lang=2&reg=48",
+          "published_on": "2026-10-28"
+        },
+        {
+          "title": "RBI monetary policy resolution 7 October 2026",
+          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
+          "published_on": "2026-10-07"
+        }
+      ]
+    },
+    {
+      "page": 5,
+      "headline": "Nifty 50: validate the price series before charting",
+      "lead": "The NSE supplies a dated 30 October snapshot, but one observation does not support a trendline, momentum score or monthly technical forecast.",
+      "analysis": [
+        "Build the chart only from matched trading-date closes with audited units, adjustment rules and no missing sessions.",
+        "Separate market breadth from index-weighted price action; the leading constituents can move the benchmark without broad participation."
+      ],
+      "risk_note": "Support and resistance, RSI and trend conclusions are withheld until a complete verified time series is available.",
+      "sources": [
+        {
+          "title": "NSE equity market snapshot as on 30 October 2026",
+          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
+          "published_on": "2026-10-30"
+        }
+      ]
+    },
+    {
+      "page": 6,
+      "headline": "Bank Nifty and major indices require comparable dates",
+      "lead": "An index comparison is meaningful only when every benchmark has the same valuation date, observation frequency and return calculation.",
+      "analysis": [
+        "Use official close-to-close series for Nifty 50, Nifty Bank, Midcap 150 and Smallcap 250 rather than mixing live and EOD values.",
+        "Show both percentage change and absolute index levels with correct units; a point difference is not comparable across indices."
+      ],
+      "risk_note": "No relative-performance ranking is approved without all official matched-date observations.",
+      "sources": [
+        {
+          "title": "NSE equity market snapshot as on 30 October 2026",
+          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
+          "published_on": "2026-10-30"
+        }
+      ]
+    },
+    {
+      "page": 7,
+      "headline": "Institutional flows need instrument-specific context",
+      "lead": "Foreign and domestic investor flow totals must be sourced by segment and settlement date; cash trades and derivatives cannot be summed as one signal.",
+      "analysis": [
+        "Compare verified cash-market FII and DII figures with turnover and price reaction for the same session.",
+        "Describe breadth using reproducible advancing, declining and unchanged constituent counts, not market anecdotes."
+      ],
+      "risk_note": "FII/DII totals and market-breadth claims remain withheld until official dated tables are captured.",
+      "sources": [
+        {
+          "title": "NSE equity market snapshot as on 30 October 2026",
+          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
+          "published_on": "2026-10-30"
+        }
+      ]
+    },
+    {
+      "page": 8,
+      "headline": "Sector rotation: distinguish returns from narratives",
+      "lead": "Sector leadership requires a consistent index universe and matched start and end dates; a high daily move is not monthly leadership.",
+      "analysis": [
+        "Use total-return and price-return conventions explicitly, with comparability checks before sorting sector rankings.",
+        "Concentration, earnings cycles and policy sensitivity deserve separate commentary after source confirmation."
+      ],
+      "risk_note": "Sector performance winners, laggards and percentages are not stated without official matching series.",
+      "sources": [
+        {
+          "title": "NSE equity market snapshot as on 30 October 2026",
+          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
+          "published_on": "2026-10-30"
+        },
+        {
+          "title": "RBI monetary policy resolution 7 October 2026",
+          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
+          "published_on": "2026-10-07"
+        }
+      ]
+    },
+    {
+      "page": 9,
+      "headline": "Large-cap research starts with issuer evidence",
+      "lead": "Large-cap company pages should connect audited operating results, balance sheets and cash generation to valuation, not only index weight.",
+      "analysis": [
+        "Use the issuer's own latest filed consolidated results before secondary estimates or headline news.",
+        "Compare operating margin, cash conversion and leverage only after units and accounting periods align."
+      ],
+      "risk_note": "No company-specific results or recommendations are certified in this draft pending issuer-filing review.",
+      "sources": [
+        {
+          "title": "NSE equity market snapshot as on 30 October 2026",
+          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
+          "published_on": "2026-10-30"
+        }
+      ]
+    },
+    {
+      "page": 10,
+      "headline": "Mid-cap research demands stronger liquidity checks",
+      "lead": "Mid-cap company research should test earnings quality, working-capital cycles and liquidity rather than extrapolating past share-price returns.",
+      "analysis": [
+        "Confirm the current Midcap 150 universe and free-float liquidity using dated NSE information.",
+        "Separate unusually strong quarterly profit from recurring operating cash flow and sustainable margins."
+      ],
+      "risk_note": "Individual mid-cap company conclusions are withheld until dated issuer financials and price records are reconciled.",
+      "sources": [
+        {
+          "title": "NSE equity market snapshot as on 30 October 2026",
+          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
+          "published_on": "2026-10-30"
+        }
+      ]
+    },
+    {
+      "page": 11,
+      "headline": "Small-cap analysis must price in execution risk",
+      "lead": "Small-cap research requires explicit trading-liquidity and balance-sheet checks because unstable pricing can magnify sizing mistakes.",
+      "analysis": [
+        "Validate the Smallcap 250 universe and identify low-volume names before any peer or valuation comparison.",
+        "Reject comparisons across different fiscal periods, standalone versus consolidated accounts and inconsistent sector groupings."
+      ],
+      "risk_note": "No qualifying small-cap stock list is established by these broad-market data sources alone.",
+      "sources": [
+        {
+          "title": "NSE equity market snapshot as on 30 October 2026",
+          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
+          "published_on": "2026-10-30"
+        }
+      ]
+    },
+    {
+      "page": 12,
+      "headline": "Fundamentals: reconcile statements before valuation",
+      "lead": "An issuer research spotlight needs filing dates, auditor scope, income-statement units, cash flow and share-count consistency.",
+      "analysis": [
+        "Treat exceptional gains and accounting reclassifications separately from recurring operating earnings.",
+        "Cross-check debt, related-party notes, dilution and contingent liabilities before any comparative multiples."
+      ],
+      "risk_note": "Stock-specific valuation ratios cannot be published without original filings and a dated share-price reference.",
+      "sources": [
+        {
+          "title": "RBI monetary policy resolution 7 October 2026",
+          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
+          "published_on": "2026-10-07"
+        }
+      ]
+    },
+    {
+      "page": 13,
+      "headline": "Strategy Lab: test a rate-and-inflation scenario",
+      "lead": "Use October's RBI tightening and November's CPI release to define conditional monitoring rules, not automatic market trades.",
+      "analysis": [
+        "Scenario A: inflation persists; review credit sensitivity and valuation assumptions once actual issuer figures are confirmed.",
+        "Scenario B: price pressure moderates; compare earnings revisions against the same risk controls and liquidity requirements."
+      ],
+      "risk_note": "These are analytical scenarios, not forecasts or personalized buy/sell instructions.",
+      "sources": [
+        {
+          "title": "RBI monetary policy resolution 7 October 2026",
+          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
+          "published_on": "2026-10-07"
+        },
+        {
+          "title": "MoSPI October 2026 consumer-price release",
+          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3",
+          "published_on": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "page": 14,
+      "headline": "Upcoming data calendar and policy checkpoints",
+      "lead": "The next monthly research update must distinguish a scheduled release date from an already published observation.",
+      "analysis": [
+        "MoSPI has scheduled the FY27 second-quarter GDP estimate for 30 November 2026; do not quote it before release.",
+        "The RBI MPC's next scheduled meeting is 2-4 December 2026; policy outcomes must remain unfilled until announced."
+      ],
+      "risk_note": "Future outcomes, final statistics and policy decisions are unknown as of 23 November 2026.",
+      "sources": [
+        {
+          "title": "MoSPI advance schedule for FY27 Q2 GDP release",
+          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2304949&lang=1&reg=3",
+          "published_on": "2026-09-01"
+        },
+        {
+          "title": "RBI monetary policy resolution 7 October 2026",
+          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
+          "published_on": "2026-10-07"
+        }
+      ]
+    },
+    {
+      "page": 15,
+      "headline": "Next month: focus on evidence and risk limits",
+      "lead": "Policy tightening and inflation risk argue for disciplined scenario analysis rather than a single unsupported market forecast.",
+      "analysis": [
+        "Review sector concentration, balance-sheet interest sensitivity and high-frequency volatility only with verified histories.",
+        "Monitor revised inflation, quarterly GDP and the next RBI resolution as distinct dated events."
+      ],
+      "risk_note": "Neither a target index level nor investment allocation is approved from this evidence set.",
+      "sources": [
+        {
+          "title": "RBI monetary policy resolution 7 October 2026",
+          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
+          "published_on": "2026-10-07"
+        },
+        {
+          "title": "MoSPI October 2026 consumer-price release",
+          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3",
+          "published_on": "2026-11-12"
+        },
+        {
+          "title": "MoSPI advance schedule for FY27 Q2 GDP release",
+          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2304949&lang=1&reg=3",
+          "published_on": "2026-09-01"
+        }
+      ]
+    },
+    {
+      "page": 16,
+      "headline": "Research method, omissions and source discipline",
+      "lead": "This draft separates source-cited macro facts from unverified market prices and issuer claims; missing values are explicitly withheld.",
+      "analysis": [
+        "NSE data are not authenticated merely by a matching URL; original bytes, SHA-256 and field-level reconciliation remain necessary.",
+        "Company pages require original exchange filings, calendar alignment, independent calculation checks and owner sign-off."
+      ],
+      "risk_note": "Not investment advice. This editorial draft is not approved for customer distribution or Telegram delivery.",
+      "sources": [
+        {
+          "title": "RBI monetary policy resolution 7 October 2026",
+          "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63839",
+          "published_on": "2026-10-07"
+        },
+        {
+          "title": "MoSPI October 2026 consumer-price release",
+          "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3",
+          "published_on": "2026-11-12"
+        },
+        {
+          "title": "NSE equity market snapshot as on 30 October 2026",
+          "url": "https://www.nseindia.com/market-data/live-equity-market?cat=EW50",
+          "published_on": "2026-10-30"
+        }
+      ]
+    }
+  ]
+}
