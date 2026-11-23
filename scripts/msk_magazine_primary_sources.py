@@ -39,10 +39,14 @@ SOURCES = {
                      r"6[.]7", r"quick estimate"),
     },
     "tcs_q2": {
-        "url": "https://www.tcs.com/who-we-are/newsroom/press-release/tcs-financial-results-q2-fy-2027",
-        "hosts": ("tcs.com", "www.tcs.com"),
-        "patterns": (r"q2.{0,8}fy.{0,8}27", r"7,642", r"2[.]4\s*%",
-                     r"24[.]0\s*%", r"october.{0,30}2026"),
+        # Official TCS *consolidated* September 2026 filing at NSE.
+        # TCS.com's public release responded 403 to GitHub Actions.
+        # Unlike the press release this exchange filing reports INR
+        # amounts; the magazine must disclose that different basis.
+        "url": "https://nsearchives.nseindia.com/corporate/ixbrl/INTEGRATED_FILING_INDAS_200121_08102026220810_iXBRL_WEB.html",
+        "hosts": ("nsearchives.nseindia.com",),
+        "patterns": (r"tcs", r"consolidated", r"01-07-2026",
+                     r"30-09-2026", r"revenue from operations.{0,115}73,18,800[.]00"),
     },
     "persistent_q2": {
         "url": "https://www.persistent.com/media/press-releases/q2-fy27-results/",
