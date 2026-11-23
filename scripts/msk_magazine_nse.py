@@ -66,12 +66,22 @@ def _decode_source(body: bytes) -> tuple[list[dict], dict]:
                 raise ValueError()
         except (InvalidOperation, ValueError):
             raise ValueError("NSE index closing value is invalid")
-        # The exact original line is used as the source quotation.
-        # CSV records with embedded newlines are rejected for evidence safety.
-        matches = [line for line in raw_lines[1:]
-                   if name in line.upper() and day in line and close in line]
+        # Evidence must match the complete parsed CSV record, not substrings.
+        # Substring matching could confuse 25100 with 125100, or accept a
+        # malformed row that happened to contain all three tokens.
+        if None in row:
+            raise ValueError("NSE CSV row has unexpected extra columns")
+        expected_cells = [row.get(field) for field in fields]
+        matches = []
+        for line in raw_lines[1:]:
+            try:
+                cells = next(csv.reader([line], strict=True))
+            except csv.Error as exc:
+                raise ValueError("Malformed NSE CSV evidence row") from exc
+            if cells == expected_cells:
+                matches.append(line)
         if len(matches) != 1:
-            raise ValueError(f"Cannot prove unique CSV row for {name}")
+            raise ValueError(f"Cannot prove unique exact CSV row for {name}")
         result.append({"name": name, "observed": observed,
                        "value": str(value), "excerpt": matches[0]})
     return result, {"fields": fields, "total_rows": len(raw_lines) - 1}
