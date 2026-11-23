@@ -12,6 +12,7 @@ from portfolio_doctor_diagnostics import weighted_secondary_portfolio_ratios
 from portfolio_doctor_live import IST
 from portfolio_doctor_peers import research_industry_peers
 from portfolio_doctor_report import _report_records, build_pdf_bytes
+from portfolio_doctor_risk_history import calculate_historical_risk
 from portfolio_doctor_visual import _trend_label, _financial_metric_label
 
 
@@ -181,6 +182,50 @@ class DoctorReportUpgradeTests(unittest.TestCase):
         self.assertEqual(result["failure_counts"]["MISSING_OR_STALE_COMPLETED_OHLCV"], 151)
         self.assertEqual(result["fresh"], 0)
         self.assertEqual(result["qualified"], 0)
+
+
+    def test_full_five_holding_report_keeps_ten_pages_with_dense_peer_results(self):
+        symbols = ("SAMPLEA", "SAMPLEB", "SAMPLEC", "SAMPLED", "SAMPLEE")
+        industries = ("Consumer Services", "Financial Services", "Consumer Durables",
+                      "Oil Gas & Consumable Fuels", "Capital Goods")
+        frames = {sym: history(base=100 + i * 40)
+                  for i, sym in enumerate(symbols)}
+        rows = [holding(sym, frame=frames[sym], qty=i+1)
+                for i, sym in enumerate(symbols)]
+        dossier = prepare_company_pages(
+            rows, frames, industries=dict(zip(symbols, industries)), now=NOW)
+        risk = calculate_historical_risk(rows, frames, now=NOW)
+        self.assertEqual(risk["status"], "VERIFIED")
+        candidates = [
+            {"symbol": "QUAL{:02d}".format(i), "industry": industries[i % 5],
+             "score": 75.0 + i, "date": DAY, "close": 200.0 + i,
+             "return20": 3.0 + i, "return_window": dossier[i % 5]["return_window"]}
+            for i in range(12)]
+        comparisons = [
+            {"symbol": "COMP{:02d}".format(i), "industry": industries[i % 5],
+             "close": 220.0 + i, "return20": 1.0 + i, "rsi14": 60.0,
+             "date": DAY, "return_window": dossier[i % 5]["return_window"]}
+            for i in range(12)]
+        peers = {
+            "status": "SCREENED", "universe": 501, "pool": 151,
+            "screened": 151, "fresh": 147, "qualified": 12,
+            "held_industries": dict(zip(symbols, industries)),
+            "candidates": candidates, "comparisons": comparisons,
+            "industry_coverage": [
+                {"industry": industry, "pool": 31 if i == 0 else 30,
+                 "attempted": 31 if i == 0 else 30, "fresh": 29,
+                 "qualified": 2}
+                for i, industry in enumerate(industries)],
+        }
+        pages = text_pages(build_pdf_bytes(rows, risk=risk,
+                                           companies=dossier, peers=peers))
+        self.assertEqual(len(pages), 10)
+        self.assertIn("Page 3 of 10", pages[2])
+        self.assertIn("Page 10 of 10", pages[9])
+        self.assertIn("SCREEN COVERAGE", pages[2])
+        self.assertIn("SAME-INDUSTRY MOMENTUM COMPARISON", pages[-1])
+        self.assertNotIn("CONTINUED", "\n".join(pages))
+
 
 
 if __name__ == "__main__":
