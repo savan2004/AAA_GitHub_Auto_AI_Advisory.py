@@ -337,6 +337,8 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     top = sorted(holdings, key=lambda r: (-r['weight'], r['symbol']))
     insights = diagnose_portfolio(holdings)
     exposures = industry_exposure(holdings, peers)
+    ratios = weighted_secondary_portfolio_ratios(holdings, companies)
+    by_company = {entry['symbol']: entry for entry in companies}
     stamp = datetime.now(IST).strftime('%d %b %Y %H:%M IST')
 
     # PAGE 1: meaningful quantitative summary; all source data is verified.
@@ -357,6 +359,17 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     line('Invested: {}   Last-close value: {}'.format(money(invested), money(value)), 9)
     line('Unrealised P/L: Rs {:+,.2f} ({:+.2f}%)'.format(pnl, 100 * pnl / invested), 10, True, 18,
          GREEN if pnl >= 0 else RED)
+    if companies:
+        subhead('VALUE-WEIGHTED PORTFOLIO FUNDAMENTALS (SECONDARY)')
+        pe_ratio, roe_ratio = ratios.get('pe'), ratios.get('roe')
+        pe = '{:.2f}x'.format(pe_ratio['value']) if pe_ratio else 'Unavailable'
+        roe = '{:.2f}%'.format(roe_ratio['value']) if roe_ratio else 'Unavailable'
+        line('Portfolio P/E: {} | Portfolio ROE: {}'.format(pe, roe), 9.2, True)
+        pe_coverage = '{:.1f}%'.format(pe_ratio['coverage_pct']) if pe_ratio else '0%'
+        roe_coverage = '{:.1f}%'.format(roe_ratio['coverage_pct']) if roe_ratio else '0%'
+        line('Value coverage: P/E {} | ROE {}. Arithmetic weighting.'.format(
+            pe_coverage, roe_coverage), 8)
+        line('Screener.in secondary; issuer financials NOT reconciled.', 8, color=MUTED)
     subhead('EXECUTIVE DIAGNOSIS (PRICE-BASED)')
     biggest = top[0]
     line('{} positions | Largest: {} at {:.1f}% of value.'.format(
@@ -364,8 +377,6 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     if biggest['weight'] > 40:
         line('Concentration warning: a single holding exceeds the illustrative 40% threshold.', 9,
              color=RED)
-    line('No numerical health score or personalised target allocation without verified suitability data.', 8,
-         color=MUTED)
     subhead('CURRENT HOLDING ALLOCATION')
     for row in top:
         pct = float(row['weight'])
@@ -378,9 +389,6 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         text_fit('{:.1f}%'.format(pct), bar_x + bar_w + 12, y - 1, 64, 9, True,
                  RED if pct > 40 else NAVY)
         y -= 37
-    subhead('DATA BOUNDARIES')
-    line('Values use your current quantity and average buy cost, plus a verified dated close.', 8)
-    line('Price-based allocation is not a recommendation to sell or add any security.', 8)
     subhead('WHAT IS DRIVING RESULTS')
     line('Top 2 holdings: {:.1f}% of value | Effective stock count: {:.2f} (from {} holdings).'.format(
         insights['top_two_pct'], insights['effective_positions'], len(holdings)), 8.5)
@@ -406,13 +414,13 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             row['pnl'], row['pnl_pct'], row['weight']), 9, leading=15,
             color=GREEN if row['pnl'] >= 0 else RED)
         ema50 = row.get('ema50')
-        trend = ('Above EMA20 and EMA50' if ema50 and row['close'] > row['ema20'] > ema50
-                 else 'Below EMA20 and EMA50' if ema50 and row['close'] < row['ema20'] < ema50
-                 else 'Mixed / insufficient trend confirmation')
+        ema200 = (by_company.get(row['symbol']) or {}).get('ema200')
+        trend = _trend_label(row['close'], row['ema20'], ema50, ema200)
         rsi = 'N/A' if row['rsi14'] is None else '{:.1f}'.format(row['rsi14'])
-        line('EMA20 Rs {:.2f} | EMA50 {} | RSI14 {} | {}'.format(
-            row['ema20'], 'Rs {:.2f}'.format(ema50) if ema50 else 'N/A',
-            rsi, trend), 8, leading=13)
+        line('EMA20 Rs {:.2f} | EMA50 {} | RSI14 {}'.format(
+            row['ema20'], 'Rs {:.2f}'.format(ema50) if ema50 is not None else 'N/A',
+            rsi), 8, leading=13)
+        line('Trend: ' + trend, 7.8, leading=12)
         movement = row.get('return20')
         twenty = ' | 20-session change {:+.1f}%'.format(movement) if movement is not None else ''
         line('20-close high Rs {:.2f} | low Rs {:.2f}{}'.format(
@@ -422,13 +430,15 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         elif str(row.get('price_source') or '').startswith('NSE EOD'):
             line('Source: NSE official daily file; historical OHLC cross-checked.', 7.5, leading=12)
         # Colored review flag communicates *which rule fired*, not a trade.
-        priority = insights['by_symbol'][row['symbol']]['priority']
+        diagnostic = insights['by_symbol'][row['symbol']]
+        priority = diagnostic['priority']
         label_color = RED if priority == 'HIGH FLAGS' else (BLUE if priority == 'WATCH FLAGS' else GREEN)
+        text_fit(_flag_reason(row, diagnostic), left + 3, card_top - 96,
+                 right - left - 139, 7.8, True, label_color)
         pdf.setFillColor(label_color)
         pdf.roundRect(right - 120, card_top - 100, 111, 16, 4, stroke=0, fill=1)
         text_fit(priority, right - 115, card_top - 96, 100, 7, True, WHITE)
         y = min(card_top - 118, y - 7)
-    line('Price status is evidence, not a HOLD / ADD / EXIT instruction.', 8, color=MUTED)
 
     # PAGE 3: sample coverage, vetted signals and non-vetted comparisons separately.
     new_page('03 / NIFTY 500 INDUSTRY-PEER WATCHLIST',
