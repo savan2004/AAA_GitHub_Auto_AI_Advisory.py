@@ -182,10 +182,11 @@ class BankFilingAccountingTests(unittest.TestCase):
                     EvidenceError,"EXCISE_EXPENSE_RECONCILIATION"):
                 extract_quarter(DownloadedFiling(URL,excise_fixture(**kw),NOW),
                                 MEMBER,expected_end=END,now=NOW)
-        with self.assertRaises(EvidenceError):
-            extract_quarter(DownloadedFiling(URL,
-                          excise_fixture().replace(b"Excise Duty",b"Fuel Expense"),NOW),
-                          MEMBER,expected_end=END,now=NOW)
+        absent=extract_quarter(DownloadedFiling(URL,
+                excise_fixture().replace(b"Excise Duty",b"Fuel Expense"),NOW),
+                MEMBER,expected_end=END,now=NOW)
+        # Missing excise must never authorize an unsupported net-revenue offset.
+        self.assertIsNone(absent.excise_cr)
 
 
 if __name__=="__main__":
