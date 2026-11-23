@@ -30,6 +30,7 @@ on:
       - 'portfolio_doctor_bhavcopy.py'
       - 'tests/test_portfolio_doctor_bhavcopy.py'
       - 'tests/test_portfolio_doctor_safety.py'
+      - 'tests/test_portfolio_doctor_ten_stock_csv.py'
       - 'tests/test_portfolio_doctor_stale_recovery.py'
       - '.github/workflows/msk-portfolio-doctor-safety.yml'
   workflow_dispatch:
@@ -50,6 +51,9 @@ jobs:
         run: python -m py_compile portfolio_doctor_live.py portfolio_doctor_input.py portfolio_doctor_calculations.py portfolio_doctor_report.py portfolio_doctor_visual.py portfolio_doctor_peers.py portfolio_doctor_bhavcopy.py main.py portfolio_doctor_diagnostics.py portfolio_doctor_visual.py portfolio_doctor_risk_history.py portfolio_doctor_research_links.py portfolio_doctor_company_research.py portfolio_audit_report.py portfolio_audit_bridge.py
       - name: Test stateless private path (no market API or Telegram sends)
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_safety.py' -v
+
+      - name: Validate ten-stock CSV template, ten-company PDF and five-stock regression
+        run: python -m unittest discover -s tests -p 'test_portfolio_doctor_ten_stock_csv.py' -v
 
       - name: Test private Doctor session switching, typed and upload routing
         run: python -m unittest discover -s tests -p 'test_portfolio_doctor_private_integration.py' -v
