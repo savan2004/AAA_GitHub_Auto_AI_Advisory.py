@@ -458,6 +458,20 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     reasoning = build_reasoning(nifty, t, fv, sc, inp.get("sector"))
     filing_evidence = reconcile_official_quarter(sym, inp.get("stm"))
     fl = eng.build_flags(t, rk, fv, sh, inp.get("consensus"))
+    if filing_evidence.get("status") == "partial_match":
+        h1_cf = filing_evidence.get("h1_operating_cash_flow_crore")
+        h1_profit = filing_evidence.get("h1_profit_crore")
+        if h1_cf is not None and h1_profit and h1_profit > 0:
+            h1_conversion = h1_cf / h1_profit
+            if h1_conversion < 0.60:
+                fl["risks"].append({
+                    "sev": "Medium",
+                    "title": "Low half-year cash conversion",
+                    "evidence": (
+                        f"FY27 H1 consolidated operating cash flow ₹{h1_cf:,.2f} Cr "
+                        f"versus PAT ₹{h1_profit:,.2f} Cr ({h1_conversion:.2f}×). "
+                        "Seasonal working capital can affect half-year figures."),
+                })
     nar = eng.deterministic_narrative(name, sym, t, rk, fv, sc, plan, sh)
     # LLM commentary is opt-in until its qualitative claims can be verified.
     ai_note = eng.ai_analyst_note(name, sym, inp.get("sector"), t, rk, fv, sc, plan, sh) if (use_ai and
@@ -791,6 +805,25 @@ def _fundamentals(R, story):
                 f"<b>Ratio discrepancy:</b> NSE reports debt/equity {official_de:.2f}×; "
                 f"the secondary-source calculation is {vendor_de:.2f}×. "
                 "Methods and scope require investigation; neither is substituted.", "tiny"))
+        half_cf, half_pat = proof.get("h1_operating_cash_flow_crore"), proof.get("h1_profit_crore")
+        if half_cf is not None and half_pat and half_pat > 0:
+            story.append(P(
+                f"<b>Half-year cash flow (NSE filing):</b> FY27 H1 consolidated "
+                f"operating cash flow ₹{half_cf:,.2f} Cr / net profit ₹{half_pat:,.2f} Cr = "
+                f"{half_cf/half_pat:.2f}×. Seasonality matters; this is not the 3Y cash-conversion ratio.",
+                "tiny"))
+        kpi = proof.get("operating_kpis") or {}
+        if kpi.get("period_end") == proof.get("period_end"):
+            story.append(P(
+                f"<b>Operating KPIs, Sep 2026:</b> {kpi['stores']} stores "
+                f"({kpi['stores_added_h1']} added in H1); Q2 like-for-like sales growth "
+                f"{kpi['like_for_like_q2_pct']:.1f}% vs Q1 "
+                f"{kpi['like_for_like_q1_pct']:.1f}%; "
+                f"retail area {kpi['retail_area_million_sqft']:.1f} mn sq ft. "
+                "Company-reported operational measures, not audited forecasts. "
+                '<link href="' + esc(kpi["source_url"]) +
+                '" color="#0B2545">Issuer investor presentation</link>.',
+                "tiny"))
     if R["nar"].get("fundamental"):
         story += [P(R["nar"]["fundamental"], "just"), Spacer(1, 6)]
 
