@@ -712,6 +712,20 @@ if data.empty:
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = data.columns.get_level_values(0)
 data = data.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+# User-requested and auto charts must only use the last verified completed
+# NSE daily session. Never render a still-forming current-day Yahoo candle.
+from market_breadth import expected_completed_session
+expected_eod = str(expected_completed_session())
+_local_sessions = [
+    (t.tz_convert("Asia/Kolkata") if t.tzinfo else t).strftime("%Y-%m-%d")
+    for t in pd.DatetimeIndex(data.index)
+]
+data = data.loc[[day <= expected_eod for day in _local_sessions]].copy()
+if data.empty or str(pd.DatetimeIndex(data.index)[-1].tz_convert("Asia/Kolkata").date()
+                     if pd.DatetimeIndex(data.index).tz is not None
+                     else pd.DatetimeIndex(data.index)[-1].date()) != expected_eod:
+    print(f"[ERROR] Latest completed NSE session {expected_eod} unavailable", file=sys.stderr)
+    sys.exit(1)
 if len(data) < 55:
     print(f"[ERROR] Insufficient completed daily data for {symbol}", file=sys.stderr)
     sys.exit(1)
@@ -775,7 +789,7 @@ ema26    = close_s.ewm(span=26, adjust=False).mean()
 macd     = ema12 - ema26
 macd_sig = macd.ewm(span=9, adjust=False).mean()
 hist     = macd - macd_sig
-vol_ma20 = vol_s.rolling(20).mean()
+vol_ma20 = vol_s.shift(1).rolling(20, min_periods=20).mean()
 
 bb_mid   = sma20
 bb_std   = close_s.rolling(20).std()
@@ -788,10 +802,13 @@ rsi_s    = pd.Series(calc_rsi(close)[:n], index=data.index)
 eb_s, er_s = build_cross_signals(ema9,  ema21, data)
 db_s, dr_s = build_cross_signals(sma20, sma50, data)
 
-# Key scalars
-recent     = data.tail(20)
-support    = float(recent["Low"].min())
-resistance = float(recent["High"].max())
+# Key scalars. The candidate's candle cannot set its own prior resistance.
+from msk_chart_context import summarize_chart
+chart_context = summarize_chart(
+    data["High"].values, data["Low"].values, close, vol_s.values,
+    float(ema9.iloc[-1]), float(ema21.iloc[-1]), float(hist.iloc[-1]))
+support = chart_context["support"]
+resistance = chart_context["resistance"]
 last_close = float(close[-1])
 prev_close = float(close[-2]) if n >= 2 else last_close
 change_pct = (last_close - prev_close) / prev_close * 100
@@ -935,6 +952,19 @@ try:
         ax.tick_params(colors=TEXT_SEC, labelsize=7.5)
         for spine in ax.spines.values(): spine.set_edgecolor(BORDER_COL)
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+
+    # One glance on a phone: causal multi-period structure from the same
+    # verified OHLCV as the candles. No score, target or trade instruction.
+    _view_color = (TV_GREEN if chart_context["outlook"] == "POSITIVE MOMENTUM"
+                   else TV_RED if chart_context["outlook"] == "NEGATIVE MOMENTUM"
+                   else TEXT_SEC)
+    ax0.text(.985, .975,
+             chart_context["outlook"] + "\n" + chart_context["level"] + "\n"
+             + chart_context["periods"],
+             transform=ax0.transAxes, ha="right", va="top", fontsize=7.3,
+             color=_view_color, fontweight="bold",
+             bbox=dict(boxstyle="round,pad=0.45", fc=BG_CARD,
+                       ec=BORDER_COL, lw=.7, alpha=.95), zorder=18)
 
     # BB fill
     _xs = np.arange(n)
