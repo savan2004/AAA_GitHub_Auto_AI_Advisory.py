@@ -19,6 +19,9 @@ from zoneinfo import ZoneInfo
 from pypdf import PdfReader
 from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import simpleSplit
+
+from scripts.msk_magazine_editorial import load_editorial_pack
 from reportlab.pdfgen import canvas
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -209,6 +212,19 @@ def _txt(c, x, y, words, size=10, color=NAVY, bold=False):
     c.drawString(x, y, str(words))
 
 
+def _wrapped(c, x, y, value, *, size=9, max_width=465,
+             max_lines=3, leading=13, color=NAVY, bold=False):
+    """Draw all lines or fail instead of silently clipping editorial text."""
+    font = "Helvetica-Bold" if bold else "Helvetica"
+    lines = simpleSplit(str(value), font, size, max_width)
+    if len(lines) > max_lines:
+        raise MagazineError(
+            f"Editorial text overflow: {len(lines)} lines exceed {max_lines}"
+        )
+    for i, line in enumerate(lines):
+        _txt(c, x, y - i * leading, line, size, color, bold)
+
+
 def _logo(c, x=45, y=777, logo_file: Path | None = None):
     if logo_file is not None and logo_file.is_file():
         c.drawImage(str(logo_file), x, y - 7, width=95, height=40,
@@ -277,7 +293,7 @@ def _index(c, issue, index):
         _txt(c, 514, y, f"{row['page']:02d}", 9, GRAY)
 
 
-def _page(c, number, title, issue, layout, observations):
+def _page(c, number, title, issue, layout, observations, editorial=None):
     w, h = A4
     _rect(c, 46, h - 74, 44, 4, TEAL)
     _txt(c, 46, h - 103, title, 19 if len(title) < 31 else 15, NAVY, True)
@@ -311,18 +327,39 @@ def _page(c, number, title, issue, layout, observations):
     else:
         for i in range(4):
             _rect(c, 46 + 126 * i, 263, 118, 205, LIGHT if i % 2 else "#EAF1F7")
-    _txt(c, 58, 435, "Analysis / chart workspace", 10, NAVY, True)
-    _txt(c, 58, 416, "Populate only after source verification.", 8, GRAY)
     _rect(c, 46, 102, 496, 140, LIGHT)
-    _txt(c, 58, 215, "MONTHLY INSIGHT / RISK NOTE", 10, NAVY, True)
-    _txt(c, 58, 193, "Research and issuer data remain withheld until verified.", 9, GRAY)
-    _txt(c, 58, 171, "Current status: DRAFT - human editorial approval required.", 9, TEAL)
+    if editorial:
+        _wrapped(c, 58, 445, editorial["headline"], size=11,
+                 max_width=463, max_lines=2, bold=True)
+        _wrapped(c, 58, 410, editorial["lead"], size=9,
+                 max_width=463, max_lines=4, leading=13)
+        _wrapped(c, 58, 352, "01  " + editorial["analysis"][0], size=8.4,
+                 max_width=463, max_lines=3, leading=13)
+        _wrapped(c, 58, 306, "02  " + editorial["analysis"][1], size=8.4,
+                 max_width=463, max_lines=3, leading=13)
+        _txt(c, 58, 215, "RISK / EVIDENCE LIMITATION", 10, NAVY, True)
+        _wrapped(c, 58, 193, editorial["risk_note"], size=8.5,
+                 max_width=460, max_lines=3, leading=13)
+        sources = " | ".join(
+            urlsplit(src["url"]).hostname + " (" + src["published_on"] + ")"
+            for src in editorial["sources"]
+        )
+        _wrapped(c, 58, 139, "Sources: " + sources, size=7.4,
+                 max_width=460, max_lines=2, leading=11, color=TEAL)
+        _txt(c, 58, 111, "Source-linked draft; figures require independent reconciliation.", 7.5, GRAY)
+    else:
+        _txt(c, 58, 435, "Analysis / chart workspace", 10, NAVY, True)
+        _txt(c, 58, 416, "Populate only after source verification.", 8, GRAY)
+        _txt(c, 58, 215, "MONTHLY INSIGHT / RISK NOTE", 10, NAVY, True)
+        _txt(c, 58, 193, "Research and issuer data remain withheld until verified.", 9, GRAY)
+        _txt(c, 58, 171, "Current status: DRAFT - human editorial approval required.", 9, TEAL)
 
 
 def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER,
              source_pack: Path | None = None, source_root: Path | None = None,
              logo_file: Path | None = None, scheduled: bool = False,
-             now: datetime | None = None) -> dict:
+             now: datetime | None = None,
+             editorial_pack: Path | None = None) -> dict:
     now = now or datetime.now(IST)
     if not MONTH_RE.fullmatch(issue):
         raise MagazineError("Issue must be YYYY-MM")
@@ -338,7 +375,9 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
             f"Issue directory already exists: {dest}; refusing to overwrite "
             "existing draft, page evidence, or release ledger"
         )
-    dest.mkdir(parents=True, exist_ok=False)
+    editorial = (load_editorial_pack(editorial_pack, issue,
+                                   as_of=now.astimezone(IST).date())
+                 if editorial_pack is not None else {})
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
@@ -346,6 +385,7 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
     else:
         by_page, failures = {}, ["No independently retrieved financial source pack supplied"]
+    dest.mkdir(parents=True, exist_ok=False)
     pdf_file = dest / f"MSK_{issue}_EDITORIAL_DRAFT.pdf"
     c = canvas.Canvas(str(pdf_file), pagesize=A4)
     c.setTitle(f"MSK Monthly Market Outlook {issue} - UNAPPROVED DRAFT")
@@ -360,15 +400,18 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         elif n == 2:
             _index(c, issue, index)
         elif n == 16:
-            _page(c, n, title, issue, entry["layout"], [])
+            _page(c, n, title, issue, entry["layout"], [], editorial.get(n))
         else:
-            _page(c, n, title, issue, entry["layout"], by_page.get(n, []))
+            _page(c, n, title, issue, entry["layout"], by_page.get(n, []),
+                  editorial.get(n))
         _footer(c, n, issue)
         c.showPage()
         page_obj = {"page": n, "locked_title": title, "layout": entry["layout"],
                     "status": "PENDING_EDITORIAL_REVIEW", "observations": by_page.get(n, []),
                     "visual_reviewed": False, "financial_reviewed": False,
-                    "human_approved": False}
+                    "human_approved": False,
+                    "editorial_content_present": n in editorial,
+                    "editorial_sources": editorial.get(n, {}).get("sources", [])}
         pages.append(page_obj)
         (dest / f"page_{n:02d}.json").write_text(
             json.dumps(page_obj, indent=2) + "\n", encoding="utf-8")
@@ -377,6 +420,7 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     result = {"issue": issue, "draft_pdf": pdf_file.name,
               "pdf_sha256": hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
               "page_count": 16, "source_consistency_rows": sum(map(len, by_page.values())),
+              "editorial_pages_authored": len(editorial),
               "source_failures": failures, "logo_asset_provided": bool(logo_file and logo_file.is_file()),
               "mechanical_pdf_checks": qa, "editorial_approved": False,
               "publication_allowed": False, "pages": pages}
@@ -415,6 +459,7 @@ def main(argv=None):
     p.add_argument("--source-pack")
     p.add_argument("--source-root")
     p.add_argument("--approved-logo")
+    p.add_argument("--editorial-pack", help="Complete 03-16 dated editorial JSON; never publication approval")
     p.add_argument("--scheduled", action="store_true",
                    help="Enforce first Monday and current IST issue")
     a = p.parse_args(argv)
@@ -423,6 +468,7 @@ def main(argv=None):
         source_pack=Path(a.source_pack) if a.source_pack else None,
         source_root=Path(a.source_root) if a.source_root else None,
         logo_file=Path(a.approved_logo) if a.approved_logo else None,
+        editorial_pack=Path(a.editorial_pack) if a.editorial_pack else None,
         scheduled=a.scheduled,
     )
     print(json.dumps({"issue": result["issue"], "pdf_sha256": result["pdf_sha256"],
