@@ -161,10 +161,10 @@ class BankFilingAccountingTests(unittest.TestCase):
         download=Mock(return_value=doc)
         result=check_latest_quarter(MEMBER,snapshot,listing=listing,
                                     download=download,clock=lambda:NOW)
-        self.assertEqual(result["issuer_revenue_cr"], "10000")
-        self.assertEqual(result["secondary_revenue_cr"], "7740")
-        self.assertEqual(result["reconciled_comparable_revenue_cr"], "7740")
-        self.assertEqual(result["disclosed_excise_cr"], "2260")
+        self.assertEqual(Decimal(result["issuer_revenue_cr"]), Decimal("10000"))
+        self.assertEqual(Decimal(result["secondary_revenue_cr"]), Decimal("7740"))
+        self.assertEqual(Decimal(result["reconciled_comparable_revenue_cr"]), Decimal("7740"))
+        self.assertEqual(Decimal(result["disclosed_excise_cr"]), Decimal("2260"))
         self.assertEqual(result["revenue_comparison_basis"],
                          "NET_OF_DISCLOSED_ISSUER_EXCISE")
         self.assertEqual(result["publication_status"], "WITHHELD")
