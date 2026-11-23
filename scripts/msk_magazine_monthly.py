@@ -25,10 +25,12 @@ if __package__:
     from .msk_magazine_editorial import load_editorial_pack
     from .msk_magazine_charts import draw_research_chart, load_metrics
     from .msk_magazine_source_archive import verify_nse_dashboard, SourceEvidenceError
+    from .msk_magazine_primary_sources import recheck_primary_sources
 else:
     from msk_magazine_editorial import load_editorial_pack
     from msk_magazine_charts import draw_research_chart, load_metrics
     from msk_magazine_source_archive import verify_nse_dashboard, SourceEvidenceError
+    from msk_magazine_primary_sources import recheck_primary_sources
 from reportlab.pdfgen import canvas
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -385,7 +387,8 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
              now: datetime | None = None,
              editorial_pack: Path | None = None,
              market_pack: Path | None = None,
-             nse_proof_dir: Path | None = None) -> dict:
+             nse_proof_dir: Path | None = None,
+             primary_proof_dir: Path | None = None) -> dict:
     now = now or datetime.now(IST)
     if not MONTH_RE.fullmatch(issue):
         raise MagazineError("Issue must be YYYY-MM")
@@ -432,8 +435,10 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         if (receipt.get("sha256") != nse_verified["sha256"] or
                 receipt.get("checked_rows") != nse_verified["checked_rows"]):
             raise MagazineError("NSE source receipt does not match independently checked PDF")
-    if scheduled and market_data and nse_verified is None:
-        raise MagazineError("Scheduled market claims require original verified source PDF")
+    primary_verified = (recheck_primary_sources(primary_proof_dir)
+                        if primary_proof_dir is not None else None)
+    if scheduled and market_data and (nse_verified is None or primary_verified is None):
+        raise MagazineError("Scheduled market claims require NSE and primary-source receipts")
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
@@ -499,6 +504,8 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
               "nse_original_pdf_reconciled": nse_verified is not None,
               "nse_reconciled_named_rows": nse_verified["checked_rows"] if nse_verified else 0,
               "nse_original_pdf_sha256": nse_verified["sha256"] if nse_verified else None,
+              "macro_issuer_original_sources_verified": primary_verified is not None,
+              "macro_issuer_source_files_rechecked": primary_verified["sources_checked"] if primary_verified else 0,
               "market_reference_url": market_data["market_source"]["url"] if market_data else None,
               "market_reference_date": market_data["market_source"]["report_date"] if market_data else None,
               "source_failures": failures, "logo_asset_provided": bool(rendered_logo and rendered_logo.is_file()),
@@ -544,6 +551,7 @@ def main(argv=None):
     p.add_argument("--editorial-pack", help="Complete 03-16 dated editorial JSON; never publication approval")
     p.add_argument("--market-pack", help="Dated official-market research evidence for real charts")
     p.add_argument("--nse-proof-dir", help="Original downloaded NSE PDF and independently reconciled receipt")
+    p.add_argument("--primary-proof-dir", help="Original RBI, MoSPI and issuer HTML files and receipts")
     p.add_argument("--scheduled", action="store_true",
                    help="Enforce first Monday and current IST issue")
     a = p.parse_args(argv)
@@ -555,6 +563,7 @@ def main(argv=None):
         editorial_pack=Path(a.editorial_pack) if a.editorial_pack else None,
         market_pack=Path(a.market_pack) if a.market_pack else None,
         nse_proof_dir=Path(a.nse_proof_dir) if a.nse_proof_dir else None,
+        primary_proof_dir=Path(a.primary_proof_dir) if a.primary_proof_dir else None,
         scheduled=a.scheduled,
     )
     print(json.dumps({"issue": result["issue"], "pdf_sha256": result["pdf_sha256"],
