@@ -39,6 +39,27 @@ OFFICIAL_QUARTERS = {
         # Explicit exchange debt/equity ratio is a DIFFERENT field and
         # must not silently replace vendor debt/equity without definition.
         "exchange_debt_equity": 0.16,
+        # Same NSE consolidated unaudited iXBRL (six months to Sep 2026):
+        # CFO 55,257 lakh = ₹552.57 Cr; consolidated PAT 1,60,342 lakh.
+        # This H1 period ratio is NOT the same calculation as 3Y conversion.
+        "h1_operating_cash_flow_crore": 552.57,
+        "h1_profit_crore": 1603.42,
+        # DMART's investor presentation published in October 2026:
+        "operating_kpis": {
+            "period_end": "2026-09-30",
+            "stores": 518,
+            "stores_added_h1": 18,
+            "like_for_like_q2_pct": 9.5,
+            "like_for_like_q1_pct": 5.5,
+            "retail_area_million_sqft": 21.4,
+            "total_bills_crore_q2": 11.1,
+            "source_url": (
+                "https://api.dmartindia.com/corporate/content/file/v1/2/"
+                "x3O3SiYbxPWrdpch4CFoWmvF1791627002/"
+                "Investor%20Presentation%20for%20the%20year%20ended%20"
+                "September%2030%2C%202026.pdf"
+            ),
+        },
     },
 }
 
@@ -77,6 +98,9 @@ def reconcile_official_quarter(symbol, statements):
         "reviewed_date": official["reviewed_date"],
         "source_url": official["source_url"],
         "exchange_debt_equity": official["exchange_debt_equity"],
+        "h1_operating_cash_flow_crore": official["h1_operating_cash_flow_crore"],
+        "h1_profit_crore": official["h1_profit_crore"],
+        "operating_kpis": official["operating_kpis"],
     }
     qs = (statements or {}).get("quarters") or []
     if not qs:
