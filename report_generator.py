@@ -51,6 +51,7 @@ from reportlab.platypus import (
 
 import research_engine as eng
 from research_reasoning import build_reasoning
+from research_filing_evidence import reconcile_official_quarter
 import report_charts as charts
 from pdf_technical_setup import build_setup_charts
 from report_quarterly_charts import render_quarterly_chart
@@ -411,6 +412,7 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     sc = eng.compute_scores(t, rk, fv)
     plan = eng.build_trade_plan(t, rk, sc)
     reasoning = build_reasoning(nifty, t, fv, sc, inp.get("sector"))
+    filing_evidence = reconcile_official_quarter(sym, inp.get("stm"))
     fl = eng.build_flags(t, rk, fv, sh, inp.get("consensus"))
     nar = eng.deterministic_narrative(name, sym, t, rk, fv, sc, plan, sh)
     # LLM commentary is opt-in until its qualitative claims can be verified.
@@ -442,6 +444,7 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
+                filing_evidence=filing_evidence,
                 news=inp.get("news") or [], fund=fund, price_session=price_session,
                 generated=datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M IST"))
 
@@ -722,6 +725,28 @@ def _fundamentals(R, story):
     if not (any(fv.get(k) is not None for k in ("pe", "roe", "pb", "eps")) or fv["has_statements"]):
         return
     story += section("Fundamental Analysis", "Valuation, growth, profitability, balance sheet and cash flow")
+    proof = R.get("filing_evidence") or {}
+    if proof.get("status") == "partial_match":
+        matched = proof["matched"]
+        details = "; ".join(
+            f"{r['field'].replace('_', ' ').title()} "
+            + (f"₹{r['official']:,.2f} Cr" if r["unit"] == "₹ Cr" else f"₹{r['official']:.2f}")
+            for r in matched
+        )
+        story += [P("<b>NSE Q2 source cross-check:</b> " + esc(details) +
+                    ". Matched " + str(len(matched)) + "/3 fields to the " +
+                    esc(proof["period_end"]) +
+                    " consolidated, unaudited issuer filing (limited review). "
+                    "This is field-level comparison, not a full financial audit.", "small"),
+                  P('<link href="' + esc(proof["source_url"]) +
+                    '" color="#0B2545">Open official NSE iXBRL filing</link>' +
+                    " · Reviewed " + esc(proof["reviewed_date"]), "tiny")]
+        official_de, vendor_de = proof.get("exchange_debt_equity"), fv.get("de")
+        if official_de is not None and vendor_de is not None and abs(official_de-vendor_de) > 0.02:
+            story.append(P(
+                f"<b>Ratio discrepancy:</b> NSE reports debt/equity {official_de:.2f}×; "
+                f"the secondary-source calculation is {vendor_de:.2f}×. "
+                "Methods and scope require investigation; neither is substituted.", "tiny"))
     if R["nar"].get("fundamental"):
         story += [P(R["nar"]["fundamental"], "just"), Spacer(1, 6)]
 
@@ -736,6 +761,9 @@ def _fundamentals(R, story):
         ["ROE", n(fv.get("roe"), 1, "%"), "ROCE", n(fv.get("roce"), 1, "%")],
         ["Dividend yield", n(fv.get("div_y"), 2, "%"), "Debt / Equity", n(fv.get("de"), 2, "×") if not fv["fin"] else "n.m. (financial)"],
     ]))
+    if fv.get("eps_basis") and fv["eps_basis"].startswith("four consecutive"):
+        story.append(P("TTM EPS is derived from four consecutive secondary-source quarters; "
+                       "its price/P-E reconciliation is a consistency check, not independent audit.", "tiny"))
 
     if fv["has_statements"] or fv["has_quarters"]:
         story += [Spacer(1, 6), P("Growth & earnings quality", "h2"), kv([
@@ -1076,6 +1104,10 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
     try:
         inputs = collect_inputs(sym)
         R = assemble(inputs)
+        if (R.get("filing_evidence") or {}).get("status") == "mismatch":
+            raise ValueError(
+                "Research report withheld: secondary quarter does not reconcile "
+                "to the dated NSE issuer filing")
         # CI-only provenance of the exact inputs used to draw the report.
         # Normal Telegram callers continue receiving the unchanged 3-tuple.
         if evidence_out is not None:
