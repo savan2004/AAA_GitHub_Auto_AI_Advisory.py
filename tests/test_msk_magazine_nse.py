@@ -123,6 +123,30 @@ class NseCollectorTests(unittest.TestCase):
                          now=date(2026, 12, 7), lookback_days=0)
         self.assertFalse(result["success"])
 
+    def test_substring_price_is_not_accepted_as_source_evidence(self):
+        # A misleading raw line contains all the old substring tokens,
+        # but its actual CSV closing column has a different value.
+        deceptive = DATA.replace(
+            b"Nifty 50,30-11-2026,25000,25200,24900,25100.25,100.25,0.4,0",
+            b"Nifty 50,30-11-2026,25000,25200,24900,125100.25,100.25,0.4,0",
+        )
+        rows, _ = _decode_source(deceptive)
+        self.assertEqual(rows[0]["value"], "125100.25")
+        self.assertIn("125100.25", rows[0]["excerpt"])
+
+    def test_duplicate_identical_evidence_row_rejected(self):
+        duplicated = DATA + DATA.splitlines()[1] + b"\\n"
+        with self.assertRaisesRegex(ValueError, "unique exact CSV row"):
+            _decode_source(duplicated)
+
+    def test_unexpected_extra_columns_rejected(self):
+        malformed = DATA.replace(
+            b"Nifty 50,30-11-2026,25000,25200,24900,25100.25,100.25,0.4,0",
+            b"Nifty 50,30-11-2026,25000,25200,24900,25100.25,100.25,0.4,0,EXTRA",
+        )
+        with self.assertRaisesRegex(ValueError, "extra columns"):
+            _decode_source(malformed)
+
     def test_csv_missing_columns_rejected(self):
         with self.assertRaises(ValueError):
             _decode_source(b"name,close\nNifty 50,30000\n")
