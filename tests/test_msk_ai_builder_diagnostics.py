@@ -103,7 +103,7 @@ class ResearchFailureDiagnostics(unittest.TestCase):
     def test_single_symbol_diagnostic_avoids_full_bank_fetch_and_preserves_gate(self):
         payload = {"totalCount": 0, "data": []}
         buff = io.StringIO()
-        with patch("msk_ai_builder_diagnostics.fetch_listing", return_value=payload) as listing, \\
+        with patch("msk_ai_builder_diagnostics.fetch_listing", return_value=payload) as listing, \
              contextlib.redirect_stdout(buff):
             rc = main(["--symbol", "MCX", "--period-end", "2026-09-30",
                        "--scope", "consolidated"])
