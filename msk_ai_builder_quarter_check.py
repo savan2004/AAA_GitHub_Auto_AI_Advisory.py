@@ -29,28 +29,45 @@ def check_latest_quarter(member, evidence, *, listing=fetch_listing,
     result = extract_quarter(doc, member, expected_end=period.end, now=clock(), scope=evidence.scope)
     if result.board_approval > ref.broadcast_at.date():
         raise EvidenceError("QUARTER_CHECK_PUBLICATION_MISMATCH")
+    # Compare the actual source definitions. Screener sometimes reports
+    # revenue net of EXCISE, whereas issuer iXBRL reports gross operating
+    # revenue and separately discloses excise under "Other Expenses".
+    # This is allowed only after source-internal two-column reconciliation
+    # in extract_quarter(); never invent an adjustment or edit vendor data.
+    reported_revenue = Decimal(str(period.revenue_cr))
+    raw_diff = abs(result.revenue_cr - reported_revenue)
+    matched_basis = "ISSUER_REVENUE_FROM_OPERATIONS"
+    comparable_revenue = result.revenue_cr
+    if raw_diff > Decimal("0.51") and result.excise_cr is not None:
+        comparable_revenue = result.revenue_cr - result.excise_cr
+        matched_basis = "NET_OF_DISCLOSED_ISSUER_EXCISE"
+    observation = {
+        "symbol": member.symbol, "period": period.end.isoformat(),
+        "scope": evidence.scope, "filing_url": ref.url,
+        "document_sha256": result.digest,
+        "issuer_revenue_cr": str(result.revenue_cr),
+        "issuer_revenue_definition": result.revenue_definition,
+        "reconciled_comparable_revenue_cr": str(comparable_revenue),
+        "disclosed_excise_cr": (str(result.excise_cr)
+                               if result.excise_cr is not None else None),
+        "secondary_revenue_cr": str(period.revenue_cr),
+        "revenue_comparison_basis": matched_basis,
+        "issuer_profit_cr": str(result.profit_cr),
+        "issuer_profit_definition": result.profit_definition,
+        "secondary_profit_cr": str(period.profit_cr),
+        "publication_status": "WITHHELD",
+    }
     if audit is not None:
-        audit({"symbol": member.symbol, "period": period.end.isoformat(),
-               "scope": evidence.scope, "filing_url": ref.url,
-               "document_sha256": result.digest,
-               "issuer_revenue_cr": str(result.revenue_cr),
-               "issuer_profit_cr": str(result.profit_cr),
-               "secondary_revenue_cr": str(period.revenue_cr),
-               "secondary_profit_cr": str(period.profit_cr),
-               "publication_status": "WITHHELD"})
-    for primary, secondary in ((result.revenue_cr, period.revenue_cr),
-                               (result.profit_cr, period.profit_cr)):
-        if abs(primary - Decimal(str(secondary))) > Decimal("0.51"):
-            raise EvidenceError("QUARTER_CHECK_VALUE_MISMATCH")
+        audit(observation)
+    if (comparable_revenue <= 0
+            or abs(comparable_revenue - reported_revenue) > Decimal("0.51")
+            or abs(result.profit_cr - Decimal(str(period.profit_cr))) > Decimal("0.51")):
+        raise EvidenceError("QUARTER_CHECK_VALUE_MISMATCH")
     return {"symbol": member.symbol, "isin": member.isin,
             "period": period.end.isoformat(), "scope": evidence.scope,
             "filing_url": ref.url, "document_sha256": result.digest,
             "broadcast_at": ref.broadcast_at.isoformat(),
             "revised_at": ref.revised_at.isoformat() if ref.revised_at else None,
-            "issuer_revenue_cr": str(result.revenue_cr),
-            "issuer_profit_cr": str(result.profit_cr),
-            "issuer_profit_definition": "Total profit (loss) for period",
-            "limitation": "Numeric comparison only; profit definition equivalence and full financial history not certified",
-            "secondary_revenue_cr": str(period.revenue_cr),
-            "secondary_profit_cr": str(period.profit_cr),
+            **observation,
+            "limitation": "Latest-quarter numeric reconciliation only; full financial history, source authenticity and profit-definition comparability not certified",
             "status": "LATEST_QUARTER_MATCHED_ONLY", "publication_status": "WITHHELD"}
