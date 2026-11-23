@@ -1698,16 +1698,17 @@ def portfolio_doctor_document(m, _typed_payload=None):
         safe_send(uid, "Unable to start Portfolio Doctor. Resend your holdings shortly.")
 
 
-# Portfolio Doctor's optional new-capital builder is independent of saved holdings.
-# It uses a single private message and a disposable in-memory worker.
+# Owner-only fictional preview. Customer Builder remains disabled until approved research exists.
 def _builder_allowed(m):
     """Only private one-to-one Telegram chats; no permission escalation for /doctor."""
     uid = getattr(getattr(m, "from_user", None), "id", None)
-    return (getattr(getattr(m, "chat", None), "type", None) == "private"
-            and type(uid) is int and uid > 0 and uid == m.chat.id)
+    chat = getattr(m, "chat", None)
+    return (getattr(chat, "type", None) == "private"
+            and type(uid) is int and uid > 0 and uid == getattr(chat, "id", None))
 
 
 _builder_form = {}
+
 
 def _builder_options(stage, choices):
     kb = types.InlineKeyboardMarkup(row_width=len(choices))
@@ -1718,11 +1719,7 @@ def _builder_options(stage, choices):
 
 @bot.message_handler(func=lambda m: (m.text or "") == "🏗️ Portfolio Builder")
 def portfolio_builder_button(m):
-    """Fail closed until an actual approved research batch powers automatic selection.
-
-    The legacy customer-facing manual-symbol wizard is retired. The separate
-    owner-only fictional preview remains accessible by its explicit test command.
-    """
+    """Keep the customer Builder fail-closed and cancel any stale private form."""
     if not _builder_allowed(m):
         safe_send(m.chat.id, "Portfolio Builder is available in private chat only.")
         return
@@ -1741,6 +1738,7 @@ def portfolio_builder_button(m):
 
 @bot.message_handler(commands=["builder_v2_preview"])
 def portfolio_builder_private_beta(m):
+    """Three-step owner-only fictional preview; never connects to customer research."""
     from msk_ai_builder_telegram import preview_allowed
     if not _builder_allowed(m) or not preview_allowed(m.chat.id):
         safe_send(m.chat.id, "Private Portfolio Builder Beta is unavailable.")
@@ -1751,6 +1749,7 @@ def portfolio_builder_private_beta(m):
             safe_send(uid, "Another private report is already running.")
             return
         _portfolio_doctor_waiting.pop(uid, None)
+        _portfolio_audit_mode.pop(uid, None)
         _builder_form[uid] = {"mode": "private_beta", "step": "amount",
                               "until": time.monotonic() + 180}
     state.clear(uid)
@@ -1763,13 +1762,13 @@ def send_private_builder_beta(uid, entry, horizon):
         safe_send(uid, "Private Beta is unavailable.")
         return
     with _portfolio_doctor_lock:
-        if _builder_form.get(uid) is not entry or entry["until"] <= time.monotonic():
+        if _builder_form.get(uid) is not entry or entry.get("until", 0) <= time.monotonic():
             notice = "Beta session expired. Use /builder_v2_preview."
         elif uid in _portfolio_doctor_running or not _portfolio_doctor_slots.acquire(blocking=False):
             notice = "Report busy. Tap your horizon again shortly."
         else:
             notice = None
-            _builder_form.pop(uid)
+            _builder_form.pop(uid, None)
             _portfolio_doctor_running.add(uid)
     if notice:
         safe_send(uid, notice)
@@ -1797,6 +1796,7 @@ def send_private_builder_beta(uid, entry, horizon):
 
 
 def portfolio_builder_option(call, value):
+    """Accept only current owner-preview callbacks; old customer keyboards are retired."""
     uid = getattr(getattr(call, "from_user", None), "id", None)
     chat = getattr(getattr(call, "message", None), "chat", None)
     if chat is None or chat.type != "private" or type(uid) is not int or uid != chat.id:
@@ -1804,18 +1804,18 @@ def portfolio_builder_option(call, value):
     stage, _, option = value.partition("|")
     with _portfolio_doctor_lock:
         entry = _builder_form.get(uid)
-        if entry is None or entry["until"] <= time.monotonic():
+        if not entry or entry.get("mode") != "private_beta":
+            _builder_form.pop(uid, None)
+            next_step = "retired"
+        elif entry.get("until", 0) <= time.monotonic():
             _builder_form.pop(uid, None)
             next_step = "expired"
-        elif stage == "risk" and entry["step"] == "risk" and option in ("low", "medium", "high"):
+        elif stage == "risk" and entry.get("step") == "risk" and option in ("low", "medium", "high"):
             entry.update(risk=option, step="horizon", until=time.monotonic() + 180)
             next_step = "horizon"
-        elif stage == "horizon" and entry["step"] == "horizon" and option in ("6", "18", "36", "60"):
-            if entry.get("mode") == "private_beta":
-                next_step = "private_beta"
-            else:
-                entry.update(horizon=option, step="stocks", until=time.monotonic() + 180)
-                next_step = "stocks"
+        elif stage == "horizon" and entry.get("step") == "horizon" and option in ("6", "18", "36", "60"):
+            entry.update(horizon=option)
+            next_step = "private_beta"
         else:
             next_step = "invalid"
     try:
@@ -1825,22 +1825,18 @@ def portfolio_builder_option(call, value):
     if next_step == "private_beta":
         send_private_builder_beta(uid, entry, option)
     elif next_step == "horizon":
-        steps = 3 if entry.get("mode") == "private_beta" else 5
-        safe_send(uid, f"Step 3/{steps} — Select time frame:",
+        safe_send(uid, "TEST MODE — Step 3/3: Select time frame:",
                   reply_markup=_builder_options("horizon", [
                       ("6 months", "6"), ("18 months", "18"),
                       ("36 months", "36"), ("60 months", "60")]))
-    elif next_step == "stocks":
-        safe_send(uid, "Step 4/5 — Type 1–5 symbols and your chosen percentages:\n"
-                  "<code>SBIN 25\nBHEL 20\nINFY 15</code>\n"
-                  "Total percentages cannot exceed 100%. Stocks are NOT selected by AI.")
     else:
-        safe_send(uid, "Selection expired or not valid. Tap Portfolio Builder to restart.")
+        safe_send(uid, "This old Builder option is no longer available. Start the private fictional preview again.")
 
 
 def portfolio_builder_form_text(m, text):
-    """Temporary form fields only; return True if builder consumed this input."""
+    """Handle only the amount field in the owner-only fictional preview."""
     uid = m.chat.id
+    retired = False
     with _portfolio_doctor_lock:
         entry = _builder_form.get(uid)
         if not entry:
@@ -1850,182 +1846,79 @@ def portfolio_builder_form_text(m, text):
             processing = True
         else:
             processing = False
-        if entry and entry["until"] <= time.monotonic():
+        if entry and entry.get("mode") != "private_beta":
+            _builder_form.pop(uid, None)
+            entry = None
+            retired = True
+        if entry and entry.get("until", 0) <= time.monotonic():
             _builder_form.pop(uid, None)
             entry = None
     if processing:
-        safe_send(uid, "Your Portfolio Builder report is being processed.")
+        safe_send(uid, "Your private Builder preview is being processed.")
+        return True
+    if retired:
+        safe_send(uid, "The old manual Builder form has been retired. For existing holdings, use Portfolio Doctor.")
         return True
     if not entry:
-        safe_send(uid, "Form expired. Tap Portfolio Builder again.")
+        safe_send(uid, "Preview session expired. Start /builder_v2_preview again.")
         return True
     if text.strip().lower() in ("/cancel", "cancel"):
         with _portfolio_doctor_lock:
             _builder_form.pop(uid, None)
-        safe_send(uid, "Builder cancelled. No details saved.")
+        safe_send(uid, "Builder preview cancelled. No details saved.")
         return True
-    beta = entry.get("mode") == "private_beta"
-    if beta:
-        from msk_ai_builder_telegram import preview_allowed
-        if not _builder_allowed(m) or not preview_allowed(uid):
-            with _portfolio_doctor_lock:
-                if _builder_form.get(uid) is entry:
-                    _builder_form.pop(uid, None)
-            safe_send(uid, "Private Beta is unavailable.")
-            return True
-    step = entry["step"]
+
+    from msk_ai_builder_telegram import preview_allowed
+    if not _builder_allowed(m) or not preview_allowed(uid):
+        with _portfolio_doctor_lock:
+            if _builder_form.get(uid) is entry:
+                _builder_form.pop(uid, None)
+        safe_send(uid, "Private Beta is unavailable.")
+        return True
+
+    step = entry.get("step")
     if step == "amount":
         amount = text.strip().replace(",", "")
-        maximum = 15000000 if beta else 1000000000000
-        if not re.fullmatch(r"[0-9]{1,13}", amount) or not 1 <= int(amount) <= maximum:
-            safe_send(uid, "Enter a valid rupee amount, like 1000000.")
+        if not re.fullmatch(r"[0-9]{1,8}", amount) or not 1 <= int(amount) <= 15000000:
+            safe_send(uid, "Enter a valid rupee amount, up to 1.5 crore.")
             return True
         entry.update(amount=amount, step="risk", until=time.monotonic() + 180)
-        steps = 3 if beta else 5
-        safe_send(uid, f"Step 2/{steps} — Tap your risk preference (not an AI risk assessment):",
+        safe_send(uid, "TEST MODE — Step 2/3: Tap your risk preference (not an investment suitability assessment):",
                   reply_markup=_builder_options("risk", [
                       ("Low", "low"), ("Mid", "medium"), ("High", "high")]))
         return True
     if step in ("risk", "horizon"):
-        safe_send(uid, "Please tap a choice on the previous message.")
+        safe_send(uid, "Please tap a choice on the previous preview message.")
         return True
-    if step == "stocks":
-        from portfolio_doctor_builder_private import parse_builder_request, BuilderError
-        rows = [line.strip() for line in text.splitlines() if line.strip()]
-        try:
-            if not 1 <= len(rows) <= 5:
-                raise BuilderError()
-            preview = ("/doctor_builder\nCAPITAL={amount} HORIZON={horizon} RISK={risk} "
-                       "CASH=0 STOCKCAP=100 SECTORCAP=100\n{rows}").format(
-                           amount=entry["amount"], horizon=entry["horizon"], risk=entry["risk"],
-                           rows="\n".join(rows))
-            parse_builder_request(preview)
-        except BuilderError:
-            safe_send(uid, "Enter 1–5 lines, e.g. <code>SBIN 25\nBHEL 20</code>, "
-                      "with unique symbols and total allocation up to 100%.")
-            return True
-        entry.update(stocks="\n".join(rows), step="limits", until=time.monotonic() + 180)
-        safe_send(uid, "Step 5/5 — Set your limits as three numbers:\n"
-                  "Minimum cash (₹), max per stock (%), max per sector (%).\n"
-                  "Example: <code>20000 35 45</code>\n"
-                  "Type back to edit your stocks or /cancel to stop.")
-        return True
-    if step == "limits":
-        if text.casefold() == "back":
-            entry.update(step="stocks", until=time.monotonic() + 180)
-            safe_send(uid, "Send your revised stocks and percentages, one per line. Total cannot exceed 100%.")
-            return True
-        fields = text.split()
-        try:
-            if len(fields) != 3 or any(not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?", v) for v in fields):
-                raise ValueError()
-            cash, stock, sector = map(float, fields)
-            if not 0 <= cash <= int(entry["amount"]) or not 0 < stock <= 100 or not 0 < sector <= 100:
-                raise ValueError()
-        except ValueError:
-            safe_send(uid, "Enter numbers like <code>20000 35 45</code>; cash cannot exceed capital.")
-            return True
-        payload = ("/doctor_builder\nCAPITAL={amount} HORIZON={horizon} RISK={risk} "
-                   "CASH={cash} STOCKCAP={stock} SECTORCAP={sector}\n{stocks}").format(
-                       amount=entry["amount"], horizon=entry["horizon"], risk=entry["risk"],
-                       cash=fields[0], stock=fields[1], sector=fields[2],
-                       stocks=entry["stocks"]).encode("utf-8")
-        portfolio_doctor_builder_command(m, payload_override=payload, form_entry=entry)
-        return True
-    return False
+
+    with _portfolio_doctor_lock:
+        if _builder_form.get(uid) is entry:
+            _builder_form.pop(uid, None)
+    safe_send(uid, "This old Builder form is no longer available. Start the private fictional preview again.")
+    return True
 
 
 @bot.message_handler(commands=["doctor_builder"])
 def portfolio_doctor_builder_command(m, payload_override=None, *, form_entry=None):
-    if not _builder_allowed(m):
-        safe_send(m.chat.id, "Portfolio Builder works only in a private bot chat.")
-        return
-    if os.getenv("MSK_PORTFOLIO_DOCTOR_BUILDER_ENABLED", "1") != "1":
-        safe_send(m.chat.id, "Portfolio Builder is temporarily disabled. Basic /doctor remains available.")
-        return
-
-    uid = m.chat.id
-    payload = payload_override if payload_override is not None else (m.text or "").encode("utf-8", "replace")
-    from portfolio_doctor_builder_private import BuilderError, parse_builder_request, run_isolated_builder
-    try:
-        parse_builder_request(payload)
-    except BuilderError:
-        if form_entry is not None:
-            safe_send(uid, "Check your cash and allocation limits. Resend the three limits or type back to edit stocks.")
-            return
-        safe_send(uid, "Send one private message in this format:\n"
-                  "<code>/doctor_builder\n"
-                  "CAPITAL=100000 HORIZON=36 RISK=medium CASH=20000 STOCKCAP=35 SECTORCAP=45\n"
-                  "INFY 25\nHDFCBANK 30\nTCS 15</code>\n"
-                  "The remaining amount stays as cash. Only 1–5 requested symbols; "
-                  "no trades or previous holdings are used.")
+    """Retired compatibility endpoint: never parses symbols or starts an allocation worker."""
+    uid = getattr(getattr(m, "chat", None), "id", None)
+    if uid is None:
         return
     with _portfolio_doctor_lock:
-        if form_entry is not None and _builder_form.get(uid) is not form_entry:
-            return
-        if uid in _portfolio_doctor_running:
-            safe_send(uid, "Your Portfolio Doctor request is already being processed.")
-            return
-        if not _portfolio_doctor_slots.acquire(blocking=False):
-            safe_send(uid, "Portfolio Builder is busy. " +
-                      ("Resend your three limits shortly." if form_entry is not None
-                       else "Retry the one-message request."))
-            return
-        _portfolio_doctor_running.add(uid)
+        _builder_form.pop(uid, None)
+    safe_send(uid, "The old manual Portfolio Builder command has been retired. "
+              "No stock symbols or percentages were processed. "
+              "For existing holdings, use 🩺 Portfolio Doctor. "
+              "Automatic Builder is not yet available.")
 
-    if form_entry is not None:
-        safe_send(uid, "Checking completed closing prices and your allocation limits.")
 
-    def finish_request(delivered=False):
-        with _portfolio_doctor_lock:
-            if form_entry is not None and _builder_form.get(uid) is form_entry:
-                if delivered:
-                    _builder_form.pop(uid)
-                else:
-                    form_entry["until"] = time.monotonic() + 180
-            _portfolio_doctor_running.discard(uid)
-            _portfolio_doctor_slots.release()
-
-    retry_hint = (" Resend your three limits or type back to edit stocks."
-                  if form_entry is not None else " Review and resend your one-message request.")
-
-    def _run():
-        import io
-        delivered = False
-        try:
-            pdf_bytes = run_isolated_builder(payload, timeout=120)
-            bio = io.BytesIO(pdf_bytes)
-            bio.name = "MSK_Optional_Portfolio_Builder.pdf"
-            receipt = bot.send_document(
-                uid, bio, caption="Hypothetical new-capital allocation only. No investment order.",
-                protect_content=True)
-            if (not isinstance(getattr(receipt, "message_id", None), int)
-                    or not getattr(getattr(receipt, "document", None), "file_id", None)):
-                raise BuilderError("WORKER_FAILED")
-            delivered = True
-            logger.info("MSK_PORTFOLIO_BUILDER_DELIVERY state=SENT receipt_verified=true")
-        except BuilderError as exc:
-            logger.warning("MSK_PORTFOLIO_BUILDER_HEALTH_ALERT code=%s", exc.code)
-            if exc.code in ("NO_PRICES", "STALE_PRICES"):
-                safe_send(uid, "A current completed-market close is missing or stale." + retry_hint)
-            elif exc.code == "UNKNOWN_SECTOR":
-                safe_send(uid, "One stock's sector could not be verified." + retry_hint)
-            elif exc.code in ("BAD_INPUT", "CONSTRAINTS"):
-                detail = html.escape(exc.detail) if exc.detail else "Inputs or allocation limits conflict."
-                safe_send(uid, detail + retry_hint)
-            else:
-                safe_send(uid, "Portfolio Builder is temporarily unavailable." + retry_hint)
-        except Exception as exc:
-            logger.error("MSK_PORTFOLIO_BUILDER_HEALTH_ALERT type=%s", type(exc).__name__)
-            safe_send(uid, "Unable to generate or deliver a verified Builder PDF." + retry_hint)
-        finally:
-            finish_request(delivered)
-
-    try:
-        executor.submit(_run)
-    except Exception:
-        finish_request()
-        safe_send(uid, "Portfolio Builder could not start." + retry_hint)
+def _looks_like_retired_builder_allocations(text):
+    """Recognize old SYMBOL PERCENT rows so they are never sent to stock search."""
+    rows = [row.strip() for row in (text or "").splitlines() if row.strip()]
+    if not 1 <= len(rows) <= 5:
+        return False
+    pattern = r"[A-Za-z][A-Za-z0-9&_.-]{0,19}\s+(?:100(?:\.0{1,2})?|(?:[1-9]?\d)(?:\.\d{1,2})?)%?"
+    return all(re.fullmatch(pattern, row) for row in rows)
 
 
 # ── Button Handlers ──────────────────────────────────────────────────────────
@@ -2476,6 +2369,11 @@ def handle_text(m):
     if portfolio_builder_form_text(m, text):
         return
 
+    if _looks_like_retired_builder_allocations(text):
+        safe_send(uid, "This looks like the old manual Builder format, which is retired. "
+                  "For existing holdings, open Portfolio Doctor and send Symbol, Quantity and Average Buy Price.")
+        return
+
     # Lost in-memory state after a process restart must not strand the
     # explicitly configured PRIVATE owner tester. This does NOT extend
     # customer access, restore expired sessions, or use persistent holdings.
@@ -2501,10 +2399,10 @@ def handle_text(m):
                   "Select Portfolio Doctor again before sending them.")
         return
 
-    # Builder settings must not be treated as a stock name.
+    # Old Builder settings must never fall through to stock-name lookup.
     if text.upper().startswith("CAPITAL="):
-        safe_send(uid, "These are Portfolio Builder settings, not an NSE ticker. "
-                  "Tap 🏗️ Portfolio Builder for the complete one-message example.")
+        safe_send(uid, "These are retired Portfolio Builder settings, not a stock name. "
+                  "The automatic Builder is not yet available. No stock search was started.")
         return
 
     if state.get(uid) == "analysis":
