@@ -607,7 +607,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         held_row = by_symbol[symbol]
         new_page('{:02d} / COMPANY RESEARCH: {}'.format(
             (5 if has_risk else 4)+index+1, symbol),
-            'Dated technical facts and limited secondary financial evidence; not a trade opinion.')
+            'Completed-session technical facts and dated secondary research coverage.')
         line('Exchange close {}: {} | Current portfolio weight {:.2f}%'.format(
             company['date'], money(held_row['close']), held_row['weight']), 9, True)
         line('Industry: {}'.format(company.get('industry') or 'Not verified'), 8)
@@ -640,7 +640,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                 '{:.2f}% of price'.format(atr) if atr is not None else 'Unavailable',
                 '{:.2f}x'.format(volume) if volume is not None else 'Unavailable'), 8.5)
             subhead('DAILY PRICE, MOVING AVERAGES AND VOLUME')
-            company_price_chart(company)
+            company_price_chart(company, average_buy=held_row['buy'])
         subhead('FUNDAMENTAL AND VALUATION FACTS')
         finance = company.get('financial') or {}
         if finance.get('status') == 'SECONDARY':
@@ -653,38 +653,53 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             # overflowing the hard 10-page private-report envelope.
             for j in range(0, len(metrics), 2):
                 first = metrics[j]
-                text_fit('{}: {:,.2f} {} ({})'.format(
-                    first['label'], first['value'], first['unit'], first['period']),
-                    left, y, 245, 7.8)
+                text_fit(_financial_metric_label(first), left, y, 245, 7.8)
                 if j + 1 < len(metrics):
                     second = metrics[j+1]
-                    text_fit('{}: {:,.2f} {} ({})'.format(
-                        second['label'], second['value'], second['unit'], second['period']),
-                        left+260, y, 245, 7.8)
+                    text_fit(_financial_metric_label(second), left+260, y, 245, 7.8)
                 y -= 13
         else:
             line('Not verified: no usable dated comparable financial statement facts.', 8)
             line('P/E, sales, profit, margins, cash flow and debt are not guessed.', 8)
         window = company.get('return_window')
-        matched_peers = [
-            peer for peer in (peers.get('candidates') or [])
-            if held_row.get('exchange') != 'BSE' and window
-            and peer.get('return_window') == window
-            and peer.get('industry') == company.get('industry')
-            and peer.get('return20') is not None
-        ][:2]
+        # Page 3 gives two different buckets: qualified candidates AND
+        # verified-but-not-qualified comparisons. Carry both into each dossier.
+        peer_records = (list(peers.get('candidates') or []) +
+                        list(peers.get('comparisons') or []))
+        matched_peers, used_symbols = [], set()
+        for peer in peer_records:
+            if (held_row.get('exchange') == 'BSE' or company.get('status') != 'VERIFIED'
+                    or not isinstance(window, (tuple, list)) or len(window) != 21
+                    or not isinstance(peer, dict) or peer.get('symbol') in used_symbols
+                    or peer.get('symbol') == symbol
+                    or peer.get('return_window') != window
+                    or peer.get('date') != company.get('date')
+                    or peer.get('industry') != company.get('industry')
+                    or not isinstance(peer.get('return20'), (int, float))
+                    or not math.isfinite(peer['return20'])):
+                continue
+            matched_peers.append(peer)
+            used_symbols.add(peer['symbol'])
+            if len(matched_peers) >= 2:
+                break
         subhead('SAME-INDUSTRY MOMENTUM COMPARISON')
         if matched_peers:
-            line('20-session return on matching trading dates | {}: {:+.1f}%'.format(
+            line('20-session return on identical 21 trading dates | {}: {:+.1f}%'.format(
                 symbol, company['return20']), 8, bold=True, leading=12)
             for peer in matched_peers:
-                line('{}: {:+.1f}% | Difference: {:+.1f} pp | Screen score {:.0f}/100'.format(
-                    peer['symbol'], peer['return20'], peer['return20'] - company['return20'],
-                    peer['score']), 8, leading=12)
-            line('Technical comparison only. Peer valuation and financial quality are unverified.',
+                score = peer.get('score')
+                if isinstance(score, (int, float)) and math.isfinite(score):
+                    provenance = 'Qualified moderate screen ({:.0f}/100)'.format(score)
+                else:
+                    provenance = 'Verified comparison; NOT qualified'
+                line('{}: {:+.1f}% | Difference {:+.1f} pp | {}'.format(
+                    peer['symbol'], peer['return20'],
+                    peer['return20'] - company['return20'], provenance),
+                    7.7, leading=12)
+            line('Peer valuation and financial quality are unverified.',
                  8, color=MUTED, leading=12)
         else:
-            line('No screened peer with matching industry and all 21 closing dates.', 8)
+            line('No verified same-industry peer shares all 21 closing dates.', 8)
             line('Peer valuation and financial quality are unverified.', 8, color=MUTED)
     footer()
     pdf.save()
