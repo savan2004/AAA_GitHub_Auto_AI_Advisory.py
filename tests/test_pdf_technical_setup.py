@@ -81,7 +81,7 @@ class TechnicalChartRegression(unittest.TestCase):
             text = " ".join((page.extract_text() or "") for page in PdfReader(str(pdf)).pages)
             self.assertIn("Technical Analysis", text)
             self.assertIn("ONE-PAGE DECISION SNAPSHOT", text)
-            self.assertIn("Verified quarterly visual trends", text)
+            self.assertIn("Quarterly trends (provider-reported; not independently reconciled)", text)
             self.assertIn("Technical setup observation", text)
             self.assertIn("No confirmed setup means WAIT", text)
             self.assertGreater(pdf.stat().st_size, 30000)
