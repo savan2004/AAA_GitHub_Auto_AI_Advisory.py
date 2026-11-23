@@ -16,7 +16,7 @@ class EditorialPackError(ValueError):
 
 
 ALLOWED_SOURCE_DOMAINS = {
-    "rbi.org.in", "pib.gov.in", "mospi.gov.in", "nseindia.in",
+    "rbi.org.in", "pib.gov.in", "mospi.gov.in", "nseindia.com", "nseindia.in",
     "niftyindices.com", "sebi.gov.in", "bseindia.com", "mca.gov.in",
     "indiabudget.gov.in", "federalreserve.gov", "bea.gov", "bls.gov",
 }
