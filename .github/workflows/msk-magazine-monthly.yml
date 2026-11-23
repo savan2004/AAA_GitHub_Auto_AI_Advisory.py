@@ -8,11 +8,13 @@ on:
       - "scripts/msk_magazine_editorial.py"
       - "scripts/msk_magazine_charts.py"
       - "scripts/msk_magazine_source_archive.py"
+      - "scripts/msk_magazine_primary_sources.py"
       - "assets/msk_ai_bot_logo_recreated.png"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
       - "tests/test_msk_magazine_source_archive.py"
+      - "tests/test_msk_magazine_primary_sources.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   push:
@@ -23,11 +25,13 @@ on:
       - "scripts/msk_magazine_editorial.py"
       - "scripts/msk_magazine_charts.py"
       - "scripts/msk_magazine_source_archive.py"
+      - "scripts/msk_magazine_primary_sources.py"
       - "assets/msk_ai_bot_logo_recreated.png"
       - "tests/test_msk_magazine_monthly.py"
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
       - "tests/test_msk_magazine_source_archive.py"
+      - "tests/test_msk_magazine_primary_sources.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   workflow_dispatch:
@@ -67,14 +71,21 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_magazine_editorial.py' -v
       - name: Run source-PDF provenance regression tests
         run: python -m unittest discover -s tests -p 'test_msk_magazine_source_archive.py' -v
+      - name: Run macro and issuer source integrity tests
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_primary_sources.py' -v
       - name: Compile monthly workflow sources
-        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_source_archive.py
+        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_source_archive.py scripts/msk_magazine_primary_sources.py
       - name: Fetch and reconcile original NSE dashboard bytes
         if: github.event_name == 'pull_request'
         run: |
           python scripts/msk_magazine_source_archive.py \
             --metrics-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json \
             --output-dir editorial_evidence/2026-11
+
+      - name: Fetch and validate seven primary macro and issuer source documents
+        if: github.event_name == 'pull_request'
+        run: |
+          python scripts/msk_magazine_primary_sources.py --output-dir editorial_evidence/2026-11/primary
 
       - name: Build a private 16-page November editorial visual proof
         if: github.event_name == 'pull_request'
@@ -84,7 +95,8 @@ jobs:
               --output-dir editorial_proof \
               --editorial-pack docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json \
               --market-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json \
-              --nse-proof-dir editorial_evidence/2026-11
+              --nse-proof-dir editorial_evidence/2026-11 \
+              --primary-proof-dir editorial_evidence/2026-11/primary
             mkdir -p editorial_proof/2026-11/source_verification
             cp -a editorial_evidence/2026-11/. editorial_proof/2026-11/source_verification/
           fi
@@ -141,6 +153,8 @@ jobs:
             python scripts/msk_magazine_source_archive.py \
               --metrics-pack "docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json" \
               --output-dir "editorial_source_inputs/$ISSUE/source_verification"
+            python scripts/msk_magazine_primary_sources.py \
+              --output-dir "editorial_source_inputs/$ISSUE/source_verification/primary"
           else
             echo "::error::NEW_MONTH_REQUIRES_MONTH_SPECIFIC_VERIFIED_SOURCE_ARCHIVE"
             exit 1
@@ -168,6 +182,7 @@ jobs:
           if [ -f "$METRICS" ]; then
             SOURCE_ARGS+=(--market-pack "$METRICS")
             SOURCE_ARGS+=(--nse-proof-dir "editorial_source_inputs/$ISSUE/source_verification")
+            SOURCE_ARGS+=(--primary-proof-dir "editorial_source_inputs/$ISSUE/source_verification/primary")
           fi
           if [ "${{ github.event_name }}" = "schedule" ]; then
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --scheduled --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
