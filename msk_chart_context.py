@@ -9,6 +9,23 @@ from __future__ import annotations
 import math
 
 
+def completed_weekly_reference(daily):
+    """Weekly trend from the SAME verified daily candles, with no partial week.
+
+    A Monday-Thursday last session is never promoted into a completed Friday
+    weekly bar. Holiday-shortened weeks are conservatively excluded if the
+    calendar Friday wasn't independently verified.
+    """
+    import pandas as pd
+    if daily is None or daily.empty or "Close" not in daily:
+        return None
+    weekly = daily["Close"].resample("W-FRI").last().dropna()
+    last = pd.Timestamp(daily.index[-1])
+    if last.weekday() != 4:
+        weekly = weekly.iloc[:-1]
+    return pd.DataFrame({"Close": weekly}) if len(weekly) >= 10 else None
+
+
 def summarize_chart(highs, lows, closes, volumes, ema_fast, ema_slow, macd_hist):
     """Causal 20/50/100/200-session structure + a descriptive momentum label."""
     n = len(closes)
