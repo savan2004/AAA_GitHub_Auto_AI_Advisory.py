@@ -510,7 +510,9 @@ def _safe_peer_watchlist(recs):
     # holdings-only PDF. The worker already suppresses all sensitive logs.
     try:
         from portfolio_doctor_peers import research_industry_peers
-        with optional_review_deadline(25):
+        # One bounded batched fetch for up to 200 peers. Preserve a hard
+        # timeout and never withhold the holdings-only PDF on provider failure.
+        with optional_review_deadline(35):
             return research_industry_peers(recs)
     except (Exception, OptionalReviewTimeout):
         return None
