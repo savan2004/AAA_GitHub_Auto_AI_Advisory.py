@@ -47,7 +47,7 @@ def _period(label):
     """Parse only explicit completed Indian financial-quarter end labels."""
     if not isinstance(label, str):
         return None
-    m = re.fullmatch(r"(Mar|Jun|Sep|Dec)\\s+(20\\d{2})", label.strip(), flags=re.I)
+    m = re.fullmatch(r"(Mar|Jun|Sep|Dec)\s+(20\d{2})", label.strip(), flags=re.I)
     if not m:
         return None
     mm = {"mar": 3, "jun": 6, "sep": 9, "dec": 12}[m.group(1).lower()]
