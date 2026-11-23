@@ -52,9 +52,24 @@ def parse_listing(payload,*,symbol,period_end,scope,now):
             raise EvidenceError("FILING_METADATA_SCOPE")
         if basis!=scope:
             continue
-        published=_time(row.get("broadcast_Date"))
         revised_raw=row.get("revised_Date")
         revised=None if revised_raw in (None,"","-") else _time(revised_raw)
+        broadcast_raw=row.get("broadcast_Date")
+        if broadcast_raw in (None,"","-") and revised is not None:
+            # NSE's revised-file entry may omit its original broadcast date.
+            # Resolve ONLY if this same response contains exactly one original
+            # publication for this symbol, period and accounting basis.
+            originals=[other for other in rows if other is not row
+                       and isinstance(other,dict)
+                       and other.get("symbol")==symbol
+                       and other.get("qe_Date")==row["qe_Date"]
+                       and str(other.get("consolidated","")).strip().lower()==basis
+                       and other.get("broadcast_Date") not in (None,"","-")
+                       and other.get("revised_Date") in (None,"","-")]
+            if len(originals)!=1:
+                raise EvidenceError("FILING_METADATA_REVISION_UNLINKED")
+            broadcast_raw=originals[0]["broadcast_Date"]
+        published=_time(broadcast_raw)
         if published.date()<period_end or published>now or (revised and not published<=revised<=now):
             raise EvidenceError("FILING_METADATA_TIME")
         matches.append(FilingReference(symbol,end,basis,published,revised,check_url(row.get("ixbrl"))))
