@@ -22,8 +22,8 @@ def verify_eod_cover_timestamp(cover_text):
     from datetime import datetime
 
     normalized = " ".join((cover_text or "").split())
-    issue = re.search(r"(\\d{2}-[A-Za-z]{3}-\\d{4})\\s+(\\d{2}):(\\d{2})\\s+IST\\b", normalized)
-    session = re.search(r"Price:\\s*EOD\\s+session\\s+(\\d{2}-[A-Za-z]{3}-\\d{4})", normalized, re.I)
+    issue = re.search(r"(\d{2}-[A-Za-z]{3}-\d{4})\s+(\d{2}):(\d{2})\s+IST\b", normalized)
+    session = re.search(r"Price:\s*EOD\s+session\s+(\d{2}-[A-Za-z]{3}-\d{4})", normalized, re.I)
     if not issue or not session:
         return
     try:
