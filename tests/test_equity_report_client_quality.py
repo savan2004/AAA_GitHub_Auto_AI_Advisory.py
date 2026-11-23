@@ -91,7 +91,7 @@ class EquityReportQuality(unittest.TestCase):
         self.assertIn("_require_latest_completed_eod(market, expected_completed_session())", REPORT)
 
     def test_unsourced_headlines_and_unverified_probability_are_suppressed(self):
-        news = fn(REPORT, "_real_news", {"logger": type("Log", (), {"info": lambda *a: None})()})
+        news = fn(REPORT, "_real_news", {"List": list, "logger": type("Log", (), {"info": lambda *a: None})()})
         self.assertEqual(news("DMART"), [])
         self.assertNotIn('if R["news"]:', REPORT)
         self.assertNotIn("about 68% of outcomes", REPORT)
