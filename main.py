@@ -2158,11 +2158,6 @@ def report_btn(m):
 
 
 # ── 🔥 Stocks Buzz — breakout radar over the top-1000 NSE stocks ─────────────
-_buzz_lock = threading.Lock()
-_buzz_running = False
-_buzz_waiters = set()
-
-
 def _buzz_keyboard(result):
     """One tap per top breakout → opens the Technical / Fundamental / Chart / PDF menu."""
     syms = stocks_buzz.top_symbols(result, 5)
@@ -2184,60 +2179,32 @@ def _deliver_buzz(chat_id, result):
 
 
 def run_buzz(chat_id, *, force_refresh=False):
-    global _buzz_running
-    # Normal requests can reuse a verified completed-session snapshot.
-    cached = None if force_refresh else stocks_buzz.get_cached()
-    if cached:
-        _deliver_buzz(chat_id, cached)
-        return
+    """Render serves completed-session research; GitHub Actions performs scans.
 
-    with _buzz_lock:
-        _buzz_waiters.add(chat_id)
-        if _buzz_running:
-            return
-        _buzz_running = True
-
-    last_ping = time.monotonic()
-
-    def _progress(done, total):
-        nonlocal last_ping
-        now = time.monotonic()
-        if now - last_ping <= 40:
-            return
-        last_ping = now
-        with _buzz_lock:
-            targets = list(_buzz_waiters)
-        for cid in targets:
-            try:
-                safe_send(cid, f"⏳ Stocks Buzz scan: downloaded {done}/{total} stocks…")
-            except Exception as exc:
-                logger.warning("Buzz progress delivery chat=%s: %s", cid, type(exc).__name__)
-
-    result = None
+    A missing or stale verified Neon snapshot must never trigger a 1,000-stock
+    Yahoo/pandas scan in the Telegram process. Keep the customer informed and
+    avoid speculative or old-session trade-ready calls.
+    """
+    if force_refresh:
+        logger.info("MSK_BUZZ_FORCE_REFRESH_DEFERRED github_actions_only=1")
     try:
-        safe_send(chat_id, "🔥 <b>Stocks Buzz</b> — scanning NSE stocks for breakouts…\n"
-                           "Verified completed-session results can be reused for later requests.")
-        result = stocks_buzz.run_scan(progress_cb=_progress)
-    except Exception:
-        logger.exception("Stocks Buzz scan failed")
-
-    # Requests can join while Telegram sends the previous batch. Release the
-    # scan only when the queue is empty, in the same lock as the empty check.
-    while True:
-        with _buzz_lock:
-            if not _buzz_waiters:
-                _buzz_running = False
-                return
-            targets = list(_buzz_waiters)
-            _buzz_waiters.clear()
-        for cid in targets:
-            try:
-                if result is None:
-                    safe_send(cid, "❌ Stocks Buzz could not complete the scan. Please retry shortly.")
-                else:
-                    _deliver_buzz(cid, result)
-            except Exception:
-                logger.exception("Buzz result delivery failed chat=%s", cid)
+        cached = stocks_buzz.get_cached()
+    except Exception as exc:
+        logger.warning("MSK_BUZZ_SNAPSHOT_LOOKUP_FAILED type=%s",
+                       type(exc).__name__)
+        cached = None
+    if cached is None:
+        logger.warning("MSK_BUZZ_SNAPSHOT_MISSING on_demand_scan=disabled")
+        safe_send(
+            chat_id,
+            "⏳ <b>Stocks Buzz research is not ready.</b> "
+            "The verified market-session scan runs on GitHub Actions "
+            "after 5:00 PM IST on weekdays. "
+            "Results appear only after the research database confirms "
+            "current-session coverage. No unverified picks were sent."
+        )
+        return
+    _deliver_buzz(chat_id, cached)
 
 @bot.message_handler(commands=["buzz"])
 def cmd_buzz(m):
