@@ -119,7 +119,6 @@ class DoctorReportUpgradeTests(unittest.TestCase):
         self.assertEqual(len(pages), 5)
         self.assertIn("EMA200", pages[-1])
         self.assertIn("Avg buy Rs 220", pages[-1])
-        self.assertIn("HIGH", pages[1] if "HIGH" in pages[1] else pages[0]) if False else None
         self.assertEqual(_trend_label(150, 140, 145, 170),
                          "Above EMA20/50 | EMA20<EMA50 | Close below EMA200")
         self.assertNotIn("Mixed / insufficient trend confirmation", pages[1])
