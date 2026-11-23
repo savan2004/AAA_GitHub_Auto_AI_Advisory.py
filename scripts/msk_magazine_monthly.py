@@ -443,6 +443,22 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
             json.dumps(page_obj, indent=2) + "\n", encoding="utf-8")
     c.save()
     qa = audit_pdf(pdf_file, master_path=master_path, issue=issue)
+    if editorial:
+        reader = PdfReader(str(pdf_file))
+        for page_num, content in sorted(editorial.items()):
+            page_obj = reader.pages[page_num - 1]
+            extracted = " ".join((page_obj.extract_text() or "").split())
+            if content["headline"] not in extracted:
+                qa["errors"].append(f"Page {page_num}: authored headline missing in PDF")
+            linked = set()
+            for annotation in page_obj.get("/Annots", []):
+                action = annotation.get_object().get("/A")
+                if action and action.get("/URI"):
+                    linked.add(str(action["/URI"]))
+            for source in content["sources"]:
+                if source["url"] not in linked:
+                    qa["errors"].append(f"Page {page_num}: missing source hyperlink")
+        qa["passed"] = not qa["errors"]
     result = {"issue": issue, "draft_pdf": pdf_file.name,
               "pdf_sha256": hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
               "page_count": 16, "source_consistency_rows": sum(map(len, by_page.values())),
