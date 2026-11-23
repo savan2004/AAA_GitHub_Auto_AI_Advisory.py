@@ -39,6 +39,17 @@ class NSEQuarterEvidenceTests(unittest.TestCase):
         self.assertEqual(out["period_end"], "2026-09-30")
         self.assertEqual(out["filed"], "2026-10-10")
         self.assertEqual(out["exchange_debt_equity"], 0.16)
+        self.assertEqual(out["h1_operating_cash_flow_crore"], 552.57)
+        self.assertEqual(out["h1_profit_crore"], 1603.42)
+        self.assertAlmostEqual(
+            out["h1_operating_cash_flow_crore"] / out["h1_profit_crore"],
+            0.34462, places=4)
+        self.assertEqual(out["operating_kpis"]["stores"], 518)
+        self.assertEqual(out["operating_kpis"]["stores_added_h1"], 18)
+        self.assertEqual(out["operating_kpis"]["like_for_like_q2_pct"], 9.5)
+        self.assertEqual(out["operating_kpis"]["like_for_like_q1_pct"], 5.5)
+        self.assertIn("api.dmartindia.com", out["operating_kpis"]["source_url"])
+
         self.assertIn("nsearchives.nseindia.com", out["source_url"])
 
     def test_any_material_disagreement_withholds_reconciliation(self):
@@ -86,6 +97,33 @@ class NSEQuarterEvidenceTests(unittest.TestCase):
         self.assertEqual(verified_industry_candidates(
             "DMART", today=date(2027, 2, 1))["candidates"], ())
         self.assertIsNone(verified_industry_candidates("STRONGCO"))
+
+    def test_dmart_research_pdf_shows_provenance_without_claiming_full_audit(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from pypdf import PdfReader
+        from fixtures import strong
+        import report_generator as rg
+        from pdf_release_gate import validate_research_pdf
+
+        data = strong(sym="DMART", name="Avenue Supermarts Limited")
+        data["sector"] = "Retail & Lifestyle"
+        data["stm"]["quarters"][-1].update(self.quarters()[-1])
+        assembled = rg.assemble(data, use_ai=False)
+        self.assertEqual(assembled["filing_evidence"]["status"], "partial_match")
+        self.assertTrue(any("cash conversion" in r["title"].lower()
+                            for r in assembled["flags"]["risks"]))
+        with TemporaryDirectory() as td:
+            report = Path(td) / "SYNTHETIC_DMART.pdf"
+            rg.build_pdf(assembled, str(report))
+            result = validate_research_pdf(report, expected_symbol="DMART")
+            self.assertGreaterEqual(result["pages"], 8)
+            content = " ".join(page.extract_text() or ""
+                               for page in PdfReader(str(report)).pages)
+            self.assertIn("NSE Q2 source cross-check", content)
+            self.assertIn("Operating KPIs, Sep 2026", content)
+            self.assertIn("Half-year cash flow", content)
+            self.assertIn("field-level comparison", content)
 
     def test_benchmark_returns_share_exact_completed_closing_dates(self):
         dates = pd.bdate_range(end="2026-11-20", periods=247)
