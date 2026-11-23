@@ -213,15 +213,21 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
     if banking:
         # Compare BOTH the discrete quarter and YTD, so a wrong column or
         # different accounting basis cannot accidentally match the vendor.
-        interest=_one(rows,"Total interest earned",columns=2)
-        other=_one(rows,"Other income",columns=2)
-        total=_one(rows,"Total income",columns=2)
-        period_profit=_one(rows,"Net profit (loss) for the period",columns=2)
-        associates=_one(rows,"Share of profit (loss) of associates",columns=2)
-        minority=_one(rows,"Profit (loss) of minority interest",columns=2)
-        attributable=_one(rows,
-            "Net Profit (loss) after taxes minority interest and share of profit (loss) of associates",
-            columns=2)
+        def bank_field(label):
+            try:
+                return _one(rows,label,columns=2)
+            except EvidenceError as exc:
+                # Static expected labels only, never filing text/customer data.
+                tag=re.sub(r"[^A-Z0-9]+","_",label.upper()).strip("_")[:60]
+                raise EvidenceError("FILING_MISSING_OR_AMBIGUOUS_FIELD_"+tag) from exc
+        interest=bank_field("Total interest earned")
+        other=bank_field("Other income")
+        total=bank_field("Total income")
+        period_profit=bank_field("Net profit (loss) for the period")
+        associates=bank_field("Share of profit (loss) of associates")
+        minority=bank_field("Profit (loss) of minority interest")
+        attributable=bank_field(
+            "Net Profit (loss) after taxes minority interest and share of profit (loss) of associates")
         for k in (0,1):
             earned=_amount(interest[k],divisor)
             others=_amount(other[k],divisor)
