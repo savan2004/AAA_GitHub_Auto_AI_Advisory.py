@@ -31,6 +31,9 @@ COLUMN_KEYS = ("m1", "m3", "y1", "vol", "pe", "pb", "dy")
 SOURCE_COLUMN_POSITIONS = {"m1": 0, "m3": 1, "y1": 2,
                            "vol": 5, "pe": 9, "pb": 10, "dy": 11}
 _NUMBER = re.compile(r"^[+\-]?\d+(?:\.\d+)?$")
+# NSE officially spells this strategy index without a space after Nifty.
+# Explicit alias only: no fuzzy matching of financial instruments.
+_NSE_NAME_ALIASES = {"Nifty 500 Equal Weight": "Nifty500 Equal Weight"}
 _EXPECTED_NAMES = {
     "Nifty 50", "Nifty Bank", "Nifty 500", "Nifty Midcap 150",
     "Nifty Smallcap 250", "Nifty 500 Equal Weight",
@@ -157,7 +160,8 @@ def verify_nse_dashboard(pdf_bytes: bytes, metrics: dict) -> dict:
         raise SourceEvidenceError("Metric roster does not match expected NSE index set")
     findings = []
     for row in records:
-        numbers, original_line = _find_named_row(lines, row["name"])
+        nse_name = _NSE_NAME_ALIASES.get(row["name"], row["name"])
+        numbers, original_line = _find_named_row(lines, nse_name)
         fields = COLUMN_KEYS if row in indices else ("m1",)
         for key in fields:
             expected = _decimal(row.get(key))
