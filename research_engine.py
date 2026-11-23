@@ -706,9 +706,9 @@ def build_flags(t: dict, rk: dict, fv: dict, sh: List[dict], consensus: Optional
     if t["rsi"] > 75:
         R("Medium", "Overbought momentum", f"RSI(14) at {t['rsi']} — elevated pullback risk after a stretched run.")
     if t["accumulation"] == "ACCUMULATION":
-        pos.append(f"Volume pattern shows accumulation (up-day volume {t['updown_vol']}× down-day volume over 20 sessions).")
+        pos.append(f"Up-day volume was {t['updown_vol']}× down-day volume over 20 sessions; this does not identify institutional buyers.")
     elif t["accumulation"] == "DISTRIBUTION":
-        R("Medium", "Distribution in volume", f"Down-day volume dominates (up/down volume ratio {t['updown_vol']}) over the last 20 sessions.")
+        R("Medium", "Down-day volume dominance", f"Down-day volume dominates (up/down volume ratio {t['updown_vol']}) over the last 20 sessions; investor identity is unknown.")
     # risk
     if rk.get("ann_vol") and rk["ann_vol"] >= 45:
         R("High", "Very high volatility", f"Annualised volatility {rk['ann_vol']}%; worst single day {rk['worst_day']}%.")
@@ -840,7 +840,10 @@ def deterministic_narrative(name: str, sym: str, t: dict, rk: dict, fv: dict, sc
     if r3.get("rel") is not None:
         parts.append(f"Over three months the stock has {'outperformed' if r3['rel'] >= 0 else 'underperformed'} "
                      f"the Nifty 50 by {abs(r3['rel']):.1f} pts.")
-    parts.append(f"Volume flow is classified as <b>{t['accumulation'].lower()}</b>.")
+    parts.append(
+        f"Twenty-session up/down volume ratio is {t.get('updown_vol')}; "
+        "up/down session volume is not evidence of institutional accumulation."
+    )
     if t["supports"] and t["resistances"]:
         parts.append(f"Immediate support lies at ₹{t['supports'][0]['price']:,.2f} ({t['supports'][0]['src']}) and "
                      f"resistance at ₹{t['resistances'][0]['price']:,.2f} ({t['resistances'][0]['src']}).")
