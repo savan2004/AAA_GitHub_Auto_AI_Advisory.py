@@ -141,7 +141,7 @@ class BankFilingAccountingTests(unittest.TestCase):
         self.assertEqual(evidence["issuer_revenue_cr"], "55991.91")
         self.assertEqual(evidence["issuer_profit_cr"], "17388.86")
         self.assertEqual(evidence["revenue_comparison_basis"],
-                         "ISSUER_REVENUE_FROM_OPERATIONS")
+                         "BANK_TOTAL_INTEREST_EARNED")
 
     def test_excise_filing_is_reconciled_but_never_overwrites_issuer_revenue(self):
         doc = DownloadedFiling(URL, excise_fixture(), NOW)
