@@ -432,8 +432,11 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
             fv["eps_basis"] = "four consecutive secondary-source quarters; price/P-E cross-checked"
 
     # ── valuation vs peers ──────────────────────────────────────────────
-    peer_pe = _median([p.get("pe") for p in peers if (p.get("pe") or 0) > 0])
-    peer_roe = _median([p.get("roe") for p in peers])
+    valid_peer_pe = [p.get("pe") for p in peers if (p.get("pe") or 0) > 0]
+    valid_peer_roe = [p.get("roe") for p in peers if p.get("roe") is not None]
+    # A one-company "median" is misleading and may distort valuation scoring.
+    peer_pe = _median(valid_peer_pe) if len(valid_peer_pe) >= 2 else None
+    peer_roe = _median(valid_peer_roe) if len(valid_peer_roe) >= 2 else None
     fv["peer_pe"], fv["peer_roe"] = _f(peer_pe, 1), _f(peer_roe, 1)
     fv["pe_prem"] = (round((fv["pe"] / peer_pe - 1) * 100, 0)
                      if fv["pe"] and fv["pe"] > 0 and peer_pe else None)
