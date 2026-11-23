@@ -2368,7 +2368,8 @@ def handle_text(m):
         return
 
     # Old one-message capital/risk/limit inputs are never equity searches.
-    if re.match(r"(?i)^(?:CAPITAL|HORIZON|RISK|CASH|STOCKCAP|SECTORCAP)\s*=", text):
+    if "=" in text and text.split("=", 1)[0].strip().upper() in (
+            "CAPITAL", "HORIZON", "RISK", "CASH", "STOCKCAP", "SECTORCAP"):
         safe_send(uid, "Those are retired Builder settings, not a stock ticker. "
                   "Automatic baskets are unavailable until research is verified.")
         return
