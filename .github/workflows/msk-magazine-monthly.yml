@@ -74,7 +74,7 @@ jobs:
         run: |
           python scripts/msk_magazine_source_archive.py \
             --metrics-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json \
-            --output-dir editorial_proof/2026-11/source_verification
+            --output-dir editorial_evidence/2026-11
 
       - name: Build a private 16-page November editorial visual proof
         if: github.event_name == 'pull_request'
@@ -84,6 +84,8 @@ jobs:
               --output-dir editorial_proof \
               --editorial-pack docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json \
               --market-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json
+            mkdir -p editorial_proof/2026-11/source_verification
+            cp -a editorial_evidence/2026-11/. editorial_proof/2026-11/source_verification/
           fi
       - name: Store the UNAPPROVED PDF for manual visual review
         if: github.event_name == 'pull_request'
@@ -137,7 +139,7 @@ jobs:
           if [ "$ISSUE" = "2026-11" ]; then
             python scripts/msk_magazine_source_archive.py \
               --metrics-pack "docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json" \
-              --output-dir "magazine_artifacts/$ISSUE/source_verification"
+              --output-dir "editorial_source_inputs/$ISSUE/source_verification"
           else
             echo "::error::NEW_MONTH_REQUIRES_MONTH_SPECIFIC_VERIFIED_SOURCE_ARCHIVE"
             exit 1
@@ -147,15 +149,15 @@ jobs:
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
-          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "magazine_artifacts/$ISSUE/sources"
+          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "editorial_source_inputs/$ISSUE/sources"
       - name: Create a 16-page UNAPPROVED monthly draft only
         if: steps.schedule.outputs.due == 'true'
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
           SOURCE_ARGS=()
-          if [ -f "magazine_artifacts/$ISSUE/sources/source_pack.json" ]; then
-            SOURCE_ARGS=(--source-pack "magazine_artifacts/$ISSUE/sources/source_pack.json" --source-root "magazine_artifacts/$ISSUE/sources")
+          if [ -f "editorial_source_inputs/$ISSUE/sources/source_pack.json" ]; then
+            SOURCE_ARGS=(--source-pack "editorial_source_inputs/$ISSUE/sources/source_pack.json" --source-root "editorial_source_inputs/$ISSUE/sources")
           fi
           EDITORIAL="docs/msk_magazine/ISSUE_${ISSUE}_SOURCE_CITED_WORKING_DRAFT.json"
           if [ -f "$EDITORIAL" ]; then
@@ -170,6 +172,17 @@ jobs:
           else
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
           fi
+      - name: Attach original-source PDFs and checked CSV evidence to finished draft
+        if: steps.schedule.outputs.due == 'true'
+        env:
+          ISSUE: ${{ steps.schedule.outputs.issue }}
+        run: |
+          set -euo pipefail
+          test -f "editorial_source_inputs/$ISSUE/source_verification/Index_Dashboard_OCT2026.pdf"
+          test -f "editorial_source_inputs/$ISSUE/source_verification/nse_dashboard_reconciliation.json"
+          test -f "magazine_artifacts/$ISSUE/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
+          cp -a "editorial_source_inputs/$ISSUE/source_verification" "magazine_artifacts/$ISSUE/source_verification"
+          cp -a "editorial_source_inputs/$ISSUE/sources" "magazine_artifacts/$ISSUE/sources"
       - name: Retain PDF and per-page evidence gates as GitHub run artifact
         if: steps.schedule.outputs.due == 'true'
         uses: actions/upload-artifact@v4
@@ -188,7 +201,7 @@ jobs:
           ROOT="magazine_artifacts/$ISSUE"
           test -f "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
           test -f "$ROOT/release_gate.json"
-          (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources release_gate.json page_*.json)
+          (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources source_verification release_gate.json page_*.json)
           TAG="msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}"
           gh release create "$TAG" \
             "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf" \
