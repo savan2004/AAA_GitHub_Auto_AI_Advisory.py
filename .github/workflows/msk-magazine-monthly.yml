@@ -59,6 +59,22 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_magazine_editorial.py' -v
       - name: Compile monthly workflow sources
         run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py
+      - name: Build a private 16-page November editorial visual proof
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -f docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json ]; then
+            python scripts/msk_magazine_monthly.py --issue 2026-11 \
+              --output-dir editorial_proof \
+              --editorial-pack docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json
+          fi
+      - name: Store the UNAPPROVED PDF for manual visual review
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MSK-MAGAZINE-NOV2026-VISUAL-PROOF-${{ github.run_id }}
+          path: editorial_proof/2026-11/
+          if-no-files-found: warn
+          retention-days: 14
 
   monthly-draft:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
