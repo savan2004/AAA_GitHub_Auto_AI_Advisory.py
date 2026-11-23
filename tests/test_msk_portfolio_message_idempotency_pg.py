@@ -101,7 +101,7 @@ class PortfolioMessageIdempotencyPostgresTests(unittest.TestCase):
         failing_store = PostgresPortfolioStore(
             self.app_dsn, connector=lambda _: InjectedCrash()
         )
-        with self.assertRaisesRegex(RuntimeError, "simulated crash"):
+        with self.assertRaises(PortfolioStorageError):
             failing_store.add(100, "SBIN", 2, 500, telegram_message_id=501)
         self.assertEqual(self.store.get(100), {})
         with self.connector(self.app_dsn) as conn:
@@ -152,7 +152,7 @@ class PortfolioMessageIdempotencyPostgresTests(unittest.TestCase):
         failing_store = PostgresPortfolioStore(
             self.app_dsn, connector=lambda _: LostCommitAck()
         )
-        with self.assertRaisesRegex(RuntimeError, "lost acknowledgment"):
+        with self.assertRaises(PortfolioStorageError):
             failing_store.add(100, "SBIN", 3, 500, telegram_message_id=801)
         reopened = PostgresPortfolioStore(self.app_dsn, connector=self.connector)
         self.assertEqual(reopened.get(100)["SBIN"]["qty"], 3.0)
