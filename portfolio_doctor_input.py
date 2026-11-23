@@ -12,6 +12,10 @@ MAX_EXPANDED_BYTES = 20 * 1024 * 1024
 MAX_ROWS = 10000
 MAX_COLUMNS = 64
 
+# Exact, exchange-confirmed name -> NSE trading-symbol correction.
+# Do not fuzzy match company names or modify an explicitly BSE-qualified ticker.
+_NSE_CANONICAL_ALIASES = {"SBI": "SBIN"}
+
 
 class InputRejected(ValueError):
     pass
@@ -159,6 +163,8 @@ def decode_holdings(filename, payload):
                 raise InputRejected()
             symbol = raw_symbol.removeprefix("NSE:").removeprefix("BSE:")
             symbol = symbol.removesuffix(".NS").removesuffix(".BO")
+            if not bse:
+                symbol = _NSE_CANONICAL_ALIASES.get(symbol, symbol)
             if not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol) or symbol in seen:
                 raise InputRejected()
             item = {"symbol": symbol, "qty": _positive(row[1]), "buy": _positive(row[2])}
