@@ -100,6 +100,89 @@ def _cluster(levels: List[float], tol: float = 0.012) -> List[float]:
     return [sum(g) / len(g) for g in out]
 
 
+def _date_aligned_returns(stock_close, index_close, sessions):
+    """Return both returns from identical completed sessions, never row offsets.
+
+    Fails closed if today's stock candle lacks a matching benchmark close.
+    Partial 1Y histories (e.g. 247 sessions) use the same available common
+    lookback for both instruments. Does not fill missing days or fabricate
+    an index performance figure.
+    """
+    if (index_close is None or not isinstance(stock_close.index, pd.DatetimeIndex)
+            or not isinstance(index_close.index, pd.DatetimeIndex)):
+        return None
+    try:
+        def normalise(series):
+            frame = pd.to_numeric(series, errors="coerce").copy()
+            idx = frame.index
+            if idx.tz is not None:
+                idx = idx.tz_convert("Asia/Kolkata").tz_localize(None)
+            frame.index = idx.normalize()
+            return frame[~frame.index.duplicated(keep="last")].sort_index()
+
+        one = normalise(stock_close).rename("stock")
+        two = normalise(index_close).rename("index")
+        pair = pd.concat([one, two], axis=1, join="inner").dropna()
+        if pair.empty or pair.index[-1] != one.index[-1]:
+            return None
+        lookback = min(sessions, len(pair) - 1)
+        if lookback < 3 or (sessions > 5 and lookback < sessions * 0.8):
+            return None
+        start = pair.iloc[-1-lookback]
+        end = pair.iloc[-1]
+        if min(start["stock"], start["index"], end["stock"], end["index"]) <= 0:
+            return None
+        stock_return = (end["stock"] / start["stock"] - 1) * 100
+        benchmark_return = (end["index"] / start["index"] - 1) * 100
+        if not (np.isfinite(stock_return) and np.isfinite(benchmark_return)):
+            return None
+        return (round(float(stock_return), 1), round(float(benchmark_return), 1),
+                round(float(stock_return - benchmark_return), 1))
+    except (TypeError, ValueError, KeyError, IndexError, AttributeError):
+        return None
+
+
+def secondary_trailing_eps(quarters, *, last_price, trailing_pe):
+    """Conservative trailing EPS from four consecutive secondary quarter reports.
+
+    No extrapolation, no gaps, no zero/negative profit. Cross-check against
+    observed reported P/E and price to reject splits and unit/basis mismatches.
+    """
+    from research_filing_evidence import _period
+
+    if not isinstance(quarters, list) or len(quarters) < 4:
+        return None
+    last_four = quarters[-4:]
+    months, eps = [], []
+    for row in last_four:
+        if not isinstance(row, dict):
+            return None
+        stamp = _period(row.get("label"))
+        if not stamp:
+            return None
+        try:
+            value = float(row.get("eps"))
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(value):
+            return None
+        year, month = (int(stamp[:4]), int(stamp[5:7]))
+        months.append(year * 12 + month)
+        eps.append(value)
+    if len(set(months)) != 4 or any(months[i]-months[i-1] != 3 for i in range(1, 4)):
+        return None
+    total = round(sum(eps), 2)
+    try:
+        close, pe = float(last_price), float(trailing_pe)
+    except (TypeError, ValueError):
+        return None
+    if not all(np.isfinite(v) for v in (close, pe, total)) or min(close, pe, total) <= 0:
+        return None
+    if abs(total * pe / close - 1) > 0.15:
+        return None
+    return total
+
+
 def compute_technicals(df: pd.DataFrame, nifty: Optional[pd.DataFrame]) -> dict:
     c, h, l, v = df["Close"], df["High"], df["Low"], df["Volume"]
     n = len(c)
@@ -117,12 +200,10 @@ def compute_technicals(df: pd.DataFrame, nifty: Optional[pd.DataFrame]) -> dict:
         if kk < 3 or (k > 5 and n - 1 < k * 0.8):
             continue
         s_ret = (ltp / float(c.iloc[-1 - kk]) - 1) * 100
-        n_ret = None
-        if nc is not None and len(nc) > kk:
-            n_ret = (float(nc.iloc[-1]) / float(nc.iloc[-1 - kk]) - 1) * 100
-        rets[lab] = {"stock": round(s_ret, 1),
-                     "nifty": round(n_ret, 1) if n_ret is not None else None,
-                     "rel": round(s_ret - n_ret, 1) if n_ret is not None else None}
+        aligned = _date_aligned_returns(c, nc, k)
+        rets[lab] = {"stock": aligned[0] if aligned else round(s_ret, 1),
+                     "nifty": aligned[1] if aligned else None,
+                     "rel": aligned[2] if aligned else None}
     t["returns"] = rets
 
     # ── trend structure ─────────────────────────────────────────────────
@@ -342,6 +423,13 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
     fv["de"] = None if fv["fin"] else _de_ratio(fund, last)
     fv["pe"], fv["fwd_pe"], fv["pb"] = fund.get("pe"), fund.get("fwd_pe"), fund.get("pb")
     fv["eps"], fv["div_y"], fv["mcap"], fv["rev_ttm"] = fund.get("eps"), fund.get("div_y"), fund.get("mcap"), fund.get("rev")
+    fv["eps_basis"] = "primary provider" if fv["eps"] is not None else None
+    if fv["eps"] is None:
+        derived_eps = secondary_trailing_eps(
+            quarters, last_price=ltp, trailing_pe=fv["pe"])
+        if derived_eps is not None:
+            fv["eps"] = derived_eps
+            fv["eps_basis"] = "four consecutive secondary-source quarters; price/P-E cross-checked"
 
     # ── valuation vs peers ──────────────────────────────────────────────
     peer_pe = _median([p.get("pe") for p in peers if (p.get("pe") or 0) > 0])
