@@ -21,7 +21,10 @@ from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import simpleSplit
 
-from scripts.msk_magazine_editorial import load_editorial_pack
+if __package__:
+    from .msk_magazine_editorial import load_editorial_pack
+else:
+    from msk_magazine_editorial import load_editorial_pack
 from reportlab.pdfgen import canvas
 
 IST = ZoneInfo("Asia/Kolkata")
