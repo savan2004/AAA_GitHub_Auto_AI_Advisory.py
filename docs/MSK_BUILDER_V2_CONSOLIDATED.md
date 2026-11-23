@@ -39,3 +39,26 @@ send, no database modification and no production flag activation.
 
 **Status: DRAFT, NOT PRODUCTION ENABLED.** JSON fixtures in tests are
 explicitly fictitious and prove code paths only, not issuer authenticity.
+
+## Step 1 hardening: reviewed release fence
+
+The customer engine now refuses any JSON artifact unless the repository's
+`msk_builder_research_release_registry.json` explicitly pins its SHA-256 digest
+AND a second independently reviewed source-evidence audit bundle covers each
+issuer and the exact completed-session closing price. The default registry is
+`WITHHELD` and empty, so even enabling the environment flag and providing a
+synthetic `APPROVED` JSON cannot publish a portfolio. No production flags
+were changed.
+
+**Important:** SHA matching and an approval record are proof of provenance
+*within the repo*, not proof the source filing bytes or financial calculations
+are correct. The `research_audits/<sha256>.json` bundle must be built from
+actual authenticated primary-source filings, peer-reviewed, and committed
+separately before any approval entry is added. Reconcile each issuer ISIN,
+financial-period basis, annual/quarterly figures, official completed close,
+corporate actions, valuations and risk assessment. Do not put synthetic QA
+fixtures, placeholder hashes, or manually asserted approval text into the
+production registry. The sample tests deliberately mock the trusted release
+boundary to exercise the mathematical/PDF implementation.
+
+Step 1 remains **BLOCKED on real issuer-primary audits**, not complete.

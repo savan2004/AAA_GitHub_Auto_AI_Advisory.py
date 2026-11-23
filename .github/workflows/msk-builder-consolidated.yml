@@ -4,6 +4,9 @@ on:
     branches: [main]
     paths:
       - 'msk_ai_builder_automatic.py'
+      - 'msk_ai_builder_research_release.py'
+      - 'msk_builder_research_release_registry.json'
+      - 'tests/test_msk_ai_builder_research_release.py'
       - 'msk_ai_builder_telegram.py'
       - 'msk_ai_builder_allocation.py'
       - 'msk_ai_builder_profile.py'
@@ -26,9 +29,11 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install 'reportlab==4.2.5' 'pypdf>=5,<7' 'pandas==2.2.2' 'numpy==1.26.4' 'openpyxl==3.1.5' 'requests==2.32.3'
       - name: Compile Builder and live MSK handlers
-        run: python -m py_compile msk_ai_builder_automatic.py msk_ai_builder_telegram.py main.py
+        run: python -m py_compile msk_ai_builder_automatic.py msk_ai_builder_research_release.py msk_ai_builder_telegram.py main.py
       - name: Offline approved-research and five-ten-twenty PDF contract
         run: python -m unittest discover -s tests -p 'test_msk_ai_builder_automatic.py' -v
+      - name: Reject self-approved research without independent audited release
+        run: python -m unittest discover -s tests -p 'test_msk_ai_builder_research_release.py' -v
       - name: Owner-only fictional preview remains isolated
         run: python -m unittest discover -s tests -p 'test_msk_private_beta_wizard.py' -v
       - name: Portfolio Doctor typed, CSV/XLSX routing and receipt isolation

@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from msk_ai_builder_allocation import ApprovedCandidate, allocate_portfolio
 from msk_ai_builder_profile import ResearchProfile
+from msk_ai_builder_research_release import require_reviewed_research
 
 
 class ResearchUnavailable(ValueError):
@@ -112,6 +113,7 @@ def approved_plan(profile, raw, *, latest_session):
         rows = payload["companies"]
         if not isinstance(rows, list) or not 1 <= len(rows) <= 20:
             raise ValueError("no approved eligible companies")
+        require_reviewed_research(raw, latest_session=latest_session, companies=rows)
         candidates = [_candidate(row, session) for row in rows]
         plan = allocate_portfolio(profile, candidates, expected_session=session)
         if not plan.positions:

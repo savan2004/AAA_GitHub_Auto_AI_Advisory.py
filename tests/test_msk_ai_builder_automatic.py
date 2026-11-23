@@ -57,6 +57,13 @@ def flags(payload=None):
 
 
 class ApprovedBuilderTests(unittest.TestCase):
+    def setUp(self):
+        # Exercise calculation mechanics with a deliberately mocked approval.
+        # Production never permits fictional fixtures without committed audits.
+        gate = patch("msk_ai_builder_automatic.require_reviewed_research", return_value=True)
+        gate.start()
+        self.addCleanup(gate.stop)
+
     def test_profile_tiers_automatic_selection_and_cash_reconcile(self):
         for capital, maximum in ((1_000_000, 5), (5_000_000, 10), (15_000_000, 20)):
             profile = ResearchProfile(capital, "high", 60)
