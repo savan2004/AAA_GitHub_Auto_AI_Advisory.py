@@ -2,7 +2,7 @@
 import unittest
 from pathlib import Path
 
-from msk_chart_context import summarize_chart
+from msk_chart_context import summarize_chart, completed_weekly_reference
 
 
 def sample(length=240, trend=2.0, volume=1000.0):
@@ -60,6 +60,18 @@ class MSKChartContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "55"):
             summarize_chart(h[:20], l[:20], c[:20], v[:20], 200, 199, 1)
 
+    def test_completed_weekly_reference_excludes_in_progress_week(self):
+        import pandas as pd
+        dates = pd.bdate_range("2026-08-03", "2026-11-23")
+        daily = pd.DataFrame({"Close": [200.0 + i for i in range(len(dates))]},
+                             index=dates)
+        from_monday = completed_weekly_reference(daily)
+        self.assertIsNotNone(from_monday)
+        self.assertEqual(str(from_monday.index[-1].date()), "2026-11-20")
+        completed_friday = completed_weekly_reference(daily.loc[:"2026-11-20"])
+        self.assertEqual(str(completed_friday.index[-1].date()), "2026-11-20")
+        self.assertIsNone(completed_weekly_reference(daily.head(15)))
+
     def test_manual_chart_cache_cannot_cross_session_or_reuse_deleted_png(self):
         import subprocess
         import tempfile
@@ -105,6 +117,8 @@ class MSKChartContextTests(unittest.TestCase):
         self.assertIn("from msk_chart_context import summarize_chart", source)
         self.assertIn("expected_eod = str(expected_completed_session())", source)
         self.assertIn("vol_s.shift(1).rolling(20", source)
+        self.assertNotIn('interval="1wk"', source)
+        self.assertIn("weekly_data = completed_weekly_reference(data)", source)
         self.assertIn('support = chart_context["support"]', source)
         self.assertIn('resistance = chart_context["resistance"]', source)
 
