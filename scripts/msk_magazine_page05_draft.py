@@ -22,8 +22,9 @@ def generate_page05(manifest_path: Path, output_path: Path) -> str:
     reports=m['close_reports']; o=m['reported_ohlc_secondary']; levels=m['provisional_levels_secondary']
     values=[float(x['value']) for x in reports]
     agreement=sorted(set(values))
-    if len(agreement)<2:
-        raise ValueError('Expected conflicting close reports; draft must display source reconciliation')
+    intraday=m['intraday_observation']
+    if len(agreement)!=1:
+        raise ValueError('Final-close sources disagree; renderer must fail closed until reconciliation')
     output_path=Path(output_path); output_path.parent.mkdir(parents=True,exist_ok=True)
     W,H=A4; x=17*mm; w=W-34*mm
     c=canvas.Canvas(str(output_path),pagesize=A4,invariant=1)
@@ -34,25 +35,25 @@ def generate_page05(manifest_path: Path, output_path: Path) -> str:
     c.setFillColor(GRAY); c.setFont('Helvetica',8.5); c.drawString(x,H-42*mm,'NOVEMBER 2026  |  DESIGN 3: LINE-BENCHMARK  |  RESEARCH DRAFT')
     y=H-80*mm; h=30*mm
     c.setFillColor(PALE); c.roundRect(x,y,w,h,3*mm,fill=1,stroke=0)
-    c.setFillColor(RED); c.setFont('Helvetica-Bold',9); c.drawString(x+4*mm,y+h-7*mm,'DATA STATUS: CLOSE VALUE DISAGREES ACROSS SECONDARY REPORTS')
+    c.setFillColor(RED); c.setFont('Helvetica-Bold',9); c.drawString(x+4*mm,y+h-7*mm,'DATA STATUS: SECONDARY CLOSE REPORTS AGREE; OFFICIAL BYTES NOT VERIFIED')
     c.setFillColor(NAVY); c.setFont('Helvetica',8.2)
-    c.drawString(x+4*mm,y+h-13*mm,'Official history page found; direct request failed because runner DNS cannot resolve www.niftyindices.com.')
-    c.drawString(x+4*mm,y+h-19*mm,'No primary-source bytes/hash. Figures below are provisional secondary reports, NOT accepted evidence.')
+    c.drawString(x+4*mm,y+h-13*mm,'Official data fetch failed: runner DNS cannot resolve www.niftyindices.com (0 bytes).')
+    c.drawString(x+4*mm,y+h-19*mm,'Secondary reports only; no source-byte SHA or independent review. Not accepted financial evidence.')
     card_y=y-25*mm; card_h=17*mm; gap=3*mm; card_w=(w-gap)/2
-    grouped={}
-    for row in reports: grouped.setdefault(float(row['value']),[]).append(row['source'])
-    for idx,val in enumerate(agreement[:2]):
-        sources=grouped[val]; color=TEAL if idx==0 else AMBER
+    close_value=agreement[0]; close_sources=len(reports); intraday_value=float(intraday['value'])
+    for idx,(label,val,detail,color) in enumerate([
+        (f'{close_sources} SECONDARY FINAL-CLOSE REPORTS',close_value,f"{reports[0]['change_points']:+.2f} pts | {reports[0]['change_pct']:+.2f}%",TEAL),
+        (f"{intraday['time']} INTRADAY • NOT CLOSE",intraday_value,f"{intraday_value-close_value:+.2f} pts vs final close",AMBER)]):
         cx=x+idx*(card_w+gap)
         c.setFillColor(white); c.setStrokeColor(color); c.setLineWidth(1); c.roundRect(cx,card_y,card_w,card_h,2*mm,fill=1,stroke=1)
-        c.setFillColor(color); c.setFont('Helvetica-Bold',6.6); c.drawString(cx+3*mm,card_y+card_h-4.2*mm,(' / '.join(sources))[:40])
+        c.setFillColor(color); c.setFont('Helvetica-Bold',6.6); c.drawString(cx+3*mm,card_y+card_h-4.2*mm,label[:40])
         c.setFillColor(NAVY); c.setFont('Helvetica-Bold',14); c.drawString(cx+3*mm,card_y+5*mm,f'{val:,.2f}')
-        c.setFillColor(GRAY); c.setFont('Helvetica',6.5); c.drawRightString(cx+card_w-3*mm,card_y+5.2*mm,'secondary report only')
+        c.setFillColor(GRAY); c.setFont('Helvetica',6.5); c.drawRightString(cx+card_w-3*mm,card_y+5.2*mm,detail)
     chart_top=card_y-8*mm; chart_h=47*mm; chart_y=chart_top-chart_h
     c.setFillColor(PALE); c.roundRect(x,chart_y,w,chart_h,3*mm,fill=1,stroke=0)
-    c.setFillColor(NAVY); c.setFont('Helvetica-Bold',8.2); c.drawString(x+4*mm,chart_top-5*mm,'5-SESSION CLOSES — SECONDARY REPORTS ONLY')
+    c.setFillColor(NAVY); c.setFont('Helvetica-Bold',8.2); c.drawString(x+4*mm,chart_top-5*mm,'5-SESSION CLOSES — SECONDARY ONLY • ORANGE = 15:15 INTRADAY')
     hist=m['close_history_secondary']; plot_x=x+14*mm; plot_w=w-28*mm; plot_y=chart_y+9*mm; plot_h=28*mm
-    vals_hist=[float(r['close']) for r in hist[:-1]]+list(map(float,hist[-1]['close_disputed']))
+    vals_hist=[float(r['close']) for r in hist]+[intraday_value]
     lo=min(vals_hist)-40; hi=max(vals_hist)+40
     px=[plot_x+i*(plot_w/4) for i in range(5)]
     def yy(v): return plot_y+(v-lo)/(hi-lo)*plot_h
@@ -62,15 +63,12 @@ def generate_page05(manifest_path: Path, output_path: Path) -> str:
             c.line(plot_x,yy(v),plot_x+plot_w,yy(v)); c.setFillColor(GRAY); c.setFont('Helvetica',6.3); c.drawRightString(plot_x-1.5*mm,yy(v)-1.5,f'{v:,}')
     c.setStrokeColor(TEAL); c.setLineWidth(1.7)
     for i in range(3): c.line(px[i],yy(float(hist[i]['close'])),px[i+1],yy(float(hist[i+1]['close'])))
-    c.line(px[3],yy(float(hist[3]['close'])),px[4],yy(sum(map(float,hist[4]['close_disputed']))/2))
-    for i,row in enumerate(hist[:-1]):
+    c.line(px[3],yy(float(hist[3]['close'])),px[4],yy(float(hist[4]['close'])))
+    for i,row in enumerate(hist):
         val=float(row['close']); c.setFillColor(TEAL); c.circle(px[i],yy(val),1.5*mm,fill=1,stroke=0)
         c.setFillColor(NAVY); c.setFont('Helvetica-Bold',6.4); c.drawCentredString(px[i],yy(val)+3*mm,f'{val:,.2f}')
-    lo_close,hi_close=map(float,hist[-1]['close_disputed'])
-    c.setStrokeColor(AMBER); c.setLineWidth(1.3); c.line(px[4],yy(lo_close),px[4],yy(hi_close))
-    c.setFillColor(TEAL); c.circle(px[4],yy(lo_close),1.5*mm,fill=1,stroke=0)
-    c.setFillColor(AMBER); c.circle(px[4],yy(hi_close),1.5*mm,fill=1,stroke=0)
-    c.setFillColor(NAVY); c.setFont('Helvetica-Bold',6.5); c.drawCentredString(px[4],yy(hi_close)+3*mm,'CLOSE DISPUTED')
+    c.setFillColor(AMBER); c.circle(px[4],yy(intraday_value),1.5*mm,fill=1,stroke=0)
+    # The orange marker is the 15:15 intraday quote; its label is in the card above.
     for i,row in enumerate(hist):
         c.setFillColor(GRAY); c.setFont('Helvetica',6.6); c.drawCentredString(px[i],chart_y+4*mm,row['date'])
     analysis_y=chart_y-7*mm; analysis_h=35*mm
@@ -79,17 +77,17 @@ def generate_page05(manifest_path: Path, output_path: Path) -> str:
     gap_pct=float(o['open_gap_pct']); gap_points=float(o['open_gap_vs_20nov_close_points'])
     distance=min(o['distance_close_above_low_points']),max(o['distance_close_above_low_points'])
     lines=[
-      f"23 Nov reportedly opened {gap_points:.2f} points (+{gap_pct:.2f}%) above 20 Nov close, then reversed from {o['high']:,.2f} high to {o['low']:,.2f} low.",
-      f"Reported range: {o['range_points']:.2f} points. Disputed closes sit near the low ({distance[0]:.2f}–{distance[1]:.2f} points above it).",
-      f"Provisional levels quoted by Univest: support {' / '.join(f'{v:,}' for v in levels['support'])}; resistance {' / '.join(f'{v:,}' for v in levels['resistance'])}.",
-      'Interpretation: gap-up failure and near-low finish suggest short-term pressure; confirm only after official OHLC/indicators are checked.'
+      f"23 Nov reportedly opened {gap_points:.2f} points (+{gap_pct:.2f}%) above 20 Nov close; high {o['high']:,.2f}, low {o['low']:,.2f}.",
+      f"Final close {close_value:,.2f}, {distance[0]:.2f} points above the reported low. Secondary sources only.",
+      f"15:15 intraday update {intraday_value:,.2f} ({intraday_value-close_value:.2f} points above final close); not a close quote.",
+      f"Univest provisional levels: support {' / '.join(f'{v:,}' for v in levels['support'])}; resistance {' / '.join(f'{v:,}' for v in levels['resistance'])}."
     ]
     c.setFillColor(NAVY); c.setFont('Helvetica',7.5); ty=analysis_y-10*mm
     for line in lines: c.drawString(x+4*mm,ty,'• '+line); ty-=5.6*mm
     src_y=analysis_y-analysis_h-5*mm
-    c.setFillColor(NAVY); c.setFont('Helvetica-Bold',7); c.drawString(x,src_y,'SOURCES (SECONDARY / CONFLICT) & OFFICIAL VALIDATION PATH')
-    links=[(row['source']+' 23 Nov close report',row['url']) for row in reports]
-    links += [('NSE official historical index data',m['primary_source_url']),('Nifty Indices official historical page',m['official_niftyindices_page_url'])]
+    c.setFillColor(NAVY); c.setFont('Helvetica-Bold',7); c.drawString(x,src_y,'SOURCES (SECONDARY) & OFFICIAL VALIDATION PATH')
+    links=[(row['source']+' 23 Nov final-close report',row['url']) for row in reports]
+    links += [(intraday['source']+' 15:15 intraday (not close)',intraday['url']),('NSE official historical index data',m['primary_source_url']),('Nifty Indices official historical page',m['official_niftyindices_page_url'])]
     for i,(label,url) in enumerate(links):
         c.setFillColor(TEAL); c.setFont('Helvetica',6.5); yy0=src_y-(i+1)*3.7*mm
         c.drawString(x,yy0,f'{i+1}. {label}')
