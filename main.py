@@ -487,8 +487,7 @@ def build_adv(sym):
         try:
             ai_text = engine_ai_insights(
                 sym, market["target_price"], rsi, macd, trend,
-                str(pe if pe is not None else "N/A"),
-                str(roe if roe is not None else "N/A")
+                pe, roe, atr=atr
             ) or ""
         except Exception:
             ai_text = "AI insights unavailable."

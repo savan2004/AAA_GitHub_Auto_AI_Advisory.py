@@ -25,6 +25,7 @@ Any field can be None.
 import re
 import time
 import calendar
+import math
 import logging
 import threading
 from datetime import date, datetime
@@ -127,8 +128,9 @@ def _num(txt) -> Optional[float]:
     if t in ("", "-", "--", "—", "NA", "N/A"):
         return None
     try:
-        return float(t)
-    except ValueError:
+        value = float(t)
+        return value if math.isfinite(value) else None
+    except (ValueError, OverflowError):
         return None
 
 
@@ -143,9 +145,13 @@ def _table_to_rows(table: List[List[str]]) -> tuple:
     header = table[0][1:]
     rows = {}
     for r in table[1:]:
-        if len(r) < 2:
+        # A missing middle cell would shift all subsequent financial periods.
+        if len(r) != len(header) + 1:
             continue
-        rows[_clean_label(r[0])] = [_num(x) for x in r[1:]]
+        label = _clean_label(r[0])
+        if label in rows:
+            return [], {}
+        rows[label] = [_num(x) for x in r[1:]]
     return header, rows
 
 
@@ -289,7 +295,7 @@ def parse_years(html: str) -> List[dict]:
         def g(arr):
             return arr[i] if arr is not None and i < len(arr) else None
         e, r = at(eq_cap, bs_hdr, lab), at(reserves, bs_hdr, lab)
-        nw = (e or 0) + r if r is not None else None
+        nw = e + r if e is not None and r is not None else None
         out.append({
             "label": lab, "revenue": g(sales), "op_profit": g(op), "opm": g(opm),
             "net_profit": g(npf), "eps": g(eps),
@@ -415,7 +421,7 @@ def _yrow(df, *names):
 def _cr(v):
     try:
         f = float(v)
-        if f != f:                                   # NaN
+        if not math.isfinite(f):                      # NaN or infinity
             return None
         return round(f / 1e7, 2)
     except (TypeError, ValueError):
@@ -588,8 +594,24 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
         except Exception as e:
             logger.info(f"[research_data] yahoo statements {sym}: {str(e)[:100]}")
 
-    years, ysrc = _fresher(s_years, y_years)
-    quarters, qsrc = _fresher(s_quarters, y_quarters)
+    cutoff = today or date.today()
+    def usable(rows):
+        dated = {}
+        conflicts = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            end = period_end(str(row.get("label") or ""))
+            if end is None or end > cutoff:
+                continue
+            if all(row.get(k) is None for k in ("revenue", "net_profit", "eps")):
+                continue
+            if end in dated and dated[end] != row:
+                conflicts.add(end)
+            dated[end] = row
+        return [dated[d] for d in sorted(dated) if d not in conflicts]
+    years, ysrc = _fresher(usable(s_years), usable(y_years))
+    quarters, qsrc = _fresher(usable(s_quarters), usable(y_quarters))
     if not years and not quarters:
         _cset(f"stm_{sym}", {}, ttl=45)
         logger.warning("[research_data] %s annual/quarter statements unavailable "

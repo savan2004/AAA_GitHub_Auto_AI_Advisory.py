@@ -115,6 +115,35 @@ class BhavcopySafeguards(unittest.TestCase):
         self.assertEqual(check(archive(duplicate=True)), {})
         self.assertEqual(check(b"not a zip"), {})
 
+        # A blocked official host can use the same-date official mirror.
+        import requests
+        for failure in ("403", "timeout"):
+            calls = []
+            def mirror_get(url, **kw):
+                calls.append(url)
+                if len(calls) == 1:
+                    return SimpleNamespace(ok=False)
+                if len(calls) == 2:
+                    if failure == "timeout":
+                        raise requests.Timeout("archive timeout")
+                    return SimpleNamespace(ok=False, status_code=403)
+                return SimpleNamespace(ok=True, content=archive())
+            self.assertEqual(nse.fetch_nse_bhavcopy_rows(
+                TUESDAY, ["SAMPLEA"], get=mirror_get), {"SAMPLEA": records(TUESDAY)})
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(calls[1], nse.FINAL_ARCHIVE_HOSTS[0] +
+                             "/content/cm/BhavCopy_NSE_CM_0_0_0_20261117_F_0000.csv.zip")
+            self.assertEqual(calls[2], nse.FINAL_ARCHIVE_HOSTS[1] +
+                             "/content/cm/BhavCopy_NSE_CM_0_0_0_20261117_F_0000.csv.zip")
+
+        calls = []
+        def unavailable(url, **kw):
+            calls.append(url)
+            return SimpleNamespace(ok=False, status_code=403)
+        self.assertEqual(nse.fetch_nse_bhavcopy_rows(
+            TUESDAY, ["SAMPLEA"], get=unavailable), {})
+        self.assertEqual(len(calls), 3)
+
     def test_file_not_published_or_equity_absent_does_not_invent(self):
         none = nse.fetch_nse_bhavcopy_rows(
             TUESDAY, ["SAMPLEA"], get=lambda *_a, **_kw:

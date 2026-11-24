@@ -21,21 +21,23 @@ def verify_final_archive(frame, *, now, expected):
     """
     from types import SimpleNamespace
     import requests
-    from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows, stitch_one_verified_day
+    from portfolio_doctor_bhavcopy import (FINAL_ARCHIVE_HOSTS, fetch_nse_bhavcopy_rows,
+                                           stitch_one_verified_day)
     from portfolio_doctor_live import previous_doctor_session
 
     previous = previous_doctor_session(expected)
-    official_prefix = "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_"
+    official_prefixes = tuple(host + "/content/cm/BhavCopy_NSE_CM_0_0_0_"
+                              for host in FINAL_ARCHIVE_HOSTS)
     requested = []
 
     def archive_only(url, **kwargs):
-        if not url.startswith(official_prefix):
+        if not url.startswith(official_prefixes):
             # Test-only injection: exercise fallback, not legacy availability.
             return SimpleNamespace(ok=False)
         requested.append(url)
         response = requests.get(url, **kwargs)
-        print("MSK_DOCTOR_FINAL_UDIFF_HTTP status={} archive={}".format(
-            response.status_code, url.rsplit("/", 1)[-1]))
+        print("MSK_DOCTOR_FINAL_UDIFF_HTTP status={} url={}".format(
+            response.status_code, url))
         return response
 
     rows = {}
@@ -48,7 +50,11 @@ def verify_final_archive(frame, *, now, expected):
     recovered = stitch_one_verified_day(
         history, prior=rows[previous], latest=rows[expected],
         previous_day=previous, expected_day=expected, now=now)
-    if len(requested) != 2 or recovered is None or recovered.index[-1].date() != expected:
+    expected_files = {f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv.zip"
+                      for day in (previous, expected)}
+    if (not 2 <= len(requested) <= 4 or len(set(requested)) != len(requested)
+            or {url.rsplit('/', 1)[-1] for url in requested} != expected_files
+            or recovered is None or recovered.index[-1].date() != expected):
         raise SystemExit("MSK_DOCTOR_FINAL_UDIFF_FAIL prior_overlap_or_continuity")
     for field in ("Open", "High", "Low", "Close", "Volume"):
         if float(recovered.iloc[-1][field]) != rows[expected][field]:

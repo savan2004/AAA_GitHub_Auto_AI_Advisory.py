@@ -113,3 +113,19 @@ def financial_source_summary(fund):
             + "\n".join("• " + line for line in details)
             + "\n⚠️ Cross-period or consolidated/standalone values must not be "
               "treated as directly comparable until issuer filings are checked.")
+
+
+def normalize_dividend_percent(value, unit):
+    """Never infer yield units from magnitude (0.8% is not 80%)."""
+    pct = normalize_roe_percent(value, unit)
+    return pct if pct is not None and 0 <= pct <= 100 else None
+
+def positive_financial_amount(value):
+    """Reject booleans, nonfinite and nonpositive monetary observations."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) and number > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
