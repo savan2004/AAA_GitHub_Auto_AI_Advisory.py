@@ -91,46 +91,60 @@ def _rect(c,x,y,w,h,color):
 
 
 def _bars(c, rows, *, x=55, y=507, width=478, height=143,
-          label_width=126, value_key="value", title="", suffix="%",
+          label_width=132, value_key="value", title="", suffix="%",
           max_rows=8):
+    """Accurately scaled divergence plot with legible A4 labels.
+
+    Bars share a zero baseline and one symmetrical scale; never use
+    category-specific axes that exaggerate relative performance.
+    """
     rows = rows[:max_rows]
-    _t(c,x,y+height+4,title,9.2,TEAL,True)
-    positive=[float(r[value_key]) for r in rows if float(r[value_key])>0]
-    negative=[abs(float(r[value_key])) for r in rows if float(r[value_key])<0]
-    scale=max([1.0]+positive+negative)
-    left=x+label_width
-    right=x+width-48
-    center=(left+right)/2
-    usable=(right-left)/2-12
-    c.setStrokeColor(HexColor("#A7BEC4"))
-    c.setLineWidth(.7)
-    c.line(center,y+4,center,y+height-16)
-    row_h=(height-19)/max(1,len(rows))
-    for i,row in enumerate(rows):
-        num=float(row[value_key])
-        ry=y+height-26-(i+0.5)*row_h
-        _t(c,x,ry,str(row["name"])[:24],7.1,NAVY)
-        bw=usable*abs(num)/scale
-        _rect(c,center if num>=0 else center-bw,ry-1,max(1.0,bw),7.5,
-              TEAL if num>=0 else NEG)
-        _t(c,right+8,ry,f"{num:+.2f}{suffix}",7.1,TEAL if num>=0 else NEG,True)
+    if not rows:
+        raise ResearchMetricError("Cannot render unverified empty comparison")
+    _t(c, x, y+height+4, title, 9.0, TEAL, True)
+    magnitudes = [abs(float(r[value_key])) for r in rows]
+    if not all(math.isfinite(v) for v in magnitudes):
+        raise ResearchMetricError("Non-finite research chart value")
+    scale = max([1.0] + magnitudes)
+    left = x + label_width
+    right = x + width - 58
+    center = (left + right) / 2
+    usable = (right - left) / 2 - 9
+    row_h = (height - 22) / len(rows)
+    c.setStrokeColor(HexColor("#A6B9BD"))
+    c.setLineWidth(.8)
+    c.line(center, y + 1, center, y + height - 17)
+    for i, row in enumerate(rows):
+        value = float(row[value_key])
+        ry = y + height - 26 - (i + .5) * row_h
+        # Fine horizontal separators are editorial guides, not metric marks.
+        if i:
+            c.setStrokeColor(HexColor("#D6E3E2"))
+            c.setLineWidth(.4)
+            c.line(x, ry + row_h/2 + 1, x + width, ry + row_h/2 + 1)
+        _t(c, x, ry + 1, str(row["name"])[:27], 8.0, NAVY)
+        bw = usable * abs(value) / scale
+        color = TEAL if value >= 0 else NEG
+        _rect(c, center if value >= 0 else center - bw, ry - 1.6,
+              max(1.2, bw), 8.0, color)
+        _t(c, right + 8, ry + 1, f"{value:+.2f}{suffix}", 8.0, color, True)
 
 
 def _tiles(c, tiles, *, title, x=57, y=515, width=470, height=134):
-    _t(c,x,y+height+3,title,9.2,TEAL,True)
-    cols=2
-    rows=2
-    cw=(width-10)/cols
-    ch=(height-22)/rows
+    """Large numeric editorial figures with dates beside the measures."""
+    _t(c,x,y+height+3,title,9.0,TEAL,True)
+    cols = 2
+    cw = (width - 11) / cols
+    ch = (height - 23) / 2
     for i,(label,val,detail) in enumerate(tiles[:4]):
-        col=i%2
-        row=i//2
-        xx=x+col*(cw+10)
-        yy=y+(1-row)*(ch+3)
-        _rect(c,xx,yy,cw-3,ch,WHITE)
-        _t(c,xx+11,yy+ch-16,label[:33],7.8,MUTED)
-        _t(c,xx+11,yy+16,val,15,TEAL,True)
-        _t(c,xx+83,yy+17,detail[:29],7,MUTED)
+        col, row = i % 2, i // 2
+        xx = x + col * (cw+11)
+        yy = y + (1-row)*(ch+4)
+        _rect(c,xx,yy,cw-2,ch,WHITE)
+        _rect(c,xx,yy,3,ch,TEAL)
+        _t(c,xx+12,yy+ch-15,label[:31],8.1,MUTED)
+        _t(c,xx+12,yy+14,val,17.2,TEAL,True)
+        _t(c,xx+120,yy+16,detail[:27],7.8,MUTED)
 
 
 def _events(c, events, *, x=59, y=519):
