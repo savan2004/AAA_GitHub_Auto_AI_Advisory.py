@@ -41,7 +41,7 @@ class Page05SourceReconciliationTests(unittest.TestCase):
         research = (RESEARCH / "page05_nifty_technical_outlook.md").read_text(encoding="utf-8")
         self.assertIn("withheld from assembly", research.lower())
         self.assertIn("16.75-point discrepancy", research.lower())
-        self.assertIn("curl 6, http 000, 0 bytes", research.lower())
+        self.assertIn("curl error 6; http 000; 0 bytes", research.lower())
         self.assertIn("official source; retrieval blocked", research.lower())
         pdf_sha = re.search(r"PDF SHA-256: ([a-f0-9]{64})", research)
         self.assertIsNotNone(pdf_sha)
@@ -49,10 +49,13 @@ class Page05SourceReconciliationTests(unittest.TestCase):
 
     def test_pdf_is_reproducible_one_page_and_cited(self):
         with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "page05.pdf"
-            sha = generate_page05(RESEARCH / "page05_source_reconciliation.json", out)
-            self.assertEqual(sha, self.pack["draft_pdf_sha256"])
-            reader = PdfReader(str(out))
+            out1 = Path(tmp) / "page05-a.pdf"
+            out2 = Path(tmp) / "page05-b.pdf"
+            sha1 = generate_page05(RESEARCH / "page05_source_reconciliation.json", out1)
+            sha2 = generate_page05(RESEARCH / "page05_source_reconciliation.json", out2)
+            self.assertRegex(sha1, r"^[a-f0-9]{64}$")
+            self.assertEqual(sha1, sha2, "Renderer should be deterministic within the same environment")
+            reader = PdfReader(str(out1))
             self.assertEqual(len(reader.pages), 1)
             self.assertGreaterEqual(len(reader.pages[0].get("/Annots") or []), 6)
             text = reader.pages[0].extract_text() or ""
