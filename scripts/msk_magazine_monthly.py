@@ -24,11 +24,13 @@ from reportlab.lib.utils import simpleSplit
 if __package__:
     from .msk_magazine_editorial import load_editorial_pack
     from .msk_magazine_charts import draw_research_chart, load_metrics
+    from .msk_magazine_cover_story import select_cover_story
     from .msk_magazine_source_archive import verify_nse_dashboard, SourceEvidenceError
     from .msk_magazine_primary_sources import recheck_primary_sources
 else:
     from msk_magazine_editorial import load_editorial_pack
     from msk_magazine_charts import draw_research_chart, load_metrics
+    from msk_magazine_cover_story import select_cover_story
     from msk_magazine_source_archive import verify_nse_dashboard, SourceEvidenceError
     from msk_magazine_primary_sources import recheck_primary_sources
 from reportlab.pdfgen import canvas
@@ -253,7 +255,7 @@ def _footer(c, number, issue):
     _txt(c, 45, 44, UNAPPROVED, 7.4, TEAL, True)
 
 
-def _cover(c, issue, logo_file, market_data=None):
+def _cover(c, issue, logo_file, market_data=None, cover_story=None):
     w, h = A4
     _rect(c, 0, 0, w, h, WHITE)
     p = c.beginPath()
@@ -266,42 +268,56 @@ def _cover(c, issue, logo_file, market_data=None):
     c.drawPath(p, fill=1, stroke=0)
     _rect(c, 0, 132, w, 14, TEAL)
     _logo(c, 45, h - 92, logo_file)
-    _txt(c, 48, 477, "MONTHLY", 33, WHITE, True)
-    _txt(c, 48, 423, "MARKET", 43, WHITE, True)
-    _txt(c, 48, 368, "OUTLOOK", 43, WHITE, True)
-    _txt(c, 48, 333, "Indian Markets | Macro & Strategy Report", 12, WHITE)
-    _txt(c, 48, 283, issue.upper() + "  |  16-PAGE RESEARCH EDITION", 11, "#78CFD0", True)
-    # Growth artwork is decorative only; deliberately no invented market values.
-    for i in range(8):
-        _rect(c, 350 + 25 * i, 301, 13, 25 + 18 * i, "#15566A")
-    p = c.beginPath()
-    for i, coords in enumerate([(340, 330), (373, 353), (408, 368),
-                                (444, 397), (480, 429), (535, 465)]):
-        if i == 0:
-            p.moveTo(*coords)
-        else:
-            p.lineTo(*coords)
-    c.setStrokeColor(HexColor("#62D5C5"))
-    c.setLineWidth(4)
-    c.drawPath(p, stroke=1)
-    if market_data:
-        _txt(c, 48, 185, "OCTOBER 2026 | NIFTY 50 +1.95% | MIDCAP 150 -3.69%", 9.5, NAVY, True)
-        _txt(c, 48, 164, "MACRO | RBI REPO 5.50% | OCT CPI 6.09% | Q2 EARNINGS", 9.5, NAVY)
+    if cover_story:
+        # A monthly magazine leads with one verified newsworthy market event,
+        # rather than using "Monthly Market Outlook" or a Diwali festival
+        # title as the cover headline every month.
+        _txt(c, 48, 497, "THE MSK MONTHLY MARKET STORY", 10, "#78CFD0", True)
+        _txt(c, 48, 467, cover_story["kicker"], 14, "#78CFD0", True)
+        headline = cover_story["headline"]
+        font_size = 39
+        lines = simpleSplit(headline, "Helvetica-Bold", font_size, 498)
+        if not 1 <= len(lines) <= 3:
+            raise MagazineError("Issue cover headline does not fit the approved editorial area")
+        for i, line in enumerate(lines):
+            _txt(c, 48, 405 - 51 * i, line, font_size, WHITE, True)
+        deck_y = 405 - 51 * len(lines) - 9
+        _wrapped(c, 48, deck_y, cover_story["deck"], size=9.6,
+                 max_width=493, max_lines=2, leading=15,
+                 color=WHITE)
+        year, month = issue.split("-")
+        _txt(c, 48, 222, date(int(year), int(month), 1).strftime("%B %Y").upper()
+             + "  |  16-PAGE RESEARCH EDITION", 11, NAVY, True)
+        _txt(c, 48, 186, "SOURCE: NSE INDICES | OBSERVED " +
+             cover_story["source_date"], 9, TEAL, True)
+        _txt(c, 48, 166, "READ THE LEAD STORY + MARKET, ECONOMY & STRATEGY", 8.4, NAVY)
+        c.linkURL(cover_story["source_url"], (47, 177, 545, 203), relative=0)
     else:
-        _txt(c, 48, 185, "Markets  |  Economy  |  Sectors  |  Companies  |  Strategy", 11, NAVY)
-    _txt(c, 48, 113, "DESIGN 3 / DESIGN C - FIXED MONTHLY MASTER", 9, TEAL, True)
+        # Fail-soft for unverified issues: do not fabricate a gold plunge,
+        # index lifetime high, festival story or any other market event.
+        _txt(c, 48, 477, "MONTHLY", 33, WHITE, True)
+        _txt(c, 48, 423, "MARKET", 43, WHITE, True)
+        _txt(c, 48, 368, "OUTLOOK", 43, WHITE, True)
+        _txt(c, 48, 333, "Indian Markets | Macro & Strategy Report", 12, WHITE)
+        _txt(c, 48, 283, issue.upper() + "  |  DATA VERIFICATION PENDING", 11,
+             "#78CFD0", True)
+        _txt(c, 48, 185, "Markets | Economy | Sectors | Companies | Strategy", 11, NAVY)
+    _txt(c, 48, 113, "MSK AI BOT | MONTHLY FINANCIAL RESEARCH MAGAZINE",
+         9, TEAL, True)
 
 
-def _index(c, issue, index, market_data=None):
+def _index(c, issue, index, market_data=None, cover_story=None):
     _txt(c, 46, 741, "EDITOR'S NOTE & INDEX", 22, NAVY, True)
     _txt(c, 46, 714, issue + "  |  Approved page order, editorial draft only", 10, GRAY)
     _rect(c, 46, 683, 498, 3, TEAL)
-    if market_data:
-        _txt(c, 46, 662, "EDITOR'S NOTE | October's Nifty 50 gain masked weak smaller indices.", 9.2, NAVY)
-        _txt(c, 46, 646, "RBI tightening, CPI inflation and Q2 filings frame this source-led edition.", 8.8, GRAY)
+    if cover_story:
+        _wrapped(c, 46, 662, "THIS ISSUE | " + cover_story["headline"],
+                 size=10, max_width=490, max_lines=1, color=NAVY, bold=True)
+        _wrapped(c, 46, 646, cover_story["deck"], size=8.8,
+                 max_width=490, max_lines=2, leading=13, color=GRAY)
     else:
         _txt(c, 46, 662, "Monthly research is rebuilt with current dated sources.", 10, NAVY)
-        _txt(c, 46, 646, "The Design 3 cover, page titles and index do not change.", 9, GRAY)
+        _txt(c, 46, 646, "The cover remains generic until the lead story is verified.", 9, GRAY)
     for i, row in enumerate(index):
         y = 615 - i * 34
         if i % 2 == 0:
@@ -415,6 +431,7 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         rendered_logo = RECREATED_LOGO
         logo_source = "RECREATED_FROM_USER_REFERENCE_NOT_FINAL_APPROVED"
     market_data = load_metrics(market_pack, issue) if market_pack is not None else None
+    cover_story = select_cover_story(issue, market_data)
     if market_data and date.fromisoformat(market_data["as_of"]) > now.astimezone(IST).date():
         raise MagazineError("Future-dated market research is prohibited")
     # Reconcile the original downloaded PDF again at assembly time. Neither
@@ -458,9 +475,9 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         c.setFillColor(HexColor(WHITE))
         c.rect(0, 0, *A4, fill=1, stroke=0)
         if n == 1:
-            _cover(c, issue, rendered_logo, market_data)
+            _cover(c, issue, rendered_logo, market_data, cover_story)
         elif n == 2:
-            _index(c, issue, index, market_data)
+            _index(c, issue, index, market_data, cover_story)
         elif n == 16:
             _page(c, n, title, issue, entry["layout"], [], editorial.get(n),
                   market_data)
@@ -480,6 +497,19 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
             json.dumps(page_obj, indent=2) + "\n", encoding="utf-8")
     c.save()
     qa = audit_pdf(pdf_file, master_path=master_path, issue=issue)
+    if cover_story:
+        cover_page = PdfReader(str(pdf_file)).pages[0]
+        cover_text = " ".join((cover_page.extract_text() or "").split())
+        if cover_story["headline"] not in cover_text:
+            qa["errors"].append("Cover: selected lead story headline missing")
+        urls = set()
+        for annot in cover_page.get("/Annots", []):
+            action = annot.get_object().get("/A")
+            if action and action.get("/URI"):
+                urls.add(str(action["/URI"]))
+        if cover_story["source_url"] not in urls:
+            qa["errors"].append("Cover: source hyperlink missing")
+        qa["passed"] = not qa["errors"]
     if editorial:
         reader = PdfReader(str(pdf_file))
         for page_num, content in sorted(editorial.items()):
@@ -500,6 +530,8 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
               "pdf_sha256": hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
               "page_count": 16, "source_consistency_rows": sum(map(len, by_page.values())),
               "editorial_pages_authored": len(editorial),
+              "cover_story": cover_story,
+              "cover_story_publication_approved": False,
               "chart_pages_with_dated_evidence": 14 if market_data else 0,
               "nse_original_pdf_reconciled": nse_verified is not None,
               "nse_reconciled_named_rows": nse_verified["checked_rows"] if nse_verified else 0,
