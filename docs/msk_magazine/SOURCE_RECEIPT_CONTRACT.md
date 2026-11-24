@@ -33,4 +33,4 @@ Example **schema only** (not a real receipt; never use as financial evidence):
 }
 ```
 
-A passing schema check is not independent authentication: the fields can be self-asserted and reviewer identity is not authenticated by code. `source_authenticity_verified` remains **false**. Release still requires actual source-byte retrieval, independent reviewer proof, exact issue/coverage check, editorial and visual QA, archive, Telegram staging, and owner approval.
+A passing schema check is not independent authentication: the fields can be self-asserted and reviewer identity is not authenticated by code. Receipt timestamps must also be no later than the actual validation time (not merely the issue cutoff date), so future-dated same-day fetch/review claims are rejected. `source_authenticity_verified` remains **false**. Release still requires actual source-byte retrieval, independent reviewer proof, exact issue/coverage check, editorial and visual QA, archive, Telegram staging, and owner approval.
