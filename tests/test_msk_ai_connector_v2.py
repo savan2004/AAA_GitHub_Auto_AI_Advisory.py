@@ -207,6 +207,25 @@ class ProviderContract(unittest.TestCase):
         self.assertEqual(ai_engine.get_chat_history(123)[0]["content"],"Test")
         ai_engine.clear_chat(123)
 
+    def test_missing_target_and_atr_do_not_fabricate_zero_price_levels(self):
+        report=ai_engine._fallback_outlook(
+            "RELIANCE", 1000, None, float("nan"), "uptrend", None,
+            None, 0, 0, 0)
+        self.assertIn("no volatility range is claimed",report)
+        self.assertIn("do not invent a target or stop",report)
+        self.assertNotIn("Reference target is Rs 0",report)
+        self.assertIn("unavailable",report)
+        self.assertEqual(ai_engine._safe(float("nan")),"N/A")
+        self.assertEqual(ai_engine._safe("NaN"),"N/A")
+
+    def test_longterm_outlook_is_not_blank_on_provider_failure(self):
+        with patch.object(ai_engine,"ai_available",return_value=True), \
+             patch.object(ai_engine,"_call_ai",return_value=("","AI_TIMEOUT")):
+            response=ai_engine.long_term_view(
+                "RELIANCE","Energy",1000,20,15,0.2,1.3,900,1200,700)
+        self.assertIn("Suitability: Watchlist only",response)
+        self.assertNotIn("Buy now",response)
+
     def test_provider_status_does_not_mislabel_paid_key_as_enabled(self):
         with patch.dict(os.environ,{"OPENAI_API_KEY":"secret"},
                         clear=True):
