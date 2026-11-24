@@ -353,6 +353,24 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertIn("future relative to validation", " ".join(result["failures"]))
 
+    def test_web_only_manifest_is_not_a_source_receipt_pack(self):
+        manifest_path = (Path(__file__).resolve().parents[1] /
+                         "magazine_artifacts/2026-11/source_observations/web_only_sources.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertFalse(manifest["source_bytes_downloaded"])
+        self.assertEqual(manifest["source_receipts"], [])
+        self.assertIs(manifest["source_authenticity_verified"], False)
+        self.assertIs(manifest["accepted_by_magazine_validator"], False)
+        self.assertIs(manifest["publication_allowed"], False)
+        self.assertTrue(all(source["sha256"] is None
+                           for source in manifest["sources"]))
+        accepted, errors = self.verify()
+        self.assertFalse(errors)
+        gate = validate_source_receipts(
+            manifest, accepted, self.source_root, "2026-11", date(2026, 11, 16))
+        self.assertFalse(gate["passed"])
+        self.assertIn("No source_receipts", " ".join(gate["failures"]))
+
     def test_receipt_schema_pass_does_not_claim_source_authenticity(self):
         pack = {"issue": "2026-11", "observations": [self.row],
                 "source_receipts": [self._receipt()]}
