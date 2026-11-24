@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 import data_engine as de
 import technical_indicators as ti
-from msk_core_data_guard import reconcile_fact, wilder_rsi_series
+from msk_core_data_guard import reconcile_fact, wilder_rsi_series, wilder_rsi_values
+from portfolio_doctor_calculations import _rsi
 from research_filing_evidence import reconcile_official_quarter
 
 class CoreGuardTests(unittest.TestCase):
@@ -36,6 +37,30 @@ class CoreGuardTests(unittest.TestCase):
         self.assertEqual(ti.calc_rsi(pd.Series(range(1,40))),100)
         self.assertEqual(ti.calc_rsi(pd.Series([100.]*40)),50)
         self.assertTrue(np.isnan(ti.calc_rsi(pd.concat([close,pd.Series([np.nan,100])],ignore_index=True))))
+
+    def test_shared_rsi_prefix_and_doctor(self):
+        closes = [100+np.sin(i)*5+i/4 for i in range(90)]
+        full = wilder_rsi_values(closes)
+        self.assertTrue(all(v is None for v in full[:14]))
+        for n in (15, 30, 60, 90):
+            self.assertAlmostEqual(_rsi(closes[:n]), full[n-1], places=10)
+            self.assertAlmostEqual(wilder_rsi_series(pd.Series(closes[:n])).iloc[-1], full[n-1], places=10)
+        self.assertIsNone(_rsi(closes[:10]))
+        self.assertEqual(_rsi([100]*30),50)
+        self.assertEqual(_rsi(list(range(40,0,-1))),0)
+        self.assertIsNone(_rsi(closes+[None,100]))
+        self.assertEqual(_rsi(closes+[None]+[100]*15),50)
+        self.assertIsNone(_rsi(closes+[True]))
+        self.assertIsNone(_rsi(closes+[float("inf")]))
+
+    def test_strategy_rsi_call_sites(self):
+        import ast
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        for name in ("swing_trades.py","msk_intraday_trade.py","investment_screener.py"):
+            tree = ast.parse((root/name).read_text(encoding="utf-8"))
+            calls = [n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=="wilder_rsi_series"]
+            self.assertEqual(len(calls),1,name)
 
     def test_primary_scope_guard(self):
         row = {"label":"Sep 2026","revenue":19644.01,"net_profit":742.98,"scope":"standalone"}

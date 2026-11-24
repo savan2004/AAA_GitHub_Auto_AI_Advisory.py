@@ -9,3 +9,5 @@
 - Production, paid services, research approval and actual trading are unchanged.
 
 P5 offline harness: `python scripts/msk_model_eval.py` emits identical synthetic prompts; `python scripts/msk_model_eval.py outputs.json` scores externally captured raw model answers, with strict field identity, exact numerals, nulls and units. Compare `openai/gpt-oss-120b`, `gemini-3.5-flash-lite` and `gemini-3.8-flash` only after verifying account quota and provider terms. Five fixtures are a schema smoke test, not an investment-quality benchmark or a substitute for a live evaluation. No model requests are made by CI.
+
+Central RSI phase: six consumer modules (technical_indicators, data_engine, swing_trades, msk_intraday_trade, investment_screener, portfolio_doctor_calculations) delegate to one pure Wilder implementation. Prefix invariance, flat/monotone series, missing observations, and caller delegation tested. ATR/ADX/MACD/EMA centralization, strategy regression and live output acceptance remain separate work; do not infer 100% trading accuracy.

@@ -176,10 +176,8 @@ def _prep(df, nifty_close):
     ema50 = c.ewm(span=50, adjust=False).mean()
     ema200 = c.ewm(span=200, adjust=False).mean()
 
-    delta = c.diff()
-    gain, loss = _wilder(delta.clip(lower=0)), _wilder((-delta).clip(lower=0))
-    rsi = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
-    rsi = rsi.where(loss != 0, 100.0)
+    from msk_core_data_guard import wilder_rsi_series
+    rsi = wilder_rsi_series(c)
 
     tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
     atr = _wilder(tr)

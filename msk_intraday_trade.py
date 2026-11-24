@@ -213,10 +213,8 @@ def _indicators(closes):
         return None
     ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean()
     ema50 = close.ewm(span=50, adjust=False, min_periods=50).mean()
-    diff = close.diff()
-    gain = diff.clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-    loss = (-diff).clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-    rsi = 100 - 100 / (1 + gain / loss.replace(0, 1e-12))
+    from msk_core_data_guard import wilder_rsi_series
+    rsi = wilder_rsi_series(close)
     prev = close.shift()
     tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
     atr = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()

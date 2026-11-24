@@ -49,27 +49,31 @@ def reconcile_fact(primary, secondary, *, tolerance="0", today=None):
         return "MISSING"
     return "MATCH" if abs(a-b) <= tol else "MISMATCH"
 
-def wilder_rsi_series(close, period=14):
-    """SMA-seeded Wilder RSI. No output before period+1 valid closes.
-    A gap resets the seed; a fully flat window is neutral by project convention.
+def wilder_rsi_values(closes, period=14):
+    """One SMA-seeded Wilder RSI algorithm; None until enough valid closes.
+    Invalid observations reset the seed. A fully flat sequence is neutral.
+    No third-party imports: portfolio valuation can use the same engine.
     """
-    import numpy as np
-    import pandas as pd
     if type(period) is not int or period < 2:
         raise ValueError("invalid RSI period")
-    x = pd.to_numeric(close, errors="coerce").to_numpy(dtype=float)
-    out = np.full(len(x), np.nan)
+    out = []
     prev = None
     count = 0
     gain = loss = 0.0
-    for i, v in enumerate(x):
-        if not np.isfinite(v) or v <= 0:
+    for raw in closes:
+        try:
+            v = float(raw) if not isinstance(raw, bool) else float("nan")
+        except (TypeError, ValueError, OverflowError):
+            v = float("nan")
+        if not math.isfinite(v) or v <= 0:
             prev = None
             count = 0
             gain = loss = 0.0
+            out.append(None)
             continue
         if prev is None:
             prev = v
+            out.append(None)
             continue
         d = v-prev
         prev = v
@@ -79,12 +83,25 @@ def wilder_rsi_series(close, period=14):
             gain += g
             loss += l
             if count < period:
+                out.append(None)
                 continue
             gain /= period
             loss /= period
         else:
             gain = (gain*(period-1)+g)/period
             loss = (loss*(period-1)+l)/period
-        out[i] = (50.0 if gain == loss == 0 else
-                  100.0 if loss == 0 else 100.0*gain/(gain+loss))
-    return pd.Series(out, index=close.index, name=close.name)
+        total = gain + loss
+        if not math.isfinite(total):
+            prev = None
+            count = 0
+            gain = loss = 0.0
+            out.append(None)
+            continue
+        out.append(50.0 if total == 0 else 100.0 * (gain / total))
+    return out
+
+def wilder_rsi_series(close, period=14):
+    """Pandas compatibility adapter for the shared pure calculation."""
+    import pandas as pd
+    return pd.Series(wilder_rsi_values(close, period), index=close.index,
+                     name=close.name, dtype=float)
