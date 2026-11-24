@@ -34,7 +34,9 @@
        else if(ch==='"')quoted=!quoted;
        else if(ch===","&&!quoted){row.push(value.trim());value="";}
        else value+=ch;
-     }row.push(value.trim());items.push(row);
+     }
+    if(quoted)throw Error("CSV contains an unclosed quoted field.");
+    row.push(value.trim());items.push(row);
    }return items;
  };
  const safe=s=>String(s||"").slice(0,200);

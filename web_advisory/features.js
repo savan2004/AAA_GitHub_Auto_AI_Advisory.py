@@ -116,8 +116,16 @@
    for(const row of d.rows){
      const key=cleanSymbol(row.symbol),date=row.asof;
      if(!key||!/^\d{4}-\d\d-\d\d$/.test(date)||!row.source?.trim())throw Error("Each fundamental row requires symbol, YYYY-MM-DD asof and source.");
+     const parsedDate = new Date(date+"T00:00:00Z");
+     if (!Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0,10)!==date ||
+         parsedDate.getTime()>Date.now()+86400000) throw Error("Invalid or future financial date for "+key);
+     if (temp.has(key)) throw Error("Duplicate financial records for "+key);
      const info={symbol:key,asof:date,source:row.source.slice(0,160)};
-     for(const field of need.slice(3))info[field]=N(row[field]);
+     for(const field of need.slice(3)) {
+       const rawValue=String(row[field]??"").trim();
+       info[field]=N(row[field]);
+       if(rawValue!==""&&info[field]===null)throw Error("Invalid numeric field "+field+" for "+key);
+     }
      if(info.pe!==null&&(info.pe<0||info.pe>2000))throw Error("P/E out of plausible range.");
      if(info.debt_equity_ratio!==null&&(info.debt_equity_ratio<0||info.debt_equity_ratio>1000))throw Error("D/E ratio must be in ratio units (x), not Yahoo percent points.");
      if(info.market_cap_inr!==null&&info.market_cap_inr<0)throw Error("Negative market cap.");
@@ -133,6 +141,7 @@
  }
  function results(){
    const out=[];for(const [symbol,entry] of library){
+     if(["NIFTY","NIFTY50","BANKNIFTY","NIFTYBANK"].includes(symbol.replace(/[^A-Z0-9]/g,"")))continue; // Index levels are not stock constituents.
      const q=core.compute(entry.bars);const last=entry.bars.at(-1),prev=entry.bars.at(-2);
      out.push({symbol,entry,q,change:prev.close?(last.close/prev.close-1)*100:0,
        sma20:entry.bars.length>=20?entry.bars.slice(-20).reduce((s,x)=>s+x.close,0)/20:null});
@@ -340,6 +349,7 @@
    panel.append(btn("Replace Portfolio CSV",()=>window.MSKImport?.open("portfolio"),"btn ghost"));
  }
  function renderPanel(tab,panel){
+   if(tab==="technical"){technicalTab(panel);return true;}
    if(tab==="pdf"){window.MSKReport?.render(panel);return true;}
   if(tab==="technical"){technicalTab(panel);return true;}
    if(tab==="portfolio"){portfolioTab(panel);return true;}
