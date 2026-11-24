@@ -17,6 +17,8 @@ import pandas as pd
 
 MAX_CSV_BYTES = 20 * 1024 * 1024
 MIN_EQ_ROWS = 400
+FINAL_ARCHIVE_HOSTS = ("https://nsearchives.nseindia.com",
+                       "https://archives.nseindia.com")
 
 
 def _number(value):
@@ -70,10 +72,19 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
         # trading date or exchange, or mask a malformed legacy response.
         aliases = {}
         if not getattr(resp, "ok", False):
-            final_url = ("https://nsearchives.nseindia.com/content/cm/"
-                         f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv.zip")
-            resp = get(final_url, headers=_UA, timeout=12)
-            if not getattr(resp, "ok", False):
+            # Try each official archive host at most once for this exact day.
+            # A transport failure may use the mirror; a malformed successful
+            # response must still fail closed, never be hidden by another source.
+            for host in FINAL_ARCHIVE_HOSTS:
+                final_url = (host + "/content/cm/"
+                             f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv.zip")
+                try:
+                    resp = get(final_url, headers=_UA, timeout=12)
+                except requests.RequestException:
+                    continue
+                if getattr(resp, "ok", False):
+                    break
+            else:
                 return {}
             payload = resp.content
             if not 0 < len(payload) <= 4_000_000:
