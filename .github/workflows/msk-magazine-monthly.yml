@@ -116,17 +116,34 @@ jobs:
             --issue-dir owner_approved_proof/2026-11 \
             --receipt owner_approved_proof/no-send-preflight.json
 
-      - name: Fetch and reconcile original NSE dashboard bytes
+      - name: Restore pinned November original-source archive (no blocked NSE request)
         if: github.event_name == 'pull_request'
         run: |
-          python scripts/msk_magazine_source_archive.py \
-            --metrics-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json \
-            --output-dir editorial_evidence/2026-11
-
-      - name: Fetch and validate seven primary macro and issuer source documents
+          set -euo pipefail
+          test -f owner_approved_proof/2026-11/source_verification/Index_Dashboard_OCT2026.pdf
+          test -f owner_approved_proof/2026-11/source_verification/nse_dashboard_reconciliation.json
+          test -f owner_approved_proof/2026-11/source_verification/primary/primary_source_ledger.json
+          mkdir -p editorial_evidence/2026-11
+          cp -a owner_approved_proof/2026-11/source_verification/. editorial_evidence/2026-11/
+      - name: Recheck archived NSE PDF and seven original macro/issuer files
         if: github.event_name == 'pull_request'
         run: |
-          python scripts/msk_magazine_primary_sources.py --output-dir editorial_evidence/2026-11/primary
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.msk_magazine_charts import load_metrics
+          from scripts.msk_magazine_source_archive import verify_nse_dashboard
+          from scripts.msk_magazine_primary_sources import recheck_primary_sources
+          folder = Path('editorial_evidence/2026-11')
+          market = load_metrics(Path('docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json'), '2026-11')
+          proof = verify_nse_dashboard((folder/'Index_Dashboard_OCT2026.pdf').read_bytes(),market)
+          receipt = json.loads((folder/'nse_dashboard_reconciliation.json').read_text())
+          assert proof['sha256'] == receipt['sha256']
+          assert proof['checked_rows'] == receipt['checked_rows']
+          primary = recheck_primary_sources(folder/'primary')
+          assert primary
+          print('NOV2026_ARCHIVED_ORIGINAL_SOURCES_REVERIFIED; no live market source bypass')
+          PY
 
       - name: Build a private 16-page November editorial visual proof
         if: github.event_name == 'pull_request'
