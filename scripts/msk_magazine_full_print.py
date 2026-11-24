@@ -119,6 +119,10 @@ def make(output_dir, nse_dir, primary_dir):
         if n >= 3:
             if ctx["stories"][n]["headline"] not in t:
                 raise ValueError(f"Page {n}: source-backed headline missing")
+            if "RISKS / IMPORTANT LIMITS" not in t or ctx["stories"][n]["risk_note"] not in t:
+                raise ValueError(f"Page {n}: risk disclosure missing or clipped")
+            if "ORIGINAL DATA SOURCES & DATES" not in t:
+                raise ValueError(f"Page {n}: source caption missing or clipped")
             links = {str(a.get_object().get("/A",{}).get("/URI",""))
                      for a in page.get("/Annots",[])}
             for src in ctx["stories"][n]["sources"]:
@@ -135,7 +139,7 @@ def make(output_dir, nse_dir, primary_dir):
     if "18.06%" not in all_text[7] or "-7.51%" not in all_text[7]:
         raise ValueError("Sector heatmap lacks dated NSE returns")
     gates = dict(issue=ISSUE, pages=16, document_sha256=hashlib.sha256(pdf.read_bytes()).hexdigest(),
-                 renderer="PlutoPrint+Jinja2", primary_source_count=len(primary_receipts),
+                 renderer="PlutoPrint+Jinja2", primary_source_count=primary_receipts["sources_checked"],
                  nse_source_sha256=nse_receipt["sha256"],
                  source_verified=True, pdf_structure_passed=True, owner_approved=False,
                  publication_allowed=False, telegram_sent=False,
