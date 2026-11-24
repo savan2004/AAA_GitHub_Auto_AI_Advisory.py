@@ -66,11 +66,11 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          from scripts.msk_magazine_monthly import generate, RECREATED_LOGO
+          from scripts.msk_magazine_monthly import generate
           issue = os.environ["ISSUE"]
           source_dir = Path("research_inputs") / issue
           source_pack = source_dir / "source_pack.json"
-          kwargs = {"logo_file": RECREATED_LOGO} if RECREATED_LOGO.is_file() else {}
+          kwargs = {}
           if source_pack.is_file():
               kwargs.update({"source_pack": source_pack, "source_root": source_dir})
           result = generate(issue, Path("private_review"), **kwargs)
