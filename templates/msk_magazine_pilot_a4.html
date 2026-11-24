@@ -51,10 +51,10 @@ html,body{margin:0;padding:0;color:#122b3c;font-family:Arial,"Helvetica Neue",sa
 .contents-splash p{font-size:12pt;color:#50656f;max-width:155mm;line-height:1.5}
 .contents-grid{margin-top:12mm;display:flex;gap:13mm}
 .contents-col{width:50%}
-.contents-row{border-top:1px solid #d5dfda;padding:4mm 1mm;min-height:20mm}
-.contents-row span{font-size:22pt;color:#b69a67;font-family:Georgia,"Times New Roman",serif;float:left;width:17mm}
-.contents-row b{font-size:11pt;display:block;margin-left:20mm;padding-top:3mm}
-.contents-row small{font-size:8pt;color:#61787a;margin-left:20mm}
+.contents-row{border-top:1px solid #d5dfda;padding:4mm 1mm 2mm 20mm;min-height:23mm;position:relative}
+.contents-row span{font-size:22pt;color:#b69a67;font-family:Georgia,"Times New Roman",serif;position:absolute;left:0;top:3mm;width:17mm}
+.contents-row b{font-size:10.5pt;display:block;margin-left:0;padding-top:1mm}
+.contents-row small{display:block;font-size:7.7pt;line-height:1.4;color:#61787a;margin-left:0;margin-top:1.3mm}
 .editor-note{margin-top:18mm;border-left:3px solid #087779;background:#edf4f0;padding:6mm 7mm 7mm}
 .editor-note h3{font-size:11pt;color:#087779;letter-spacing:.08em}
 .editor-note p{font-size:10pt;line-height:1.6}
@@ -88,11 +88,11 @@ html,body{margin:0;padding:0;color:#122b3c;font-family:Arial,"Helvetica Neue",sa
 .sector-head{padding:9mm 0 3mm;border-bottom:1px solid #d6bf92}
 .sector-head h1{font-size:29pt;margin:4mm 0}
 .sector-head p{font-size:11pt;line-height:1.4;color:#536b70}
-.sector-tiles{margin-top:10mm;display:flex;flex-wrap:wrap;gap:3mm}
-.sector-cell{width:calc(25% - 3mm);height:37mm;background:#d8eae3;padding:5mm 4mm;position:relative}
+.sector-tiles{margin-top:10mm;width:100%;border-spacing:2.5mm;table-layout:fixed}
+.sector-cell{width:25%;height:43mm;background:#d8eae3;padding:5mm 4mm;position:relative;vertical-align:top}
 .sector-cell.down{background:#f4e2df}
-.sector-cell b{display:block;font-size:9.5pt;color:#1b3947;max-height:15mm}
-.sector-cell span{position:absolute;left:4mm;bottom:6mm;font-size:19pt;font-weight:bold;letter-spacing:-.04em;color:#087779}
+.sector-cell b{display:block;font-size:8.7pt;line-height:1.15;color:#1b3947;min-height:12mm}
+.sector-cell span{display:block;margin-top:4mm;font-size:18pt;font-weight:bold;letter-spacing:-.04em;color:#087779}
 .sector-cell.down span{color:#af4a45}
 .sector-insight{margin-top:12mm;border-top:4px solid #0b7377;padding:7mm 0;display:flex;gap:8mm}
 .sector-insight .huge{width:25%;font-size:35pt;font-weight:bold;color:#0b7377;letter-spacing:-.06em}
@@ -175,11 +175,13 @@ html,body{margin:0;padding:0;color:#122b3c;font-family:Arial,"Helvetica Neue",sa
 <section class="page content">
   <header class="masthead"><img src="{{logo}}" alt="MSK AI BOT"><div class="issue">08 / 16<br>SECTORS</div></header>
   <div class="sector-head"><div class="section-label">The Eight-Sector Lens</div><h1 class="serif">{{sector.headline}}</h1><p>{{sector.lead}}</p></div>
-  <div class="sector-tiles">
+  <table class="sector-tiles"><tbody>
     {% for row in sectors %}
-    <div class="sector-cell {{row.status}}"><b>{{row.name}}</b><span>{{'%+.2f'|format(row.value)}}%</span></div>
+      {% if loop.index0 % 4 == 0 %}<tr>{% endif %}
+      <td class="sector-cell {{row.status}}"><b>{{row.name}}</b><span>{{'%+.2f'|format(row.value)}}%</span></td>
+      {% if loop.index0 % 4 == 3 %}</tr>{% endif %}
     {% endfor %}
-  </div>
+  </tbody></table>
   <div class="sector-insight"><div class="huge">18.06%</div><div class="insight"><b>THE IT OUTLIER</b>{{sector.analysis[0]}}</div></div>
   <div class="risk"><b>RISK / EVIDENCE LIMITATION</b> — {{sector.risk_note}}</div>
   <div class="sources"><b>PRIMARY SOURCES & DATES</b>
