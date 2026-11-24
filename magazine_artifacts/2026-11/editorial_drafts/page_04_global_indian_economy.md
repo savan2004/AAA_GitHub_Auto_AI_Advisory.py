@@ -2,7 +2,7 @@
 
 **Locked title:** Global & Indian Economy  
 **Issue:** 2026-11  
-**Research checked:** 23 November 2026  
+**Research checked:** 24 November 2026, 08:55 IST  
 **State:** Content draft + one-page A4 PDF rendered and visually checked. **Not eligible for magazine assembly** until independent source-byte receipts, reviewer verification, locked Design 3 parity and editorial approval.
 
 ## October inflation: pressure increased
@@ -31,13 +31,13 @@ Do not insert either release before publication.
 1. [MoSPI CPI October 2026 release (12 Nov; provisional)](https://www.mospi.gov.in/uploads/latestreleasesfiles/1794480048335-Press%20Release%20of%20CPI%20for%20October%202026%20.pdf)
 2. [MoSPI IIP September 2026 release (28 Oct)](https://mospi.gov.in/uploads/latestReleases/latest_release_1793182514284_e9b71fc1-c565-480f-81c2-91618ea42c2f_IIP_Press_Release_September_2026.pdf)
 3. [RBI October 2026 Monetary & Credit Information Review](https://www.rbi.org.in/Scripts/PublicationsView.aspx?id=24097)
-4. [MoSPI eSankhyiki macro indicators portal](https://esankhyiki.mospi.gov.in/)
-5. [MoSPI 2026-27 advance release calendar](https://www.mospi.gov.in/uploads/documents/releaseCalender/1779709510470-ADVANCE%20RELEASE%20CALENDAR%202026-27%20Updated%2025.05.2026.pdf)
+4. [MoSPI/PIB Q1 FY27 GDP release (31 Aug 2026)](https://www.pib.gov.in/PressReleseDetailm.aspx?PRID=2304949&lang=2&reg=48)
+5. [MoSPI advance release calendar updated through October 2026](https://mospi.gov.in/uploads/documents/releaseCalender/1793948871564-ARC%202026-27%20updated%20till%20October%202026.pdf)
 
 ## QA evidence
 
-- One-page A4 PDF generated: `MSK_2026-11_Page04_Global_Indian_Economy_DRAFT.pdf`
-- PDF SHA-256: `46f052a44afd6a6eaeb66be73873cb09251301d242eda576d89a98f5867547b8`
-- Size: 6,013 bytes; mechanical page size: A4; page count: 1.
-- Visual inspection: title, four KPI cards, comparison chart, article text, source links and draft footer present; no clipping detected.
-- Limitations: source bytes not archived with an independent receipt; reviewer identity not independently authenticated; original MSK logo and Design 3 page-4 reference not available in this run. Therefore **source provenance gate remains FAIL / WITHHOLD**.
+- Updated one-page A4 PDF: `MSK_2026-11_Page04_Global_Indian_Economy_DRAFT.pdf` (24 Nov research check; clickable official-source links).
+- PDF SHA-256: `462a7ac8d73f7f7ba803ae0398d20a21524d48cdfd225887f0326f69abb5e9ff`; size 5,918 bytes.
+- Visual inspection: single A4 page, text and chart readable, links present, no clipping detected. It is a research page draft, **not** a Design 3 parity page; original logo/reference bytes were not available.
+- Web-only source manifest: `magazine_artifacts/2026-11/source_observations/web_only_sources.json` (source-byte downloads unavailable; SHA-256 receipts null; release gates false).
+- Source-byte receipt and independent reviewer proof remain pending; this page is **withheld from magazine assembly**.
