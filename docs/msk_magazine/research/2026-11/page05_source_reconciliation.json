@@ -11,35 +11,20 @@
   "official_source_sha256": null,
   "independent_review": false,
   "magazine_assembly_allowed": false,
+  "primary_source_fetch_attempt": {
+    "attempted": true,
+    "endpoint": "https://www.niftyindices.com/Backpage.aspx/getHistoricaldatatabletoString",
+    "requested_date": "2026-11-23",
+    "http_status": 0,
+    "bytes_received": 0,
+    "error": "curl (6) Could not resolve host: www.niftyindices.com",
+    "network_blocked": true
+  },
   "close_reports": [
-    {
-      "source": "Univest",
-      "value": 25349.65,
-      "change_points": -450.95,
-      "change_pct": -1.75,
-      "url": "https://univest.in/blogs/stock-market-prediction-for-tomorrow-live"
-    },
-    {
-      "source": "HDFC Sky",
-      "value": 25349.65,
-      "change_points": -450.95,
-      "change_pct": -1.75,
-      "url": "https://hdfcsky.com/news/market-close-report-today-november-23-2026-nifty-sensex-crash-as-profit-booking-ends-the-party"
-    },
-    {
-      "source": "Oquilia",
-      "value": 25349.65,
-      "change_points": -450.95,
-      "change_pct": -1.75,
-      "url": "https://www.oquilia.com/news/stock-market-today-nifty-50-closing-23-november-2026"
-    },
-    {
-      "source": "ThePip",
-      "value": 25366.4,
-      "change_points": -434.2,
-      "change_pct": -1.68,
-      "url": "https://www.thepip.in/closing-bell/closing-bell-nifty-50-ends-lower-monday-financial-stocks-23-nov-2026"
-    }
+    {"source": "Univest", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://univest.in/blogs/stock-market-prediction-for-tomorrow-live"},
+    {"source": "HDFC Sky", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://hdfcsky.com/news/market-close-report-today-november-23-2026-nifty-sensex-crash-as-profit-booking-ends-the-party"},
+    {"source": "Oquilia", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://www.oquilia.com/news/stock-market-today-nifty-50-closing-23-november-2026"},
+    {"source": "ThePip", "value": 25366.4, "change_points": -434.2, "change_pct": -1.68, "url": "https://www.thepip.in/closing-bell/closing-bell-nifty-50-ends-lower-monday-financial-stocks-23-nov-2026"}
   ],
   "reported_ohlc_secondary": {
     "open": 25929.15,
@@ -56,7 +41,7 @@
     "resistance": [25500, 25800, 26000],
     "source": "Univest; not independently recalculated"
   },
-  "withholding_reason": "Secondary reports disagree on the 23 Nov Nifty 50 close; NSE historical data page was found but raw CSV/official source bytes were not retrieved. Do not use figures as verified financial evidence.",
+  "withholding_reason": "Secondary reports disagree on the 23 Nov Nifty 50 close. Official data endpoint retrieval was attempted but runner DNS resolution failed (curl 6; HTTP 000; 0 bytes). No source-byte SHA or independent review; figures must not be treated as verified financial evidence.",
   "no_forecast_or_recommendation": true,
-  "draft_pdf_sha256": "896386e44a736f726ebc6d6bf0c8149caa3d3be0066ded2783fa5d3e5e83c031"
+  "draft_pdf_sha256": "9b51a8cda64ee0b7eb5bdebac678ea7470ccd14d139b5a9e143366bfb5782942"
 }
