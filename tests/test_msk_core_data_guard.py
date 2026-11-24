@@ -31,6 +31,22 @@ class CoreGuardTests(unittest.TestCase):
                 self.assertEqual(set(de._mem), {"b", "c"})
                 self.assertIsNone(de._mem_get("b", 0))
 
+    def test_shared_indicator_series_matches_public_wrappers(self):
+        from msk_indicator_math import ema, macd, directional_series, bollinger
+        from portfolio_doctor_calculations import portfolio_weights
+        close = pd.Series([100+np.sin(i)*5+i/4 for i in range(120)])
+        df = pd.DataFrame({"High":close+2,"Low":close-2,"Close":close})
+        atr,adx,pdi,mdi=directional_series(df.High,df.Low,df.Close)
+        self.assertEqual(ti.calc_ema(close,20),round(float(ema(close,20).iloc[-1]),2))
+        self.assertEqual(ti.calc_atr(df),round(float(atr.iloc[-1]),2))
+        self.assertEqual(ti.calc_adx(df),tuple(round(float(v.iloc[-1]),1) for v in (adx,pdi,mdi)))
+        self.assertEqual(ti.calc_macd(close),tuple(round(float(v.iloc[-1]),2) for v in macd(close)))
+        self.assertEqual(ti.calc_bollinger(close),tuple(round(float(v.iloc[-1]),2) for v in bollinger(close)))
+        self.assertTrue(np.isnan(directional_series(df.High[:5],df.Low[:5],df.Close[:5])[0].iloc[-1]))
+        self.assertEqual(portfolio_weights([{"qty":2,"close":100},{"qty":1,"close":200}]),[50,50])
+        with self.assertRaises(ValueError):
+            portfolio_weights([{"qty":-1,"close":100},{"qty":2,"close":200}])
+
     def test_quote_identity_survives_cache(self):
         now = datetime(2026,11,23,5,30,tzinfo=timezone.utc).timestamp()
         raw = {"price":100,"provider_symbol":"SBIN.NS","quote_timestamp":now-60}

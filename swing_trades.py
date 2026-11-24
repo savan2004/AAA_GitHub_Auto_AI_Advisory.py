@@ -138,7 +138,8 @@ def _scan_universe():
 
 # ── INDICATORS (one pass per symbol) ─────────────────────────────────────────
 def _wilder(s, n=14):
-    return s.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
+    from msk_indicator_math import wilder
+    return wilder(s, n)
 
 
 def _naive(idx):
@@ -172,28 +173,20 @@ def _prep(df, nifty_close):
         return None, "invalid daily OHLCV"
     o, h, l, c, v = d.Open, d.High, d.Low, d.Close, d.Volume
 
-    ema20 = c.ewm(span=20, adjust=False).mean()
-    ema50 = c.ewm(span=50, adjust=False).mean()
-    ema200 = c.ewm(span=200, adjust=False).mean()
+    from msk_indicator_math import ema, macd, directional_series
+    ema20 = ema(c,20)
+    ema50 = ema(c,50)
+    ema200 = ema(c,200)
 
     from msk_core_data_guard import wilder_rsi_series
     rsi = wilder_rsi_series(c)
 
-    tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
-    atr = _wilder(tr)
-    up, dn = h.diff(), -l.diff()
-    pdm = pd.Series(np.where((up > dn) & (up > 0), up, 0.0), index=d.index)
-    mdm = pd.Series(np.where((dn > up) & (dn > 0), dn, 0.0), index=d.index)
-    pdi = 100 * _wilder(pdm) / atr
-    mdi = 100 * _wilder(mdm) / atr
-    adx = _wilder(100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan))
-
-    macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
-    hist = macd - macd.ewm(span=9, adjust=False).mean()
+    atr, adx, pdi, mdi = directional_series(h,l,c)
+    _, _, hist = macd(c)
 
     # Weekly trend from completed weekly bars only (ffill => no look-ahead)
     wc = c.resample("W-FRI").last().dropna()
-    we9, we21 = wc.ewm(span=9, adjust=False).mean(), wc.ewm(span=21, adjust=False).mean()
+    we9, we21 = ema(wc,9), ema(wc,21)
     wt = pd.Series(np.where((wc > we9) & (we9 > we21), 1, np.where((wc < we9) & (we9 < we21), -1, 0)),
                    index=wc.index)
     wt.iloc[:21] = 0
@@ -327,7 +320,8 @@ def _backtest(A):
 def _regime(nifty):
     try:
         c = pd.to_numeric(nifty["Close"], errors="coerce").dropna()
-        e = c.ewm(span=50, adjust=False).mean()
+        from msk_indicator_math import ema
+        e = ema(c,50)
         if c.iloc[-1] > e.iloc[-1] and e.iloc[-1] > e.iloc[-6]:
             return "bull"
         if c.iloc[-1] < e.iloc[-1] and e.iloc[-1] < e.iloc[-6]:

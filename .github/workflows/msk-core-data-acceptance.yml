@@ -14,6 +14,7 @@ on:
       - 'portfolio_doctor_calculations.py'
       - 'research_filing_evidence.py'
       - 'msk_core_data_guard.py'
+      - 'msk_indicator_math.py'
       - 'scripts/msk_reference_indicators.py'
       - 'tests/test_msk_core_data_guard.py'
       - 'scripts/msk_model_eval.py'

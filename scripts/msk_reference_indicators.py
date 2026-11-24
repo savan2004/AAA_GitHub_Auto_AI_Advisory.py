@@ -27,15 +27,15 @@ def main():
     checks.extend((name,v,ref[-1],.011) for name,v,ref in zip(
         ("MACD","signal","hist"),ti.calc_macd(s),(m,sig,hist)))
     upper,mid,lower = talib.BBANDS(c,timeperiod=20)
-    # Existing pandas sample std differs from TA-Lib population std;
-    # record it explicitly rather than silently claim parity.
+    checks.extend((name,v,ref[-1],.011) for name,v,ref in zip(
+        ("Bollinger mid","Bollinger upper","Bollinger lower"),
+        ti.calc_bollinger(s),(mid,upper,lower)))
     for name,v,ref,tol in checks:
         if not np.isfinite(v) or abs(v-ref)>tol:
             raise AssertionError(f"{name}: mismatch {v} versus {ref}")
         print(f"{name}: PASS")
     print("RSI: PASS; flat-window convention separately tested")
-    print("Bollinger population reference:",upper[-1],mid[-1],lower[-1],
-          "existing sample-standard-deviation implementation:",ti.calc_bollinger(s))
+
 
 if __name__=="__main__":
     main()

@@ -38,7 +38,15 @@ def position_values(holding, close):
 
 
 def portfolio_weights(records):
-    values = [Decimal(str(row["qty"])) * Decimal(str(row["close"])) for row in records]
+    try:
+        values = []
+        for row in records:
+            qty, close = Decimal(str(row["qty"])), Decimal(str(row["close"]))
+            if any(not v.is_finite() or v <= 0 for v in (qty, close)):
+                raise ValueError("incomplete_portfolio")
+            values.append(qty*close)
+    except (InvalidOperation, KeyError, TypeError, OverflowError):
+        raise ValueError("incomplete_portfolio") from None
     total = sum(values, Decimal(0))
     if not values or not total.is_finite() or total <= 0:
         raise ValueError("incomplete_portfolio")

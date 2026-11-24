@@ -874,9 +874,8 @@ def calc_rsi(close: pd.Series, period: int = 14) -> float:
 
 
 def calc_ema(close: pd.Series, span: int) -> float:
-    ema = close.ewm(span=span, adjust=False).mean()
-    val = ema.iloc[-1]
-    return round(float(val), 2) if pd.notna(val) else float(close.iloc[-1])
+    from technical_indicators import calc_ema as shared_ema
+    return shared_ema(close, span)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

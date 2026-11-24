@@ -14,6 +14,7 @@ All functions:
 
 import pandas as pd
 import numpy as np
+from msk_indicator_math import ema as _ema_series, macd as _macd_series, atr_series, directional_series, bollinger
 from config import RSI_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL, ATR_PERIOD, ADX_PERIOD
 
 
@@ -32,11 +33,11 @@ def rsi_series(close: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
 # ── EMA ───────────────────────────────────────────────────────────────────────
 def calc_ema(close: pd.Series, span: int) -> float:
     """Exponential Moving Average — returns scalar (latest value)."""
-    return round(float(close.ewm(span=span, adjust=False).mean().iloc[-1]), 2)
+    return round(float(ema_series(close, span).iloc[-1]), 2)
 
 
 def ema_series(close: pd.Series, span: int) -> pd.Series:
-    return close.ewm(span=span, adjust=False).mean()
+    return _ema_series(close, span)
 
 
 # ── SMA ───────────────────────────────────────────────────────────────────────
@@ -52,11 +53,7 @@ def calc_macd(close: pd.Series,
     """
     Returns (macd_line, signal_line, histogram) — all scalars.
     """
-    exp_fast   = close.ewm(span=fast,   adjust=False).mean()
-    exp_slow   = close.ewm(span=slow,   adjust=False).mean()
-    macd_line  = exp_fast - exp_slow
-    signal_line= macd_line.ewm(span=signal, adjust=False).mean()
-    histogram  = macd_line - signal_line
+    macd_line, signal_line, histogram = _macd_series(close, fast, slow, signal)
     return (
         round(float(macd_line.iloc[-1]),   2),
         round(float(signal_line.iloc[-1]), 2),
@@ -70,13 +67,7 @@ def calc_atr(df: pd.DataFrame, period: int = ATR_PERIOD) -> float:
     Average True Range using Wilder's EMA.
     df must have High, Low, Close columns.
     """
-    h, l, c = df["High"], df["Low"], df["Close"]
-    tr = pd.concat([
-        (h - l),
-        (h - c.shift()).abs(),
-        (l - c.shift()).abs(),
-    ], axis=1).max(axis=1)
-    atr = tr.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    atr = atr_series(df["High"], df["Low"], df["Close"], period)
     return round(float(atr.iloc[-1]), 2)
 
 
@@ -87,22 +78,7 @@ def calc_adx(df: pd.DataFrame, period: int = ADX_PERIOD) -> tuple:
     Returns (adx, plus_di, minus_di) — all scalars.
     ADX > 25 = trending market. +DI > -DI = bullish.
     """
-    high, low, close = df["High"], df["Low"], df["Close"]
-    # Wilder directional movement: a rising Low is NOT negative movement.
-    # Compare the *raw* competing moves before zeroing either series.
-    up_move = high.diff()
-    down_move = low.shift(1) - low
-    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
-    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-    tr1 = high - low
-    tr2 = (high - close.shift()).abs()
-    tr3 = (low  - close.shift()).abs()
-    tr  = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr_s    = tr.ewm(com=period - 1,   min_periods=period, adjust=False).mean()
-    plus_di  = 100 * (plus_dm.ewm(com=period - 1,  min_periods=period, adjust=False).mean() / atr_s)
-    minus_di = 100 * (minus_dm.ewm(com=period - 1, min_periods=period, adjust=False).mean() / atr_s)
-    dx       = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)) * 100
-    adx_s    = dx.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    _, adx_s, plus_di, minus_di = directional_series(df["High"], df["Low"], df["Close"], period)
     return (
         round(float(adx_s.iloc[-1]),    1),
         round(float(plus_di.iloc[-1]),  1),
@@ -115,10 +91,7 @@ def calc_bollinger(close: pd.Series, window: int = 20, num_sd: float = 2.0) -> t
     """
     Returns (mid, upper, lower) — all scalars (latest values).
     """
-    mid   = close.rolling(window).mean()
-    std   = close.rolling(window).std()
-    upper = mid + num_sd * std
-    lower = mid - num_sd * std
+    mid, upper, lower = bollinger(close, window, num_sd)
     return (
         round(float(mid.iloc[-1]),   2),
         round(float(upper.iloc[-1]), 2),
@@ -168,8 +141,8 @@ def trend_label(close: pd.Series) -> str:
     if len(close) < 50:
         return "NEUTRAL"
     ltp   = float(close.iloc[-1])
-    ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
-    ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
+    ema20 = float(ema_series(close, 20).iloc[-1])
+    ema50 = float(ema_series(close, 50).iloc[-1])
     if ltp > ema20 > ema50: return "BULLISH"
     if ltp < ema20 < ema50: return "BEARISH"
     return "NEUTRAL"

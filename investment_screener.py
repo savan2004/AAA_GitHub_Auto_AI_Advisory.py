@@ -82,25 +82,17 @@ def evaluate_candidate(sym, df, profile, asof=None):
     try:
         c, h, l, v = (f[x] for x in ("Close", "High", "Low", "Volume"))
         price = float(c.iloc[-1])
-        ema20 = float(c.ewm(span=20, adjust=False).mean().iloc[-1])
-        ema50 = float(c.ewm(span=50, adjust=False).mean().iloc[-1])
-        ema100 = float(c.ewm(span=100, adjust=False).mean().iloc[-1])
+        from msk_indicator_math import ema, directional_series
+        ema20 = float(ema(c,20).iloc[-1])
+        ema50 = float(ema(c,50).iloc[-1])
+        ema100 = float(ema(c,100).iloc[-1])
         change20 = (price / float(c.iloc[-21]) - 1) * 100
         change1 = (price / float(c.iloc[-2]) - 1) * 100
         from msk_core_data_guard import wilder_rsi_series
         rsi = float(wilder_rsi_series(c).iloc[-1])
-        prev = c.shift(1)
-        tr = pd.concat([h - l, (h - prev).abs(), (l - prev).abs()], axis=1).max(axis=1)
-        atr = float(tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean().iloc[-1])
-        up, down = h.diff(), -l.diff()
-        plus_dm = up.where((up > down) & (up > 0), 0)
-        minus_dm = down.where((down > up) & (down > 0), 0)
-        smooth = lambda a: a.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-        smtr = smooth(tr).replace(0, float("nan"))
-        dip = 100 * smooth(plus_dm) / smtr
-        dim = 100 * smooth(minus_dm) / smtr
-        dx = (100 * (dip - dim).abs() / (dip + dim).replace(0, float("nan")))
-        adx = float(smooth(dx).iloc[-1])
+        atr_values, adx_values, _, _ = directional_series(h,l,c)
+        atr = float(atr_values.iloc[-1])
+        adx = float(adx_values.iloc[-1])
         volx = float(v.iloc[-1] / v.iloc[-21:-1].mean())
         liquidity = float((c * v).tail(20).median())
         atrpct = 100 * atr / price
