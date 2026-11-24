@@ -326,7 +326,8 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                 "pb":             raw(ks, "priceToBook"),
                 "roe":            raw(fd, "returnOnEquity"),
                 "eps":            raw(ks, "trailingEps"),
-                "dividend_yield": raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield"),
+                "dividend_yield": (raw(sd, "dividendYield") if raw(sd, "dividendYield") is not None else raw(sd, "trailingAnnualDividendYield")),
+                "dividend_yield_unit": "fraction",
                 "high52":         raw(sd, "fiftyTwoWeekHigh"),
                 "low52":          raw(sd, "fiftyTwoWeekLow"),
                 "market_cap":     raw(pr, "marketCap"),
@@ -753,7 +754,7 @@ def get_info(symbol: str) -> dict:
     is_index = raw.startswith("^")
     sym_clean = raw.removesuffix(".NS").removesuffix(".NSE")
     yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
-    cache_key = f"info_v3_roe_unit_{yahoo_sym}"
+    cache_key = f"info_v4_explicit_yield_unit_{yahoo_sym}"
 
     cached = cached_get(cache_key, TTL_PRICE if is_index else TTL_FUND)
     if cached is not None:

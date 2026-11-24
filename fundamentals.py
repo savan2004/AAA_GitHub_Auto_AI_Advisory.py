@@ -41,7 +41,8 @@ import logging
 import math
 import random
 from datetime import date
-from financial_quality import annual_sales_from_table, normalize_roe_percent
+from financial_quality import (annual_sales_from_table, normalize_roe_percent,
+                               normalize_dividend_percent, positive_financial_amount)
 from typing import Dict, Any, Optional
 
 import requests
@@ -339,7 +340,7 @@ def _fetch_yfinance(sym: str) -> dict:
 def get_fundamentals(sym: str) -> dict:
     sym       = sym.upper().replace(".NS", "")
     # Version bump excludes old cache entries with no field-by-field origin.
-    cache_key = f"fund_provenance_v2_roe_unit_{sym}"
+    cache_key = f"fund_provenance_v2_roe_unit_v3_amounts_{sym}"
     cached    = _get_cached(cache_key, CACHE_TTL_FUND)
     if cached:
         return cached
@@ -380,16 +381,16 @@ def get_fundamentals(sym: str) -> dict:
                 info.get("roe"), info.get("roe_unit")
             )
             result["eps"]    = safe_val(info, "eps")
-            result["mcap"]   = info.get("market_cap")
+            result["mcap"]   = positive_financial_amount(info.get("market_cap"))
             # FIX: totalRevenue from Yahoo v10 financialData (absolute rupees)
             # fmt_mcap() correctly converts to Crores by dividing by 1e7
-            result["rev"]    = info.get("totalRevenue")
+            result["rev"]    = positive_financial_amount(info.get("totalRevenue"))
             result["de"]     = normalized_debt_equity_ratio(info)
             result["beta"]   = safe_val(info, "beta")
             result["w52h"]   = safe_val(info, "high52")
             result["w52l"]   = safe_val(info, "low52")
-            div_raw = safe_val(info, "dividend_yield")
-            result["div_y"]  = round(div_raw * 100, 2) if div_raw is not None and div_raw <= 1 else div_raw
+            result["div_y"] = normalize_dividend_percent(
+                info.get("dividend_yield"), info.get("dividend_yield_unit"))
             logger.info(f"get_fundamentals {sym}: data_engine OK (rev={result['rev'] is not None})")
     except Exception as e:
         logger.warning(f"get_fundamentals data_engine {sym}: {e}")
@@ -399,7 +400,9 @@ def get_fundamentals(sym: str) -> dict:
     # ── Source 2: Screener.in (NO key required — fills most gaps) ────────────
     missing = [k for k in ["pe", "roe", "de", "mcap", "rev", "w52h", "w52l", "eps", "div_y", "pb"]
                if result[k] is None]
-    if missing:
+    # Prefer a recent explicitly dated annual statement over undated
+    # secondary revenue. Keep the latter indicative only if no FY is available.
+    if missing or not _origins.get("rev", {}).get("period_end"):
         before_source = dict(result)
         sc = _fetch_screener(sym)
         if sc:
@@ -407,11 +410,17 @@ def get_fundamentals(sym: str) -> dict:
             if result["roe"]  is None: result["roe"]  = sc.get("roe")    # Screener = already %
             if result["de"]   is None: result["de"]   = sc.get("de")
             if result["eps"]  is None: result["eps"]  = sc.get("eps")
-            if result["mcap"] is None: result["mcap"] = sc.get("mcap")
-            if result["rev"]  is None: result["rev"]  = sc.get("rev")
+            if result["mcap"] is None: result["mcap"] = positive_financial_amount(sc.get("mcap"))
+            dated_revenue = positive_financial_amount(sc.get("rev"))
+            if (dated_revenue is not None and sc.get("_revenue_period_end")
+                    and sc.get("_screener_scope") in ("consolidated", "standalone")):
+                result["rev"] = dated_revenue
+                _origins["rev"] = {"source": "Screener.in",
+                                   "scope": sc["_screener_scope"],
+                                   "period_end": sc["_revenue_period_end"]}
             if result["w52h"] is None: result["w52h"] = sc.get("w52h")
             if result["w52l"] is None: result["w52l"] = sc.get("w52l")
-            if result["div_y"] is None: result["div_y"] = sc.get("div_y")
+            if result["div_y"] is None: result["div_y"] = normalize_dividend_percent(sc.get("div_y"), "percent")
             if result["name"] == sym:  result["name"] = sc.get("name", sym)
             # PB from Book Value
             if result["pb"] is None and sc.get("book_value"):
@@ -444,7 +453,7 @@ def get_fundamentals(sym: str) -> dict:
             if result["w52h"]  is None: result["w52h"]   = safe_val(fh, "high52")
             if result["w52l"]  is None: result["w52l"]   = safe_val(fh, "low52")
             if result["div_y"] is None:
-                result["div_y"] = safe_val(fh, "dividend_yield")
+                result["div_y"] = normalize_dividend_percent(fh.get("dividend_yield"), "percent")
             mark_new_fields(before_source, "Finnhub", scope="unknown")
 
     # ── Source 4: yfinance (last resort — attempt EVERY still-missing field) ──
@@ -463,8 +472,8 @@ def get_fundamentals(sym: str) -> dict:
                     yf_info.get("returnOnEquity"), "fraction"
                 )
             if result["eps"]   is None: result["eps"]  = safe_val(yf_info, "trailingEps")
-            if result["mcap"]  is None: result["mcap"] = yf_info.get("marketCap")
-            if result["rev"]   is None: result["rev"]  = yf_info.get("totalRevenue")
+            if result["mcap"]  is None: result["mcap"] = positive_financial_amount(yf_info.get("marketCap"))
+            if result["rev"]   is None: result["rev"]  = positive_financial_amount(yf_info.get("totalRevenue"))
             if result["de"]    is None:
                 from data_engine import normalized_debt_equity_ratio
                 result["de"] = normalized_debt_equity_ratio(yf_info)
@@ -472,12 +481,26 @@ def get_fundamentals(sym: str) -> dict:
             if result["w52l"]  is None: result["w52l"] = safe_val(yf_info, "fiftyTwoWeekLow")
             if result["beta"]  is None: result["beta"] = safe_val(yf_info, "beta")
             if result["div_y"] is None:
-                div_raw = safe_val(yf_info, "dividendYield")
-                result["div_y"] = round(div_raw * 100, 2) if div_raw and div_raw <= 1 else div_raw
+                # yfinance dividendYield has changed representation across
+                # versions. Use the explicitly fractional trailing annual field.
+                result["div_y"] = normalize_dividend_percent(
+                    yf_info.get("trailingAnnualDividendYield"), "fraction")
             mark_new_fields(before_source, "yfinance", scope="unknown")
 
     # Full period/source proof requires issuer XBRL or signed financial
     # statements. These third-party values are always labeled indicative.
+    # Normalize all final numeric fields; negative EPS/ROE remain legitimate.
+    for field in _metric_fields:
+        value = safe_val(result, field) if field not in ("rev", "mcap") else positive_financial_amount(result[field])
+        if value is not None and field in ("pe", "fwd_pe", "pb", "w52h", "w52l") and value <= 0:
+            value = None
+        result[field] = value
+        if value is None:
+            _origins.pop(field, None)
+    if result["w52h"] is not None and result["w52l"] is not None and result["w52h"] < result["w52l"]:
+        for field in ("w52h", "w52l"):
+            result[field] = None
+            _origins.pop(field, None)
     result["_field_provenance"] = _origins
     result["_issuer_filing_verified"] = False
     filled = [k for k, v in result.items() if v is not None]
