@@ -88,13 +88,13 @@ def build(output_dir: Path, *, renderer="plutoprint"):
     # pypdf's text transform yields a top-origin y for this PlutoPrint PDF.
     anchors = {}
     def check_sector_flow(txt, cm, tm, font, size):
-        for key in ("RISK / EVIDENCE LIMITATION", "PRIMARY SOURCES & DATES"):
+        for key in ("RISK / WHAT WE DO NOT KNOW", "PRIMARY SOURCES & DATES"):
             if key in txt:
                 anchors[key] = tm[5]
     reader.pages[3].extract_text(visitor_text=check_sector_flow)
     if len(anchors) != 2 or (
         anchors["PRIMARY SOURCES & DATES"] -
-        anchors["RISK / EVIDENCE LIMITATION"] < 18
+        anchors["RISK / WHAT WE DO NOT KNOW"] < 18
     ):
         raise ValueError("Sector layout overlaps risk limitation and sources")
     first = " ".join(reader.pages[0].extract_text().split())
