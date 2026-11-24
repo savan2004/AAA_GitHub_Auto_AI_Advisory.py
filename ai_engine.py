@@ -94,10 +94,10 @@ def _fallback_outlook(
         str: Markdown formatted outlook
     """
     from math import isfinite
-    zone = ("overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
-            if isinstance(rsi, (float, int)) and isfinite(rsi) else "unavailable")
-    direction = ("positive" if macd > 0 else "negative"
-                 if isinstance(macd, (float, int)) and isfinite(macd) else "unavailable")
+    valid_rsi = isinstance(rsi, (float, int)) and isfinite(rsi)
+    valid_macd = isinstance(macd, (float, int)) and isfinite(macd)
+    zone = ("overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral") if valid_rsi else "unavailable"
+    direction = ("positive" if macd > 0 else "negative") if valid_macd else "unavailable"
     atr_line = (f"ATR Rs {_safe(atr)}; a reference volatility range is available."
                 if isinstance(atr, (int, float)) and isfinite(atr) and atr > 0
                 else "ATR was not supplied; no volatility range is claimed.")
