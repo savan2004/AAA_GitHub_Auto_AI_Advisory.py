@@ -9,6 +9,7 @@ All data is request-local memory and this file never creates logs.
 import csv
 import io
 import math
+import zipfile
 from datetime import datetime, date
 from typing import Mapping
 
@@ -60,15 +61,44 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
     url = _BHAV_URL.format(d=day.strftime("%d%m%Y"))
     get = get or requests.get
     try:
-        resp = get(url, headers=_UA, timeout=12)
+        try:
+            resp = get(url, headers=_UA, timeout=12)
+        except requests.RequestException:
+            resp = None
+        # Independent official final archive, reusing AiAutoUpdate's UDiFF
+        # endpoint and bounded in-memory ZIP approach. Never use a different
+        # trading date or exchange, or mask a malformed legacy response.
+        aliases = {}
         if not getattr(resp, "ok", False):
-            return {}
-        body = resp.content
+            final_url = ("https://nsearchives.nseindia.com/content/cm/"
+                         f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv.zip")
+            resp = get(final_url, headers=_UA, timeout=12)
+            if not getattr(resp, "ok", False):
+                return {}
+            payload = resp.content
+            if not 0 < len(payload) <= 4_000_000:
+                return {}
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                files = [f for f in archive.infolist()
+                         if not f.is_dir() and f.filename.lower().endswith(".csv")]
+                if len(files) != 1 or not 0 < files[0].file_size <= MAX_CSV_BYTES:
+                    return {}
+                body = archive.read(files[0])
+            aliases = {"TCKRSYMB": "SYMBOL", "SCTYSRS": "SERIES",
+                       "TRADDT": "DATE1", "OPNPRIC": "OPEN_PRICE",
+                       "HGHPRIC": "HIGH_PRICE", "LWPRIC": "LOW_PRICE",
+                       "CLSPRIC": "CLOSE_PRICE", "PRVSCLSGPRIC": "PREV_CLOSE",
+                       "TTLTRADGVOL": "TTL_TRD_QNTY"}
+        else:
+            body = resp.content
         if not body or not (50_000 <= len(body) <= MAX_CSV_BYTES):
             return {}
         source = io.StringIO(body.decode("utf-8-sig"))
         reader = csv.DictReader(source)
-        headers = [str(h or "").strip().upper() for h in (reader.fieldnames or [])]
+        def normalized(key):
+            key = str(key or "").strip().upper()
+            return aliases.get(key, key)
+        headers = [normalized(h) for h in (reader.fieldnames or [])]
         required = {"SYMBOL", "SERIES", "DATE1", "OPEN_PRICE", "HIGH_PRICE",
                     "LOW_PRICE", "CLOSE_PRICE", "PREV_CLOSE", "TTL_TRD_QNTY"}
         if not required.issubset(headers):
@@ -77,7 +107,7 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
         rows = {}
         eq_total = 0
         for raw in reader:
-            row = {str(k or "").strip().upper(): str(v or "").strip()
+            row = {normalized(k): str(v or "").strip()
                    for k, v in raw.items()}
             if row.get("SERIES") != "EQ":
                 continue
@@ -105,7 +135,7 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
             rows[symbol] = fields
         return rows if eq_total >= MIN_EQ_ROWS else {}
     except (requests.RequestException, UnicodeError, ValueError, KeyError,
-            TypeError, OverflowError, OSError, csv.Error):
+            TypeError, OverflowError, OSError, csv.Error, zipfile.BadZipFile, RuntimeError):
         return {}
 
 
