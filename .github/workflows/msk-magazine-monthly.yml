@@ -220,22 +220,18 @@ jobs:
               out.write(f"due={'true' if due else 'false'}\nissue={issue}\n")
           print(f"Issue={issue}; due={due}; manual={manual}")
           PY
-      - name: Require complete month-matched research material
+      - name: Select matching research inputs without borrowing another month
         if: steps.schedule.outputs.due == 'true'
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
-          test -f "docs/msk_magazine/ISSUE_${ISSUE}_SOURCE_CITED_WORKING_DRAFT.json" || { echo "::error::MONTHLY_EDITORIAL_PACK_MISSING"; exit 1; }
-          test -f "docs/msk_magazine/ISSUE_${ISSUE}_OFFICIAL_RESEARCH_METRICS.json" || { echo "::error::MONTHLY_MARKET_PACK_MISSING"; exit 1; }
-          if [ "$ISSUE" = "2026-11" ]; then
-            python scripts/msk_magazine_source_archive.py \
-              --metrics-pack "docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json" \
-              --output-dir "editorial_source_inputs/$ISSUE/source_verification"
-            python scripts/msk_magazine_primary_sources.py \
-              --output-dir "editorial_source_inputs/$ISSUE/source_verification/primary"
+          set -euo pipefail
+          echo "Checking optional research files for $ISSUE; missing files never block a private draft."
+          if [ -f "docs/msk_magazine/ISSUE_${ISSUE}_SOURCE_CITED_WORKING_DRAFT.json" ] &&
+             [ -f "docs/msk_magazine/ISSUE_${ISSUE}_OFFICIAL_RESEARCH_METRICS.json" ]; then
+            echo "Current-month editorial/market packs found; full verification is separately required."
           else
-            echo "::error::NEW_MONTH_REQUIRES_MONTH_SPECIFIC_VERIFIED_SOURCE_ARCHIVE"
-            exit 1
+            echo "No complete dated editorial pack; creating a clearly unapproved draft from verified closing values only."
           fi
       - name: Retrieve month-end official NSE index CSV (fail closed on HTTP errors)
         if: steps.schedule.outputs.due == 'true'
@@ -243,41 +239,38 @@ jobs:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
           python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "editorial_source_inputs/$ISSUE/sources"
-      - name: Create a 16-page UNAPPROVED monthly draft only
-        if: steps.schedule.outputs.due == 'true'
-        env:
-          ISSUE: ${{ steps.schedule.outputs.issue }}
-        run: |
-          SOURCE_ARGS=()
-          if [ -f "editorial_source_inputs/$ISSUE/sources/source_pack.json" ]; then
-            SOURCE_ARGS=(--source-pack "editorial_source_inputs/$ISSUE/sources/source_pack.json" --source-root "editorial_source_inputs/$ISSUE/sources")
-          fi
-          EDITORIAL="docs/msk_magazine/ISSUE_${ISSUE}_SOURCE_CITED_WORKING_DRAFT.json"
-          if [ -f "$EDITORIAL" ]; then
-            SOURCE_ARGS+=(--editorial-pack "$EDITORIAL")
-          fi
-          METRICS="docs/msk_magazine/ISSUE_${ISSUE}_OFFICIAL_RESEARCH_METRICS.json"
-          if [ -f "$METRICS" ]; then
-            SOURCE_ARGS+=(--market-pack "$METRICS")
-            SOURCE_ARGS+=(--nse-proof-dir "editorial_source_inputs/$ISSUE/source_verification")
-            SOURCE_ARGS+=(--primary-proof-dir "editorial_source_inputs/$ISSUE/source_verification/primary")
-          fi
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            python scripts/msk_magazine_monthly.py --issue "$ISSUE" --scheduled --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
-          else
-            python scripts/msk_magazine_monthly.py --issue "$ISSUE" --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
-          fi
-      - name: Attach original-source PDFs and checked CSV evidence to finished draft
+      - name: Generate self-contained 16-page UNAPPROVED monthly PDF
         if: steps.schedule.outputs.due == 'true'
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
           set -euo pipefail
-          test -f "editorial_source_inputs/$ISSUE/source_verification/Index_Dashboard_OCT2026.pdf"
-          test -f "editorial_source_inputs/$ISSUE/source_verification/nse_dashboard_reconciliation.json"
+          SOURCE_ARGS=()
+          if [ -f "editorial_source_inputs/$ISSUE/sources/source_pack.json" ]; then
+            SOURCE_ARGS+=(--source-pack "editorial_source_inputs/$ISSUE/sources/source_pack.json" --source-root "editorial_source_inputs/$ISSUE/sources")
+          fi
+          # Never automatically use unverified editorial figures or reuse a previous issue's NSE PDF.
+          # Source-based sections stay clearly incomplete until their independent proofs exist.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            python scripts/msk_magazine_monthly.py --issue "$ISSUE" --scheduled --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
+          else
+            python scripts/msk_magazine_monthly.py --issue "$ISSUE" --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
+          fi
+          mkdir -p "magazine_artifacts/$ISSUE/sources"
+          if [ -d "editorial_source_inputs/$ISSUE/sources" ]; then
+            cp -a "editorial_source_inputs/$ISSUE/sources/." "magazine_artifacts/$ISSUE/sources/"
+          fi
           test -f "magazine_artifacts/$ISSUE/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
-          cp -a "editorial_source_inputs/$ISSUE/source_verification" "magazine_artifacts/$ISSUE/source_verification"
-          cp -a "editorial_source_inputs/$ISSUE/sources" "magazine_artifacts/$ISSUE/sources"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          issue=os.environ["ISSUE"]
+          gate=json.loads((Path("magazine_artifacts")/issue/"release_gate.json").read_text())
+          assert gate["page_count"]==16 and gate["mechanical_pdf_checks"]["passed"]
+          assert gate["publication_allowed"] is False and gate["editorial_approved"] is False
+          assert gate["source_consistency_rows"] >= 0
+          print("MONTHLY_PRIVATE_DRAFT_BUILT:",issue,"verified_csv_observations:",gate["source_consistency_rows"])
+          PY
       - name: Retain PDF and per-page evidence gates as GitHub run artifact
         if: steps.schedule.outputs.due == 'true'
         uses: actions/upload-artifact@v4
@@ -296,7 +289,7 @@ jobs:
           ROOT="magazine_artifacts/$ISSUE"
           test -f "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
           test -f "$ROOT/release_gate.json"
-          (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources source_verification release_gate.json page_*.json)
+          (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources release_gate.json page_*.json)
           TAG="msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}"
           gh release create "$TAG" \
             "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf" \
@@ -304,7 +297,7 @@ jobs:
             "$ROOT/MSK_${ISSUE}_source_and_page_evidence.tar.gz" \
             --draft \
             --title "MSK Magazine $ISSUE | UNAPPROVED editorial draft | run $GITHUB_RUN_ID" \
-            --notes "Unapproved 16-page Design 3 editorial draft; financial data may be missing. Human source, logo, visual and publication approval are REQUIRED. No Telegram release."
+            --notes "UNAPPROVED automatic 16-page monthly layout draft. Any missing official figures are WITHHELD, not estimated. A complete V4-level editorial magazine requires current-month verified research, visual QA, and explicit owner approval. No Telegram release."
           echo "Created private draft release: $TAG" >> "$GITHUB_STEP_SUMMARY"
       - name: Report missing publication evidence
         if: steps.schedule.outputs.due == 'true'
@@ -312,8 +305,8 @@ jobs:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
           echo "### MSK Magazine $ISSUE - UNAPPROVED EDITORIAL DRAFT" >> "$GITHUB_STEP_SUMMARY"
-          echo "16-page A4 draft generated from locked Design 3 index." >> "$GITHUB_STEP_SUMMARY"
-          echo "Financial observations are WITHHELD unless a dated checked source pack is explicitly supplied." >> "$GITHUB_STEP_SUMMARY"
+          echo "Automated 16-page A4 private draft generated on first Monday in IST; all public-release gates remain disabled." >> "$GITHUB_STEP_SUMMARY"
+          echo "Official NSE CSV closing values are included only if downloaded and source-verified for the correct month. Unavailable company/macro research is withheld." >> "$GITHUB_STEP_SUMMARY"
           echo "No automatic Telegram publication, no investment recommendations, no owner approval." >> "$GITHUB_STEP_SUMMARY"
           echo "Draft PDF and page-by-page JSONs are available in the uploaded run artifact (90-day retention)." >> "$GITHUB_STEP_SUMMARY"
       - name: Skip non-first Mondays without errors
