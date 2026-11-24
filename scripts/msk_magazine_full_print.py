@@ -24,6 +24,7 @@ from scripts.msk_magazine_editorial import load_editorial_pack
 from scripts.msk_magazine_monthly import load_master, RECREATED_LOGO
 from scripts.msk_magazine_source_archive import verify_nse_dashboard
 from scripts.msk_magazine_primary_sources import recheck_primary_sources
+from scripts.msk_magazine_editorial_art_nov2026 import art_direct_november
 
 ROOT = Path(__file__).resolve().parents[1]
 ISSUE = "2026-11"
@@ -98,6 +99,9 @@ def make(output_dir, nse_dir, primary_dir):
                       autoescape=select_autoescape(["html"]), trim_blocks=True,
                       lstrip_blocks=True)
     html_content = env.get_template(TEMPLATE.name).render(**ctx, css=css)
+    # Visual-only print upgrade: facts/sources were checked before styling.
+    # Edition-scoped data labels prevent accidental future-month reuse.
+    html_content = art_direct_november(html_content, ctx["logo"])
     base.mkdir(parents=True, exist_ok=True)
     html_out = base / "MSK_2026-11_MAGAZINE_PREVIEW.html"
     html_out.write_text(html_content, encoding="utf-8")
