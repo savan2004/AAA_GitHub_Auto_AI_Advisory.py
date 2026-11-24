@@ -31,4 +31,4 @@ The reported candle shows early strength rejected and selling into the close. A 
 
 **Evidence flags:** official_source_bytes_downloaded=false; source SHA=null; independent_review=false; magazine_assembly_allowed=false.
 
-PDF SHA-256: 8da4d8d080586c5b50e9522de6b52af6a0901feb5e3d3bb2e2250b46d7249766
+PDF SHA-256: 585f259838ae3be65dce2f7f19ce76459402c8f69356c51e1132d26ae092d681
