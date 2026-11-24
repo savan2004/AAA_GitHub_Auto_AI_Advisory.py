@@ -83,6 +83,20 @@ def build(output_dir: Path, *, renderer="plutoprint"):
         w, h = float(page.mediabox.width), float(page.mediabox.height)
         if abs(w - 595.276) > 1 or abs(h - 841.89) > 1:
             raise ValueError(f"Page {n}: wrong A4 dimensions")
+    # Vertical position check prevents the same visual collision observed in
+    # first pilot: sector risk note and cited sources touching each other.
+    # pypdf's text transform yields a top-origin y for this PlutoPrint PDF.
+    anchors = {}
+    def check_sector_flow(txt, cm, tm, font, size):
+        for key in ("RISK / EVIDENCE LIMITATION", "PRIMARY SOURCES & DATES"):
+            if key in txt:
+                anchors[key] = tm[5]
+    reader.pages[3].extract_text(visitor_text=check_sector_flow)
+    if len(anchors) != 2 or (
+        anchors["PRIMARY SOURCES & DATES"] -
+        anchors["RISK / EVIDENCE LIMITATION"] < 18
+    ):
+        raise ValueError("Sector layout overlaps risk limitation and sources")
     first = " ".join(reader.pages[0].extract_text().split())
     if "NIFTY RISES. SMALL CAPS FALL." not in first:
         raise ValueError("Evidence-bound cover story missing from PDF")
