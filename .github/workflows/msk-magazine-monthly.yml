@@ -8,6 +8,7 @@ on:
       - "scripts/msk_magazine_editorial.py"
       - "scripts/msk_magazine_charts.py"
       - "scripts/msk_magazine_cover_story.py"
+      - "scripts/msk_magazine_premium.py"
       - "scripts/msk_magazine_source_archive.py"
       - "scripts/msk_magazine_primary_sources.py"
       - "scripts/msk_magazine_private_pilot.py"
@@ -16,6 +17,7 @@ on:
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
       - "tests/test_msk_magazine_cover_story.py"
+      - "tests/test_msk_magazine_premium.py"
       - "tests/test_msk_magazine_source_archive.py"
       - "tests/test_msk_magazine_primary_sources.py"
       - "tests/test_msk_magazine_private_pilot.py"
@@ -29,6 +31,7 @@ on:
       - "scripts/msk_magazine_editorial.py"
       - "scripts/msk_magazine_charts.py"
       - "scripts/msk_magazine_cover_story.py"
+      - "scripts/msk_magazine_premium.py"
       - "scripts/msk_magazine_source_archive.py"
       - "scripts/msk_magazine_primary_sources.py"
       - "scripts/msk_magazine_private_pilot.py"
@@ -37,6 +40,7 @@ on:
       - "tests/test_msk_magazine_nse.py"
       - "tests/test_msk_magazine_editorial.py"
       - "tests/test_msk_magazine_cover_story.py"
+      - "tests/test_msk_magazine_premium.py"
       - "tests/test_msk_magazine_source_archive.py"
       - "tests/test_msk_magazine_primary_sources.py"
       - "tests/test_msk_magazine_private_pilot.py"
@@ -85,8 +89,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_msk_magazine_private_pilot.py' -v
       - name: Test verified news-led monthly cover titles
         run: python -m unittest discover -s tests -p 'test_msk_magazine_cover_story.py' -v
+      - name: Test premium editorial A4 redesign and source links
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_premium.py' -v
       - name: Compile monthly workflow sources
-        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_cover_story.py scripts/msk_magazine_source_archive.py scripts/msk_magazine_primary_sources.py scripts/msk_magazine_private_pilot.py
+        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_cover_story.py scripts/msk_magazine_premium.py scripts/msk_magazine_source_archive.py scripts/msk_magazine_primary_sources.py scripts/msk_magazine_private_pilot.py
       - name: Retrieve the exact November PDF approved by owner for safe dry-run
         if: github.event_name == 'pull_request'
         uses: actions/download-artifact@v4
