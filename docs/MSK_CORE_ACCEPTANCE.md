@@ -7,3 +7,5 @@
 - P5: Groq GPT-OSS 120B remains a documented model; compare providers with verified fixtures before switching. Production credentials, quota and actual quality are not proven here.
 - P6: menu acceptance uses real handler AST and mocks, not a private Telegram delivery.
 - Production, paid services, research approval and actual trading are unchanged.
+
+P5 offline harness: `python scripts/msk_model_eval.py` emits identical synthetic prompts; `python scripts/msk_model_eval.py outputs.json` scores externally captured raw model answers, with strict field identity, exact numerals, nulls and units. Compare `openai/gpt-oss-120b`, `gemini-3.5-flash-lite` and `gemini-3.8-flash` only after verifying account quota and provider terms. Five fixtures are a schema smoke test, not an investment-quality benchmark or a substitute for a live evaluation. No model requests are made by CI.

@@ -9,6 +9,8 @@ on:
       - 'msk_core_data_guard.py'
       - 'scripts/msk_reference_indicators.py'
       - 'tests/test_msk_core_data_guard.py'
+      - 'scripts/msk_model_eval.py'
+      - 'tests/test_msk_model_eval.py'
       - '.github/workflows/msk-core-data-acceptance.yml'
   workflow_dispatch:
 permissions:
@@ -32,6 +34,7 @@ jobs:
       - run: python -m pip install 'numpy==1.26.4' 'pandas==2.2.2' 'requests==2.32.3'
       - run: python -m unittest discover -s tests -p test_msk_core_data_guard.py -v
       - run: python -m unittest discover -s tests -p test_menu_end_to_end.py -v
+      - run: python -m unittest discover -s tests -p test_msk_model_eval.py -v
   independent-indicators:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
