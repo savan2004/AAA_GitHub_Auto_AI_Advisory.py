@@ -79,6 +79,25 @@ class ApprovedBuilderTests(unittest.TestCase):
                 self.assertEqual(len({row.candidate.symbol for row in plan.positions}), maximum)
                 self.assertEqual(data["source_class"], "ISSUER_PRIMARY_VERIFIED")
 
+    def test_independently_approved_midrange_scores_are_not_rejected_as_imperfect(self):
+        # Offline fictional fixture: proves the arithmetic and approval
+        # contract, NOT that these companies have passed actual issuer review.
+        research = fixture(5)
+        for i, row in enumerate(research["companies"]):
+            row["score"] = str(42 + i)
+        plan, _ = approved_plan(
+            ResearchProfile(1_000_000, "medium", 36),
+            json.dumps(research), latest_session=SESSION)
+        self.assertEqual(len(plan.positions), 5)
+        self.assertEqual({p.candidate.symbol for p in plan.positions},
+                         {r["symbol"] for r in research["companies"]})
+        self.assertTrue(all(0 < p.candidate.score < 75 for p in plan.positions))
+        # Approval cannot be replaced by a score, however high.
+        research["companies"][0]["price_status"] = "UNVERIFIED"
+        with self.assertRaises(ResearchUnavailable):
+            approved_plan(ResearchProfile(1_000_000, "medium", 36),
+                          json.dumps(research), latest_session=SESSION)
+
     def test_missing_stale_and_unverified_research_never_allocates(self):
         bad = []
         for key, value in (
