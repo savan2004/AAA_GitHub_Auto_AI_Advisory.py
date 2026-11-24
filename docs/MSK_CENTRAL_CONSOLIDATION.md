@@ -1,0 +1,5 @@
+# MSK central systems — single review PR
+
+Base main: 3bf6f43b41f657e2b254d46d78cfa0ea259c0eb8; December 1 magazine preview retained unchanged. First integration commit a34c1394b5f35f51aef0ccec16a89dcccf039532 preserves #271 core data and #270 AI connector changes. Second integration applies #235 approved six-button UI and its real-handler tests, #230 isolated TA-Lib reference QA, #218 SELECT-only Telegram recovery tool with offline and disposable PostgreSQL tests, and #182 operating blueprint. No live DB, Telegram or provider calls.
+
+The Mutual Fund Doctor is an unavailable development placeholder, not a working review tool. TA-Lib is CI-only. Recovery is read-only and must not replay uncertain transactions. No paid APIs or runners, no financial data fabrication. Old PR heads preserved. Passing source-PR tests do not establish combined CI or production approval. Keep draft; verify exact-head workflows, resolve any overlapping test expectations, independently confirm live market/provider data and deployment gates. Do not merge AiAutoUpdate, website or magazine changes into this work.

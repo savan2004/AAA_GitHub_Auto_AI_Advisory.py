@@ -860,13 +860,10 @@ def build_portfolio_card(uid):
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
 def main_keyboard():
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    kb.add("🔍 Analysis", "🩺 Market Health", "🔥 Stocks Buzz")
-    kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
-    kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "⚡ Intraday Trade")
-    kb.add("📈 Chart", "📄 Report")
-    kb.add("🏭 Sector Report", "🩺 Portfolio Doctor", "🏗️ Portfolio Builder")
-    kb.add("🆕 New Version")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add("🏗️ Portfolio Builder", "🩺 Portfolio Doctor")
+    kb.add("🔍 Stock Research", "🔥 Stocks Buzz")
+    kb.add("🏆 Top 5 Stocks", "💰 Mutual Fund Doctor")
     return kb
 
 
@@ -1117,6 +1114,7 @@ def cmd_daily_report(m):
     # Existing emoji buttons keep their direct scan handler; both paths
     # still invoke deliver_daily_reports() with exactly the same formatter.
     func=lambda m: not str(getattr(m, "text", "")).startswith(("🏦", "⚖️", "🚀")) and
+                   (getattr(m, "text", "") or "").strip() != "🏆 Top 5 Stocks" and
                    bool(parse_daily_report_request(getattr(m, "text", None))),
     content_types=["text"],
 )
@@ -2159,6 +2157,45 @@ def portfolio_doctor_builder_command(m, payload_override=None, *, form_entry=Non
 
 
 # ── Button Handlers ──────────────────────────────────────────────────────────
+def stock_research_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add("🔍 Analysis", "📄 Report")
+    kb.add("📈 Chart", "🩺 Market Health")
+    kb.add("🏭 Sector Report", "⚡ Intraday Trade")
+    kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)")
+    kb.add("🆕 New Version", "🔙 Menu")
+    return kb
+
+
+def top_five_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
+    kb.add("🔙 Menu")
+    return kb
+
+
+@bot.message_handler(func=lambda m: (m.text or "") == "🔍 Stock Research")
+def stock_research_menu(m):
+    state.clear(m.chat.id)
+    safe_send(m.chat.id, "🔍 <b>Stock Research</b> — choose a research tool.",
+              reply_markup=stock_research_keyboard())
+
+
+@bot.message_handler(func=lambda m: (m.text or "") == "🏆 Top 5 Stocks")
+def top_five_menu(m):
+    state.clear(m.chat.id)
+    safe_send(m.chat.id, "🏆 <b>Top 5 Stocks</b> — choose an NSE index category.",
+              reply_markup=top_five_keyboard())
+
+
+@bot.message_handler(func=lambda m: (m.text or "") == "💰 Mutual Fund Doctor")
+def mutual_fund_doctor_status(m):
+    state.clear(m.chat.id)
+    safe_send(m.chat.id, "💰 Mutual Fund Doctor is under development. "
+              "Verified fund reviews and SIP planning are not available yet.",
+              reply_markup=main_keyboard())
+
+
 @bot.message_handler(func=lambda m: m.text == "🔙 Menu")
 def back_menu(m):
     state.clear(m.chat.id)
