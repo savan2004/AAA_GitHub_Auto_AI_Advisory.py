@@ -58,9 +58,15 @@ def _safe(value: any) -> str:
     Returns:
         str: Safe string representation or "N/A"
     """
-    if value is None or str(value).strip() in {"", "None", "Null"}:
+    from math import isfinite
+    if value is None or isinstance(value, bool):
         return "N/A"
-    return str(value)
+    if isinstance(value, (float, int)) and not isfinite(value):
+        return "N/A"
+    raw = str(value).strip()
+    if raw.lower() in ("", "none", "null", "nan", "inf", "-inf", "infinity"):
+        return "N/A"
+    return raw
 
 
 def _fallback_outlook(
@@ -87,14 +93,26 @@ def _fallback_outlook(
     Returns:
         str: Markdown formatted outlook
     """
-    zone = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
-    direction = "positive" if macd > 0 else "negative"
+    from math import isfinite
+    zone = ("overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
+            if isinstance(rsi, (float, int)) and isfinite(rsi) else "unavailable")
+    direction = ("positive" if macd > 0 else "negative"
+                 if isinstance(macd, (float, int)) and isfinite(macd) else "unavailable")
+    atr_line = (f"ATR Rs {_safe(atr)}; a reference volatility range is available."
+                if isinstance(atr, (int, float)) and isfinite(atr) and atr > 0
+                else "ATR was not supplied; no volatility range is claimed.")
+    levels_line = (
+        f"Verified source-supplied target Rs {_safe(target)} and stop Rs {_safe(sl)} are reference levels, not forecasts."
+        if all(isinstance(v, (int, float)) and isfinite(v) and v > 0
+               for v in (target, sl)) else
+        "Execution price levels unavailable; do not invent a target or stop.")
+
     
     return (
         "---\n## 📈 Technical Structure & Momentum Spectrum\n"
         f"- **Trend Diagnostics:** {symbol} is currently {_safe(trend)} based on the supplied trend structure.\n"
         f"- **Oscillator Readings:** RSI is {_safe(rsi)} ({zone}); MACD is {_safe(macd)} ({direction}). Avoid chasing overbought momentum.\n"
-        f"- **Volatility Parameters:** ATR is Rs {_safe(atr)}, defining the available risk-band reference.\n\n"
+        f"- **Volatility Parameters:** {atr_line}\n\n"
         "---\n## 🔎 Fundamental Quality & Valuation Framework\n"
         f"- **Pricing Multiple Assessment:** TTM P/E is {_safe(pe)}; a complete valuation conclusion requires sector comparison.\n"
         f"- **Balance Sheet Health:** ROE is {_safe(roe)}%; leverage assessment is constrained where Debt/Equity is unavailable.\n\n"
@@ -103,7 +121,7 @@ def _fallback_outlook(
         "- **Benchmark Contrast:** Relative Nifty alpha was unavailable; no outperformance claim is made.\n\n"
         "---\n## 💡 Comprehensive AI Outlook & Guardrails\n"
         f"- **Strategic Thesis:** The technical bias is {_safe(trend)}, but conviction is limited until fundamentals and news are confirmed.\n"
-        f"- **Execution Trajectory:** Reference target is Rs {_safe(target)} and protective stop is Rs {_safe(sl)}. If support fails, reduce exposure and wait for confirmation.\n\n"
+        f"- **Execution Trajectory:** {levels_line}\n\n"
         "---\n*Disclaimer: This report is automatically compiled from public market feeds and a generative intelligence layer. It is not investment advice.*"
     )
 
@@ -263,7 +281,12 @@ def long_term_view(
         "No targets or invented figures.",
         financial=True,
     )
-    return text or ""
+    return text or (
+        f"Quality: ROE={_safe(roe)}%; leverage={_safe(de)}.\n"
+        f"Valuation: PE={_safe(pe)}; peer comparison requires verified data.\n"
+        "Watch for: dated earnings, cash flows, valuations and business risks.\n"
+        "Suitability: Watchlist only; independently verify the figures."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
