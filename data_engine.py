@@ -29,6 +29,7 @@ from io import StringIO
 
 import requests
 import pandas as pd
+from msk_history_quality import clean_daily_history
 
 logger = logging.getLogger(__name__)
 
@@ -513,7 +514,7 @@ def _yfinance_hist(symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
         try:
             _wait_for_rate_slot()
             tk = yf.Ticker(symbol)
-            df = tk.history(period=period, auto_adjust=True, timeout=15)
+            df = tk.history(period=period, auto_adjust=False, timeout=15)
             if not df.empty:
                 df = df[["Open", "High", "Low", "Close", "Volume"]]
                 return df
@@ -545,9 +546,9 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     yahoo_sym = raw if is_index or is_bse else f"{sym_clean}.NS"
 
     ttl = TTL_HIST if period not in ("5d", "2d", "1d") else TTL_PRICE
-    cache_key = f"hist_{yahoo_sym}_{period}"
+    cache_key = f"hist_raw_validated_v2_{yahoo_sym}_{period}"
 
-    cached = cached_get(cache_key, ttl)
+    cached = clean_daily_history(cached_get(cache_key, ttl))
     if cached is not None:
         logger.debug(f"[Cache HIT] {cache_key}")
         return cached
@@ -558,11 +559,11 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
         "1y": "1y", "6mo": "6mo", "3mo": "3mo",
         "2mo": "3mo", "1mo": "1mo", "5d": "5d", "2d": "5d",
     }.get(period, "1y")
-    df = _yahoo_v8_hist(yahoo_sym, period=yf_period)
+    df = clean_daily_history(_yahoo_v8_hist(yahoo_sym, period=yf_period))
 
     if (df is None or df.empty) and not is_index and not is_bse:
         logger.info("[DataEngine] Yahoo v8 unavailable for %s; trying NSE equity history", sym_clean)
-        df = _nse_hist(sym_clean)
+        df = clean_daily_history(_nse_hist(sym_clean))
 
     if (df is None or df.empty) and not is_index:
         logger.info("[DataEngine] earlier sources unavailable for %s; trying Stooq", sym_clean)
@@ -570,15 +571,15 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
             "1y": 365, "6mo": 180, "3mo": 90,
             "2mo": 60, "1mo": 30, "5d": 5, "2d": 2,
         }
-        df = _stooq_hist(yahoo_sym, period_days=days_map.get(period, 365))
+        df = clean_daily_history(_stooq_hist(yahoo_sym, period_days=days_map.get(period, 365)))
 
     if df is None or df.empty:
         logger.info(f"[DataEngine] Stooq failed for {sym_clean} — trying yfinance (last resort)")
         time.sleep(_jitter(3))
-        df = _yfinance_hist(yahoo_sym, period=period)
+        df = clean_daily_history(_yfinance_hist(yahoo_sym, period=period))
 
     if df is not None and not df.empty:
-        cached_set(cache_key, df, ttl)
+        cached_set(cache_key, df.copy(), ttl)
         logger.info(f"[DataEngine] {sym_clean} history: {len(df)} rows fetched")
         return df
 

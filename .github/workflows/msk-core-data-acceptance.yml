@@ -4,6 +4,9 @@ on:
     branches: [main]
     paths:
       - 'data_engine.py'
+      - 'market_data.py'
+      - 'msk_history_quality.py'
+      - 'tests/test_msk_history_quality.py'
       - 'technical_indicators.py'
       - 'swing_trades.py'
       - 'msk_intraday_trade.py'
@@ -37,6 +40,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install 'numpy==1.26.4' 'pandas==2.2.2' 'requests==2.32.3'
       - run: python -m unittest discover -s tests -p test_msk_core_data_guard.py -v
+      - run: python -m unittest discover -s tests -p test_msk_history_quality.py -v
       - run: python -m unittest discover -s tests -p test_menu_end_to_end.py -v
       - run: python -m unittest discover -s tests -p test_msk_model_eval.py -v
   independent-indicators:

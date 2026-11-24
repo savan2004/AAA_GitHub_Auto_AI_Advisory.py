@@ -46,30 +46,7 @@ def from_yahoo(ticker: str) -> str:
     return t
 
 
-def _clean_frame(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Reject incomplete OHLCV; never synthesize candles from close prices."""
-    if df is None or df.empty or not all(col in df.columns for col in _OHLCV):
-        return None
-    out = df[_OHLCV].copy()
-    for col in _OHLCV:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-    out = out.replace([float("inf"), float("-inf")], float("nan"))
-    out = out.dropna(subset=_OHLCV)
-    if out.empty:
-        return None
-    valid = (out["Open"] > 0) & (out["High"] > 0) & (out["Low"] > 0) & (out["Close"] > 0)
-    valid &= (out["Volume"] >= 0)
-    valid &= (out["High"] >= out[["Open", "Close", "Low"]].max(axis=1))
-    valid &= (out["Low"] <= out[["Open", "Close", "High"]].min(axis=1))
-    out = out.loc[valid]
-    if out.empty:
-        return None
-    try:
-        if getattr(out.index, "tz", None) is not None:
-            out.index = out.index.tz_localize(None)
-    except (AttributeError, TypeError):
-        pass
-    return out
+from msk_history_quality import clean_daily_history as _clean_frame
 
 
 def _split_multi(raw: pd.DataFrame, tickers: List[str]) -> Dict[str, pd.DataFrame]:
@@ -216,7 +193,7 @@ def bulk_history(
             with _cache_lock:
                 e = _cache.get(f"{s}|{period}|{adjusted}")
             if e and now - e["ts"] < cache_ttl:
-                result[s] = e["df"]
+                result[s] = e["df"].copy()
                 continue
         todo.append(s)
 
@@ -227,20 +204,22 @@ def bulk_history(
     for i in range(0, len(todo), chunk_size):
         chunk_budget = min(12, remaining_fallbacks)
         part = todo[i:i + chunk_size]
-        y_map = {to_yahoo(s): s for s in part}
+        y_map = {}
+        for s in part:
+            y_map.setdefault(to_yahoo(s), []).append(s)
         got = _download_chunk(list(y_map.keys()), period, retries=max(0, min(retries, 2)), adjusted=adjusted, timeout=download_timeout)
         for yt, df in got.items():
-            plain = y_map.get(yt) or from_yahoo(yt)
-            result[plain] = df
-            if cache_ttl:
-                with _cache_lock:
-                    _cache[f"{plain}|{period}|{adjusted}"] = {"df": df, "ts": time.time()}
+            for plain in y_map.get(yt, [from_yahoo(yt)]):
+                result[plain] = df.copy()
+                if cache_ttl:
+                    with _cache_lock:
+                        _cache[f"{plain}|{period}|{adjusted}"] = {"df": df.copy(), "ts": time.time()}
         # When Yahoo bulk returns HTTP 401/missing symbols, try a small number
         # via independent NSE equity history or direct chart API. Never synthesize
         # missing candles, never retry the entire failed universe indefinitely.
         for missing in part:
-            if chunk_budget <= 0:
-                break
+            if adjusted or chunk_budget <= 0:
+                break  # Alternate sources cannot establish adjusted OHLC parity.
             if missing in result:
                 continue
             chunk_budget -= 1
@@ -252,7 +231,7 @@ def bulk_history(
             if cache_ttl:
                 with _cache_lock:
                     _cache[f"{missing}|{period}|{adjusted}"] = {
-                        "df": recovered, "ts": time.time()
+                        "df": recovered.copy(), "ts": time.time()
                     }
         # Progress represents validated/returned coverage, not symbols attempted.
         done = len(result)
