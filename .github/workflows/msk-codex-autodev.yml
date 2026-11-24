@@ -1,10 +1,9 @@
 name: MSK Codex Autonomous Development
 on:
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
 
-# No deployment permissions. Scheduler checks often, paid jobs are separately gated.
+# Manual development task selection only. Avoid burning hosted runner minutes
+# on idle polling. Existing approval/cost gates and no-deploy policy remain.
 permissions:
   contents: read
   issues: read
