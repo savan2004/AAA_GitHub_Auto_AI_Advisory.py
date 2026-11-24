@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -124,6 +124,96 @@ def _source_text(path: Path) -> str:
     if path.suffix.lower() not in {".txt", ".csv", ".json", ".html", ".htm"}:
         raise MagazineError("Unsupported source-file format")
     return path.read_text(encoding="utf-8")
+
+
+def _receipt_timestamp(value: str) -> datetime | None:
+    """Parse a receipt timestamp only when it carries an explicit UTC offset."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def validate_source_receipts(pack: dict, accepted_rows: dict[int, list[dict]],
+                             source_root: Path, issue: str, as_of: date,
+                             validation_time: datetime | None = None) -> dict:
+    """Validate a handoff receipt's structure and local byte consistency.
+
+    This does not authenticate a download or reviewer identity; human cross-check
+    remains a separate publication gate.
+    """
+    validation_time = validation_time or datetime.now(timezone.utc)
+    if validation_time.tzinfo is None or validation_time.utcoffset() is None:
+        return {"passed": False, "receipts_checked": 0,
+                "failures": ["Validation timestamp must include timezone"]}
+    validation_time = validation_time.astimezone(timezone.utc)
+    accepted = [row for rows in accepted_rows.values() for row in rows]
+    failures = []
+    if not accepted:
+        return {"passed": False, "receipts_checked": 0,
+                "failures": ["No accepted source observations to receipt-check"]}
+    receipts = pack.get("source_receipts")
+    if not isinstance(receipts, list) or not receipts:
+        return {"passed": False, "receipts_checked": 0,
+                "failures": ["No source_receipts handoff records supplied"]}
+    root = source_root.resolve(strict=True)
+    expected = {(row["source_url"], row["source_file"], row["source_sha256"])
+                for row in accepted}
+    checked = set()
+    for i, receipt in enumerate(receipts, 1):
+        try:
+            if not isinstance(receipt, dict):
+                raise MagazineError("Receipt must be an object")
+            if receipt.get("issue") != issue:
+                raise MagazineError("Receipt issue mismatch")
+            key = (receipt.get("source_url"), receipt.get("source_file"),
+                   receipt.get("source_sha256"))
+            if key not in expected:
+                raise MagazineError("Receipt does not match an accepted observation")
+            if key in checked:
+                raise MagazineError("Duplicate receipt for source bytes")
+            fetched = _receipt_timestamp(receipt.get("fetched_at_utc"))
+            reviewed = _receipt_timestamp(receipt.get("reviewed_at_utc"))
+            if fetched is None or reviewed is None:
+                raise MagazineError("Fetch/review timestamps must include timezone")
+            if fetched > validation_time or reviewed > validation_time:
+                raise MagazineError("Receipt timestamp is in the future relative to validation")
+            if fetched.date() > as_of or reviewed.date() > as_of:
+                raise MagazineError("Receipt timestamp is after issue evidence cutoff")
+            if reviewed < fetched:
+                raise MagazineError("Review timestamp precedes source retrieval")
+            if type(receipt.get("http_status")) is not int or receipt["http_status"] != 200:
+                raise MagazineError("Source retrieval must record HTTP 200")
+            if receipt.get("reviewer_verified") is not True:
+                raise MagazineError("Independent reviewer confirmation is missing")
+            reviewer = receipt.get("reviewer")
+            notes = receipt.get("review_notes")
+            if not isinstance(reviewer, str) or not reviewer.strip():
+                raise MagazineError("Reviewer name/identity is missing")
+            if not isinstance(notes, str) or len(notes.strip()) < 20:
+                raise MagazineError("Reviewer cross-check notes are missing")
+            name = receipt.get("source_file")
+            path = (root / name).resolve(strict=True)
+            if not path.is_relative_to(root) or not path.is_file():
+                raise MagazineError("Receipt source file outside trusted directory")
+            if (hashlib.sha256(path.read_bytes()).hexdigest() !=
+                    receipt.get("source_sha256")):
+                raise MagazineError("Receipt byte checksum mismatch")
+            checked.add(key)
+        except (MagazineError, OSError, ValueError, TypeError, KeyError) as exc:
+            failures.append(f"Receipt {i}: {exc}")
+    missing = expected - checked
+    if missing:
+        failures.append(f"Missing receipts for {len(missing)} accepted source observation(s)")
+    return {"passed": not failures and checked == expected,
+            "receipts_checked": len(checked), "failures": failures,
+            "schema_only": True,
+            "human_independent_authentication_required": True}
 
 
 def validate_evidence(pack: dict, issue: str, source_root: Path,
@@ -458,11 +548,15 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
                         if primary_proof_dir is not None else None)
     if scheduled and market_data and (nse_verified is None or primary_verified is None):
         raise MagazineError("Scheduled market claims require NSE and primary-source receipts")
+    source_receipt_validation = {"passed": False, "receipts_checked": 0,
+                                 "failures": ["Source receipt validation not run"]}
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
         source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
         by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
+        source_receipt_validation = validate_source_receipts(
+            source, by_page, source_root, issue, now.astimezone(IST).date(), validation_time=now)
     else:
         by_page, failures = {}, ([] if nse_verified else
                                 ["No independently retrieved financial source pack supplied"])
@@ -541,6 +635,10 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     result = {"issue": issue, "draft_pdf": pdf_file.name,
               "pdf_sha256": hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
               "page_count": 16, "source_consistency_rows": sum(map(len, by_page.values())),
+              "source_receipt_validation": source_receipt_validation,
+              "source_receipt_structurally_valid": source_receipt_validation["passed"],
+              "source_authenticity_verified": False,
+              "source_provenance_blocker": "Local consistency does not establish independent source and reviewer authenticity.",
               "editorial_pages_authored": len(editorial),
               "visual_engine": "premium_a4_editorial_v1" if editorial and market_data else "conservative_draft",
               "cover_story": cover_story,

@@ -1,6 +1,7 @@
 """NSE primary-source archive collection: offline deterministic tests only."""
 from datetime import date, datetime, timezone
 from pathlib import Path
+import json
 import tempfile
 import unittest
 
@@ -67,10 +68,17 @@ class NseCollectorTests(unittest.TestCase):
         self.assertEqual(len(session.requests), 1)
         self.assertEqual(session.kwargs["timeout"], 15)
 
+    def test_official_closing_index_value_header(self):
+        rows, _ = _decode_source(DATA.replace(b",Closing,", b",Closing Index Value,"))
+        self.assertEqual(rows[0]["value"], "25100.25")
+
+    def test_ambiguous_close_headers_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Ambiguous"):
+            _decode_source(DATA.replace(b",High,Low,Closing,", b",High,Closing,Closing Index Value,"))
+
     def test_collected_pack_passes_local_byte_consistency(self):
         collect("2026-12", self.folder, session=FakeSession(),
                 now=date(2026, 12, 7), lookback_days=0)
-        import json
         pack = json.loads((self.folder / "source_pack.json").read_text())
         points, failures = validate_evidence(pack, "2026-12", self.folder,
                                              date(2026, 12, 7))
@@ -110,6 +118,21 @@ class NseCollectorTests(unittest.TestCase):
         result = collect("2026-12", self.folder, session=FakeSession(body=wrong),
                          now=date(2026, 12, 7), lookback_days=0)
         self.assertFalse(result["success"])
+
+    def test_wrong_archive_on_official_host_rejected_even_with_matching_rows(self):
+        wrong = "https://archives.nseindia.com/content/indices/ind_close_all_27112026.csv"
+        result = collect("2026-12", self.folder, session=FakeSession(redirect=wrong),
+                         now=date(2026, 12, 7), lookback_days=0)
+        self.assertFalse(result["success"])
+        self.assertFalse((self.folder / "source_pack.json").exists())
+
+    def test_official_mirror_recorded_as_source_of_received_bytes(self):
+        mirror = "https://nsearchives.nseindia.com/content/indices/ind_close_all_30112026.csv"
+        result = collect("2026-12", self.folder, session=FakeSession(redirect=mirror),
+                         now=date(2026, 12, 7), lookback_days=0)
+        self.assertTrue(result["success"])
+        pack = json.loads((self.folder / "source_pack.json").read_text())
+        self.assertEqual({row["source_url"] for row in pack["observations"]}, {mirror})
 
     def test_duplicate_names_rejected(self):
         bad = DATA + DATA.splitlines()[1] + b"\n"
