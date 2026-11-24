@@ -25,12 +25,14 @@ if __package__:
     from .msk_magazine_editorial import load_editorial_pack
     from .msk_magazine_charts import draw_research_chart, load_metrics
     from .msk_magazine_cover_story import select_cover_story
+    from .msk_magazine_premium import draw_cover as premium_cover, draw_index as premium_index, draw_article as premium_article
     from .msk_magazine_source_archive import verify_nse_dashboard, SourceEvidenceError
     from .msk_magazine_primary_sources import recheck_primary_sources
 else:
     from msk_magazine_editorial import load_editorial_pack
     from msk_magazine_charts import draw_research_chart, load_metrics
     from msk_magazine_cover_story import select_cover_story
+    from msk_magazine_premium import draw_cover as premium_cover, draw_index as premium_index, draw_article as premium_article
     from msk_magazine_source_archive import verify_nse_dashboard, SourceEvidenceError
     from msk_magazine_primary_sources import recheck_primary_sources
 from reportlab.pdfgen import canvas
@@ -474,7 +476,17 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
         n, title = entry["page"], entry["title"]
         c.setFillColor(HexColor(WHITE))
         c.rect(0, 0, *A4, fill=1, stroke=0)
-        if n == 1:
+        if editorial and market_data:
+            # One premium A4 print path for fully authored, source-backed
+            # issues. Sparse drafts keep the conservative fallback below.
+            if n == 1:
+                premium_cover(c, issue, rendered_logo, _logo, cover_story)
+            elif n == 2:
+                premium_index(c, issue, index, cover_story)
+            else:
+                premium_article(c, n, title, editorial[n],
+                                lambda ctx: draw_research_chart(ctx, n, market_data))
+        elif n == 1:
             _cover(c, issue, rendered_logo, market_data, cover_story)
         elif n == 2:
             _index(c, issue, index, market_data, cover_story)
@@ -530,6 +542,7 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
               "pdf_sha256": hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
               "page_count": 16, "source_consistency_rows": sum(map(len, by_page.values())),
               "editorial_pages_authored": len(editorial),
+              "visual_engine": "premium_a4_editorial_v1" if editorial and market_data else "conservative_draft",
               "cover_story": cover_story,
               "cover_story_publication_approved": False,
               "chart_pages_with_dated_evidence": 14 if market_data else 0,
