@@ -7,7 +7,7 @@ other facts that the input did not verify.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 import re
 from urllib.parse import urlsplit
@@ -62,8 +62,12 @@ def select_cover_story(issue: str, metrics: dict | None) -> dict | None:
     if source.get("report_date") != "2026-10-31":
         raise CoverStoryError("Unsupported/unverified dashboard observation date")
     observation = feature.get("observation_month")
-    if observation != "2026-10" or observation > issue:
-        raise CoverStoryError("Cover observation must be a verified prior month")
+    year, month = map(int, issue.split("-"))
+    last_month = (date(year, month, 1) - timedelta(days=1)).strftime("%Y-%m")
+    if observation != last_month:
+        raise CoverStoryError("Cover observation must be the prior month, not recycled news")
+    if observation != "2026-10":
+        raise CoverStoryError("A newer month requires a new verified dashboard/source contract")
     if feature.get("special_edition", False):
         raise CoverStoryError("Diwali/festival theme requires a separate explicitly approved special issue")
     kind = feature.get("kind")
