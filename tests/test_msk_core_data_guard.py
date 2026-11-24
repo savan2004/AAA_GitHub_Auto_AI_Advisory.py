@@ -12,6 +12,25 @@ from portfolio_doctor_calculations import _rsi
 from research_filing_evidence import reconcile_official_quarter
 
 class CoreGuardTests(unittest.TestCase):
+    def test_disk_cache_promotion_does_not_extend_original_lifetime(self):
+        with patch.object(de, "_mem", {}), patch.object(de, "_disk_get",
+                return_value={"val": 7, "ts": 80, "ttl": 30}):
+            with patch.object(de.time, "time", return_value=100):
+                self.assertEqual(de.cached_get("x", 60), 7)
+                self.assertEqual(de._mem_get("x", 60), 7)
+            with patch.object(de.time, "time", return_value=110):
+                self.assertIsNone(de._mem_get("x", 60))
+
+    def test_memory_cache_is_bounded_and_rejects_future_entries(self):
+        with patch.object(de, "_mem", {}), patch.object(de, "_MEM_MAX_ENTRIES", 2):
+            with patch.object(de.time, "time", return_value=100):
+                de._mem_set("a", 1, 60)
+                de._mem_set("b", 2, 60)
+                de._mem_set("c", 3, 60)
+                de._mem_set("future", 4, 60, stored_at=101)
+                self.assertEqual(set(de._mem), {"b", "c"})
+                self.assertIsNone(de._mem_get("b", 0))
+
     def test_quote_identity_survives_cache(self):
         now = datetime(2026,11,23,5,30,tzinfo=timezone.utc).timestamp()
         raw = {"price":100,"provider_symbol":"SBIN.NS","quote_timestamp":now-60}

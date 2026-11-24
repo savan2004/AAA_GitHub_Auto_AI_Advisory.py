@@ -68,19 +68,33 @@ _HEADERS = {
 
 _mem: Dict[str, dict] = {}
 _mem_lock = threading.Lock()
+_MEM_MAX_ENTRIES = 128
 
 
 def _mem_get(key: str, ttl: int):
     with _mem_lock:
         entry = _mem.get(key)
-        if entry and time.time() - entry["ts"] < ttl:
+        if entry and 0 <= time.time() - entry["ts"] < min(ttl, entry.get("ttl", ttl)):
             return entry["val"]
+        if entry and not 0 <= time.time() - entry["ts"] < entry.get("ttl", ttl):
+            _mem.pop(key, None)
     return None
 
 
-def _mem_set(key: str, val, ttl: int):  # noqa: ARG001
+def _mem_set(key: str, val, ttl: int, *, stored_at=None):
+    now = time.time()
+    ts = now if stored_at is None else stored_at
+    if not 0 <= now - ts < ttl:
+        return
     with _mem_lock:
-        _mem[key] = {"val": val, "ts": time.time()}
+        _mem.pop(key, None)
+        _mem[key] = {"val": val, "ts": ts, "ttl": ttl}
+        if len(_mem) > _MEM_MAX_ENTRIES:
+            for old in [k for k, e in _mem.items()
+                        if not 0 <= now-e["ts"] < e.get("ttl", ttl)]:
+                _mem.pop(old, None)
+        while len(_mem) > _MEM_MAX_ENTRIES:
+            _mem.pop(next(iter(_mem)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,8 +109,8 @@ def _disk_get(key: str, ttl: int):
         with _disk_lock:
             with shelve.open(CACHE_FILE, flag="r") as db:
                 entry = db.get(key)
-        if entry and time.time() - entry["ts"] < ttl:
-            return entry["val"]
+        if entry and 0 <= time.time() - entry["ts"] < min(ttl, entry.get("ttl", ttl)):
+            return entry
     except Exception:
         pass
     return None
@@ -106,7 +120,7 @@ def _disk_set(key: str, val, ttl: int = 0):  # noqa: ARG001
     try:
         with _disk_lock:
             with shelve.open(CACHE_FILE, flag="c") as db:
-                db[key] = {"val": val, "ts": time.time()}
+                db[key] = {"val": val, "ts": time.time(), "ttl": ttl}
     except Exception:
         pass
 
@@ -116,10 +130,12 @@ def cached_get(key: str, ttl: int):
     v = _mem_get(key, ttl)
     if v is not None:
         return v
-    v = _disk_get(key, ttl)
-    if v is not None:
-        _mem_set(key, v, ttl)   # promote to memory
-    return v
+    entry = _disk_get(key, ttl)
+    if entry is None:
+        return None
+    _mem_set(key, entry["val"], min(ttl, entry.get("ttl", ttl)),
+             stored_at=entry["ts"])
+    return entry["val"]
 
 
 def cached_set(key: str, val, ttl: int):
