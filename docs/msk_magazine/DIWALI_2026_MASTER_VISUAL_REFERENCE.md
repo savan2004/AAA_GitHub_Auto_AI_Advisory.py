@@ -11,6 +11,30 @@ Owner supplied the original 16-page Diwali Special / Samvat 2083 PDF on 2026-11-
 - Binary asset is **not yet committed**. Do not claim it exists in GitHub until that exact path and checksum are verified.
 - Historical design reference only; do not reuse its market data, research candidates, dates or illustrative weights as current facts.
 
+## Cover policy — ordinary month versus special edition (24 Nov 2026)
+
+**Diwali is ONLY a special-edition title/theme, not the recurring magazine title.**
+The MSK magazine brand remains constant, while the *largest verified market
+story of each month* becomes the feature headline on page 1. Example editorial
+categories: a supported gold sell-off, a proven Bank Nifty all-time high, an
+unusual index/sector split, a major inflation shock, or an important policy
+decision. These are story ideas, not claims about events that actually happened.
+
+- Every issue's lead story must carry a clear observation period, source link,
+  exact verified metric(s), and a fresh issue-specific research pack.
+- Never write "lifetime high" without an independently verified historical
+  benchmark and dated latest value; never write "gold is falling" without
+  source-verified gold price history, currency, units and time window.
+- The monthly cover must **not** recycle Diwali imagery, slogans or other past
+  months' news merely because that design reference looks attractive.
+- The November 2026 issue uses a **verified October 2026 index-divergence**
+  headline: "NIFTY RISES. SMALL CAPS FALL." Supported by NSE Indices'
+  Nifty 50 +1.95% and Nifty Smallcap 250 -5.78% total-return figures.
+- The current cover generator supports source-checked index divergence and
+  sector moves. Unsupported story types must fail closed until their source
+  verifier is implemented. A fresh PDF and cover headline require new visual
+  owner review and must not inherit approval of an older PDF SHA.
+
 ## Page-by-page visual reference
 
 | Sample page | Visual layout to adapt |
