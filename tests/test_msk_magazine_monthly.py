@@ -339,7 +339,7 @@ class MagazineMonthlyTests(unittest.TestCase):
         result = validate_source_receipts(
             {"issue": "2026-11", "source_receipts": [future]},
             accepted, self.source_root, "2026-11", date(2026, 11, 16),
-            validation_time=validation_time)
+            validation_time=datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc))
         self.assertFalse(result["passed"])
         self.assertIn("after issue evidence cutoff", " ".join(result["failures"]))
 
