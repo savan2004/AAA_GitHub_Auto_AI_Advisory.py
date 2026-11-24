@@ -7,6 +7,7 @@
   "status": "PROVISIONAL_SECONDARY_DATA_CONFLICT_WITHHELD",
   "primary_source": "NSE Historical Index Data",
   "primary_source_url": "https://betanseapi.nseindia.com/reports-indices-historical-index-data",
+  "official_niftyindices_page_url": "https://www.niftyindices.com/reports/historical-data",
   "official_source_bytes_downloaded": false,
   "official_source_sha256": null,
   "independent_review": false,
@@ -43,5 +44,5 @@
   },
   "withholding_reason": "Secondary reports disagree on the 23 Nov Nifty 50 close. Official data endpoint retrieval was attempted but runner DNS resolution failed (curl 6; HTTP 000; 0 bytes). No source-byte SHA or independent review; figures must not be treated as verified financial evidence.",
   "no_forecast_or_recommendation": true,
-  "draft_pdf_sha256": "9b51a8cda64ee0b7eb5bdebac678ea7470ccd14d139b5a9e143366bfb5782942"
+  "draft_pdf_sha256": "8da4d8d080586c5b50e9522de6b52af6a0901feb5e3d3bb2e2250b46d7249766"
 }
