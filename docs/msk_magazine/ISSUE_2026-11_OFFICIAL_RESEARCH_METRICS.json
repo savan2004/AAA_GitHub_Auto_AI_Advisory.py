@@ -181,5 +181,13 @@
       "source": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3"
     }
   ],
-  "issuer_comparison_basis": "Only Persistent Systems and Coforge have USD YoY growth plotted; TCS NSE iXBRL is INR-only and excluded from USD bars."
+  "issuer_comparison_basis": "Only Persistent Systems and Coforge have USD YoY growth plotted; TCS NSE iXBRL is INR-only and excluded from USD bars.",
+  "cover_feature": {
+    "kind": "index_divergence",
+    "observation_month": "2026-10",
+    "primary": "Nifty 50",
+    "secondary": "Nifty Smallcap 250",
+    "editorial_topic": "The sharp split between large-cap Nifty and small-cap returns",
+    "special_edition": false
+  }
 }
