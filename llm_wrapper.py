@@ -2,7 +2,10 @@
 import os
 from typing import Tuple
 
-from msk_ai_connector_v2 import request_ai
+def request_ai(*args, **kwargs):
+    """Load transport only for real AI calls; analytics needs no HTTP dependency."""
+    from msk_ai_connector_v2 import request_ai as shared_request
+    return shared_request(*args, **kwargs)
 
 def actual_llm_call(prompt: str, max_tokens: int = 500) -> str:
     result = request_ai(
