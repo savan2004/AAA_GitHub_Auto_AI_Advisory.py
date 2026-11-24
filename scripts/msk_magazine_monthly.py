@@ -429,7 +429,7 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     # falsely claiming that a recovered original asset was authenticated.
     rendered_logo = logo_file
     logo_source = "EXPLICIT_LOGO_FILE" if logo_file is not None else "NONE"
-    if rendered_logo is None and editorial and RECREATED_LOGO.is_file():
+    if rendered_logo is None and RECREATED_LOGO.is_file():
         rendered_logo = RECREATED_LOGO
         logo_source = "RECREATED_FROM_USER_REFERENCE_NOT_FINAL_APPROVED"
     market_data = load_metrics(market_pack, issue) if market_pack is not None else None
