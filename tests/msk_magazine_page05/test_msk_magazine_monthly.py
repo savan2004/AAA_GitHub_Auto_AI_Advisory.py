@@ -22,15 +22,22 @@ class Page05SourceReconciliationTests(unittest.TestCase):
         self.assertIsNone(pack["official_source_sha256"])
         self.assertIs(pack["independent_review"], False)
         self.assertIs(pack["magazine_assembly_allowed"], False)
+        attempt = pack["primary_source_fetch_attempt"]
+        self.assertTrue(attempt["attempted"])
+        self.assertEqual(attempt["http_status"], 0)
+        self.assertEqual(attempt["bytes_received"], 0)
+        self.assertTrue(attempt["network_blocked"])
+        self.assertIn("curl (6) Could not resolve host", attempt["error"])
         values = [row["value"] for row in pack["close_reports"]]
         self.assertEqual(values.count(25349.65), 3)
         self.assertEqual(values.count(25366.4), 1)
         self.assertAlmostEqual(max(values) - min(values), 16.75)
         self.assertTrue(pack["no_forecast_or_recommendation"])
+        self.assertRegex(pack["draft_pdf_sha256"], r"^[a-f0-9]{64}$")
         research = (RESEARCH / "page05_nifty_technical_outlook.md").read_text(encoding="utf-8")
         self.assertIn("withheld from assembly", research.lower())
-        self.assertIn("conflicting close", research.lower())
-        self.assertIn("official primary source", research.lower())
+        self.assertIn("16.75-point discrepancy", research.lower())
+        self.assertIn("official source; retrieval blocked", research.lower())
 
 
 if __name__ == "__main__":
