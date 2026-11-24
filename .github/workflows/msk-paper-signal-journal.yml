@@ -1,0 +1,152 @@
+name: MSK Paper Signal Journal Contracts
+on:
+  pull_request:
+    paths:
+      - 'msk_signal_journal.py'
+      - 'tests/test_msk_signal_journal.py'
+      - 'tests/test_msk_signal_journal_postgres.py'
+      - 'scripts/verify_msk_journal_neon.py'
+      - 'tests/test_msk_journal_neon_probe.py'
+      - 'docs/MSK_JOURNAL_NEON_STAGING_TEST.md'
+      - '.github/workflows/msk-paper-signal-journal.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'msk_signal_journal.py'
+      - 'tests/test_msk_signal_journal.py'
+      - 'tests/test_msk_signal_journal_postgres.py'
+      - 'scripts/verify_msk_journal_neon.py'
+      - 'tests/test_msk_journal_neon_probe.py'
+      - 'docs/MSK_JOURNAL_NEON_STAGING_TEST.md'
+      - '.github/workflows/msk-paper-signal-journal.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  paper-signal-journal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile journal module and offline tests
+        run: python -m py_compile msk_signal_journal.py tests/test_msk_signal_journal.py
+      - name: Verify offline paper-signal journal
+        run: python -m unittest discover -s tests -p 'test_msk_signal_journal.py' -v
+      - name: Verify Neon staging guard with no credentials
+        run: |
+          python -m py_compile scripts/verify_msk_journal_neon.py tests/test_msk_journal_neon_probe.py
+          python -m unittest discover -s tests -p 'test_msk_journal_neon_probe.py' -v
+
+  paper-signal-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # These credentials are for a temporary container on this CI runner ONLY.
+      # Never pass a Neon or production database password through workflow YAML.
+      MSK_JOURNAL_CI_DSN: postgresql://journal_ci:ci-only-test-pass@127.0.0.1:5432/journal_ci?sslmode=require
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PostgreSQL Python driver
+        run: python -m pip install 'psycopg[binary]==3.2.9'
+      - name: Start fresh TLS-only PostgreSQL 16 container
+        shell: bash
+        run: |
+          set -euo pipefail
+          certdir="$RUNNER_TEMP/msk-journal-ci-tls"
+          mkdir -p "$certdir"
+          chmod 755 "$certdir"
+          openssl req -x509 -newkey rsa:2048 -keyout "$certdir/server.key" \
+            -out "$certdir/server.crt" -days 1 -nodes -subj "/CN=localhost" \
+            >/dev/null 2>&1
+          sudo chown 999:999 "$certdir/server.key"
+          sudo chmod 600 "$certdir/server.key"
+          docker run -d --name msk-journal-ci-db \
+            -e POSTGRES_USER=journal_ci \
+            -e POSTGRES_PASSWORD=ci-only-test-pass \
+            -e POSTGRES_DB=journal_ci \
+            -p 127.0.0.1:5432:5432 \
+            -v "$certdir:/certs:ro" \
+            postgres:16 \
+            -c ssl=on \
+            -c ssl_cert_file=/certs/server.crt \
+            -c ssl_key_file=/certs/server.key
+          ready=0
+          for i in $(seq 1 45); do
+            if docker exec msk-journal-ci-db pg_isready -U journal_ci -d journal_ci -q; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" -eq 1
+      - name: Verify real Python journal against PostgreSQL (including SSL)
+        run: |
+          python -m py_compile tests/test_msk_signal_journal_postgres.py
+          python -m unittest discover -s tests -p 'test_msk_signal_journal_postgres.py' -v
+      - name: Write verified journal record from first Python process
+        run: python tests/test_msk_signal_journal_postgres.py write
+      - name: Restart PostgreSQL and wait for re-connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker restart msk-journal-ci-db
+          ready=0
+          for i in $(seq 1 45); do
+            if docker exec msk-journal-ci-db pg_isready -U journal_ci -d journal_ci -q; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" -eq 1
+      - name: Prove record persists and duplicate is ignored from fresh Python process
+        run: python tests/test_msk_signal_journal_postgres.py read
+
+  # Secrets are resolved fresh for this new PR run after credential setup.
+  neon-staging-python-acceptance:
+    # Never send the credential to pull requests from forks or other PRs.
+    # This PR-specific staging test is not a production deploy.
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 243 && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    env:
+      MSK_JOURNAL_NEON_STAGING_DSN: ${{ secrets.MSK_JOURNAL_NEON_STAGING_DSN }}
+      MSK_JOURNAL_NEON_STAGING_ONLY: YES_STAGING_ONLY
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check staging-only GitHub secret is configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${MSK_JOURNAL_NEON_STAGING_DSN:-}" ]; then
+            echo "::error::Missing repository Actions secret MSK_JOURNAL_NEON_STAGING_DSN. Add ONLY the isolated staging branch DSN (sslmode=require), never a default/production DSN."
+            exit 1
+          fi
+      - name: Install journal PostgreSQL driver
+        run: python -m pip install 'psycopg[binary]==3.2.9'
+      - name: Verify actual Python writer, fresh-process reader and idempotency on pinned Neon staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MSK_JOURNAL_NEON_PROBE_ID="$(date -u +%Y%m%d%H%M%S)"
+          # The Python probe validates the approved host, database and sslmode
+          # BEFORE opening any connection. It suppresses DSN/error details.
+          # The probe intentionally suppresses database error details and passwords.
+          # Do not wrap the command in $(...) here: failures would hide its safe
+          # STAGING_PROBE_FAILED reason and make incident diagnosis impossible.
+          python scripts/verify_msk_journal_neon.py write
+          # A separate Python invocation verifies durable readback and idempotency.
+          python scripts/verify_msk_journal_neon.py read
+          echo "PR243_NEON_STAGING_PYTHON_ACCEPTANCE_PASS"
