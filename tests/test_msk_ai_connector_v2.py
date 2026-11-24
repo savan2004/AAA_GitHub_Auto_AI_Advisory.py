@@ -185,7 +185,7 @@ class ProviderContract(unittest.TestCase):
         self.assertEqual(r.provider,"askfuzz")
 
     def test_legacy_ai_insights_uses_number_grounding(self):
-        with patch.object(ai_engine,"ai_available",return_value=True), \\
+        with patch.object(ai_engine,"ai_available",return_value=True), \
              patch.object(ai_engine,"request_ai",return_value=AIResponse(
                  "Price Rs 1000", "groq",GROQ_MODEL,"",())) as connector:
             txt=ai_engine.ai_insights("RELIANCE",1000,65,1.2,"uptrend",20,15,
@@ -194,7 +194,7 @@ class ProviderContract(unittest.TestCase):
         self.assertTrue(connector.call_args.kwargs["financial"])
 
     def test_topic_history_isolation_and_defensive_history_copy(self):
-        with patch.object(ai_engine,"ai_available",return_value=True), \\
+        with patch.object(ai_engine,"ai_available",return_value=True), \
              patch.object(ai_engine,"_call_ai",return_value=("Research only.","")) as send:
             a=ai_engine.ai_topic_respond("Explain ROE")
         self.assertEqual(a,"Research only.")
