@@ -1,5 +1,6 @@
 """Page 05 secondary-source reconciliation must remain fail-closed."""
 import json
+import re
 from pathlib import Path
 import unittest
 
@@ -37,7 +38,11 @@ class Page05SourceReconciliationTests(unittest.TestCase):
         research = (RESEARCH / "page05_nifty_technical_outlook.md").read_text(encoding="utf-8")
         self.assertIn("withheld from assembly", research.lower())
         self.assertIn("16.75-point discrepancy", research.lower())
+        self.assertIn("curl error 6; http 000; 0 bytes", research.lower())
         self.assertIn("official source; retrieval blocked", research.lower())
+        pdf_sha = re.search(r"PDF SHA-256: ([a-f0-9]{64})", research)
+        self.assertIsNotNone(pdf_sha)
+        self.assertEqual(pdf_sha.group(1), pack["draft_pdf_sha256"])
 
 
 if __name__ == "__main__":
