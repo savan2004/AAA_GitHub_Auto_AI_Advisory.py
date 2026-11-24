@@ -57,8 +57,8 @@ class CompleteEditorialDraftTests(unittest.TestCase):
                           and annot.get_object()["/A"].get("/URI")]
             self.assertIn(result["cover_story"]["source_url"], cover_urls)
             authored = json.loads(PACK.read_text(encoding="utf-8"))["pages"]
-            self.assertIn(authored[0]["headline"], reader.pages[2].extract_text())
-            self.assertIn(authored[-1]["headline"], reader.pages[15].extract_text())
+            self.assertIn(authored[0]["headline"], " ".join(reader.pages[2].extract_text().split()))
+            self.assertIn(authored[-1]["headline"], " ".join(reader.pages[15].extract_text().split()))
             self.assertIn("Nifty 50", reader.pages[4].extract_text())
             self.assertIn("TCS", reader.pages[11].extract_text())
             self.assertIn("+18.06%", reader.pages[7].extract_text())
