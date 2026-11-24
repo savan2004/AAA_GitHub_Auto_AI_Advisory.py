@@ -647,8 +647,12 @@ def _verified_quote_payload(payload, source, expected_symbol, *, now_epoch=None)
                else _CLOSED_SESSION_QUOTE_AGE_SECONDS)
     if age < -120 or age > max_age:
         return None
+    if is_open and (stamp_ist.date() != now.date() or
+                    (stamp_ist.hour, stamp_ist.minute) < (9, 15)):
+        return None
     return {
         "price": price,
+        "provider_symbol": reported_symbol.upper(),
         "quote_timestamp": stamp.timestamp(),
         "quote_asof_ist": stamp_ist.isoformat(timespec="seconds"),
         "quote_source": source,
@@ -846,18 +850,10 @@ def clear_cache(symbol: Optional[str] = None):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def calc_rsi(close: pd.Series, period: int = 14) -> float:
-    """RSI(14) — self-contained so callers don't need to import calc functions."""
-    if len(close) < period + 1:
-        return 50.0
-    delta     = close.diff()
-    gain      = delta.clip(lower=0)
-    loss      = -delta.clip(upper=0)
-    avg_gain  = gain.rolling(period).mean()
-    avg_loss  = loss.rolling(period).mean()
-    avg_loss  = avg_loss.replace(0, 1e-10)
-    rsi       = 100 - (100 / (1 + avg_gain / avg_loss))
-    val       = rsi.iloc[-1]
-    return round(float(val), 1) if pd.notna(val) else 50.0
+    """Shared Wilder RSI; NaN means insufficient or invalid history."""
+    from msk_core_data_guard import wilder_rsi_series
+    values = wilder_rsi_series(close, period)
+    return round(float(values.iloc[-1]), 1) if len(values) else float("nan")
 
 
 def calc_ema(close: pd.Series, span: int) -> float:

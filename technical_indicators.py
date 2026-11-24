@@ -19,32 +19,14 @@ from config import RSI_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL, ATR_PERIOD, AD
 
 # ── RSI (Wilder's smoothing — matches TradingView) ────────────────────────────
 def calc_rsi(close: pd.Series, period: int = RSI_PERIOD) -> float:
-    """
-    Relative Strength Index using Wilder's EMA (com = period-1).
-    Requires 2×period bars for stable output.
-    Returns 50.0 if insufficient data.
-    """
-    if len(close) < period * 2:
-        return 50.0
-    delta    = close.diff()
-    gain     = delta.clip(lower=0)
-    loss     = (-delta.clip(upper=0))
-    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    avg_loss = avg_loss.replace(0, 1e-10)
-    rsi_s    = 100 - (100 / (1 + avg_gain / avg_loss))
-    return round(float(rsi_s.iloc[-1]), 1)
+    """Shared Wilder RSI; missing history is NaN, not a fabricated neutral value."""
+    values = rsi_series(close, period)
+    return round(float(values.iloc[-1]), 1) if len(values) else float("nan")
 
 
 def rsi_series(close: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
-    """Full RSI series (for charts/signals over time)."""
-    delta    = close.diff()
-    gain     = delta.clip(lower=0)
-    loss     = (-delta.clip(upper=0))
-    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    avg_loss = avg_loss.replace(0, 1e-10)
-    return 100 - (100 / (1 + avg_gain / avg_loss))
+    from msk_core_data_guard import wilder_rsi_series
+    return wilder_rsi_series(close, period)
 
 
 # ── EMA ───────────────────────────────────────────────────────────────────────
@@ -173,6 +155,7 @@ def calc_asi(df: pd.DataFrame) -> float:
 
 # ── Signal Labels ─────────────────────────────────────────────────────────────
 def rsi_label(rsi: float) -> str:
+    if not np.isfinite(rsi): return "UNAVAILABLE"
     if rsi > 70: return "OVERBOUGHT"
     if rsi < 30: return "OVERSOLD"
     if rsi > 60: return "STRONG"
@@ -194,6 +177,7 @@ def trend_label(close: pd.Series) -> str:
 
 def swing_signal(rsi: float, trend: str, chg: float) -> str:
     """Unified screener signal — consistent across all views."""
+    if not np.isfinite(rsi): return "⏳ WAIT — RSI unavailable"
     if rsi < 35:                                          return "⚡ OVERSOLD — bounce watch"
     if rsi > 72:                                          return "⚠️ OVERBOUGHT — pullback risk"
     if trend == "BULLISH" and rsi > 50 and chg > 0:      return "✅ UPTREND — strong momentum"
