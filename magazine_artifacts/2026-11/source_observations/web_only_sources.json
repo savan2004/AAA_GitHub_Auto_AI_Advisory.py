@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "issue": "2026-11",
+  "research_checked_at_ist": "2026-11-24T08:55:42+05:30",
+  "evidence_mode": "official-domain web text excerpts; raw source bytes unavailable",
+  "source_bytes_downloaded": false,
+  "source_receipts": [],
+  "source_authenticity_verified": false,
+  "accepted_by_magazine_validator": false,
+  "publication_allowed": false,
+  "withholding_reason": "Official-source excerpts were reviewed in web retrieval. Direct CPI PDF download attempt failed in the runtime; raw bytes, SHA-256, and independent reviewer receipt are not available. This manifest is NOT an accepted source pack.",
+  "sources": [
+    {
+      "source_id": "mospi-cpi-oct-2026",
+      "title": "MoSPI CPI October 2026 release",
+      "official_url": "https://www.mospi.gov.in/uploads/latestreleasesfiles/1794480048335-Press%20Release%20of%20CPI%20for%20October%202026%20.pdf",
+      "release_date": "2026-11-12",
+      "web_reference": "turn960857search39",
+      "byte_download_status": "FAILED",
+      "sha256": null,
+      "observations": [
+        {"label": "CPI general combined", "value": 6.09, "unit": "percent", "period": "October 2026 provisional"},
+        {"label": "Consumer food inflation combined", "value": 8.94, "unit": "percent", "period": "October 2026 provisional"},
+        {"label": "CPI general combined", "value": 5.54, "unit": "percent", "period": "September 2026 final"},
+        {"label": "Consumer food inflation combined", "value": 7.74, "unit": "percent", "period": "September 2026 final"},
+        {"label": "CPI general rural", "value": 6.63, "unit": "percent", "period": "October 2026 provisional"},
+        {"label": "CPI general urban", "value": 5.41, "unit": "percent", "period": "October 2026 provisional"}
+      ]
+    },
+    {
+      "source_id": "mospi-iip-sep-2026",
+      "title": "MoSPI IIP September 2026 quick estimates",
+      "official_url": "https://mospi.gov.in/uploads/latestReleases/latest_release_1793182514284_e9b71fc1-c565-480f-81c2-91618ea42c2f_IIP_Press_Release_September_2026.pdf",
+      "release_date": "2026-10-28",
+      "web_reference": "turn857825search44",
+      "byte_download_status": "NOT_ATTEMPTED_AFTER_RUNTIME_DOWNLOAD_FAILURE",
+      "sha256": null,
+      "observations": [
+        {"label": "IIP overall year-on-year", "value": 6.7, "unit": "percent", "period": "September 2026 quick estimate"},
+        {"label": "Manufacturing year-on-year", "value": 7.6, "unit": "percent", "period": "September 2026 quick estimate"},
+        {"label": "Electricity and gas supply year-on-year", "value": 11.2, "unit": "percent", "period": "September 2026 quick estimate"},
+        {"label": "Mining and quarrying year-on-year", "value": -6.2, "unit": "percent", "period": "September 2026 quick estimate"}
+      ]
+    },
+    {
+      "source_id": "rbi-mci-review-oct-2026",
+      "title": "RBI Monetary and Credit Information Review, October 2026",
+      "official_url": "https://www.rbi.org.in/Scripts/PublicationsView.aspx?id=24097",
+      "release_date": "2026-10-31",
+      "web_reference": "turn122704search2",
+      "byte_download_status": "NOT_ATTEMPTED_AFTER_RUNTIME_DOWNLOAD_FAILURE",
+      "sha256": null,
+      "observations": [
+        {"label": "Policy repo rate", "value": 5.50, "unit": "percent", "period": "October 2026 policy"},
+        {"label": "Standing deposit facility", "value": 5.25, "unit": "percent", "period": "October 2026 policy"},
+        {"label": "MSF and Bank Rate", "value": 5.75, "unit": "percent", "period": "October 2026 policy"},
+        {"label": "Policy stance", "value": "calibrated tightening", "unit": "text", "period": "October 2026 policy"}
+      ]
+    },
+    {
+      "source_id": "mospi-gdp-q1-fy27",
+      "title": "MoSPI Q1 FY2026-27 GDP press release via PIB",
+      "official_url": "https://www.pib.gov.in/PressReleseDetailm.aspx?PRID=2304949&lang=2&reg=48",
+      "release_date": "2026-08-31",
+      "web_reference": "turn278095search2",
+      "byte_download_status": "NOT_ATTEMPTED_AFTER_RUNTIME_DOWNLOAD_FAILURE",
+      "sha256": null,
+      "observations": [
+        {"label": "Real GDP year-on-year", "value": 7.8, "unit": "percent", "period": "Q1 FY2026-27"},
+        {"label": "Nominal GDP year-on-year", "value": 10.3, "unit": "percent", "period": "Q1 FY2026-27"},
+        {"label": "Real GVA year-on-year", "value": 8.2, "unit": "percent", "period": "Q1 FY2026-27"}
+      ]
+    },
+    {
+      "source_id": "mospi-arc-2026-27-updated-oct",
+      "title": "MoSPI Advance Release Calendar 2026-27 updated through October 2026",
+      "official_url": "https://mospi.gov.in/uploads/documents/releaseCalender/1793948871564-ARC%202026-27%20updated%20till%20October%202026.pdf",
+      "release_date": "2026-10-30",
+      "web_reference": "turn197718search14",
+      "byte_download_status": "NOT_ATTEMPTED_AFTER_RUNTIME_DOWNLOAD_FAILURE",
+      "sha256": null,
+      "observations": [
+        {"label": "October 2026 IIP scheduled release", "value": "2026-11-28", "unit": "date", "period": "Advance Release Calendar"},
+        {"label": "Q2 FY2026-27 GDP scheduled release", "value": "2026-11-30", "unit": "date", "period": "Advance Release Calendar"}
+      ]
+    }
+  ]
+}
