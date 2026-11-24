@@ -1,0 +1,62 @@
+{
+  "issue": "2026-11",
+  "page": 5,
+  "locked_title": "Nifty 50 Technical Outlook",
+  "layout": "line-benchmark",
+  "research_checked_at_ist": "2026-11-24T18:00:00+05:30",
+  "status": "PROVISIONAL_SECONDARY_DATA_CONFLICT_WITHHELD",
+  "primary_source": "NSE Historical Index Data",
+  "primary_source_url": "https://betanseapi.nseindia.com/reports-indices-historical-index-data",
+  "official_source_bytes_downloaded": false,
+  "official_source_sha256": null,
+  "independent_review": false,
+  "magazine_assembly_allowed": false,
+  "close_reports": [
+    {
+      "source": "Univest",
+      "value": 25349.65,
+      "change_points": -450.95,
+      "change_pct": -1.75,
+      "url": "https://univest.in/blogs/stock-market-prediction-for-tomorrow-live"
+    },
+    {
+      "source": "HDFC Sky",
+      "value": 25349.65,
+      "change_points": -450.95,
+      "change_pct": -1.75,
+      "url": "https://hdfcsky.com/news/market-close-report-today-november-23-2026-nifty-sensex-crash-as-profit-booking-ends-the-party"
+    },
+    {
+      "source": "Oquilia",
+      "value": 25349.65,
+      "change_points": -450.95,
+      "change_pct": -1.75,
+      "url": "https://www.oquilia.com/news/stock-market-today-nifty-50-closing-23-november-2026"
+    },
+    {
+      "source": "ThePip",
+      "value": 25366.4,
+      "change_points": -434.2,
+      "change_pct": -1.68,
+      "url": "https://www.thepip.in/closing-bell/closing-bell-nifty-50-ends-lower-monday-financial-stocks-23-nov-2026"
+    }
+  ],
+  "reported_ohlc_secondary": {
+    "open": 25929.15,
+    "high": 25992.6,
+    "low": 25343.85,
+    "close_disputed": [25349.65, 25366.4],
+    "range_points": 648.75,
+    "open_gap_vs_20nov_close_points": 128.55,
+    "open_gap_pct": 0.498,
+    "distance_close_above_low_points": [5.8, 22.55]
+  },
+  "provisional_levels_secondary": {
+    "support": [25300, 25200, 25000],
+    "resistance": [25500, 25800, 26000],
+    "source": "Univest; not independently recalculated"
+  },
+  "withholding_reason": "Secondary reports disagree on the 23 Nov Nifty 50 close; NSE historical data page was found but raw CSV/official source bytes were not retrieved. Do not use figures as verified financial evidence.",
+  "no_forecast_or_recommendation": true,
+  "draft_pdf_sha256": "896386e44a736f726ebc6d6bf0c8149caa3d3be0066ded2783fa5d3e5e83c031"
+}
