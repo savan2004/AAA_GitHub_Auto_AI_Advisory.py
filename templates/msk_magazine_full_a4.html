@@ -16,9 +16,9 @@
 <div class="cover-bottom"><div class="item"><b>NIFTY</b><p>What really happened in October</p></div><div class="item"><b>SECTORS</b><p>Which sectors rose and fell</p></div><div class="item"><b>RESEARCH</b><p>Company results and risks</p></div></div>
 {{badge(1)}}</section>
 <section class="page content">{{mast(2)}}<div class="contents-splash"><div class="section-label">THE CONTENTS</div><h1 class="serif">Indian markets.<br>Simply explained.</h1><p>Market facts, clear charts and practical explanations for Indian retail investors.</p></div>
-<div class="contents-grid"><div class="contents-col">{% for i in range(3,10) %}<div class="contents-row"><span>{{i}}</span><b>{{sections[i]}}</b></div>{% endfor %}</div>
-<div class="contents-col">{% for i in range(10,17) %}<div class="contents-row"><span>{{i}}</span><b>{{sections[i]}}</b></div>{% endfor %}</div></div>
-<div class="editor-note" style="margin-top:6mm"><h3>MARKET TERMS, MADE SIMPLE</h3><p>P/E: price compared with earnings. CPI: consumer inflation. TRI: index return including dividends. 25 bps: 0.25 percentage points.</p></div>{{badge(2)}}</section>
+<div class="contents-grid" style="margin-top:8mm"><div class="contents-col">{% for i in range(3,10) %}<div class="contents-row" style="min-height:14mm;padding:1.5mm 1mm"><span>{{i}}</span><b>{{sections[i]}}</b></div>{% endfor %}</div>
+<div class="contents-col">{% for i in range(10,17) %}<div class="contents-row" style="min-height:14mm;padding:1.5mm 1mm"><span>{{i}}</span><b>{{sections[i]}}</b></div>{% endfor %}</div></div>
+<div class="editor-note" style="margin-top:4mm;padding:3mm 4mm"><h3>MARKET TERMS, MADE SIMPLE</h3><p>P/E: price compared with earnings. CPI: consumer inflation. TRI: index return including dividends. 25 bps: 0.25 percentage points.</p></div>{{badge(2)}}</section>
 {% for n in range(3,17) %}
 <section class="page content">{{mast(n)}}
 {% if n in [3,8,12,16] %}
