@@ -1,6 +1,7 @@
 """Offline NSE bhavcopy authenticity, overlap and non-fabrication tests."""
 import io
 import csv
+import zipfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
@@ -76,6 +77,43 @@ class BhavcopySafeguards(unittest.TestCase):
         self.assertEqual(nse.fetch_nse_bhavcopy_rows(
             TUESDAY, ["SAMPLEA"], get=lambda *_a, **_kw:
                 SimpleNamespace(ok=True, content=b"not a CSV")), {})
+
+    def test_official_final_udiff_fallback_preserves_price_date_and_ohlcv(self):
+        def archive(day=TUESDAY, duplicate=False):
+            stream = io.StringIO()
+            writer = csv.writer(stream)
+            writer.writerow(["TckrSymb", "SctySrs", "TradDt", "OpnPric",
+                             "HghPric", "LwPric", "ClsPric", "PrvsClsgPric",
+                             "TtlTradgVol"])
+            row = ["SAMPLEA", "EQ", day.isoformat(), "102", "104",
+                   "101", "103", "100", "10000"]
+            writer.writerow(row)
+            if duplicate:
+                writer.writerow(row)
+            for i in range(1500):
+                writer.writerow([f"DUMMY{i:05d}", "EQ", day.isoformat(),
+                                 "101", "103", "99", "100", "100", "5000"])
+            data = io.BytesIO()
+            with zipfile.ZipFile(data, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr("official.csv", stream.getvalue())
+            return data.getvalue()
+
+        def check(payload):
+            calls = []
+            def get(url, **kw):
+                calls.append(url)
+                if len(calls) == 1:
+                    return SimpleNamespace(ok=False, content=b"")
+                return SimpleNamespace(ok=True, content=payload)
+            result = nse.fetch_nse_bhavcopy_rows(TUESDAY, ["SAMPLEA"], get=get)
+            self.assertEqual(len(calls), 2)
+            self.assertIn("20261117_F_0000.csv.zip", calls[1])
+            return result
+
+        self.assertEqual(check(archive()), {"SAMPLEA": records(TUESDAY)})
+        self.assertEqual(check(archive(MONDAY)), {})
+        self.assertEqual(check(archive(duplicate=True)), {})
+        self.assertEqual(check(b"not a zip"), {})
 
     def test_file_not_published_or_equity_absent_does_not_invent(self):
         none = nse.fetch_nse_bhavcopy_rows(
