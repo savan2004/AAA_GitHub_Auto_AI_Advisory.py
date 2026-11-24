@@ -1,0 +1,125 @@
+name: MSK Magazine - Dec 1 Private Live Review
+
+# One-time December 1 test. Even if this workflow remains in the repo,
+# the date guard prevents accidental repeats in later years.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/msk-magazine-dec1-private-preview.yml"
+  schedule:
+    - cron: "30 2 1 12 *" # 08:00 IST on 1 December (GitHub cron may be delayed)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msk-dec1-private-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  private-preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install existing MSK draft dependencies
+        run: python -m pip install reportlab==4.2.5 "pypdf>=5,<7" requests==2.32.3 chardet==5.2.0
+      - name: Verify test date and issue (no future sources)
+        id: date_guard
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, date
+          from zoneinfo import ZoneInfo
+          now = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+          event = os.environ["EVENT_NAME"]
+          # PR validation uses a November structure-only draft. Do not pretend
+          # December market data is already available in November.
+          if event == "pull_request":
+              issue, should_run = "2026-11", True
+          else:
+              issue, should_run = "2026-12", now == date(2026, 12, 1)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+              stream.write(f"run={'true' if should_run else 'false'}\nissue={issue}\n")
+          print(f"event={event} date_IST={now} issue={issue} run={should_run}")
+          PY
+      - name: Download official NSE monthly closing CSV if and only if Dec 1
+        if: steps.date_guard.outputs.run == 'true' && github.event_name != 'pull_request'
+        env:
+          ISSUE: ${{ steps.date_guard.outputs.issue }}
+        run: |
+          # Fails closed, records a source_fetch_failures.json file on HTTP/DNS errors.
+          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "research_inputs/$ISSUE"
+      - name: Generate private 16-page MSK preview with month-matched sources only
+        if: steps.date_guard.outputs.run == 'true'
+        env:
+          ISSUE: ${{ steps.date_guard.outputs.issue }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msk_magazine_monthly import generate, RECREATED_LOGO
+          issue = os.environ["ISSUE"]
+          source_dir = Path("research_inputs") / issue
+          source_pack = source_dir / "source_pack.json"
+          kwargs = {"logo_file": RECREATED_LOGO} if RECREATED_LOGO.is_file() else {}
+          if source_pack.is_file():
+              kwargs.update({"source_pack": source_pack, "source_root": source_dir})
+          result = generate(issue, Path("private_review"), **kwargs)
+          assert result["page_count"] == 16 and result["mechanical_pdf_checks"]["passed"]
+          assert result["publication_allowed"] is False
+          assert result["editorial_approved"] is False
+          # The technical layout is a REVIEW DRAFT, NOT the premium V4.
+          # A credible cover/company section needs a fresh validated editorial pack.
+          manifest = {
+              "issue": issue, "review_only": True, "customer_publication": False,
+              "layout": "conservative automatic draft; V4 dynamic integration pending",
+              "source_rows_verified": result["source_consistency_rows"],
+              "nse_data_available": source_pack.is_file(),
+              "official_source_date": json.loads(source_pack.read_text()).get("source_date") if source_pack.is_file() else None,
+              "missing_facts_are_withheld": True,
+              "pdf_sha256": result["pdf_sha256"],
+              "source_failures": result["source_failures"],
+          }
+          pdf_dir = Path("private_review") / issue
+          (pdf_dir/"live_review_manifest.json").write_text(json.dumps(manifest, indent=2)+"\n", encoding="utf-8")
+          print(json.dumps(manifest, indent=2))
+          PY
+      - name: Preserve original source input or download-failure receipt
+        if: steps.date_guard.outputs.run == 'true'
+        env:
+          ISSUE: ${{ steps.date_guard.outputs.issue }}
+        run: |
+          mkdir -p "private_review/$ISSUE/source_verification"
+          if [ -d "research_inputs/$ISSUE" ]; then
+            cp -a "research_inputs/$ISSUE/." "private_review/$ISSUE/source_verification/"
+          fi
+      - name: Upload private review PDF and evidence (NO Telegram, NO public release)
+        if: steps.date_guard.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MSK-DEC1-PRIVATE-${{ steps.date_guard.outputs.issue }}-${{ github.run_id }}
+          path: private_review/${{ steps.date_guard.outputs.issue }}/
+          retention-days: 90
+          if-no-files-found: error
+      - name: Explain review limitations
+        if: steps.date_guard.outputs.run == 'true'
+        env:
+          ISSUE: ${{ steps.date_guard.outputs.issue }}
+        run: |
+          echo "### MSK Magazine $ISSUE — PRIVATE TEST ONLY" >> "$GITHUB_STEP_SUMMARY"
+          echo "16-page PDF and source receipts saved in a private GitHub Actions artifact." >> "$GITHUB_STEP_SUMMARY"
+          echo "Absent or unverified market facts are withheld, never fabricated." >> "$GITHUB_STEP_SUMMARY"
+          echo "Not the V4 premium editorial edition. Source-complete V4 automation remains a separate acceptance gate." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Telegram send, no public publishing, no auto-approval." >> "$GITHUB_STEP_SUMMARY"
+      - name: Explain date guard
+        if: steps.date_guard.outputs.run != 'true'
+        run: echo "Only the exact Indian date 2026-12-01 enables the private live preview; otherwise no PDF was generated." >> "$GITHUB_STEP_SUMMARY"
