@@ -1,0 +1,79 @@
+
+/* Original MSK A4 layouts; created independently.  No copied third-party templates. */
+.page{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+.chapter-ribbon{margin-top:10mm;background:#0d293c;color:#fff;padding:8mm 8mm 9mm}
+.chapter-ribbon small{display:block;color:#d8c08f;font-weight:bold;font-size:8.5pt;letter-spacing:.12em}
+.chapter-ribbon h1{font: bold 29pt/1.08 Georgia,serif;letter-spacing:-.02em;margin:4mm 0 4mm}
+.chapter-ribbon p{font-size:10.3pt;line-height:1.52;margin:0;color:#dfede9}
+.feature-title{font:bold 30pt/1.10 Georgia,"Times New Roman",serif;letter-spacing:-.026em;margin:4mm 0 6mm;color:#10283a}
+.kicker{font:bold 8.5pt Arial,sans-serif;letter-spacing:.13em;color:#087779;text-transform:uppercase}
+.feature-deck{font:11pt/1.55 Arial,sans-serif;color:#415b64;margin-top:3mm}
+.number-wall{display:flex;gap:3mm;margin-top:8mm}
+.number-wall .number{flex:1;padding:6mm 4.5mm;background:#edf3ef;border-top:3px solid #bba16d;min-height:38mm}
+.number-wall .number.dark{background:#0c293c;color:#fff;border-top-color:#d7b473}
+.number-wall .number h2{font:bold 25pt Georgia,serif;margin:0 0 3mm;color:#087779;white-space:nowrap}
+.number-wall .number.dark h2{color:#f1dfb2}
+.number-wall .number p{font-size:8.3pt;line-height:1.4;margin:0;color:#536c70}
+.number-wall .number.dark p{color:#d9e8e4}
+.feature-divider{height:2px;background:#d0b685;margin:9mm 0 7mm}
+.explain-cols{display:flex;gap:7mm;margin-top:7mm}
+.explain-cols>article{flex:1;border-top:2px solid #c7d7d1;padding-top:4mm;font-size:9.6pt;line-height:1.58;color:#354e56}
+.explain-cols>article b{display:block;font-size:8pt;letter-spacing:.11em;color:#087779;margin-bottom:3mm}
+.big-quote{margin-top:8mm;padding:9mm 7mm;border-left:4px solid #087779;background:#eaf2ee;font:bold 16pt/1.35 Georgia,serif;color:#193c46}
+.big-quote small{display:block;font:8pt Arial,sans-serif;color:#567077;margin-top:5mm}
+.bare-risk{margin-top:8mm;border-top:1px solid #ccb187;padding-top:4mm;color:#68594b;font-size:8.6pt;line-height:1.5}
+.bare-risk b{font-size:8pt;letter-spacing:.09em;color:#a05149;display:block;margin-bottom:2mm}
+.section-rule{margin-top:8mm;border-top:1px solid #d9e1db;padding-top:4mm}
+.section-rule b{font-size:8pt;letter-spacing:.13em;color:#087779}
+.hero-pair{display:flex;align-items:stretch;margin-top:8mm;gap:4mm}
+.hero-pair .side{width:50%;padding:8mm 7mm;background:#e6f0ec}
+.hero-pair .side.neg{background:#f5e7e3}
+.hero-pair .side .fig{font:bold 38pt Georgia,serif;color:#087779}
+.hero-pair .side.neg .fig{color:#b9504c}
+.hero-pair .side span{display:block;margin-top:4mm;font-size:9pt;color:#415961}
+.metrics-table{width:100%;border-collapse:collapse;margin-top:8mm;table-layout:fixed}
+.metrics-table th{text-align:left;background:#112e41;color:#f3ead3;font-size:9pt;padding:3.5mm}
+.metrics-table td{font-size:9pt;border-bottom:1px solid #dbe3de;padding:3.3mm;color:#2e4752}
+.metrics-table td:last-child{text-align:right;font-weight:bold;color:#087779}
+.huge-inset{margin:9mm 0;background:#112e41;color:white;padding:9mm 9mm}
+.huge-inset label{display:block;font-size:8.3pt;letter-spacing:.14em;color:#d7bd84}
+.huge-inset strong{display:block;font:bold 45pt Georgia,serif;margin:3mm 0;line-height:1.05;color:#fff}
+.huge-inset p{font-size:9.2pt;line-height:1.5;color:#e3f0ed;margin:0}
+.company-card{margin-top:6mm;background:#f2f6f2;border-left:3px solid #b59b67;padding:6mm 7mm}
+.company-card.strong{border-left-color:#087779}
+.company-card .top{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #dce7e0;padding-bottom:3mm}
+.company-card .top b{font:bold 15pt Georgia,serif;color:#143549}
+.company-card .top small{font-size:8pt;color:#52666d}
+.company-card .featured{font:bold 22pt Georgia,serif;color:#087779;margin-top:4mm}
+.company-card .smallcopy{font-size:9pt;line-height:1.43;color:#425a62;margin-top:2mm}
+.split-feature{display:flex;gap:7mm;margin-top:8mm;align-items:stretch}
+.split-visual{width:43%;background:#123044;color:#fff;padding:8mm}
+.split-visual h2{font:bold 31pt Georgia,serif;margin:2mm 0;color:#d8bd84}
+.split-visual p{font-size:9pt;line-height:1.55;color:#e6efeb}
+.split-prose{width:57%;padding:3mm 0;font-size:9.8pt;line-height:1.58;color:#415960}
+.split-prose b{display:block;font-size:9pt;letter-spacing:.1em;color:#087779;margin-bottom:3mm}
+.timeline{margin-top:8mm;border-left:2px solid #087779;margin-left:7mm;padding-left:8mm}
+.timeline-row{position:relative;margin-bottom:9mm;padding:2mm 4mm;border-bottom:1px solid #dce4de}
+.timeline-row:before{content:"";position:absolute;left:-11mm;top:5mm;width:5mm;height:5mm;background:#c0a16c;border-radius:50%}
+.timeline-row b{display:block;color:#087779;font:bold 19pt Georgia,serif}
+.timeline-row span{font-size:10pt;display:block;margin-top:3mm;color:#354b55}
+.checklist{margin-top:6mm}
+.checklist .check{display:flex;gap:4mm;border-bottom:1px solid #dce4de;padding:4mm 0}
+.checklist .check .no{font:bold 17pt Georgia,serif;color:#a88b56;width:13mm}
+.checklist .check p{margin:0;font-size:9.7pt;line-height:1.46;color:#3c535d}
+.research-capsules{display:flex;gap:4mm;margin-top:10mm}
+.research-capsules .cap{width:33%;background:#e9f1ed;padding:6mm 4mm;border-top:2px solid #0f7a7e;min-height:35mm}
+.research-capsules .cap b{font-size:9pt;color:#304b58}
+.research-capsules .cap strong{display:block;margin-top:4mm;font:bold 22pt Georgia,serif;color:#087779}
+.research-capsules .cap p{font-size:8pt;color:#536a6b}
+.full-source{position:absolute;bottom:23mm;left:17mm;right:17mm;border-top:1px solid #bfd0cc;padding-top:3mm}
+.full-source>b{font-size:7.6pt;color:#0b7277;letter-spacing:.12em}
+.full-source>a{display:inline-block;font-size:7.4pt;margin:2mm 4mm 0 0;color:#546c70;text-decoration:none}
+.reader-callout{margin-top:6mm;background:#e7f0ec;padding:5mm 6mm;font-size:9pt;line-height:1.5;color:#3b5059}
+.reader-callout b{display:block;color:#087779;margin-bottom:2mm;font-size:8.1pt;letter-spacing:.1em}
+.closing-hero{background:#0e2b3c;color:#fff;margin-top:9mm;padding:10mm 8mm}
+.closing-hero h1{font: bold 30pt/1.12 Georgia,serif;margin:0 0 5mm}
+.closing-hero p{font-size:11pt;line-height:1.52;color:#dcebe7;margin:0}
+.glossary{margin-top:8mm;display:flex;flex-wrap:wrap;gap:4mm}
+.glossary .term{width:48%;padding:3mm 0;border-bottom:1px solid #d8e0da;font-size:8.7pt;color:#3a5159}
+.glossary .term b{color:#087779}
