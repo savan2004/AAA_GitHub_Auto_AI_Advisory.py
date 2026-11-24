@@ -754,7 +754,8 @@ def get_info(symbol: str) -> dict:
     is_index = raw.startswith("^")
     sym_clean = raw.removesuffix(".NS").removesuffix(".NSE")
     yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
-    cache_key = f"info_v4_explicit_yield_unit_{yahoo_sym}"
+    cache_key = (f"info_v3_roe_unit_{yahoo_sym}" if is_index else
+                 f"info_v4_explicit_yield_unit_{yahoo_sym}")
 
     cached = cached_get(cache_key, TTL_PRICE if is_index else TTL_FUND)
     if cached is not None:

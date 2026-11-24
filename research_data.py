@@ -578,7 +578,7 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
     periods (typical for recent IPOs), which let Yahoo's stale quarters overwrite fresh ones.
     """
     sym = sym.upper().replace(".NS", "")
-    cached = _cget(f"stm_v2_dated_{sym}")
+    cached = _cget(f"stm_{sym}")
     if cached is not None and today is None:
         return cached or None
 
@@ -613,7 +613,7 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
     years, ysrc = _fresher(usable(s_years), usable(y_years))
     quarters, qsrc = _fresher(usable(s_quarters), usable(y_quarters))
     if not years and not quarters:
-        _cset(f"stm_v2_dated_{sym}", {}, ttl=45)
+        _cset(f"stm_{sym}", {}, ttl=45)
         logger.warning("[research_data] %s annual/quarter statements unavailable "
                        "from both sources; short retry cache (45s)", sym)
         return None
@@ -630,7 +630,7 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
         # verified multi-year, current-quarter source response.
         fresh = result["freshness"].get("status") == "FRESH"
         ttl = _TTL if len(years) >= 4 and fresh else 300
-        _cset(f"stm_v2_dated_{sym}", result, ttl=ttl)
+        _cset(f"stm_{sym}", result, ttl=ttl)
     return result
 
 
