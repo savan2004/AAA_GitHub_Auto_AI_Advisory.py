@@ -4,7 +4,7 @@
   "locked_title": "Nifty 50 Technical Outlook",
   "layout": "line-benchmark",
   "research_checked_at_ist": "2026-11-24T18:00:00+05:30",
-  "status": "PROVISIONAL_SECONDARY_DATA_CONFLICT_WITHHELD",
+  "status": "PROVISIONAL_SECONDARY_ONLY_OFFICIAL_SOURCE_WITHHELD",
   "primary_source": "NSE Historical Index Data",
   "primary_source_url": "https://betanseapi.nseindia.com/reports-indices-historical-index-data",
   "official_niftyindices_page_url": "https://www.niftyindices.com/reports/historical-data",
@@ -22,20 +22,31 @@
     "network_blocked": true
   },
   "close_reports": [
-    {"source": "Univest", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://univest.in/blogs/stock-market-prediction-for-tomorrow-live"},
-    {"source": "HDFC Sky", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://hdfcsky.com/news/market-close-report-today-november-23-2026-nifty-sensex-crash-as-profit-booking-ends-the-party"},
+    {"source": "Reuters", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://www.reuters.com/world/india/indian-shares-set-open-higher-foreign-inflows-ai-selloff-persists-2026-11-23/"},
+    {"source": "Financial Express", "value": 25349.65, "change_points": -450.94, "change_pct": -1.75, "url": "https://www.financialexpress.com/market/sensex-nifty-today-gift-nifty-signals-strong-open-despite-black-monday-fears-4391393/"},
     {"source": "Oquilia", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://www.oquilia.com/news/stock-market-today-nifty-50-closing-23-november-2026"},
-    {"source": "ThePip", "value": 25366.4, "change_points": -434.2, "change_pct": -1.68, "url": "https://www.thepip.in/closing-bell/closing-bell-nifty-50-ends-lower-monday-financial-stocks-23-nov-2026"}
+    {"source": "Univest", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://univest.in/blogs/closing-bell-sensex-nifty-bank-nifty-23-november-2026"},
+    {"source": "PL Capital", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://www.plindia.com/news/stock-market-today-nifty-50-closes-1-75-lower-at-25349-65-as-bank-and-metal-stocks-fall/"},
+    {"source": "FinMinutes", "value": 25349.65, "change_points": -450.95, "change_pct": -1.75, "url": "https://finminutes.com/closing-bell/2026-11-23/"}
   ],
+  "intraday_observation": {
+    "source": "OptionChainPractice",
+    "date": "2026-11-23",
+    "time": "15:15 IST",
+    "value": 25366.4,
+    "classification": "INTRADAY_NOT_CLOSE",
+    "url": "https://optionchainpractice.com/news/2026-11-23",
+    "note": "15:15 observation; not a final closing value."
+  },
   "reported_ohlc_secondary": {
     "open": 25929.15,
     "high": 25992.6,
     "low": 25343.85,
-    "close_disputed": [25349.65, 25366.4],
+    "final_close": 25349.65,
     "range_points": 648.75,
     "open_gap_vs_20nov_close_points": 128.55,
     "open_gap_pct": 0.498,
-    "distance_close_above_low_points": [5.8, 22.55]
+    "distance_close_above_low_points": [5.8]
   },
   "provisional_levels_secondary": {
     "support": [25300, 25200, 25000],
@@ -47,9 +58,9 @@
     {"date": "18 Nov", "close": 25227.95},
     {"date": "19 Nov", "close": 25514.3},
     {"date": "20 Nov", "close": 25800.6},
-    {"date": "23 Nov", "close_disputed": [25349.65, 25366.4]}
+    {"date": "23 Nov", "close": 25349.65}
   ],
-  "withholding_reason": "Secondary reports disagree on the 23 Nov Nifty 50 close. Official data endpoint retrieval was attempted but runner DNS resolution failed (curl 6; HTTP 000; 0 bytes). No source-byte SHA or independent review; figures must not be treated as verified financial evidence.",
+  "withholding_reason": "Secondary sources consistently report the 23 Nov final close as 25,349.65; the 25,366.40 figure is a 15:15 intraday update, not a close. Official source bytes were not retrieved because runtime DNS failed (curl 6; HTTP 000; 0 bytes). No official source SHA or independent review; exclude from accepted financial evidence.",
   "no_forecast_or_recommendation": true,
-  "draft_pdf_sha256": "585f259838ae3be65dce2f7f19ce76459402c8f69356c51e1132d26ae092d681"
+  "draft_pdf_sha256": "8811ea4f309977bb8ab616220c9b61644a0446abd74dd006477ffb7728b5c559"
 }
