@@ -1,0 +1,136 @@
+name: MSK Monthly AI and Weekly Technical Research
+on:
+  pull_request:
+    paths:
+      - 'msk_monthly_weekly_research.py'
+      - 'tests/test_msk_monthly_weekly_research.py'
+      - '.github/workflows/msk-monthly-weekly-research.yml'
+      - 'docs/MSK_MONTHLY_WEEKLY_RESEARCH.md'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Monthly AI ideas and fundamental refresh, or weekly technical update
+        required: true
+        type: choice
+        options: [monthly, weekly]
+        default: weekly
+  schedule:
+    - cron: '17 2 1 * *'    # 07:47 IST, first calendar day: one monthly AI shortlist
+    - cron: '47 3 * * 1'    # 09:17 IST Monday: no AI, weekly EOD technical refresh
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test the existing-code research orchestration without provider network calls
+        run: |
+          python -m py_compile msk_monthly_weekly_research.py
+          python -m unittest discover -s tests -p 'test_msk_monthly_weekly_research.py' -v
+      - name: Customer publication remains forbidden
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          registry=json.loads(Path("msk_builder_research_release_registry.json").read_text())
+          assert registry["publication_status"] == "WITHHELD"
+          assert registry["approved"] == []
+          PY
+
+  monthly:
+    if: >-
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '17 2 1 * *') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'monthly')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: msk-monthly-ai-ideas
+      cancel-in-progress: false
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Reject absent monthly AI credential without paid-model fallback
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then
+            echo "::error::Existing GROQ_API_KEY secret is unavailable. No monthly AI run or stock shortlist."
+            exit 1
+          fi
+      - name: Install existing MSK runtime dependencies; no new library
+        run: python -m pip install -r requirements.txt
+      - name: Generate one AI idea batch and validate fundamentals from existing sources
+        run: python -m msk_monthly_weekly_research monthly
+      - name: Retain internal monthly snapshot (not customer publication)
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-monthly-research-seed
+          path: msk-monthly-research.json
+          retention-days: 45
+          if-no-files-found: error
+
+  weekly:
+    if: >-
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '47 3 * * 1') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'weekly')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: msk-weekly-technical-research
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Retrieve latest monthly research seed, not a fresh AI call
+        run: |
+          set -euo pipefail
+          found=0
+          ids=$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow msk-monthly-weekly-research.yml \
+            --status success --limit 45 \
+            --json databaseId --jq '.[].databaseId')
+          for id in $ids; do
+            if gh run download "$id" --repo "$GITHUB_REPOSITORY" \
+                 --name msk-monthly-research-seed --dir . 2>/dev/null; then
+              found=1
+              break
+            fi
+          done
+          if [ "$found" -ne 1 ]; then
+            echo "::error::No monthly AI artifact was found. Weekly output withheld."
+            exit 1
+          fi
+      - name: Install existing EOD and technical dependencies
+        run: python -m pip install pandas==2.2.2 numpy==1.26.4 yfinance==0.2.61 requests==2.32.3 curl_cffi==0.7.4
+      - name: Refresh technical analysis from completed daily candles, zero AI calls
+        run: python -m msk_monthly_weekly_research weekly
+      - name: Store internal technical watchlist only
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-weekly-technical-research
+          path: msk-weekly-research.json
+          retention-days: 21
+          if-no-files-found: error
