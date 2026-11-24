@@ -1,271 +1,51 @@
-"""
-AI provider adapter and report-safe fallbacks.
+"""MSK AI commentary interface — backward-compatible facade over connector v2.
 
-Supports multiple AI providers with intelligent fallback:
-  1. GROQ (primary, free, fast)
-  2. Gemini (secondary, reliable)
-  3. OpenAI (tertiary, premium quality)
-  4. AskFuzz (optional, India-focused finance AI)
-  5. Deterministic fallback (never crashes)
-
-All functions return safe, non-empty responses regardless of provider availability.
+Retains all public analysis functions used by main.py; the provider network,
+model choices, bounded failover, price-data grounding and spending policy live
+in msk_ai_connector_v2.py. This module does not verify market evidence.
 """
 import os
 import logging
-import requests
 from datetime import date, timedelta
 from typing import Tuple, Dict, List, Optional
 from collections import defaultdict
 
+from msk_ai_connector_v2 import (
+    GROQ_MODEL, request_ai, configured_providers,
+)
+
 logger = logging.getLogger(__name__)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AI PROVIDER CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
-
-_GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
-_groq = _gemini = _openai = None
-
-# Chat history storage: {user_id: list of messages, max 10 turns for context safety}
-_chat_history: Dict[int, List[Dict]] = defaultdict(list)
+_GROQ_MODELS = [GROQ_MODEL]
+_chat_history: Dict[int, List[Dict[str, str]]] = defaultdict(list)
 MAX_CHAT_HISTORY = 10
 
 
-def _key(name: str, *fallbacks: str) -> str:
-    """
-    Get environment variable by name with fallback names.
-    
-    Args:
-        name: Primary env var name
-        *fallbacks: Alternative env var names to try if primary is not set
-    
-    Returns:
-        str: Environment variable value (stripped), or empty string if not found
-    """
-    val = os.getenv(name, "").strip()
-    if val:
-        return val
-    for alt_name in fallbacks:
-        val = os.getenv(alt_name, "").strip()
-        if val:
-            return val
-    return ""
+def _key(name, *fallbacks):
+    from msk_ai_connector_v2 import _key as credential
+    return credential(os.environ, name, *fallbacks)
 
 
-def ai_available() -> bool:
-    """
-    Check if at least one AI provider is configured with a valid API key.
-    
-    Providers checked (in order):
-      1. GROQ_API_KEY
-      2. GEMINI_API_KEY or GOOGLE_API_KEY
-      3. OPENAI_API_KEY or OPENAI_KEY
-      4. ASKFUZZ_API_KEY
-    
-    Returns:
-        bool: True if any provider is configured, False otherwise
-    """
-    return bool(
-        _key("GROQ_API_KEY") or 
-        _key("GEMINI_API_KEY", "GOOGLE_API_KEY") or 
-        _key("OPENAI_API_KEY", "OPENAI_KEY") or
-        _key("ASKFUZZ_API_KEY")  # ✅ FIXED: Now includes AskFuzz
-    )
+def ai_available():
+    """True only if an *allowed* provider has a configured key; not a health claim."""
+    return bool(configured_providers())
 
 
-def _make_groq_client(api_key: str):
-    """Initialize Groq safely without global monkey-patches to httpx.
-
-    The surrounding provider fallback catches a compatibility failure and
-    tries the next configured provider rather than affecting other threads.
-    """
-    from groq import Groq
-    try:
-        return Groq(api_key=api_key, timeout=15.0, max_retries=1)
-    except TypeError as exc:
-        if "proxies" in str(exc).lower():
-            raise RuntimeError(
-                "Installed Groq/httpx dependency versions are incompatible. "
-                "Update pinned dependencies in a tested release; no global patch applied."
-            ) from exc
-        raise
+def _call_ai(messages, max_tokens=500, system="", *, financial=False):
+    """Legacy tuple contract for all previous callers. Never returns raw API errors."""
+    answer = request_ai(messages, max_tokens=max_tokens, system=system,
+                        financial=financial)
+    if answer.ok:
+        return answer.text, ""
+    return "", (answer.error_code + (
+        " [" + ", ".join(answer.attempts) + "]" if answer.attempts else ""))
 
 
-def _call_ai(
-    messages: List[Dict[str, str]], 
-    max_tokens: int = 500, 
-    system: str = ""
-) -> Tuple[str, str]:
-    """
-    Call AI providers in fallback order: GROQ → Gemini → OpenAI → AskFuzz.
-    Tries each provider sequentially until one succeeds.
-    
-    Args:
-        messages: List of message dicts with 'role' and 'content' keys
-        max_tokens: Maximum tokens in response (default 500)
-        system: System prompt (optional)
-        
-    Returns:
-        Tuple[str, str]: (response_text, error_message)
-            - If successful: (text, "")
-            - If all fail: ("", error_details)
-    """
-    errors = []
-    global _groq, _gemini, _openai
-    
-    # ─────────────────────────────────────────────────────────────────────────
-    # Try GROQ (Primary)
-    # ─────────────────────────────────────────────────────────────────────────
-    groq_key = _key("GROQ_API_KEY")
-    if groq_key:
-        try:
-            if _groq is None:
-                _groq = _make_groq_client(groq_key)
-            payload = ([{"role": "system", "content": system}] if system else []) + messages
-            for model in _GROQ_MODELS:
-                try:
-                    r = _groq.chat.completions.create(
-                        model=model, 
-                        messages=payload, 
-                        max_tokens=max_tokens, 
-                        temperature=0.1
-                    )
-                    text = (r.choices[0].message.content or "").strip()
-                    if text:
-                        return text, ""
-                except Exception as exc:
-                    errors.append(f"GROQ ({model}): {str(exc)[:80]}")
-        except Exception as exc:
-            errors.append(f"GROQ init: {str(exc)[:80]}")
-            logger.warning("Groq initialization failed: %s", exc)
-    
-    # ─────────────────────────────────────────────────────────────────────────
-    # Try Gemini (Secondary)
-    # ─────────────────────────────────────────────────────────────────────────
-    gemini_key = _key("GEMINI_API_KEY", "GOOGLE_API_KEY")
-    if gemini_key:
-        try:
-            if _gemini is None:
-                import google.generativeai as genai
-                genai.configure(api_key=gemini_key)
-                _gemini = genai.GenerativeModel("gemini-1.5-flash")
-            prompt = (system + "\n\n" if system else "") + messages[-1]["content"]
-            r = _gemini.generate_content(prompt)
-            text = (getattr(r, "text", "") or "").strip()
-            if text:
-                return text, ""
-        except Exception as exc:
-            errors.append(f"Gemini: {str(exc)[:80]}")
-            logger.warning("Gemini call failed: %s", exc)
-    
-    # ─────────────────────────────────────────────────────────────────────────
-    # Try OpenAI (Tertiary) — correctly indented as sibling, not child
-    # ─────────────────────────────────────────────────────────────────────────
-    openai_key = _key("OPENAI_API_KEY", "OPENAI_KEY")
-    if openai_key:
-        try:
-            if _openai is None:
-                from openai import OpenAI
-                _openai = OpenAI(api_key=openai_key)
-            payload = ([{"role": "system", "content": system}] if system else []) + messages
-            r = _openai.chat.completions.create(
-                model="gpt-4o-mini", 
-                messages=payload, 
-                max_tokens=max_tokens, 
-                temperature=0.1
-            )
-            text = (r.choices[0].message.content or "").strip()
-            if text:
-                return text, ""
-        except Exception as exc:
-            errors.append(f"OpenAI: {str(exc)[:80]}")
-            logger.warning("OpenAI call failed: %s", exc)
-    
-    # ─────────────────────────────────────────────────────────────────────────
-    # Try AskFuzz (India-focused finance AI)
-    # ─────────────────────────────────────────────────────────────────────────
-    askfuzz_key = _key("ASKFUZZ_API_KEY")
-    if askfuzz_key:
-        try:
-            text, error = _call_askfuzz_ai(askfuzz_key, messages, max_tokens, system)
-            if text:
-                return text, ""
-            errors.append(f"AskFuzz: {error[:80]}")
-        except Exception as exc:
-            errors.append(f"AskFuzz init: {str(exc)[:80]}")
-            logger.warning("AskFuzz call failed: %s", exc)
-    
-    # ─────────────────────────────────────────────────────────────────────────
-    # All providers failed — return comprehensive error message
-    # ─────────────────────────────────────────────────────────────────────────
-    error_msg = "\n".join(errors) if errors else "No AI provider configured"
-    return "", error_msg
-
-
-def _call_askfuzz_ai(
-    api_key: str, 
-    messages: List[Dict[str, str]], 
-    max_tokens: int, 
-    system: str
-) -> Tuple[str, str]:
-    """
-    Call AskFuzz API (India-focused financial AI).
-    
-    https://askfuzz.ai/api/v1/query
-    
-    Args:
-        api_key: ASKFUZZ_API_KEY
-        messages: Conversation messages
-        max_tokens: Max response length
-        system: System prompt
-        
-    Returns:
-        Tuple[str, str]: (response_text, error_message)
-    """
-    try:
-        # Construct prompt from messages
-        prompt = messages[-1]["content"] if messages else ""
-        if system:
-            prompt = f"{system}\n\n{prompt}"
-        
-        # Make API call
-        response = requests.post(
-            "https://api.askfuzz.ai/v1/query",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "query": prompt,
-                "max_tokens": max_tokens
-            },
-            timeout=10
-        )
-        
-        # Handle response
-        if response.status_code == 401:
-            return "", "AskFuzz authentication failed (invalid API key)"
-        elif response.status_code == 429:
-            return "", "AskFuzz rate limit exceeded"
-        elif response.status_code == 200:
-            data = response.json()
-            text = data.get("response", "").strip()
-            confidence = data.get("confidence", 0)
-            if text:
-                # Optionally append confidence score
-                if confidence:
-                    text = f"{text}\n\n*Confidence: {confidence:.1%}*"
-                return text, ""
-            return "", "AskFuzz returned empty response"
-        else:
-            return "", f"AskFuzz HTTP {response.status_code}: {response.text[:80]}"
-    
-    except requests.Timeout:
-        return "", "AskFuzz timeout (>10s)"
-    except requests.ConnectionError:
-        return "", "AskFuzz connection failed"
-    except Exception as exc:
-        return "", f"AskFuzz error: {str(exc)[:80]}"
+def _call_askfuzz_ai(api_key, messages, max_tokens, system):
+    """Backward-compatible explicit AskFuzz path, never auto-selected."""
+    env = {"ASKFUZZ_API_KEY": api_key, "MSK_AI_ALLOW_ASKFUZZ": "1"}
+    result = request_ai(messages, max_tokens=max_tokens, system=system,
+                        env=env)
+    return (result.text, "") if result.ok else ("", result.error_code)
 
 
 def _safe(value: any) -> str:
@@ -278,9 +58,15 @@ def _safe(value: any) -> str:
     Returns:
         str: Safe string representation or "N/A"
     """
-    if value is None or str(value).strip() in {"", "None", "Null"}:
+    from math import isfinite
+    if value is None or isinstance(value, bool):
         return "N/A"
-    return str(value)
+    if isinstance(value, (float, int)) and not isfinite(value):
+        return "N/A"
+    raw = str(value).strip()
+    if raw.lower() in ("", "none", "null", "nan", "inf", "-inf", "infinity"):
+        return "N/A"
+    return raw
 
 
 def _fallback_outlook(
@@ -307,14 +93,26 @@ def _fallback_outlook(
     Returns:
         str: Markdown formatted outlook
     """
-    zone = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
-    direction = "positive" if macd > 0 else "negative"
+    from math import isfinite
+    valid_rsi = isinstance(rsi, (float, int)) and isfinite(rsi)
+    valid_macd = isinstance(macd, (float, int)) and isfinite(macd)
+    zone = ("overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral") if valid_rsi else "unavailable"
+    direction = ("positive" if macd > 0 else "negative") if valid_macd else "unavailable"
+    atr_line = (f"ATR Rs {_safe(atr)}; a reference volatility range is available."
+                if isinstance(atr, (int, float)) and isfinite(atr) and atr > 0
+                else "ATR was not supplied; no volatility range is claimed.")
+    levels_line = (
+        f"Verified source-supplied target Rs {_safe(target)} and stop Rs {_safe(sl)} are reference levels, not forecasts."
+        if all(isinstance(v, (int, float)) and isfinite(v) and v > 0
+               for v in (target, sl)) else
+        "Execution price levels unavailable; do not invent a target or stop.")
+
     
     return (
         "---\n## 📈 Technical Structure & Momentum Spectrum\n"
         f"- **Trend Diagnostics:** {symbol} is currently {_safe(trend)} based on the supplied trend structure.\n"
         f"- **Oscillator Readings:** RSI is {_safe(rsi)} ({zone}); MACD is {_safe(macd)} ({direction}). Avoid chasing overbought momentum.\n"
-        f"- **Volatility Parameters:** ATR is Rs {_safe(atr)}, defining the available risk-band reference.\n\n"
+        f"- **Volatility Parameters:** {atr_line}\n\n"
         "---\n## 🔎 Fundamental Quality & Valuation Framework\n"
         f"- **Pricing Multiple Assessment:** TTM P/E is {_safe(pe)}; a complete valuation conclusion requires sector comparison.\n"
         f"- **Balance Sheet Health:** ROE is {_safe(roe)}%; leverage assessment is constrained where Debt/Equity is unavailable.\n\n"
@@ -323,7 +121,7 @@ def _fallback_outlook(
         "- **Benchmark Contrast:** Relative Nifty alpha was unavailable; no outperformance claim is made.\n\n"
         "---\n## 💡 Comprehensive AI Outlook & Guardrails\n"
         f"- **Strategic Thesis:** The technical bias is {_safe(trend)}, but conviction is limited until fundamentals and news are confirmed.\n"
-        f"- **Execution Trajectory:** Reference target is Rs {_safe(target)} and protective stop is Rs {_safe(sl)}. If support fails, reduce exposure and wait for confirmation.\n\n"
+        f"- **Execution Trajectory:** {levels_line}\n\n"
         "---\n*Disclaimer: This report is automatically compiled from public market feeds and a generative intelligence layer. It is not investment advice.*"
     )
 
@@ -365,7 +163,8 @@ def ai_insights(
         text, error = _call_ai(
             [{"role": "user", "content": prompt}],
             700,
-            "Use only supplied values. Output Markdown only. Never invent data."
+            "Use only supplied values. Output Markdown only. Never invent data.",
+            financial=True,
         )
         if text:
             return text
@@ -426,7 +225,8 @@ def structured_investment_outlook(
         text, error = _call_ai(
             [{"role": "user", "content": prompt}],
             900,
-            "Output only structured Markdown. Never fabricate missing values."
+            "Output only structured Markdown. Never fabricate missing values.",
+            financial=True,
         )
         if text:
             return text
@@ -478,9 +278,15 @@ def long_term_view(
             )
         }],
         250,
-        "No targets or invented figures."
+        "No targets or invented figures.",
+        financial=True,
     )
-    return text or ""
+    return text or (
+        f"Quality: ROE={_safe(roe)}%; leverage={_safe(de)}.\n"
+        f"Valuation: PE={_safe(pe)}; peer comparison requires verified data.\n"
+        "Watch for: dated earnings, cash flows, valuations and business risks.\n"
+        "Suitability: Watchlist only; independently verify the figures."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -527,7 +333,7 @@ def get_chat_history(uid: int) -> List[Dict[str, str]]:
     Returns:
         List[Dict]: Chat messages (role, content)
     """
-    return _chat_history.get(uid, [])
+    return [dict(entry) for entry in _chat_history.get(uid, [])]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -580,7 +386,16 @@ def ai_topic_respond(topic_prompt: str) -> str:
     Returns:
         str: AI response or fallback message
     """
-    return ai_chat_respond(0, topic_prompt)  # uid=0 for topic-based (stateless)
+    # A topic request must not share a fake user-id=0 history across customers.
+    if not isinstance(topic_prompt, str) or not topic_prompt.strip():
+        return "⚠️ AI topic unavailable."
+    if not ai_available():
+        return "⚠️ No AI key configured."
+    response, _error = _call_ai(
+        [{"role":"user", "content":topic_prompt}],
+        450,
+        "Use only supplied NSE/BSE source facts; missing market data is unknown.")
+    return response or "⚠️ AI temporarily unavailable."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -652,9 +467,13 @@ def get_ai_provider_status() -> Dict[str, any]:
     """
     groq_ok = bool(_key("GROQ_API_KEY"))
     gemini_ok = bool(_key("GEMINI_API_KEY", "GOOGLE_API_KEY"))
-    openai_ok = bool(_key("OPENAI_API_KEY", "OPENAI_KEY"))
-    askfuzz_ok = bool(_key("ASKFUZZ_API_KEY"))  # ✅ FIXED: Now checking
-    
+    # Credential presence != permission to bill. Paid providers disabled unless
+    # specifically authorized, and the status screen must not misrepresent it.
+    openai_ok = bool(_key("OPENAI_API_KEY", "OPENAI_KEY")
+                     and os.environ.get("MSK_AI_ALLOW_PAID") == "1")
+    askfuzz_ok = bool(_key("ASKFUZZ_API_KEY")
+                      and os.environ.get("MSK_AI_ALLOW_ASKFUZZ") == "1")
+
     any_provider = groq_ok or gemini_ok or openai_ok or askfuzz_ok
     
     return {
