@@ -42,7 +42,14 @@
     "resistance": [25500, 25800, 26000],
     "source": "Univest; not independently recalculated"
   },
+  "close_history_secondary": [
+    {"date": "17 Nov", "close": 25387.4},
+    {"date": "18 Nov", "close": 25227.95},
+    {"date": "19 Nov", "close": 25514.3},
+    {"date": "20 Nov", "close": 25800.6},
+    {"date": "23 Nov", "close_disputed": [25349.65, 25366.4]}
+  ],
   "withholding_reason": "Secondary reports disagree on the 23 Nov Nifty 50 close. Official data endpoint retrieval was attempted but runner DNS resolution failed (curl 6; HTTP 000; 0 bytes). No source-byte SHA or independent review; figures must not be treated as verified financial evidence.",
   "no_forecast_or_recommendation": true,
-  "draft_pdf_sha256": "8da4d8d080586c5b50e9522de6b52af6a0901feb5e3d3bb2e2250b46d7249766"
+  "draft_pdf_sha256": "585f259838ae3be65dce2f7f19ce76459402c8f69356c51e1132d26ae092d681"
 }
