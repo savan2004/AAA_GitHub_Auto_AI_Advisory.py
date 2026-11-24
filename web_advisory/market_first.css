@@ -1,0 +1,16 @@
+/* Isolated market-first trial; scoped to market-first component. */
+.market-first{display:block;margin:0 0 22px}.market-first-title{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px}
+.market-first-title h2{font-size:23px;line-height:1.2;margin:4px 0 6px;color:#17263d}.market-first-title p{font-size:13px;margin:0;color:#667b93}
+.market-first-status{padding:7px 10px;border-radius:7px;color:#8a5219;background:#fff2db;border:1px solid #ecd1a6;font-weight:750;font-size:10px}
+.market-index-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.market-index-grid article,.market-first-panel{background:white;border:1px solid #e1e8f0;border-radius:13px;padding:17px;min-width:0}
+.market-index-grid small{display:block;font-size:11px;letter-spacing:.06em;color:#57708b;font-weight:800}
+.market-index-grid strong{display:block;font-size:25px;color:#17263d;margin:4px 0}.market-index-grid span{display:block;font-size:11px;color:#8c6674;margin-bottom:8px}
+.market-first a{color:#117c81;font-weight:700;text-decoration:underline;text-underline-offset:2px;font-size:12px}
+.market-two{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.market-first-panel h3{font-size:16px;color:#17263d;margin:0 0 8px}.market-first-panel p{font-size:12px;color:#687a8d;line-height:1.6;margin:0 0 12px}
+.market-first-panel ul{padding-left:19px;margin:8px 0;line-height:2}.market-breadth-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:12px 0}
+.market-breadth-grid div{background:#f4f7fa;border-radius:9px;padding:10px;text-align:center}.market-breadth-grid strong{display:block;font-size:21px;color:#24384d}.market-breadth-grid span{font-size:10px;color:#697e91}
+.market-first-hint{display:flex;gap:6px 14px;flex-wrap:wrap;padding:12px 15px;background:#e8f7f4;border:1px solid #cfe9e3;border-radius:9px;margin-top:12px;color:#175f59;font-size:12px}
+@media(max-width:1100px){.market-index-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.market-index-grid{gap:8px}.market-index-grid article{padding:12px}.market-index-grid strong{font-size:21px}.market-two{grid-template-columns:1fr}.market-first-title h2{font-size:20px}}

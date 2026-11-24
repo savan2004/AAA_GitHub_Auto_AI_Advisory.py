@@ -366,6 +366,36 @@ test("Portfolio tab is real, source-labelled and does not invent P&L",()=>{
  w.close();
 });
 
+test("technical button displays historic support resistance EMA ADX and pattern without invented values",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("loadSample").click();
+ d.querySelector('[data-tab="technical"]').click();
+ const body=d.getElementById("detailBody").textContent;
+ for(const term of ["Historical support","Historical resistance","EMA 20","EMA 50","ADX (14)","Relative volume","Pattern finder","RESEARCH ONLY"]){
+   assert.ok(body.includes(term),"missing technical observation: "+term);
+ }
+ assert.match(body,/FICTIONAL DEMO/);
+ w.MSKWeb.features.choose("BEL",false);
+ d.querySelector('[data-tab="technical"]').click();
+ assert.match(d.getElementById("detailBody").textContent,/No validated price history/);
+ assert.doesNotMatch(d.getElementById("detailBody").textContent,/Historical support.*₹/);
+ w.close();
+});
+
+test("CSV import button rejects unterminated quoted fields before enabling Import",()=>{
+ const w=build(),d=w.document;
+ d.getElementById("openImport").click();
+ assert.equal(d.getElementById("importModal").hidden,false);
+ assert.throws(
+  ()=>w.MSKImport.readPreview('symbol,timestamp,open,high,low,close,volume\n"BEL,2026-01-01,10,12,9,11,100'),
+  /unclosed quoted field/i
+ );
+ assert.equal(d.getElementById("confirmImport").disabled,true);
+ d.getElementById("closeImport").click();
+ assert.equal(d.getElementById("importModal").hidden,true);
+ w.close();
+});
+
 test("Research Report generates exactly eight source-aware pages without fabricated fundamentals",()=>{
  const w=build(),d=w.document;
  d.getElementById("loadSample").click();
