@@ -120,6 +120,14 @@ def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_da
     if not isinstance(prior, Mapping) or not isinstance(latest, Mapping):
         return None
     try:
+        # Inspect the raw sequence before a shared normalizer can sort or
+        # collapse exact duplicates. Official one-day recovery must be strict.
+        if (not isinstance(primary, pd.DataFrame) or
+                not isinstance(primary.index, pd.DatetimeIndex) or
+                primary.index.has_duplicates or primary.index.hasnans or
+                not primary.index.is_monotonic_increasing or
+                len(set(primary.index.date)) != len(primary)):
+            return None
         original = _clean_frame(primary)
         if original is None:
             return None
