@@ -1,0 +1,56 @@
+name: MSK Magazine - Independent A4 Print Design Pilot
+
+on:
+  pull_request:
+    paths:
+      - "scripts/msk_magazine_print_pilot.py"
+      - "templates/msk_magazine_pilot_a4.html"
+      - "docs/msk_magazine/**"
+      - ".github/workflows/msk-magazine-print-pilot.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msk-magazine-print-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  private-print-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install print pilot and existing research validation deps
+        run: python -m pip install plutoprint Jinja2 "pypdf>=5,<7" reportlab==4.2.5 requests==2.32.3 chardet==5.2.0
+      - name: Compile and produce private four-page proof
+        run: |
+          python -m py_compile scripts/msk_magazine_print_pilot.py
+          python -m scripts.msk_magazine_print_pilot --output-dir print_pilot
+      - name: Inspect four-page A4 PDF structure and source transparency
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from pypdf import PdfReader
+          p = Path("print_pilot/MSK_NOV2026_PRINT_PILOT_UNAPPROVED.pdf")
+          r = PdfReader(str(p))
+          assert len(r.pages) == 4
+          contents = [" ".join((page.extract_text() or "").split()) for page in r.pages]
+          assert "NIFTY RISES. SMALL CAPS FALL." in contents[0]
+          assert "+1.95%" in contents[2] and "-5.78%" in contents[2]
+          assert "+18.06%" in contents[3] and "-7.51%" in contents[3]
+          assert all("UNAPPROVED" in txt for txt in contents)
+          assert all(abs(float(page.mediabox.width)-595.276)<1 and abs(float(page.mediabox.height)-841.89)<1 for page in r.pages)
+          assert any(page.get("/Annots") for page in r.pages)
+          print("MSK_A4_PREMIUM_PRINT_PILOT_OK: 4 A4 pages; real data; private proof; no sends")
+          PY
+      - name: Save private layout proof for owner comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: MSK-PRINT-PILOT-${{ github.run_id }}
+          path: print_pilot/
+          if-no-files-found: error
+          retention-days: 14
