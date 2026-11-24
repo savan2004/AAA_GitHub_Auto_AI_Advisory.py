@@ -1,11 +1,13 @@
 # Page 05 — Nifty 50 Technical Outlook (2026-11)
 
 **Status:** provisional secondary-source research; withheld from assembly.  
-**Research date:** 24 November 2026 (IST). **Layout:** locked Design 3 `line-benchmark`.
+**Research date:** 24 November 2026 (IST). **Layout:** locked Design 3 line-benchmark.
 
 ## Data reconciliation
 
-Three secondary reports (Univest, HDFC Sky and Oquilia) report the 23 November close as **25,349.65**. A fourth (ThePip) reports **25,366.40**. This is a **16.75-point discrepancy**. The official NSE historical-index-data page was located, but the historical CSV was not downloaded; there is no source-byte SHA or independent review. All figures remain provisional and are excluded from the accepted source pack.
+Three secondary reports (Univest, HDFC Sky and Oquilia) report the 23 November close as **25,349.65**. A fourth (ThePip) reports **25,366.40**. This is a **16.75-point discrepancy**.
+
+Official NSE/Nifty Indices historical pages and the documented official data endpoint were located. A direct official POST was attempted for 23 November, but the runner could not resolve www.niftyindices.com (curl error 6; HTTP 000; 0 bytes). No source-byte SHA or independent review exists. All figures remain provisional and are excluded from the accepted source pack.
 
 ## Provisional session read (secondary reports only)
 
@@ -24,8 +26,9 @@ The reported candle shows early strength rejected and selling into the close. A 
 - [HDFC Sky — 23 Nov market close](https://hdfcsky.com/news/market-close-report-today-november-23-2026-nifty-sensex-crash-as-profit-booking-ends-the-party)
 - [Oquilia — 23 Nov close](https://www.oquilia.com/news/stock-market-today-nifty-50-closing-23-november-2026)
 - [ThePip — conflicting close](https://www.thepip.in/closing-bell/closing-bell-nifty-50-ends-lower-monday-financial-stocks-23-nov-2026)
-- [NSE — Historical Index Data (official primary source; retrieval pending)](https://betanseapi.nseindia.com/reports-indices-historical-index-data)
+- [NSE — Historical Index Data](https://betanseapi.nseindia.com/reports-indices-historical-index-data)
+- [Nifty Indices — Historical Data](https://www.niftyindices.com/reports/historical-data) (official source; retrieval blocked)
 
-**Evidence flags:** `official_source_bytes_downloaded=false`, `official_source_sha256=null`, `independent_review=false`, `magazine_assembly_allowed=false`.
+**Evidence flags:** official_source_bytes_downloaded=false; source SHA=null; independent_review=false; magazine_assembly_allowed=false.
 
-PDF SHA-256: `896386e44a736f726ebc6d6bf0c8149caa3d3be0066ded2783fa5d3e5e83c031` (PDF was generated and visually inspected locally; not the locked full-issue assembly).
+PDF SHA-256: 9b51a8cda64ee0b7eb5bdebac678ea7470ccd14d139b5a9e143366bfb5782942
