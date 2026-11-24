@@ -114,12 +114,12 @@ def draw_cover(c, issue, logo_file, logo_draw, cover_story=None):
         _fit(c, 48, 434, "Independent monthly research, pending dated "
              "primary-source evidence.", width=480, size=13,
              lines=3, color="#E4F0F0")
-    _text(c, 48, 199, "INSIDE THIS EDITION", 11, TEAL, "Helvetica-Bold")
+    _text(c, 48, 199, "INSIDE: NIFTY, SECTORS & MARKET RISKS", 11, TEAL, "Helvetica-Bold")
     _line(c, 48, 187, 547, 187, GOLD, 1.1)
     teasers = [
-        ("01", "MARKETS", "Indices, trends and market breadth"),
-        ("02", "RESEARCH", "Sectors, company filings and valuation"),
-        ("03", "STRATEGY", "Macro risks and next-month watchpoints"),
+        ("01", "MARKETS", "Nifty, Bank Nifty and other indices"),
+        ("02", "COMPANIES", "Profits, valuations and company filings"),
+        ("03", "YOUR RISKS", "RBI, inflation and next-month watchpoints"),
     ]
     for i, (no, label, note) in enumerate(teasers):
         x = 48 + 171 * i
@@ -162,12 +162,14 @@ def draw_index(c, issue, index, cover_story=None):
              font="Helvetica-Bold")
     _box(c, 48, 94, 497, 92, LIGHT)
     _box(c, 48, 94, 4, 92, TEAL)
-    _text(c, 64, 163, "FROM THE RESEARCH DESK", 9.7, TEAL,
+    _text(c, 64, 163, "YOUR QUICK GUIDE TO MARKET TERMS", 9.7, TEAL,
           "Helvetica-Bold")
-    _fit(c, 64, 142, "This issue separates sourced observations from "
-         "interpretation. Chart dates and source links appear beside "
-         "the analysis. Draft information is not a trading signal.",
-         width=466, size=9.5, lines=4, leading=14)
+    _fit(c, 64, 142, "P/E = price compared with earnings. "
+         "CPI = consumer inflation. "
+         "TRI = index return including reinvested dividends. "
+         "25 bps = 0.25 percentage points. "
+         "Returns shown are not buy or sell advice.",
+         width=466, size=9.1, lines=4, leading=14)
 
 
 def _article_head(c, number, section, article):
@@ -191,12 +193,12 @@ def _lead(c, article, *, feature=False):
     if feature:
         _box(c, 48, 392, 498, 90, LIGHT)
         _box(c, 48, 392, 4, 90, TEAL)
-        _text(c, 65, 461, "THE BIG PICTURE", 8.5, TEAL,
+        _text(c, 65, 461, "WHAT THE NUMBERS SHOW", 8.5, TEAL,
               "Helvetica-Bold")
         _fit(c, 65, 443, article["lead"], width=455, size=10.2,
              min_size=9.2, lines=4, leading=14.3)
     else:
-        _text(c, 49, 469, "THE STORY", 8.7, TEAL, "Helvetica-Bold")
+        _text(c, 49, 469, "WHAT HAPPENED", 8.7, TEAL, "Helvetica-Bold")
         _fit(c, 49, 450, article["lead"], width=494, size=10.4,
              min_size=9.1, lines=4, leading=14.0)
 
@@ -218,7 +220,7 @@ def _analysis(c, article, family):
             if family == "opening":
                 _line(c, 48, 384, 546, 384, GOLD, 1)
         for i, ((x, y), width) in enumerate(zip(positions, widths), 1):
-            _text(c, x, y, f"0{i}  /  INSIGHT", 8.3, TEAL,
+            _text(c, x, y, f"0{i}  /  WHY IT MATTERS", 8.3, TEAL,
                   "Helvetica-Bold")
             _fit(c, x, y - 20, parts[i-1], width=width, lines=6,
                  size=9.45, min_size=8.8, leading=13.4)
@@ -234,7 +236,7 @@ def _analysis(c, article, family):
 def _evidence(c, article):
     _box(c, 48, 171, 498, 76, "#F5F1EB")
     _box(c, 48, 171, 4, 76, RISK)
-    _text(c, 63, 227, "RISK  /  LIMITATION", 9.0, RISK, "Helvetica-Bold")
+    _text(c, 63, 227, "RISK  /  WHAT WE DO NOT KNOW", 9.0, RISK, "Helvetica-Bold")
     _fit(c, 63, 208, article["risk_note"], width=459, lines=3,
          size=9.1, min_size=8.5, leading=12.4)
     _text(c, 49, 151, "PRIMARY SOURCES  /  VERIFIED LINKS", 8.3,
