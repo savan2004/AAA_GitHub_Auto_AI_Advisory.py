@@ -178,7 +178,9 @@ class MagazineMonthlyTests(unittest.TestCase):
         )
         self.assertFalse(output["publication_allowed"])
         self.assertFalse(output["editorial_approved"])
-        self.assertFalse(output["logo_asset_provided"])
+        self.assertTrue(output["logo_asset_provided"])
+        self.assertFalse(output["original_logo_authenticated"])
+        self.assertEqual(output["logo_source"], "RECREATED_FROM_USER_REFERENCE_NOT_FINAL_APPROVED")
         self.assertTrue(output["source_failures"])
         self.assertTrue(output["mechanical_pdf_checks"]["passed"])
         pdf = self.root / "out" / "2026-12" / output["draft_pdf"]
