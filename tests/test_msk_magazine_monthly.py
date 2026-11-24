@@ -309,8 +309,10 @@ class MagazineMonthlyTests(unittest.TestCase):
         accepted, errors = self.verify()
         self.assertFalse(errors)
         pack = {"issue": "2026-11", "source_receipts": [self._receipt()]}
+        validation_time = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
         result = validate_source_receipts(
-            pack, accepted, self.source_root, "2026-11", date(2026, 11, 16))
+            pack, accepted, self.source_root, "2026-11", date(2026, 11, 16),
+            validation_time=validation_time)
         self.assertTrue(result["passed"])
         self.assertTrue(result["schema_only"])
         self.assertTrue(result["human_independent_authentication_required"])
@@ -318,7 +320,8 @@ class MagazineMonthlyTests(unittest.TestCase):
         unreviewed = self._receipt(reviewed=False)
         result = validate_source_receipts(
             {"issue": "2026-11", "source_receipts": [unreviewed]},
-            accepted, self.source_root, "2026-11", date(2026, 11, 16))
+            accepted, self.source_root, "2026-11", date(2026, 11, 16),
+            validation_time=validation_time)
         self.assertFalse(result["passed"])
         self.assertIn("reviewer confirmation", " ".join(result["failures"]))
 
@@ -326,7 +329,8 @@ class MagazineMonthlyTests(unittest.TestCase):
         wrong_hash["source_sha256"] = "0" * 64
         result = validate_source_receipts(
             {"issue": "2026-11", "source_receipts": [wrong_hash]},
-            accepted, self.source_root, "2026-11", date(2026, 11, 16))
+            accepted, self.source_root, "2026-11", date(2026, 11, 16),
+            validation_time=validation_time)
         self.assertFalse(result["passed"])
         self.assertIn("does not match", " ".join(result["failures"]))
 
@@ -334,9 +338,20 @@ class MagazineMonthlyTests(unittest.TestCase):
                                review_time="2026-11-17T10:15:00Z")
         result = validate_source_receipts(
             {"issue": "2026-11", "source_receipts": [future]},
-            accepted, self.source_root, "2026-11", date(2026, 11, 16))
+            accepted, self.source_root, "2026-11", date(2026, 11, 16),
+            validation_time=validation_time)
         self.assertFalse(result["passed"])
         self.assertIn("after issue evidence cutoff", " ".join(result["failures"]))
+
+        same_day_future = self._receipt(
+            fetch_time="2026-11-16T18:00:00Z",
+            review_time="2026-11-16T18:15:00Z")
+        result = validate_source_receipts(
+            {"issue": "2026-11", "source_receipts": [same_day_future]},
+            accepted, self.source_root, "2026-11", date(2026, 11, 16),
+            validation_time=datetime(2026, 11, 16, 17, 0, tzinfo=timezone.utc))
+        self.assertFalse(result["passed"])
+        self.assertIn("future relative to validation", " ".join(result["failures"]))
 
     def test_receipt_schema_pass_does_not_claim_source_authenticity(self):
         pack = {"issue": "2026-11", "observations": [self.row],
