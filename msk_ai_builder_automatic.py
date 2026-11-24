@@ -73,8 +73,11 @@ def _candidate(row, session):
             or symbol.startswith(("DEMO", "TEST", "SYNTH"))):
         raise ValueError("invalid or demonstration symbol")
     score = Decimal(str(row["score"]))
-    if not score.is_finite() or not Decimal(75) <= score <= Decimal(100):
-        raise ValueError("candidate below quality threshold")
+    # Scores rank independently approved companies; they do not certify
+    # an issuer or set an arbitrary "perfect stock" threshold. The full
+    # issuer/price/valuation/risk/corporate-action gates above still apply.
+    if not score.is_finite() or not Decimal(0) < score <= Decimal(100):
+        raise ValueError("invalid approved candidate score")
     return ApprovedCandidate(
         symbol,
         row["isin"],
