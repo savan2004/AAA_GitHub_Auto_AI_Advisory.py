@@ -1,0 +1,31 @@
+# Page 05 — Nifty 50 Technical Outlook (2026-11)
+
+**Status:** provisional secondary-source research; withheld from assembly.  
+**Research date:** 24 November 2026 (IST). **Layout:** locked Design 3 `line-benchmark`.
+
+## Data reconciliation
+
+Three secondary reports (Univest, HDFC Sky and Oquilia) report the 23 November close as **25,349.65**. A fourth (ThePip) reports **25,366.40**. This is a **16.75-point discrepancy**. The official NSE historical-index-data page was located, but the historical CSV was not downloaded; there is no source-byte SHA or independent review. All figures remain provisional and are excluded from the accepted source pack.
+
+## Provisional session read (secondary reports only)
+
+- Reported open: 25,929.15; high: 25,992.60; low: 25,343.85.
+- Reported range: 648.75 points; gap above 20 November close 25,800.60: +128.55 points (~0.50%).
+- Close reports are 5.80–22.55 points above the reported low, suggesting a gap-up reversal and near-low finish; official OHLC must be confirmed before technical conclusions are accepted.
+- Univest quotes support levels 25,300 / 25,200 / 25,000 and resistance 25,500 / 25,800 / 26,000. These are attributed levels, not independently calculated.
+
+## Editorial interpretation
+
+The reported candle shows early strength rejected and selling into the close. A near-low finish would indicate short-term pressure, but the close discrepancy and missing official OHLC make the exact candle and indicator values unfit for a financial conclusion. RSI, MACD, moving averages and trend signals are deliberately withheld until official index history is retrieved and checked. No prediction or trade recommendation is made.
+
+## Sources
+
+- [Univest — 23 Nov market wrap and reported OHLC/levels](https://univest.in/blogs/stock-market-prediction-for-tomorrow-live)
+- [HDFC Sky — 23 Nov market close](https://hdfcsky.com/news/market-close-report-today-november-23-2026-nifty-sensex-crash-as-profit-booking-ends-the-party)
+- [Oquilia — 23 Nov close](https://www.oquilia.com/news/stock-market-today-nifty-50-closing-23-november-2026)
+- [ThePip — conflicting close](https://www.thepip.in/closing-bell/closing-bell-nifty-50-ends-lower-monday-financial-stocks-23-nov-2026)
+- [NSE — Historical Index Data (official primary source; retrieval pending)](https://betanseapi.nseindia.com/reports-indices-historical-index-data)
+
+**Evidence flags:** `official_source_bytes_downloaded=false`, `official_source_sha256=null`, `independent_review=false`, `magazine_assembly_allowed=false`.
+
+PDF SHA-256: `896386e44a736f726ebc6d6bf0c8149caa3d3be0066ded2783fa5d3e5e83c031` (PDF was generated and visually inspected locally; not the locked full-issue assembly).
