@@ -126,8 +126,8 @@ html,body{margin:0;padding:0;color:#122b3c;font-family:Arial,"Helvetica Neue",sa
   <header class="masthead"><img src="{{logo}}" alt="MSK AI BOT"><div class="issue">MSK / NOVEMBER 2026<br>EDITORIAL ISSUE</div></header>
   <div class="contents-splash">
     <div class="section-label">Inside The Issue</div>
-    <h1 class="serif">The stories behind<br>the numbers.</h1>
-    <p>One market, very different outcomes. This month's research opens with index divergence, then examines sector performance and the evidence behind each claim.</p>
+    <h1 class="serif">Nifty, sectors &amp;<br>what it means for you.</h1>
+    <p>For Indian investors: see what happened in Nifty, Bank Nifty and different sectors. Each figure is tied to a date and an original source.</p>
   </div>
   <div class="contents-grid">
     <div class="contents-col">
@@ -143,7 +143,7 @@ html,body{margin:0;padding:0;color:#122b3c;font-family:Arial,"Helvetica Neue",sa
       <div class="contents-row"><span>16</span><b>Methodology</b><small>Source dates and limitations</small></div>
     </div>
   </div>
-  <div class="editor-note"><h3>LETTER FROM THE RESEARCH DESK</h3><p>This is a design pilot built around the existing November 2026 verified research. The financial content remains subject to publication review. A market return is not an entry signal, and a sector gain is not a company recommendation.</p></div>
+  <div class="editor-note"><h3>MARKET TERMS MADE SIMPLE</h3><p>P/E means price compared with company earnings. CPI means consumer inflation. TRI means index return including reinvested dividends. 25 bps means a 0.25 percentage-point change. These are market facts, not buy or sell calls.</p></div>
   <div class="publication"><span class="locked">UNAPPROVED EDITORIAL DRAFT — PRIVATE REVIEW ONLY</span><strong>02 / PILOT</strong></div>
 </section>
 
@@ -165,7 +165,7 @@ html,body{margin:0;padding:0;color:#122b3c;font-family:Arial,"Helvetica Neue",sa
     </div>
     {% endfor %}
   </div>
-  <div class="article-analysis"><div><strong>THE VIEW</strong>{{market.analysis[0]}}</div><div><strong>THE COUNTERPOINT</strong>{{market.analysis[1]}}</div></div>
+  <div class="article-analysis"><div><strong>WHAT THE NUMBERS MEAN</strong>{{market.analysis[0]}}</div><div><strong>WHAT TO WATCH</strong>{{market.analysis[1]}}</div></div>
   <div class="sources"><b>PRIMARY SOURCES & DATES</b>
     {% for s in market.sources %}<a href="{{s.url}}">{{loop.index}} / {{s.title}} · {{s.published_on}}</a>{% endfor %}
   </div>
@@ -182,8 +182,8 @@ html,body{margin:0;padding:0;color:#122b3c;font-family:Arial,"Helvetica Neue",sa
       {% if loop.index0 % 4 == 3 %}</tr>{% endif %}
     {% endfor %}
   </tbody></table>
-  <div class="sector-insight"><div class="huge">18.06%</div><div class="insight"><b>THE IT OUTLIER</b>{{sector.analysis[0]}}</div></div>
-  <div class="risk"><b>RISK / EVIDENCE LIMITATION</b> — {{sector.risk_note}}</div>
+  <div class="sector-insight"><div class="huge">18.06%</div><div class="insight"><b>IT SECTOR LEADS</b>{{sector.analysis[0]}}</div></div>
+  <div class="risk"><b>RISK / WHAT WE DO NOT KNOW</b> — {{sector.risk_note}}</div>
   <div class="sources"><b>PRIMARY SOURCES & DATES</b>
     {% for s in sector.sources %}<a href="{{s.url}}">{{loop.index}} / {{s.title}} · {{s.published_on}}</a>{% endfor %}
   </div>
