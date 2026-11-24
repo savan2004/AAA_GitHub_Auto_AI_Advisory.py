@@ -123,12 +123,18 @@ def _receipt_timestamp(value: str) -> datetime | None:
 
 
 def validate_source_receipts(pack: dict, accepted_rows: dict[int, list[dict]],
-                             source_root: Path, issue: str, as_of: date) -> dict:
+                             source_root: Path, issue: str, as_of: date,
+                             validation_time: datetime | None = None) -> dict:
     """Validate a handoff receipt's structure and local byte consistency.
 
     This does not authenticate a download or reviewer identity; human cross-check
     remains a separate publication gate.
     """
+    validation_time = validation_time or datetime.now(timezone.utc)
+    if validation_time.tzinfo is None or validation_time.utcoffset() is None:
+        return {"passed": False, "receipts_checked": 0,
+                "failures": ["Validation timestamp must include timezone"]}
+    validation_time = validation_time.astimezone(timezone.utc)
     accepted = [row for rows in accepted_rows.values() for row in rows]
     failures = []
     if not accepted:
@@ -158,6 +164,8 @@ def validate_source_receipts(pack: dict, accepted_rows: dict[int, list[dict]],
             reviewed = _receipt_timestamp(receipt.get("reviewed_at_utc"))
             if fetched is None or reviewed is None:
                 raise MagazineError("Fetch/review timestamps must include timezone")
+            if fetched > validation_time or reviewed > validation_time:
+                raise MagazineError("Receipt timestamp is in the future relative to validation")
             if fetched.date() > as_of or reviewed.date() > as_of:
                 raise MagazineError("Receipt timestamp is after issue evidence cutoff")
             if reviewed < fetched:
@@ -447,7 +455,8 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
             else:
                 by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
                 source_receipt_validation = validate_source_receipts(
-                    source, by_page, source_root, issue, now.astimezone(IST).date())
+                    source, by_page, source_root, issue, now.astimezone(IST).date(),
+                    validation_time=now)
     else:
         by_page, failures = {}, ["No independently retrieved financial source pack supplied"]
     pdf_file = dest / f"MSK_{issue}_EDITORIAL_DRAFT.pdf"
