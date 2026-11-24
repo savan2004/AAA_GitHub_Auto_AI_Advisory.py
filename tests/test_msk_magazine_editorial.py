@@ -44,6 +44,18 @@ class CompleteEditorialDraftTests(unittest.TestCase):
             self.assertEqual(len(reader.pages), 16)
             self.assertTrue(reader.pages[0].images, "Recreated MSK logo must be embedded on cover")
             self.assertNotIn("ORIGINAL LOGO ASSET PENDING", reader.pages[0].extract_text())
+            self.assertEqual(result["cover_story"]["kind"], "index_divergence")
+            self.assertEqual(result["cover_story"]["headline"], "NIFTY RISES. SMALL CAPS FALL.")
+            self.assertFalse(result["cover_story_publication_approved"])
+            cover_text = " ".join(reader.pages[0].extract_text().split())
+            self.assertIn("NIFTY RISES. SMALL CAPS FALL.", cover_text)
+            self.assertNotIn("DIWALI SPECIAL", cover_text)
+            self.assertIn("October 2026", cover_text)
+            cover_urls = [str(annot.get_object()["/A"]["/URI"])
+                          for annot in reader.pages[0].get("/Annots", [])
+                          if annot.get_object().get("/A")
+                          and annot.get_object()["/A"].get("/URI")]
+            self.assertIn(result["cover_story"]["source_url"], cover_urls)
             authored = json.loads(PACK.read_text(encoding="utf-8"))["pages"]
             self.assertIn(authored[0]["headline"], reader.pages[2].extract_text())
             self.assertIn(authored[-1]["headline"], reader.pages[15].extract_text())
