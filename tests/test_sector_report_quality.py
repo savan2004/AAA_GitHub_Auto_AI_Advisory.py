@@ -7,6 +7,7 @@ import ast
 import logging
 import types
 import sys
+from unittest.mock import patch
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -257,7 +258,7 @@ class SectorCompletedSessionCache(unittest.TestCase):
             fake_drive = types.SimpleNamespace(
                 load_sector_cloud=lambda **_kwargs: None,
                 store_sector_cloud=lambda *_args, **_kwargs: True)
-            with unittest.mock.patch.dict(sys.modules, {"sector_report_drive": fake_drive}):
+            with patch.dict(sys.modules, {"sector_report_drive": fake_drive}):
                 ok, path, summary = ns["generate_sector_report_pdf"]()
             self.assertTrue(ok)
             self.assertNotEqual(path, prior)
