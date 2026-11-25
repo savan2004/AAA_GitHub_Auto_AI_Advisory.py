@@ -54,6 +54,19 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(calls,[DAY,PREVIOUS])
         self.assertEqual(recover.recovered,2)
 
+    def test_price_missing_with_zero_volume_or_verified_positive_volume(self):
+        def fetch(day,wanted):
+            return {SYMBOL:(dict(official(),High=102.) if day == PREVIOUS else official(102.))}
+        for volume in (0.,1000.,999.):
+            frame = history()
+            frame.loc[pd.Timestamp(DAY),"Volume"] = volume
+            result = ArchiveRecovery([SYMBOL],DAY,fetch=fetch)(SYMBOL,frame)
+            if volume == 999.:
+                self.assertIsNone(result)
+            else:
+                self.assertIsNotNone(result)
+                self.assertEqual(result.Volume.iloc[-1],1000.)
+
     def test_mismatch_partial_latest_and_multiple_missing_sessions_fail(self):
         def fetch(day,wanted):
             return {SYMBOL:dict(official(), High=102., Volume=2000.)}

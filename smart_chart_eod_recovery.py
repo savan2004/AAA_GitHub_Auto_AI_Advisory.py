@@ -126,14 +126,28 @@ def prior_history(frame, expected, previous):
         if not data.index.is_unique:
             return None
         target = data.loc[data.index == pd.Timestamp(expected)]
-        # A fully populated candle is never overwritten, even if rejected.
-        if len(target) and not target.iloc[0].isna().all():
-            return None
+        # A fully or partially observed price candle is never overwritten.
+        # Yahoo bulk downloads may fill volume with zero even though all
+        # four prices are missing. A positive observed volume must match
+        # the final exchange volume exactly before the day is recovered.
+        reported_volume = None
+        if len(target):
+            row = target.iloc[0]
+            if not row[["Open","High","Low","Close"]].isna().all():
+                return None
+            if not pd.isna(row["Volume"]):
+                volume = _number(row["Volume"])
+                if volume < 0:
+                    return None
+                reported_volume = volume if volume > 0 else None
         data = data.loc[data.index <= pd.Timestamp(previous)]
         empty = data.isna().all(axis=1)
         holidays = [not doctor_trading_session(d.date()) for d in data.index]
         data = data.loc[~(empty & holidays)]
-        return validated_daily_history(data, previous.isoformat())
+        verified = validated_daily_history(data, previous.isoformat())
+        if verified is not None:
+            verified.attrs["target_placeholder_volume"] = reported_volume
+        return verified
     except (ValueError, TypeError, KeyError, AttributeError, RuntimeError):
         return None
 
@@ -149,6 +163,9 @@ def stitch_final_day(primary, previous, expected, prior, latest):
         if any(not _matches(last[k], prior[k]) for k in ("Open","High","Low","Close")):
             return None
         if float(last["Volume"]) != float(prior["Volume"]):
+            return None
+        reported_volume = primary.attrs.get("target_placeholder_volume")
+        if reported_volume is not None and reported_volume != float(latest["Volume"]):
             return None
         if not _matches(prior["Close"], latest["PreviousClose"]):
             return None
