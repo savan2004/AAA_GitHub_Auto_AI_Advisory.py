@@ -7,6 +7,7 @@ to rank unscanned Nifty constituents.
 import math
 import random
 import time
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -67,6 +68,10 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     candidates = {}
     diagnostics = {"rejected": 0, "scorer": 0, "download_failures": 0}
     rejection_reasons = {}
+    verified_symbols = set()
+    preferred = ("RELIANCE.NS", "SBIN.NS", "TCS.NS", "HDFCBANK.NS",
+                 "ICICIBANK.NS", "INFY.NS", "ITC.NS", "LT.NS")
+    recovery_symbols = sorted(symbols, key=lambda sym: (sym not in preferred, symbols.index(sym)))
 
     def consider(symbol, frame):
         if symbol in candidates:
@@ -75,6 +80,7 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
         if complete is None:
             diagnostics["rejected"] += 1
             return
+        verified_symbols.add(symbol)
         try:
             candidate = scorer(symbol, names[symbol], df=complete.copy())
             if not isinstance(candidate, dict) or candidate.get("sym") != symbol:
@@ -99,10 +105,15 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
             diagnostics["scorer"] += 1
 
-    def bulk(tickers, *, threads, timeout):
+    def bulk(tickers, *, threads, timeout, explicit_dates=False):
         try:
+            window = {"period": "1y"}
+            if explicit_dates:
+                day = date.fromisoformat(str(session_key))
+                window = {"start": (day - timedelta(days=370)).isoformat(),
+                          "end": (day + timedelta(days=1)).isoformat()}
             prices = download(
-                tickers=tickers, period="1y", interval="1d", progress=False,
+                tickers=tickers, **window, interval="1d", progress=False,
                 auto_adjust=True, group_by="ticker", threads=threads,
                 timeout=timeout,
             )
@@ -116,10 +127,10 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                 diagnostics["rejected"] += 1
 
     # Bounded full-universe scan. Small batches avoid 500-ticker Yahoo timeouts
-    # and keep failures isolated. Stop after 55s; never claim full coverage.
+    # and keep failures isolated. Stop starting bulk batches after 120s.
     attempted = 0
+    started = time.monotonic()
     if scan_all:
-        started = time.monotonic()
         for start in range(0, len(symbols), 40):
             if time.monotonic() - started > 120:
                 break
@@ -133,15 +144,19 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
         # Yahoo can rate-limit a 60-name request while serving a 10-name
         # serial batch. Retry once, without concurrent ticker workers.
         bulk(symbols[:min(10, len(symbols))], threads=False, timeout=9)
+    elif scan_all and not verified_symbols and time.monotonic() - started < 120:
+        # A full batch may return an empty expected-session row for every
+        # ticker. Recover at most three already-attempted liquid symbols
+        # using a dated, serial Yahoo request, with unchanged candle gates.
+        attempted_symbols = set(symbols[:attempted])
+        retry = [sym for sym in recovery_symbols if sym in attempted_symbols][:3]
+        if retry:
+            bulk(retry, threads=False, timeout=6, explicit_dates=True)
 
     if not candidates and fallback_history is not None:
         # A narrowly bounded official NSE historical source is independent
-        # of Yahoo's batch endpoint. No more than two calls (<=15s each).
-        preferred = ("RELIANCE.NS", "SBIN.NS", "TCS.NS", "HDFCBANK.NS",
-                     "ICICIBANK.NS", "INFY.NS", "ITC.NS", "LT.NS")
-        fallback_symbols = sorted(
-            symbols, key=lambda sym: (sym not in preferred, symbols.index(sym)))
-        for sym in fallback_symbols[:2]:
+        # of Yahoo's batch endpoint. No more than two original sample calls.
+        for sym in recovery_symbols[:2]:
             try:
                 consider(sym, fallback_history(sym))
             except Exception:
@@ -149,11 +164,12 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
 
     if not candidates:
         raise ChartScanUnavailable(
-            ("No verified 12+/20 breakout or trend-confirmation setup " if min_score is not None
+            ("No verified current-session histories " if not verified_symbols else
+             "No verified 12+/20 breakout or trend-confirmation setup " if min_score is not None
              else "No valid real price bars in bounded chart sample ") +
             f"(session={session_key}; sampled={len(selected)}; "
             f"attempted={attempted}/{whole}; rejected={diagnostics['rejected']}; "
-            f"scorer_rejected={diagnostics['scorer']}; "
+            f"verified_histories={len(verified_symbols)}; scorer_rejected={diagnostics['scorer']}; "
             f"provider_errors={diagnostics['download_failures']}; "
             f"history_reasons={dict(sorted(rejection_reasons.items()))})."
         )
