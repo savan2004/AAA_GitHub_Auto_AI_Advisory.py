@@ -50,7 +50,7 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertIn("GITHUB_RUN_ID", workflow)
         self.assertIn("first_monday", workflow)
         self.assertIn("continuation", workflow)
-        self.assertIn('TAG="msk-magazine-$ISSUE-draft"', workflow)
+        self.assertIn('TAG="msk-magazine-${ISSUE}-draft"', workflow)
         self.assertNotIn("gh release publish", workflow)
         self.assertNotIn("sendDocument", workflow)
         self.assertNotIn('draft-$GITHUB_RUN_ID', workflow)
