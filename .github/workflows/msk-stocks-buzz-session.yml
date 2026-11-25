@@ -4,12 +4,20 @@ on:
     branches: [main]
     paths:
       - 'stocks_buzz.py'
+      - 'swing_trades.py'
+      - 'msk_target_levels.py'
+      - 'tests/test_msk_target_levels.py'
+      - 'tests/test_swing_investor_print.py'
       - 'tests/test_stocks_buzz_session.py'
       - '.github/workflows/msk-stocks-buzz-session.yml'
   push:
     branches: [main]
     paths:
       - 'stocks_buzz.py'
+      - 'swing_trades.py'
+      - 'msk_target_levels.py'
+      - 'tests/test_msk_target_levels.py'
+      - 'tests/test_swing_investor_print.py'
       - 'tests/test_stocks_buzz_session.py'
   workflow_dispatch:
 permissions:
@@ -26,3 +34,5 @@ jobs:
       - run: pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3'
       - run: python -m py_compile stocks_buzz.py tests/test_stocks_buzz_session.py
       - run: python -m unittest discover -s tests -p 'test_stocks_buzz_session.py' -v
+      - run: python -m unittest discover -s tests -p 'test_msk_target_levels.py' -v
+      - run: python -m unittest discover -s tests -p 'test_swing_investor_print.py' -v
