@@ -100,6 +100,14 @@ class PdfCurrentEodRecovery(unittest.TestCase):
             verified_pdf_history("DMART", lambda sym, period: complete.iloc[-59:],
                                  SESSION, lambda sym: complete.iloc[-59:])
 
+    def test_other_issuer_minimum_accepts_exactly_60_completed_sessions(self):
+        exactly = bars().iloc[-60:]
+        alternate = Mock(side_effect=AssertionError("No alternate for valid 60-session primary"))
+        result = verified_pdf_history(
+            "DCXINDIA", lambda sym, period: exactly, SESSION, alternate)
+        pd.testing.assert_frame_equal(result, exactly, check_freq=False)
+        alternate.assert_not_called()
+
     def test_primary_exception_uses_one_bounded_alternate(self):
         primary = Mock(side_effect=RuntimeError("synthetic provider failure"))
         alternate = Mock(return_value=bars())
