@@ -32,38 +32,9 @@ def _ticker_frame(prices, symbol, ticker_count):
 
 
 def _completed_frame(frame, session_key):
-    """Accept only real, finite, internally coherent completed-session bars."""
-    if frame is None or getattr(frame, "empty", True):
-        return None
-    if not all(column in frame.columns for column in _REQUIRED):
-        return None
-    try:
-        result = frame.loc[:, list(_REQUIRED)].copy()
-        index = pd.DatetimeIndex(pd.to_datetime(result.index, errors="coerce"))
-        if index.tz is not None:
-            index = index.tz_convert("Asia/Kolkata").tz_localize(None)
-        result.index = index.normalize()
-        result = result.loc[~result.index.isna()]
-        result = result.sort_index()
-        result = result.loc[~result.index.duplicated(keep="last")]
-        # Never incorporate a future, still-open or misdated bar into indicators.
-        result = result.loc[result.index <= pd.Timestamp(session_key)]
-        for column in _REQUIRED:
-            result[column] = pd.to_numeric(result[column], errors="coerce")
-        result = result.replace([float("inf"), float("-inf")], float("nan")).dropna()
-        result = result.loc[
-            (result["Low"] > 0) & (result["High"] >= result["Low"]) &
-            (result["Low"] <= result["Open"]) &
-            (result["Open"] <= result["High"]) &
-            (result["Low"] <= result["Close"]) &
-            (result["Close"] <= result["High"]) &
-            (result["Volume"] >= 0)
-        ]
-        if len(result) < 55 or str(result.index[-1].date()) != str(session_key):
-            return None
-        return result
-    except (ValueError, TypeError, OverflowError, AttributeError, KeyError):
-        return None
+    """Same strict completed-bar contract for scanner and renderer."""
+    from msk_chart_release import validated_daily_history
+    return validated_daily_history(frame, session_key)
 
 
 def choose_auto_chart(universe, *, download, scorer, session_key,

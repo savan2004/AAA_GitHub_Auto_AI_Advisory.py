@@ -20,7 +20,7 @@ META = (
     "CONCOR.NS|Concor|BUY|+13/20|442.15|425.00|470.00|490.00|"
     "Sample: 52/60 qualifying NSE setups from 250; "
     "partial-universe scan; Setup: Breakout confirmed: 20-session high + volume; "
-    "EOD 2026-11-13"
+    "EOD 2026-11-13; Chart V8"
 )
 
 
@@ -58,6 +58,20 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
                 store._validate(
                     self.image,
                     META.replace("BUY|+13/20", weak), SESSION)
+
+    def test_chart_v8_rejects_legacy_or_invalid_levels_and_displays_missing_targets(self):
+        with self.assertRaises(ValueError):
+            store._validate(self.image, META.replace("; Chart V8", ""), SESSION)
+        with self.assertRaises(ValueError):
+            store._validate(self.image, META.replace("425.00|470.00", "450.00|470.00"), SESSION)
+        one = META.replace("490.00", "0.00")
+        store._validate(self.image, one, SESSION)
+        self.assertIn("T2: unavailable", store.format_chart_meta(one, SESSION))
+        none = META.replace("425.00|470.00|490.00", "0.00|0.00|0.00")
+        store._validate(self.image, none, SESSION)
+        caption = store.format_chart_meta(none, SESSION)
+        self.assertIn("OBSERVATION ONLY", caption)
+        self.assertNotIn("₹0.00", caption)
 
     def test_cannot_claim_full_universe_when_only_partially_scanned(self):
         with self.assertRaisesRegex(ValueError, "full-universe"):

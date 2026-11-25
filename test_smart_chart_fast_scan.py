@@ -142,7 +142,7 @@ class FastSmartChartTests(unittest.TestCase):
                   "gen_smart_stock_chart.py").read_text(encoding="utf-8")
         self.assertIn('color=price_col, va="center", zorder=8)', source)
         self.assertIn('header.text(0.17, 0.58, f"₹{last_close:,.2f}"', source)
-        self.assertIn('sa.text(0.5, 0.968, "AUTOAI ADVISORY  v7.0"', source)
+        self.assertIn('sa.text(0.5, 0.968, "AUTOAI ADVISORY  v8.0"', source)
         self.assertIn('"WAIT — No Setup"', source)
         self.assertIn('"NO TRADE ZONE"', source)
         self.assertNotIn('"⏸  NO TRADE ZONE"', source)

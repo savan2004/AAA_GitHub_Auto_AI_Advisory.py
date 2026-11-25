@@ -25,7 +25,7 @@ META = re.compile(
     r"(Breakout confirmed: 20-session high \+ volume|"
     r"Trend change: bullish EMA cross \+ weekly alignment|"
     r"Trend confirmation: higher highs/lows \+ weekly trend); "
-    r"EOD (\d{4}-\d{2}-\d{2})$"
+    r"EOD (\d{4}-\d{2}-\d{2}); Chart V8$"
 )
 
 
@@ -63,11 +63,10 @@ def _validate(image, meta, session):
         raise ValueError("Chart candidate coverage invalid")
     if match.group(12) == "full-universe scan" and sampled != universe:
         raise ValueError("Chart claims unverified full-universe coverage")
-    if match.group(3) not in ("BUY", "STRONG BUY") or int(match.group(4).split("/")[0]) < 12:
+    if match.group(3) not in ("BUY", "STRONG BUY") or not 12 <= int(match.group(4).split("/")[0]) <= 20:
         raise ValueError("Auto Smart Chart must have a confirmed 12+/20 bullish score")
-    price = float(match.group(5))
-    if not math.isfinite(price) or price <= 0:
-        raise ValueError("Chart price invalid")
+    from msk_chart_release import rounded_levels
+    rounded_levels(match.group(3), *match.groups()[4:8])
     return match
 
 
@@ -78,24 +77,25 @@ def format_chart_meta(meta, session):
     if not match or match.group(14) != str(session):
         raise ValueError("Unverified chart metadata")
     symbol, name, signal, score, ltp, sl, t1, t2 = match.groups()[:8]
+    from msk_chart_release import rounded_levels
+    levels = rounded_levels(signal, ltp, sl, t1, t2)
+    label = signal if levels else "OBSERVATION ONLY"
     result = (
         f"<b>{html.escape(symbol)} — {html.escape(name)}</b>\n"
-        f"Signal: <b>{html.escape(signal)}</b>  Score: {html.escape(score)}\n"
-        f"Entry: ₹{html.escape(ltp)}\n"
+        f"Technical score: <b>{html.escape(label)}</b>  {html.escape(score)}\n"
+        f"Reference close: ₹{html.escape(ltp)}\n"
     )
-    if signal == "WAIT":
-        result += "⏸ No-Trade Zone — wait for ≥12/20 score"
-    elif float(sl) > 0:
-        result += (
-            f"SL: ₹{html.escape(sl)}  |  "
-            f"T1: ₹{html.escape(t1)}  |  T2: ₹{html.escape(t2)}"
-        )
+    if levels:
+        _, _, second, rr1, rr2 = levels
+        result += f"SL: ₹{html.escape(sl)} | T1: ₹{html.escape(t1)} (1:{rr1:.1f})"
+        result += (f" | T2: ₹{html.escape(t2)} (1:{rr2:.1f}; conditional)"
+                   if second is not None else " | T2: unavailable")
     else:
-        result += "⚠️ Trade levels unavailable — no actionable signal"
+        result += "No-Trade Zone — no verified chart levels"
     result += f"\n📊 Confirmed setup: {html.escape(match.group(13))}"
     result += (
         f"\n🔎 Sample: {match.group(9)}/{match.group(10)} qualifying NSE setups "
-        f"from {match.group(11)}; {match.group(12)}; EOD {session}"
+        f"from {match.group(11)}; {match.group(12)}; EOD {session}; Chart V8"
     )
     return result
 

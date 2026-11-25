@@ -8,7 +8,7 @@ Fixes in this version:
   5. Fallback message sends proper text on failure
 """
 
-import os, sys, subprocess, logging, time
+import os, sys, subprocess, logging, time, html, re
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -82,8 +82,8 @@ class ChartGenerator:
             # FIX: period passed directly here — no self._period needed
             script_abs = os.path.abspath(self.script_path)
             cmd = [sys.executable, script_abs]
-            if symbol and company_name:
-                cmd.extend([symbol, company_name])
+            if symbol:
+                cmd.extend([symbol, company_name or symbol])
                 if period and period in {"1mo","3mo","6mo","1y","2y"}:
                     cmd.append(period)
 
@@ -113,35 +113,47 @@ class ChartGenerator:
                 logger.error(f"[Chart] Failed (rc={result.returncode}): {err[:200]}")
                 return False, f"Chart failed: {err[:200]}", None
 
-            # ── Parse OUTPUT and META lines ───────────────────────────────────
-            png_path  = None
-            meta_text = ""
-            for line in stdout.splitlines():
-                if line.startswith("OUTPUT:"):
-                    png_path = line.split(":", 1)[1].strip()
-                elif line.startswith("META:"):
-                    parts = line.split(":", 1)[1].strip().split("|")
-                    if len(parts) >= 8:
-                        sym, name, signal, score, ltp, sl, t1, t2 = parts[:8]
-                        # Clean signal text for display
-                        is_wait = "WAIT" in signal.upper()
-                        meta_text = (
-                            f"<b>{sym} — {name}</b>\n"
-                            f"Signal: <b>{signal}</b>  Score: {score}\n"
-                            f"Entry: ₹{ltp}\n"
-                        )
-                        if not is_wait and float(sl) > 0:
-                            meta_text += (
-                                f"SL: ₹{sl}  |  T1: ₹{t1}  |  T2: ₹{t2}"
-                            )
-                        else:
-                            meta_text += "⏸ No-Trade Zone — wait for ≥12/20 score"
-                        if len(parts) >= 9 and parts[8].startswith("Sample:"):
-                            meta_text += "\n🔎 " + parts[8]
-
-            if not png_path or not os.path.exists(png_path):
-                logger.warning(f"[Chart] PNG missing: {png_path!r}")
-                return False, "Chart PNG not found — try again.", None
+            # ── Parse and validate one versioned, current-session result ──────
+            from msk_chart_release import rounded_levels
+            from pathlib import Path
+            from PIL import Image
+            outputs = [line.split(":", 1)[1].strip() for line in stdout.splitlines()
+                       if line.startswith("OUTPUT:")]
+            records = [line.split(":", 1)[1].strip() for line in stdout.splitlines()
+                       if line.startswith("META:")]
+            if len(outputs) != 1 or len(records) != 1:
+                return False, "Chart output or metadata missing or ambiguous.", None
+            parts = records[0].split("|")
+            if len(parts) != 9:
+                return False, "Chart metadata invalid.", None
+            sym, name, signal, score, ltp, sl, t1, t2, scope = parts
+            expected = str(expected_completed_session())
+            if (sym.upper() != symbol.upper() or scope != f"EOD {expected}; Chart V8"
+                    or not re.fullmatch(r"[+-]?\d{1,2}/20", score)
+                    or abs(int(score.split("/")[0])) > 20):
+                return False, "Chart identity, session or score not verified.", None
+            levels = rounded_levels(signal, ltp, sl, t1, t2)
+            meta_text = (
+                f"<b>{html.escape(sym)} — {html.escape(name)}</b>\n"
+                f"Technical score: <b>{html.escape(signal if levels else 'OBSERVATION ONLY')}</b>  {html.escape(score)}\n"
+                f"Reference close: ₹{html.escape(ltp)} | {html.escape(scope)}\n"
+            )
+            if levels:
+                _, _, second, rr1, rr2 = levels
+                meta_text += f"SL: ₹{html.escape(sl)} | T1: ₹{html.escape(t1)} (1:{rr1:.1f})"
+                meta_text += (f" | T2: ₹{html.escape(t2)} (1:{rr2:.1f}; conditional)"
+                              if second is not None else " | T2: unavailable")
+            else:
+                meta_text += "No-Trade Zone — no verified chart levels"
+            path = (Path(cwd) / outputs[0]).resolve()
+            if (path.parent != (Path(cwd) / "output").resolve()
+                    or not path.is_file() or not 25000 <= path.stat().st_size <= 8*1024*1024):
+                return False, "Chart PNG missing or invalid.", None
+            with Image.open(path) as checked:
+                if checked.format != "PNG" or not (800 <= checked.width <= 8000 and 500 <= checked.height <= 5000):
+                    return False, "Chart PNG dimensions invalid.", None
+                checked.verify()
+            png_path = str(path)
 
             # ── Cache ─────────────────────────────────────────────────────────
             if cache_key:
