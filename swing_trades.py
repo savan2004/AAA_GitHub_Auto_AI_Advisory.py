@@ -77,7 +77,7 @@ MAX_LONG, MAX_SHORT, MAX_PER_SECTOR = 4, 2, 2
 HOLD_BARS = 10          # max holding period, also used by the backtest
 MIN_TURNOVER = 5e7      # ₹5 Cr average daily traded value (20d)
 MIN_RR1 = 1.2           # reject setups whose T1 reward < 1.2 × risk
-CACHE_KEY, CACHE_TTL = "swing_v7_calc", 1800
+CACHE_KEY, CACHE_TTL = "swing_v7_structure_v1", 1800
 _LOCK = threading.Lock()
 
 
@@ -218,8 +218,11 @@ def _levels(A, i, side):
         dist = (A["h"][max(0, i - 6):i + 1].max() + 0.2 * atr) - c
         sgn = -1
     dist = min(max(dist, 1.0 * atr), 2.0 * atr)
-    return dict(sl=c - sgn * dist, t1=c + sgn * 2.0 * atr, t2=c + sgn * 3.5 * atr,
-                rr1=2.0 * atr / dist, rr2=3.5 * atr / dist, atr=atr)
+    from msk_target_levels import calculate_targets
+    stop = c - sgn * dist
+    targets = calculate_targets(A["h"], A["l"], i, entry=c, stop=stop,
+        atr=atr, side=side, first_distance=2.0*atr, second_distance=3.5*atr)
+    return dict(targets, sl=stop, atr=atr) if targets else None
 
 
 def _signal(A, i, side):
@@ -270,8 +273,8 @@ def _signal(A, i, side):
     rs_pt = int(np.isfinite(rs) and rs * sgn > 0)
 
     lv = _levels(A, i, side)
-    if lv["rr1"] < MIN_RR1:
-        return None, "R:R below 1.2 (stop too wide)"
+    if lv is None or lv["rr1"] < MIN_RR1:
+        return None, "Target structure unavailable or R:R below 1.2"
 
     score = trend + (2 if wt == sgn else 0) + mom + adx_pt + vol_pt + rs_pt + setup_pt
     return dict(score=score, setup=setup, lv=lv, ltp=c, rsi=rsi, adx=adx, volx=volx,
@@ -388,7 +391,9 @@ def _scan():
                                  volx=float(res["volx"]), rs=res["rs"], parts=res["parts"],
                                  sector=_sector_of(s),
                                  sl=float(lv["sl"]), t1=float(lv["t1"]), t2=float(lv["t2"]),
-                                 rr1=float(lv["rr1"]), rr2=float(lv["rr2"]), atr=float(lv["atr"])))
+                                 rr1=float(lv["rr1"]), rr2=float(lv["rr2"]), atr=float(lv["atr"]),
+                                 target_model=lv["target_model"], t1_basis=lv["t1_basis"],
+                                 t2_basis=lv["t2_basis"]))
             else:
                 fails.append(f"{side}:{reason}")
         if len(fails) == 2:
@@ -499,6 +504,9 @@ def _verified_swing_row(p):
         risk = abs(c - sl)
         rr1 = abs(t1 - c) / risk
         rr2 = abs(t2 - c) / risk
+        from msk_target_levels import target_quality
+        if not target_quality(p, entry_key="ltp", min_rr=MIN_RR1):
+            return None
         if rr1 + 0.02 < MIN_RR1 or rr2 <= rr1:
             return None
         # Missing actual observed volume or technical factors must not
@@ -597,7 +605,7 @@ def _format_swing_watchlist(mode, data, thr):
             f"Sector: {esc(p.get('sector') or 'Unclassified')} | "
             f"Direction: {p['side']}",
             f"Entry watch zone: ₹{low:,.2f}–₹{high:,.2f}",
-            f"SL: ₹{sl:,.2f} | T1: ₹{t1:,.2f} | T2: ₹{t2:,.2f}",
+            f"SL: ₹{sl:,.2f} | T1: ₹{t1:,.2f} ({p['t1_basis']}) | T2: ₹{t2:,.2f} ({p['t2_basis']}; conditional)",
             f"R:R = 1:{p['rr1_calc']:.1f} / 1:{p['rr2_calc']:.1f} "
             "(at reference close)",
             f"Stop risk: {risk:.1f}% | 🟡 <b>Status: WAIT</b>",
