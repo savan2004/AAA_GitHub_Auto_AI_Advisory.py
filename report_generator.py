@@ -30,6 +30,8 @@ import re
 import html as _html
 import logging
 import math
+import tempfile
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -60,6 +62,8 @@ logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = os.path.join("output", "reports")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Bound the expensive on-demand report pipeline per bot process.
+_REPORT_GENERATION_LOCK = threading.Lock()
 
 # ══════════════════════════════════════════════════════════════════════════
 # Fonts — DejaVu ships with matplotlib and has the ₹ glyph (Helvetica does not)
@@ -1224,8 +1228,13 @@ def build_pdf(R: dict, output_path: str, *, compact=False) -> str:
 # ══════════════════════════════════════════════════════════════════════════
 def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, str, Optional[str]]:
     sym = str(symbol).upper().replace(".NS", "").replace(".BO", "").strip()
-    if not sym:
-        return False, "No symbol provided.", None
+    if not re.fullmatch(r"[A-Z0-9&._-]{1,30}", sym):
+        return False, "Invalid research symbol.", None
+    if not _REPORT_GENERATION_LOCK.acquire(blocking=False):
+        logger.info("MSK_RESEARCH_PDF_BUSY symbol=%s", sym)
+        return False, "Research report busy; please retry later.", None
+    out = None
+    success = False
     stage = "collect_inputs"
     reason = "INPUTS_UNVERIFIED"
     try:
@@ -1252,9 +1261,12 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             evidence_out.update(
                 symbol=R["sym"], price_session=R["price_session"],
                 historical_close=R["t"]["ltp"])
-        out = os.path.join(OUTPUT_DIR, f"{sym}_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
         stage = "render"
         reason = "PDF_RENDER_FAILED"
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        fd, out = tempfile.mkstemp(prefix=f"{sym}_Report_", suffix=".pdf",
+                                   dir=OUTPUT_DIR)
+        os.close(fd)
         build_pdf(R, out)
         stage = "release_gate"
         reason = "PDF_RELEASE_REJECTED"
@@ -1291,7 +1303,9 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             except OSError:
                 pass
             raise ValueError("Research report withheld: PDF validation unavailable") from exc
-        return True, out, R["name"]
+        name = R["name"]
+        success = True
+        return True, out, name
     except ValueError as e:
         # Only fixed stage/reason codes enter production logs; raw provider
         # errors may contain credentials, URLs or private filesystem paths.
@@ -1307,3 +1321,14 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
         logger.error("MSK_RESEARCH_PDF_FAILURE symbol=%s stage=%s reason=%s type=%s",
                      sym, stage, reason, type(e).__name__)
         return False, f"Report generation failed: {e}", None
+    finally:
+        try:
+            if out is not None and not success:
+                try:
+                    os.unlink(out)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.warning("MSK_RESEARCH_PDF_CLEANUP_FAILED symbol=%s", sym)
+        finally:
+            _REPORT_GENERATION_LOCK.release()
