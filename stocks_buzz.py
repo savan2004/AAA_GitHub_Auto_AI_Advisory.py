@@ -435,13 +435,17 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None, *,
                 frame = fetch_tej_history(sym, completed)
                 return sym, _completed_session_frame(frame, completed)
 
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                for sym, frame in pool.map(fetch_verified, missing):
-                    if frame is not None:
-                        pickle.dump((sym, frame), staged,
-                                    protocol=pickle.HIGHEST_PROTOCOL)
-                        valid_count += 1
-                        secondary_count += 1
+            # map() eagerly submits its iterable. Bound completed frames retained
+            # behind a slow response while preserving the original symbol order.
+            workers = 8
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for start in range(0, len(missing), workers):
+                    for sym, frame in pool.map(fetch_verified, missing[start:start + workers]):
+                        if frame is not None:
+                            pickle.dump((sym, frame), staged,
+                                        protocol=pickle.HIGHEST_PROTOCOL)
+                            valid_count += 1
+                            secondary_count += 1
             coverage = valid_count / len(symbols) if symbols else 0.0
             logger.info("MSK_BUZZ_SECONDARY_EOD session=%s recovered=%d total=%d",
                         completed, secondary_count, len(symbols))

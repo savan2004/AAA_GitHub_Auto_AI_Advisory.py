@@ -258,6 +258,35 @@ class SessionSafety(unittest.TestCase):
 
 
 
+    def test_secondary_provider_submits_at_most_eight_histories_per_batch(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        symbols = [f"TEST{i}" for i in range(33)]
+        sizes = []
+        frame = series()
+
+        class MeasuredPool(ThreadPoolExecutor):
+            def map(self, fn, batch):
+                sizes.append(len(batch))
+                return super().map(fn, batch)
+
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols},
+            "bulk_history": lambda *_args, **_kwargs: {},
+            "index_history": lambda *_args: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": lambda *_args: None,
+            "market_regime": lambda *_args: {},
+            "logger": Mock(), "_state": {}, "_state_lock": threading.Lock(),
+        })
+        secondary = types.SimpleNamespace(fetch_tej_history=lambda *_args: frame)
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
+                patch.dict(sys.modules, {"overnight_index_sources": secondary}), \
+                patch("concurrent.futures.ThreadPoolExecutor", MeasuredPool):
+            result = ns["run_scan"](save_snapshot=False)
+        self.assertEqual(result["secondary_count"], len(symbols))
+        self.assertEqual(sizes, [8, 8, 8, 8, 1])
+
     def test_stock_buzz_streams_250_symbols_with_full_coverage_and_stable_ranking(self):
         """All 250 synthetic stocks count; no provider batch holds the full universe."""
         symbols = [f"TEST{i:03d}" for i in range(250)]
