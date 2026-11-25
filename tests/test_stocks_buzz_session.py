@@ -258,6 +258,27 @@ class SessionSafety(unittest.TestCase):
 
 
 
+    def test_stale_secondary_history_does_not_count_or_rank(self):
+        symbols = [f"TEST{i}" for i in range(10)]
+        frame = series()
+        analyzed = Mock()
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols},
+            "bulk_history": lambda *_args, **_kwargs: {},
+            "index_history": lambda *_args: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": analyzed,
+            "market_regime": lambda *_args: {},
+            "logger": Mock(), "_state": {}, "_state_lock": threading.Lock(),
+        })
+        secondary = types.SimpleNamespace(
+            fetch_tej_history=lambda sym, *_args: frame.iloc[:-1] if sym == "TEST0" else frame)
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
+                patch.dict(sys.modules, {"overnight_index_sources": secondary}):
+            with self.assertRaisesRegex(ValueError, "valid stock histories"):
+                ns["run_scan"](save_snapshot=False)
+        analyzed.assert_not_called()
+
     def test_secondary_provider_submits_at_most_eight_histories_per_batch(self):
         from concurrent.futures import ThreadPoolExecutor
 
