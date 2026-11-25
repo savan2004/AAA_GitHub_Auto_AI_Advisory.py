@@ -3,6 +3,8 @@ import hashlib
 import sys
 import types
 import unittest
+
+from reportlab.pdfgen import canvas
 from datetime import date
 from unittest.mock import patch
 
@@ -97,8 +99,17 @@ class DirectSectorGenerationSafety(unittest.TestCase):
                           and node.name == "generate_sector_report_pdf")
         self.report = {"asof": "13-Nov-2026", "index_coverage": (12, 15),
                        "n_unique": 190, "n_configured": 250}
-        self.build = Mock(side_effect=lambda report, path:
-                          Path(path).write_bytes(b"%PDF-UNIT-FIXTURE" + b"x" * 1200))
+        def build_fixture(report, path):
+            pdf = canvas.Canvas(str(path), pagesize=(595, 842), pageCompression=0)
+            for page in range(3):
+                pdf.drawString(45, 800, "Sectoral Update {}".format(report["asof"]))
+                for line in range(120):
+                    pdf.drawString(45, 780 - line * 5,
+                                  "Offline structural fixture; not live market evidence.")
+                pdf.showPage()
+            pdf.save()
+            return Path(path).stat().st_size
+        self.build = Mock(side_effect=build_fixture)
         self.summary = Mock(return_value=["Isolated fixture, not live financial evidence"])
         self.cache = {"path": None, "summary": None, "session": None}
         self.ns = {
