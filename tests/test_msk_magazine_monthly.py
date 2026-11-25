@@ -80,11 +80,15 @@ class MagazineMonthlyTests(unittest.TestCase):
             scheduled_issue_mode(datetime(2026, 12, 7, 8, tzinfo=timezone.utc),
                                 "pull_request")
 
-    def test_december_preview_is_manual_not_scheduled(self):
+    def test_december_preview_is_preserved_and_monthly_waits_for_kickoff(self):
         preview = (Path(__file__).resolve().parents[1] /
                    ".github/workflows/msk-magazine-dec1-private-preview.yml").read_text()
-        self.assertNotIn("cron:", preview)
+        self.assertIn("MSK Magazine - Dec 1 Private Live Review", preview)
+        self.assertIn('cron: "30 2 1 12 *"', preview)
         self.assertIn("workflow_dispatch", preview)
+        preview_day = datetime(2026, 12, 1, 2, 30, tzinfo=timezone.utc)
+        self.assertEqual(scheduled_issue_mode(preview_day, "schedule"),
+                         ("2026-12", "not_due"))
     def test_first_mondays(self):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
