@@ -399,16 +399,12 @@ def collect_inputs(sym: str) -> dict:
     from market_data import index_history
     import research_data as rd
 
-    if sym in ("SBIN", "DLF"):
-        # Publisher-only strict recovery: primary history can lag one session.
-        # Require genuine full-year bars ending at the latest completed NSE
-        # session; use one bounded alternative provider or withhold the PDF.
-        from research_pdf_fresh_history import verified_pdf_history
-        from market_breadth import expected_completed_session
-        df = verified_pdf_history(
-            sym, get_hist, str(expected_completed_session()))
-    else:
-        df = get_hist(sym, "1y")
+    # Apply the existing completed-session recovery to every NSE report.
+    # It removes current incomplete bars and never splices separate sources.
+    from research_pdf_fresh_history import verified_pdf_history
+    from market_breadth import expected_completed_session
+    expected_session = expected_completed_session()
+    df = verified_pdf_history(sym, get_hist, str(expected_session))
     if df is None or df.empty or len(df) < 60:
         raise ValueError(f"Not enough price history for {sym} (need at least 60 sessions).")
     # A complete-looking but year-old chart must never publish current
@@ -417,8 +413,7 @@ def collect_inputs(sym: str) -> dict:
     market = technical_price_context(df)
     if market is None:
         raise ValueError("Research report withheld: historical price session stale or unverified")
-    from market_breadth import expected_completed_session
-    _require_latest_completed_eod(market, expected_completed_session())
+    _require_latest_completed_eod(market, expected_session)
     ltp = market["historical_close"]
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -1231,14 +1226,20 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
     sym = str(symbol).upper().replace(".NS", "").replace(".BO", "").strip()
     if not sym:
         return False, "No symbol provided.", None
+    stage = "collect_inputs"
+    reason = "INPUTS_UNVERIFIED"
     try:
         inputs = collect_inputs(sym)
+        stage = "assemble"
+        reason = "ASSEMBLY_FAILED"
         R = assemble(inputs)
         if (R.get("filing_evidence") or {}).get("status") == "mismatch":
+            reason = "QUARTER_FILING_MISMATCH"
             raise ValueError(
                 "Research report withheld: secondary quarter does not reconcile "
                 "to the dated NSE issuer filing")
         if (R.get("annual_evidence") or {}).get("status") == "mismatch":
+            reason = "ANNUAL_FILING_MISMATCH"
             raise ValueError(
                 "Research report withheld: FY26 secondary statement does not "
                 "reconcile to audited issuer filing")
@@ -1252,7 +1253,11 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
                 symbol=R["sym"], price_session=R["price_session"],
                 historical_close=R["t"]["ltp"])
         out = os.path.join(OUTPUT_DIR, f"{sym}_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+        stage = "render"
+        reason = "PDF_RENDER_FAILED"
         build_pdf(R, out)
+        stage = "release_gate"
+        reason = "PDF_RELEASE_REJECTED"
         # A successful ReportLab write is NOT enough for Telegram delivery:
         # assert readable pages, instrument identity and financial caveats.
         from pdf_release_gate import validate_research_pdf, ResearchPDFRefused
@@ -1280,7 +1285,7 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             raise ValueError(f"Research report withheld: {exc}") from exc
         except Exception as exc:
             logger.error("[Report] PDF release checker crashed for %s (%s)",
-                         sym, type(exc).__name__, exc_info=True)
+                         sym, type(exc).__name__)
             try:
                 os.unlink(out)
             except OSError:
@@ -1288,7 +1293,17 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             raise ValueError("Research report withheld: PDF validation unavailable") from exc
         return True, out, R["name"]
     except ValueError as e:
+        # Only fixed stage/reason codes enter production logs; raw provider
+        # errors may contain credentials, URLs or private filesystem paths.
+        if stage == "collect_inputs" and str(e).startswith((
+                "Research report withheld: historical price session stale",
+                "Research report withheld: latest completed NSE EOD",
+                "Not enough price history for ")):
+            reason = "COMPLETED_EOD_UNVERIFIED"
+        logger.warning("MSK_RESEARCH_PDF_FAILURE symbol=%s stage=%s reason=%s type=%s",
+                       sym, stage, reason, type(e).__name__)
         return False, str(e), None
     except Exception as e:
-        logger.error(f"[Report] generation failed for {sym}: {e}", exc_info=True)
+        logger.error("MSK_RESEARCH_PDF_FAILURE symbol=%s stage=%s reason=%s type=%s",
+                     sym, stage, reason, type(e).__name__)
         return False, f"Report generation failed: {e}", None
