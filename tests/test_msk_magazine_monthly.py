@@ -54,6 +54,7 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertNotIn("gh release publish", workflow)
         self.assertNotIn("sendDocument", workflow)
         self.assertNotIn('draft-$GITHUB_RUN_ID', workflow)
+        self.assertNotIn("\\\\n", workflow)
 
     def test_daily_schedule_starts_on_first_monday_and_continues(self):
         first = datetime(2026, 12, 7, 2, 30, tzinfo=timezone.utc)
