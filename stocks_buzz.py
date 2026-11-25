@@ -242,13 +242,18 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
             if sl >= ltp - 0.5 * atr:
                 sl = ltp - 1.0 * atr
             risk = ltp - sl
+            from msk_target_levels import calculate_targets
+            levels = calculate_targets(h.to_numpy(), l.to_numpy(), len(c)-1,
+                entry=ltp, stop=sl, atr=atr, side="LONG",
+                first_distance=1.5*risk, second_distance=3*risk)
             base.update({
                 "kind": "BREAKOUT", "label": brk["label"], "level": brk["level"],
                 "age": k, "vol_ratio": brk["vol_ratio"], "clv": clv,
                 "score": round(score, 1), "reasons": reasons, "flags": flags,
                 "entry": ltp, "sl": sl, "risk_pct": risk / ltp * 100,
-                "t1": ltp + 1.5 * risk, "t2": ltp + 3.0 * risk,
             })
+            if levels:
+                base.update(levels)
         return base
 
     # ─────────────────────────── near-breakout watch ──────────────────────
@@ -492,6 +497,9 @@ def _trade_ready_block_reasons(r: dict) -> List[str]:
     if turnover is None or turnover < MIN_TRADED_VALUE / 1e7:
         reasons.append(f"turnover ₹{turnover:.1f} Cr < ₹2 Cr liquidity limit"
                        if turnover is not None else "liquidity unavailable")
+    from msk_target_levels import target_quality
+    if not target_quality(r, min_rr=1.5):
+        reasons.append("target structure or 1:1.5 reward/risk not verified")
     return reasons
 
 
@@ -535,7 +543,7 @@ def _breakout_card(i: int, r: dict, trade_ready: bool = False) -> str:
     if trade_ready:
         lines.extend([
             f"   🎯 Reference Entry ₹{r['entry']:,.2f}  SL ₹{r['sl']:,.2f} (-{r['risk_pct']:.1f}%)",
-            f"       T1 ₹{r['t1']:,.2f} · T2 ₹{r['t2']:,.2f}",
+            f"       T1 ₹{r['t1']:,.2f} ({r['t1_basis']}) · T2 ₹{r['t2']:,.2f} ({r['t2_basis']}; conditional)",
         ])
     else:
         blocked = _trade_ready_block_reasons(r)
