@@ -345,16 +345,18 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
             break
     if cross_age is None:
         e9l = float(ema9.iloc[-1]); e21l = float(ema21.iloc[-1])
-        pts = +1 if e9l > e21l else -1
-        col = TV_GREEN if pts > 0 else TV_RED
-        checks.append(("EMA 9 > EMA 21" if pts > 0 else "EMA 9 < EMA 21", pts, col, "No fresh cross"))
+        pts = +1 if e9l > e21l else (-1 if e9l < e21l else 0)
+        col = TV_GREEN if pts > 0 else (TV_RED if pts < 0 else TEXT_SEC)
+        checks.append(("EMA 9 > EMA 21" if pts > 0 else ("EMA 9 < EMA 21" if pts < 0 else "EMA 9 = EMA 21"), pts, col, "No fresh cross"))
 
     # ── CHECK 2: SMA 20/50 alignment + slope (+2) ─────────────────────────────
     s20l = float(sma20.dropna().iloc[-1]) if sma20.dropna().shape[0] > 0 else last_close
     s50l = float(sma50.dropna().iloc[-1]) if sma50.dropna().shape[0] > 0 else last_close
     sma_align = s20l > s50l
     sma_slope = float(sma20.iloc[-1]) - float(sma20.iloc[-3]) if len(sma20) >= 3 else 0
-    sma_pts   = 2 if (sma_align and sma_slope > 0) else (-2 if (not sma_align and sma_slope < 0) else (1 if sma_align else -1))
+    sma_pts   = (0 if s20l == s50l else
+                 2 if (sma_align and sma_slope > 0) else
+                 -2 if (not sma_align and sma_slope < 0) else (1 if sma_align else -1))
     sma_col   = TV_GREEN if sma_pts > 0 else TV_RED
     checks.append((f"SMA 20{'>'if sma_align else '<'}SMA 50  slope={'↑' if sma_slope>0 else '↓'}",
         sma_pts, sma_col, f"Slope {sma_slope:+.1f}"))
@@ -441,51 +443,46 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
     signal_dir = "bullish" if last_close > e21l_c else "bearish"
     if candle_name:
         if candle_dir == signal_dir:
-            ck_pts = +1; ck_col = TV_GREEN
+            ck_pts = +1 if candle_dir == "bullish" else -1
+            ck_col = TV_GREEN if ck_pts > 0 else TV_RED
             ck_lbl = f"Candle: {candle_name}  confirms {candle_dir.upper()}"
         elif candle_dir == "neutral":
             ck_pts = 0; ck_col = TEXT_SEC
             ck_lbl = f"Candle: {candle_name}  (Doji — indecision)"
         else:
-            ck_pts = -1; ck_col = TV_RED
+            ck_pts = 0; ck_col = TV_AMBER
             ck_lbl = f"Candle: {candle_name}  OPPOSES signal ⚠"
     else:
         ck_pts = 0; ck_col = TEXT_SEC
         ck_lbl = "Candle: No clear pattern"
     checks.append((ck_lbl, ck_pts, ck_col, f"Bar: {candle_name or 'plain'}"))
 
-    # ── CHECK 8: ADX strength ≥ 28 (+1) ──────────────────────────────────────
-    try:
-        high_v = data["High"].values; low_v = data["Low"].values; close_v = data["Close"].values
-        tr = np.maximum(high_v[1:]-low_v[1:], np.maximum(np.abs(high_v[1:]-close_v[:-1]),
-                                                           np.abs(low_v[1:]-close_v[:-1])))
-        dm_p = np.where((high_v[1:]-high_v[:-1]) > (low_v[:-1]-low_v[1:]),
-                        np.maximum(high_v[1:]-high_v[:-1], 0.0), 0.0)
-        dm_n = np.where((low_v[:-1]-low_v[1:]) > (high_v[1:]-high_v[:-1]),
-                        np.maximum(low_v[:-1]-low_v[1:], 0.0), 0.0)
-        p=14
-        tr14 = pd.Series(tr).rolling(p).mean().values
-        dp14 = pd.Series(dm_p).rolling(p).mean().values
-        dn14 = pd.Series(dm_n).rolling(p).mean().values
-        dip  = np.where(tr14>0, 100*dp14/tr14, 0.0)
-        din  = np.where(tr14>0, 100*dn14/tr14, 0.0)
-        dx   = np.where((dip+din)>0, 100*np.abs(dip-din)/(dip+din), 0.0)
-        adx_val = float(pd.Series(dx).rolling(p).mean().iloc[-1])
-    except Exception:
-        adx_val = 20.0
-    adx_pts = +1 if adx_val >= 28 else -1
-    adx_col = TV_GREEN if adx_val >= 28 else TEXT_SEC
-    checks.append((f"ADX {adx_val:.1f}  {'Strong trend ≥28' if adx_val>=28 else 'Weak trend <28'}",
-        adx_pts, adx_col, f"ADX={adx_val:.1f}"))
+    # ── CHECK 8: directional Wilder ADX (+1 bullish, -1 bearish) ────────────
+    from msk_indicator_math import directional_series
+    _, adx_s, plus_di, minus_di = directional_series(data["High"], data["Low"], data["Close"])
+    adx_val, pdi, mdi = (float(x.iloc[-1]) for x in (adx_s, plus_di, minus_di))
+    if not all(np.isfinite(x) for x in (adx_val, pdi, mdi)):
+        adx_pts, adx_lbl = 0, "ADX unavailable"
+    elif adx_val >= 28 and pdi != mdi:
+        adx_pts = 1 if pdi > mdi else -1
+        adx_lbl = f"ADX {adx_val:.1f}  {'Bullish' if adx_pts>0 else 'Bearish'} trend"
+    else:
+        adx_pts, adx_lbl = 0, f"ADX {adx_val:.1f}  No directional confirmation"
+    adx_col = TV_GREEN if adx_pts > 0 else (TV_RED if adx_pts < 0 else TEXT_SEC)
+    checks.append((adx_lbl, adx_pts, adx_col, "Wilder ADX / +DI / -DI"))
 
-    # ── CHECK 9: Volume confirmation ≥ 2× avg (+1) ───────────────────────────
+    # ── CHECK 9: genuine, directional volume confirmation ──────────────────
+    prior = vol_s.iloc[-21:-1]
     lv = float(vol_s.iloc[-1])
-    av = float(vol_ma20.dropna().iloc[-1]) if vol_ma20.dropna().shape[0] > 0 else lv
-    vr = lv / av if av > 0 else 1.0
-    vol_pts = +1 if vr >= 2.0 else (-1 if vr < 0.5 else 0)
+    vr = lv / float(prior.mean()) if len(prior) == 20 and (prior > 0).all() and lv > 0 else None
+    if vr is None:
+        vol_pts, vol_lbl = 0, "Volume confirmation unavailable"
+    else:
+        change = last_close - float(data["Close"].iloc[-2])
+        vol_pts = (1 if change > 0 else -1 if change < 0 else 0) if vr >= 2 else 0
+        vol_lbl = f"Volume {vr:.1f}×avg  {'Directional surge' if vr>=2 else 'No surge'}"
     vol_col = TV_GREEN if vol_pts > 0 else (TV_RED if vol_pts < 0 else TEXT_SEC)
-    vol_lbl = f"Volume {vr:.1f}×avg  {'Surge ✓' if vr>=2 else ('Low ×' if vr<0.5 else 'Normal')}"
-    checks.append((vol_lbl, vol_pts, vol_col, f"Vol ratio {vr:.2f}"))
+    checks.append((vol_lbl, vol_pts, vol_col, "Previous 20 completed sessions"))
 
     # ── CHECK 10: BB squeeze breakout (+1) ───────────────────────────────────
     bw     = (bb_upper - bb_lower) / bb_lower.replace(0, 1)       # bandwidth
@@ -533,8 +530,10 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
     checks.append((hhhl_lbl, hhhl_pts, hhhl_col, "Price structure"))
 
     # ── FINAL SCORE ───────────────────────────────────────────────────────────
-    score     = sum(pts for _, pts, _, _ in checks)
-    max_score = 20   # theoretical max from all checks combined
+    # Keep the established /20 release scale and threshold; individual raw
+    # factors can sum to 21. Saturate only at the documented endpoints.
+    max_score = 20
+    score = max(-max_score, min(max_score, sum(pts for _, pts, _, _ in checks)))
 
     # Signal tiers (team agreement)
     if   score >= 16: signal_text, sig_col = "STRONG BUY",  "#00E676"
@@ -796,9 +795,11 @@ _bb_u = float(bb_upper.dropna().iloc[-1]); _bb_l = float(bb_lower.dropna().iloc[
 s20l = float(sma20.dropna().iloc[-1]) if sma20.dropna().shape[0] > 0 else e9l
 s50l = float(sma50.dropna().iloc[-1]) if sma50.dropna().shape[0] > 0 else e21l
 
-_h = data["High"].values; _l = data["Low"].values; _c = data["Close"].values
-_tr= np.maximum(_h[1:]-_l[1:], np.maximum(np.abs(_h[1:]-_c[:-1]), np.abs(_l[1:]-_c[:-1])))
-atr_val = round(float(np.mean(_tr[-14:])), 2) if len(_tr) >= 14 else round(float(np.mean(_tr)), 2)
+from msk_indicator_math import atr_series
+atr_val = float(atr_series(structure_data["High"], structure_data["Low"], structure_data["Close"]).iloc[-1])
+if not np.isfinite(atr_val) or atr_val <= 0:
+    print("[ERROR] Verified ATR unavailable; no chart released", file=sys.stderr)
+    sys.exit(1)
 
 # Only use dated, completed chart history for the range position.
 hist_n = min(252, len(structure_data))
@@ -1133,7 +1134,7 @@ try:
             va="top", ha="right", zorder=5, fontfamily="monospace")
         trows = [
             ("Ref. close", last_close, None, None, TEXT_ACC, True),
-            ("Stop Loss", sl_val, -sl_pct, None, TV_RED, False),
+            ("SL (S/R)", sl_val, -sl_pct, None, TV_RED, False),
             ("Target 1", t1_val, t1_pct, round(_rr1, 1), TV_GREEN, False),
             ("Target 2", t2_val if t2_val else None, t2_pct if t2_val else None,
              round(_rr2, 1) if _rr2 is not None else None, TV_GREEN, False),
