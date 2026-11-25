@@ -999,8 +999,9 @@ def run_report(chat_id, query):
 
         # A genuine, fully validated completed-session PDF can be delivered
         # immediately. Cold symbols still use the existing real generator.
-        from research_pdf_snapshot import load_verified_report
-        cached = load_verified_report(sym)
+        from research_pdf_snapshot import (
+            load_recent_local_report, load_verified_report, report_quote_line)
+        cached = load_recent_local_report(sym) or load_verified_report(sym)
         if cached is not None:
             ok, result, name = True, cached[0], (cname or sym)
             logger.info("MSK_PDF_CACHE_HIT symbol=%s session=%s", sym, cached[1])
@@ -1056,13 +1057,22 @@ def run_report(chat_id, query):
                           "source disclosures or content verification failed.")
                 return
             try:
+                # Keep the immutable PDF separate from the timestamped market quote.
+                # An unavailable quote must never block a verified report.
+                try:
+                    quote = get_verified_quote(sym)
+                except Exception:
+                    quote = None
+                quote_text = report_quote_line(quote)
+                from html import escape
                 with open(result, "rb") as f:
                     sent = bot.send_document(
                         chat_id, f,
                         visible_file_name=f"{sym}_Research_Report.pdf",
-                        caption=(f"📄 <b>{name or sym} — Equity Research Report</b>\n"
+                        caption=(f"📄 <b>{escape(str(name or sym))} — Equity Research Report</b>\n"
                                  f"Stance · Technicals · Fundamentals · Ownership · Peers · Trade plan · Risks\n"
-                                 f"Generated {datetime.now().strftime('%d-%b-%Y %H:%M')}\n\n"
+                                 f"PDF: dated completed-session research; short-term levels may change.\n"
+                                 f"{escape(quote_text)}\n\n"
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
                     )
