@@ -54,6 +54,7 @@ def candidate(sym, *, side="LONG", score=8, price=1000, sector="Banking",
         "atr": atr, "rr1": 2 * atr / abs(price - stop),
         "rr2": 3.5 * atr / abs(price - stop),
         "volx": volume, "sector": sector,
+        "target_model": "structure-v1", "t1_basis": "projection", "t2_basis": "projection",
         "parts": {"trend": 2, "weekly": 1, "mom": 2, "adx": 1,
                   "vol": 1, "rs": 1, "setup": 1},
     }
