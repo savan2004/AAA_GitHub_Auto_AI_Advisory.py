@@ -100,6 +100,14 @@ class PdfCurrentEodRecovery(unittest.TestCase):
             verified_pdf_history("DMART", lambda sym, period: complete.iloc[-59:],
                                  SESSION, lambda sym: complete.iloc[-59:])
 
+    def test_primary_exception_uses_one_bounded_alternate(self):
+        primary = Mock(side_effect=RuntimeError("synthetic provider failure"))
+        alternate = Mock(return_value=bars())
+        result = verified_pdf_history("APLAPOLLO", primary, SESSION, alternate)
+        self.assertEqual(str(result.index[-1].date()), SESSION)
+        primary.assert_called_once_with("APLAPOLLO", "1y")
+        alternate.assert_called_once_with("APLAPOLLO")
+
 
 if __name__ == "__main__":
     unittest.main()
