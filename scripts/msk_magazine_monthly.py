@@ -72,6 +72,10 @@ def scheduled_issue_mode(now: datetime, event_name: str,
     local = now.astimezone(IST)
     current_issue = local.strftime("%Y-%m")
     if event_name == "schedule":
+        # Preserve the existing private Dec 1 preview and do not initialize a
+        # new issue before its first-Monday kickoff.
+        if local.date() < first_monday(local.year, local.month):
+            return current_issue, "not_due"
         mode = "first_monday" if is_monthly_due(local) else "continuation"
         return current_issue, mode
     if event_name == "workflow_dispatch":
