@@ -86,7 +86,8 @@ jobs:
               now, os.environ["EVENT_NAME"], os.environ.get("REQUESTED_ISSUE", ""))
           run_root = f"magazine_artifacts/{issue}/runs/{os.environ['GITHUB_RUN_ID']}"
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"due=true\nissue={issue}\nmode={mode}\nrun_root={run_root}\n")
+              due = "false" if mode == "not_due" else "true"
+              out.write(f"due={due}\nissue={issue}\nmode={mode}\nrun_root={run_root}\n")
           print(f"Issue={issue}; mode={mode}; run_root={run_root}")
           PY
       - name: Retrieve official month-end NSE CSV into this run's isolated folder
