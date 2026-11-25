@@ -50,8 +50,14 @@ class StagingProbeTests(unittest.TestCase):
         self.assertEqual(dsn, alias)
         self.assertEqual(key, RUN_ID)
 
-    def test_rejects_unsupported_driver_scheme_with_clear_message(self):
-        bad = SAMPLE_DSN.replace("postgresql://", "postgresql+psycopg://")
+    def test_accepts_sqlalchemy_psycopg_scheme_and_normalizes_for_driver(self):
+        alias = SAMPLE_DSN.replace("postgresql://", "postgresql+psycopg://")
+        normalized, key = load_config(env(**{DSN_ENV: alias}))
+        self.assertEqual(normalized, SAMPLE_DSN)
+        self.assertEqual(key, RUN_ID)
+
+    def test_rejects_other_driver_schemes(self):
+        bad = SAMPLE_DSN.replace("postgresql://", "postgresql+asyncpg://")
         with self.assertRaisesRegex(ProbeError, "scheme must be"):
             load_config(env(**{DSN_ENV: bad}))
 
