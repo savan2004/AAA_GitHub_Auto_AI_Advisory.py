@@ -58,8 +58,8 @@ def load_config(env=None):
 
     # Report only fixed, non-secret configuration categories so a GitHub
     # Actions failure can be corrected without revealing the DSN or password.
-    if parsed.scheme not in ("postgres", "postgresql", "postgresql+psycopg", "postgresql+psycopg2"):
-        raise ProbeError("Staging DSN scheme must be postgresql://, postgres://, or a supported psycopg driver URL")
+    if parsed.scheme not in ("postgres", "postgresql", "postgresql+psycopg", "postgresql+psycopg2", "postgresql+psycopg3"):
+        raise ProbeError("Staging DSN scheme unsupported: {} (credentials and connection details suppressed)".format(parsed.scheme or "missing"))
     if host != STAGING_HOST:
         raise ProbeError("Connection is NOT the approved staging direct host; select branch br-delicate-base-b3zz6z20, non-pooled")
     if parsed.path != "/" + STAGING_DATABASE:
@@ -72,7 +72,7 @@ def load_config(env=None):
         raise ProbeError("Staging DSN has an unexpected URL fragment")
     # SQLAlchemy adds a driver suffix that psycopg.connect does not accept.
     # Normalize only the scheme after the pinned host/database/TLS checks.
-    if parsed.scheme in ("postgresql+psycopg", "postgresql+psycopg2"):
+    if parsed.scheme in ("postgresql+psycopg", "postgresql+psycopg2", "postgresql+psycopg3"):
         dsn = parsed._replace(scheme="postgresql").geturl()
     return dsn, run_id
 
