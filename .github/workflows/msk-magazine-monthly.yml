@@ -206,6 +206,18 @@ jobs:
               --notes "Daily revisions are preserved as separate assets in one draft release. All pages remain editorially pending. Source authenticity, publication and owner approval are false. No Telegram send."
             echo "Created one draft release for issue $ISSUE: $TAG" >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Optional private Drive draft backup (never publishes)
+        if: steps.schedule.outputs.due == 'true' && vars.MSK_MAGAZINE_DRIVE_ENABLED == '1'
+        env:
+          MSK_MAGAZINE_DRIVE_ENABLED: ${{ vars.MSK_MAGAZINE_DRIVE_ENABLED }}
+          MSK_MAGAZINE_DRIVE_FOLDER_ID: ${{ vars.MSK_MAGAZINE_DRIVE_FOLDER_ID }}
+          MSK_DRIVE_CLIENT_ID: ${{ secrets.MSK_DRIVE_CLIENT_ID }}
+          MSK_DRIVE_CLIENT_SECRET: ${{ secrets.MSK_DRIVE_CLIENT_SECRET }}
+          MSK_DRIVE_REFRESH_TOKEN: ${{ secrets.MSK_DRIVE_REFRESH_TOKEN }}
+          ISSUE: ${{ steps.schedule.outputs.issue }}
+          RUN_ROOT: ${{ steps.schedule.outputs.run_root }}
+        run: |
+          python -m scripts.msk_magazine_drive --issue-dir "$RUN_ROOT/output/$ISSUE" --issue "$ISSUE" --run-id "$GITHUB_RUN_ID"
       - name: Report first-Monday start or daily continuation status
         if: steps.schedule.outputs.due == 'true'
         env:
