@@ -112,6 +112,12 @@ class DirectSectorGenerationSafety(unittest.TestCase):
         self.build = Mock(side_effect=build_fixture)
         self.summary = Mock(return_value=["Isolated fixture, not live financial evidence"])
         self.cache = {"path": None, "summary": None, "session": None}
+        fake_drive = types.SimpleNamespace(
+            load_sector_cloud=lambda **_kwargs: None,
+            store_sector_cloud=lambda *_args, **_kwargs: True)
+        drive_modules = patch.dict(sys.modules, {"sector_report_drive": fake_drive})
+        drive_modules.start()
+        self.addCleanup(drive_modules.stop)
         self.ns = {
             "Tuple": Tuple, "List": List, "os": os, "time": time,
             "datetime": datetime, "IST": timezone.utc,
