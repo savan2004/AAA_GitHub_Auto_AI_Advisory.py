@@ -67,8 +67,38 @@ class PdfCurrentEodRecovery(unittest.TestCase):
         other = Mock()
         result = verified_pdf_history(
             "TCS", lambda sym, period: frame, SESSION, other)
-        self.assertIs(result, frame)
+        pd.testing.assert_frame_equal(result, frame, check_freq=False)
         other.assert_not_called()
+
+    def test_other_issuer_excludes_incomplete_current_day(self):
+        completed = bars()
+        unfinished = completed.iloc[-1:].copy()
+        unfinished.index = [pd.Timestamp("2026-11-16")]
+        alternate = Mock(side_effect=AssertionError("No alternate needed"))
+        for symbol in ("DCXINDIA", "APLAPOLLO", "DMART"):
+            with self.subTest(symbol=symbol):
+                result = verified_pdf_history(
+                    symbol, lambda sym, period: pd.concat([completed, unfinished]),
+                    SESSION, alternate)
+                pd.testing.assert_frame_equal(result, completed, check_freq=False)
+        alternate.assert_not_called()
+
+    def test_other_issuer_recovers_stale_primary_and_retains_minimum(self):
+        complete = bars().iloc[-80:]
+        alternate = Mock(return_value=complete)
+        result = verified_pdf_history(
+            "DCXINDIA", lambda sym, period: complete.iloc[:-1], SESSION, alternate)
+        pd.testing.assert_frame_equal(result, complete, check_freq=False)
+        alternate.assert_called_once_with("DCXINDIA")
+        with self.assertRaisesRegex(ValueError, "stale or"):
+            verified_pdf_history("APLAPOLLO", lambda sym, period: complete.iloc[:-1],
+                                 SESSION, lambda sym: complete.iloc[:-1])
+        with self.assertRaisesRegex(ValueError, "stale or"):
+            verified_pdf_history("SBIN", lambda sym, period: complete,
+                                 SESSION, lambda sym: complete)
+        with self.assertRaisesRegex(ValueError, "stale or"):
+            verified_pdf_history("DMART", lambda sym, period: complete.iloc[-59:],
+                                 SESSION, lambda sym: complete.iloc[-59:])
 
 
 if __name__ == "__main__":
