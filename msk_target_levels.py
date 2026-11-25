@@ -42,10 +42,12 @@ def calculate_targets(high, low, i, *, entry, stop, atr, side,
                 clusters.append(distance)
         buffer = 0.10 * atr
         distances, bases = [], []
-        for rank, planned in enumerate((d1, d2)):
+        rank = 0
+        for planned in (d1, d2):
             barrier = clusters[rank] if rank < len(clusters) else None
             if barrier is not None and barrier - buffer <= planned:
                 distance, basis = barrier - buffer, "resistance" if sign == 1 else "support"
+                rank += 1
             else:
                 distance, basis = planned, "projection"
             distances.append(distance)
