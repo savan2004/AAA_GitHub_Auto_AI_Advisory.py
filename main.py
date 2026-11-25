@@ -1001,7 +1001,9 @@ def run_report(chat_id, query):
         # immediately. Cold symbols still use the existing real generator.
         from research_pdf_snapshot import (
             load_recent_local_report, load_verified_report, report_quote_line)
-        cached = load_recent_local_report(sym) or load_verified_report(sym)
+        from research_pdf_drive import load_cloud_report
+        cached = (load_recent_local_report(sym) or load_cloud_report(sym)
+                  or load_verified_report(sym))
         if cached is not None:
             ok, result, name = True, cached[0], (cname or sym)
             logger.info("MSK_PDF_CACHE_HIT symbol=%s session=%s", sym, cached[1])
