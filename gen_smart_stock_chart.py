@@ -181,14 +181,8 @@ def detect_patterns(data, pivots, lookback=60):
 
 # ── INDICATORS ────────────────────────────────────────────────────────────────
 def calc_rsi(prices, period=14):
-    d  = np.diff(prices)
-    g  = np.where(d > 0, d, 0.0)
-    l  = np.where(d < 0, -d, 0.0)
-    ag = np.convolve(g, np.ones(period)/period, "full")[:len(g)]
-    al = np.convolve(l, np.ones(period)/period, "full")[:len(l)]
-    rs = np.where(al != 0, ag/al, 100.0)
-    rsi= np.concatenate([[np.nan]*period, (100 - 100/(1+rs))[period-1:]])
-    return rsi[:len(prices)]
+    from msk_chart_release import wilder_rsi
+    return wilder_rsi(prices, period)
 
 def build_cross_signals(fast, slow, data):
     diff = fast.values - slow.values
@@ -292,8 +286,11 @@ def score_symbol_weighted(sym, name, df=None):
         # an aligned higher-high/higher-low and weekly bullish structure.
         last = float(close_s.iloc[-1])
         prior_high = float(data["High"].iloc[-21:-1].max())
-        avg_vol = float(volume.iloc[-21:-1].mean())
-        vol_ratio = float(volume.iloc[-1]) / avg_vol if avg_vol > 0 else 0
+        prior_vol = volume.iloc[-21:-1]
+        avg_vol = float(prior_vol.mean())
+        vol_ratio = (float(volume.iloc[-1]) / avg_vol
+                     if len(prior_vol) == 20 and (prior_vol > 0).all()
+                     and float(volume.iloc[-1]) > 0 else 0.0)
         weekly_bull = any("Weekly BULLISH" in row[0] and row[1] > 0
                           for row in checks)
         bullish_cross = any("Bull Cross" in row[0] and row[1] > 0
@@ -705,33 +702,20 @@ if auto_history is None:
                        progress=False, auto_adjust=True)
 else:
     data = auto_history.copy()
-if data.empty:
-    print(f"[ERROR] No verified daily data for {symbol}", file=sys.stderr)
-    sys.exit(1)
-if isinstance(data.columns, pd.MultiIndex):
-    data.columns = data.columns.get_level_values(0)
-data = data.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
-# User-requested and auto charts must only use the last verified completed
-# NSE daily session. Never render a still-forming current-day Yahoo candle.
+# Both manual and auto charts use the same completed-candle validator.
 from market_breadth import expected_completed_session
+from smart_chart_fast_scan import _ticker_frame
+from msk_chart_release import validated_daily_history
 expected_eod = str(expected_completed_session())
-_local_sessions = [
-    (t.tz_convert("Asia/Kolkata") if t.tzinfo else t).strftime("%Y-%m-%d")
-    for t in pd.DatetimeIndex(data.index)
-]
-data = data.loc[[day <= expected_eod for day in _local_sessions]].copy()
-_latest_session = pd.Timestamp(data.index[-1]) if not data.empty else None
-_latest_date = (
-    (_latest_session.tz_convert("Asia/Kolkata")
-     if _latest_session.tzinfo else _latest_session).strftime("%Y-%m-%d")
-    if _latest_session is not None else None
-)
-if _latest_date != expected_eod:
-    print(f"[ERROR] Latest completed NSE session {expected_eod} unavailable", file=sys.stderr)
+data = validated_daily_history(_ticker_frame(data, symbol, 1), expected_eod)
+if data is None:
+    print(f"[ERROR] Latest completed NSE session {expected_eod} unavailable or invalid for {symbol}", file=sys.stderr)
     sys.exit(1)
-if len(data) < 55:
-    print(f"[ERROR] Insufficient completed daily data for {symbol}", file=sys.stderr)
-    sys.exit(1)
+structure_data = data
+if auto_history is None:
+    winner["scope_note"] = f"EOD {expected_eod}; Chart V8"
+else:
+    winner["scope_note"] += "; Chart V8"
 
 # Reuse the same source-validated daily history for the weekly picture.
 # A still-forming Mon-Thu weekly candle must never count as completed.
@@ -795,7 +779,8 @@ db_s, dr_s = build_cross_signals(sma20, sma50, data)
 # Key scalars. The candidate's candle cannot set its own prior resistance.
 from msk_chart_context import summarize_chart
 chart_context = summarize_chart(
-    data["High"].values, data["Low"].values, close, vol_s.values,
+    structure_data["High"].values, structure_data["Low"].values,
+    structure_data["Close"].values, structure_data["Volume"].values,
     float(ema9.iloc[-1]), float(ema21.iloc[-1]), float(hist.iloc[-1]))
 support = chart_context["support"]
 resistance = chart_context["resistance"]
@@ -815,10 +800,13 @@ _h = data["High"].values; _l = data["Low"].values; _c = data["Close"].values
 _tr= np.maximum(_h[1:]-_l[1:], np.maximum(np.abs(_h[1:]-_c[:-1]), np.abs(_l[1:]-_c[:-1])))
 atr_val = round(float(np.mean(_tr[-14:])), 2) if len(_tr) >= 14 else round(float(np.mean(_tr)), 2)
 
-hist_n = min(252, n)
-if _52h is None: _52h = float(data["High"].rolling(hist_n).max().iloc[-1])
-if _52l is None: _52l = float(data["Low"].rolling(hist_n).min().iloc[-1])
-_52w_pct = round((last_close - _52l) / (_52h - _52l) * 100, 1) if _52h != _52l else 50.0
+# Only use dated, completed chart history for the range position.
+hist_n = min(252, len(structure_data))
+range_history = structure_data.tail(hist_n)
+_52h = float(range_history["High"].max())
+_52l = float(range_history["Low"].min())
+_range_label = "52W%" if (range_history.index[-1] - range_history.index[0]).days >= 350 else f"{hist_n}D%"
+_52w_pct = round((last_close - _52l) / (_52h - _52l) * 100, 1) if _52h > _52l else None
 
 # ── 11-CHECK WEIGHTED SCORING ─────────────────────────────────────────────────
 pivots = find_pivots(data, left=5, right=5)
@@ -836,28 +824,18 @@ if auto_history is not None and (
 is_bull   = score >= 0
 is_wait   = signal_text == "WAIT"
 
-# ── TARGETS (only shown when NOT in WAIT zone) ────────────────────────────────
-if not is_wait:
-    if is_bull:
-        sl_val = min(float(data["Low"].tail(5).min()), e21l) * 0.997
-        sl_pct = (last_close - sl_val) / last_close * 100
-        t1_val = last_close + 1.5 * (last_close - sl_val)
-        t2_val = last_close + 2.5 * (last_close - sl_val)
-        t1_pct = (t1_val - last_close) / last_close * 100
-        t2_pct = (t2_val - last_close) / last_close * 100
-    else:
-        sl_val = max(float(data["High"].tail(5).max()), e21l) * 1.003
-        sl_pct = (sl_val - last_close) / last_close * 100
-        t1_val = last_close - 1.5 * (sl_val - last_close)
-        t2_val = last_close - 2.5 * (sl_val - last_close)
-        t1_pct = (last_close - t1_val) / last_close * 100
-        t2_pct = (last_close - t2_val) / last_close * 100
-    _risk = abs(last_close - sl_val)
-    _rr1  = round(abs(t1_val - last_close) / _risk, 1) if _risk > 0 else 0
-    _rr2  = round(abs(t2_val - last_close) / _risk, 1) if _risk > 0 else 0
-else:
-    sl_val = t1_val = t2_val = 0.0
-    sl_pct = t1_pct = t2_pct = _rr1 = _rr2 = 0.0
+# ── CHART-FIRST LEVELS ────────────────────────────────────────────────────────
+from msk_chart_release import chart_plan
+level_plan = chart_plan(structure_data, signal_text, atr_val)
+has_levels = level_plan is not None
+sl_val = t1_val = t2_val = 0.0  # wire-only absence; never printed as a target
+sl_pct = t1_pct = t2_pct = _rr1 = _rr2 = 0.0
+if has_levels:
+    sl_val, t1_val, second, _rr1, _rr2 = level_plan
+    t2_val = second if second is not None else 0.0
+    sl_pct = abs(last_close - sl_val) / last_close * 100
+    t1_pct = abs(t1_val - last_close) / last_close * 100
+    t2_pct = abs(t2_val - last_close) / last_close * 100 if second is not None else 0.0
 
 # ── MPLFINANCE STYLE ──────────────────────────────────────────────────────────
 mc = mpf.make_marketcolors(
@@ -1047,7 +1025,7 @@ try:
     if _mcap_str: pills.append(("MCap", _mcap_str))
     if _pe_str:   pills.append(("",     _pe_str))
     pills += [("ATR", f"₹{atr_val:,.1f}"), ("Vol", f"{vr:.1f}x avg"),
-              ("52W%", f"{_52w_pct:.0f}%"), ("Period", CHART_PERIOD.upper()),
+              (_range_label, f"{_52w_pct:.0f}%" if _52w_pct is not None else "N/A"), ("Period", CHART_PERIOD.upper()),
               ("Score", score_str)]
     px = 0.40
     for lbl, val in pills:
@@ -1072,11 +1050,12 @@ try:
     # Signal header
     sa.add_patch(FancyBboxPatch((0.03,0.89), 0.94, 0.08,
         boxstyle="round,pad=0.01", lw=0, fc=sig_bg_c, zorder=3))
-    sa.text(0.5, 0.968, "AUTOAI ADVISORY  v7.0", fontsize=6.5, color=TEXT_SEC,
+    sa.text(0.5, 0.968, "AUTOAI ADVISORY  v8.0", fontsize=6.5, color=TEXT_SEC,
         ha="center", va="top", style="italic", zorder=5)
     hmap = {"STRONG BUY":"STRONG BUY","BUY":"BUY","WAIT":"WAIT — No Setup",
             "SELL":"SELL","STRONG SELL":"STRONG SELL"}
-    sa.text(0.5, 0.950, hmap.get(signal_text, signal_text), fontsize=12,
+    score_heading = hmap.get(signal_text, signal_text) if has_levels or is_wait else ("BULLISH SCORE" if is_bull else "BEARISH SCORE")
+    sa.text(0.5, 0.950, score_heading, fontsize=12,
         fontweight="bold", color=sig_fg, ha="center", va="top", zorder=5)
 
     # Score + bar
@@ -1128,22 +1107,21 @@ try:
 
     # ── TRADE LEVELS or No-Trade Zone ────────────────────────────────────────
     tl_top = 0.188; tl_gap = 0.048
-    if is_wait:
-        # No-Trade Zone — show no levels, just explanation
+    if not has_levels:
+        # A technical score is not a trade plan. Missing chart levels stay absent.
         sa.add_patch(FancyBboxPatch((0.04,0.042), 0.92, 0.145,
             boxstyle="round,pad=0.01", fc="#2A2410", ec=TV_YELLOW, lw=1.2, zorder=4))
         sa.text(0.5, 0.172, "NO TRADE ZONE", fontsize=9, fontweight="bold",
             color=TV_YELLOW, ha="center", va="top", zorder=5)
-        sa.text(0.5, 0.145, f"Score {score:+d} — need ≥+12 for BUY", fontsize=7.5,
+        sa.text(0.5, 0.145, "Score only — no verified trade levels", fontsize=7.5,
             color=TEXT_SEC, ha="center", va="top", zorder=5)
         sa.text(0.5, 0.120, "Wait for stronger confirmation:", fontsize=7,
             color=TEXT_SEC, ha="center", va="top", zorder=5)
         needs = []
-        if score < 12:
-            gap = 12 - score
-            needs.append(f"Need +{gap} more pts for BUY signal")
-        if weekly_data is not None:
-            needs.append("Check weekly trend first")
+        if is_wait:
+            needs.append("Wait for directional confirmation")
+        else:
+            needs.append("Need chart support/resistance and R:R ≥1.5")
         sa.text(0.5, 0.098, "\n".join(needs[:2]), fontsize=6.5, color=TV_YELLOW,
             ha="center", va="top", zorder=5)
         sa.text(0.5, 0.052, "ATR(14): ₹" + f"{atr_val:,.2f}", fontsize=7.5,
@@ -1154,10 +1132,11 @@ try:
         sa.text(0.93, tl_top + tl_gap*0.5, f"₹{atr_val:,.2f}", fontsize=7.5, color=TEXT_PRI,
             va="top", ha="right", zorder=5, fontfamily="monospace")
         trows = [
-            ("Entry",     last_close, None,   None, TEXT_ACC, True),
-            ("Stop Loss", sl_val,    -sl_pct, None, TV_RED,   False),
-            ("Target 1",  t1_val,     t1_pct, _rr1, TV_GREEN, False),
-            ("Target 2",  t2_val,     t2_pct, _rr2, TV_GREEN, False),
+            ("Ref. close", last_close, None, None, TEXT_ACC, True),
+            ("Stop Loss", sl_val, -sl_pct, None, TV_RED, False),
+            ("Target 1", t1_val, t1_pct, round(_rr1, 1), TV_GREEN, False),
+            ("Target 2", t2_val if t2_val else None, t2_pct if t2_val else None,
+             round(_rr2, 1) if _rr2 is not None else None, TV_GREEN, False),
         ]
         for i, (lbl, price, pct, rr, col, bold) in enumerate(trows):
             y   = tl_top - i * tl_gap
@@ -1168,7 +1147,7 @@ try:
                     boxstyle="round,pad=0.003", fc=bg_c, ec="none", zorder=3))
             sa.text(0.07, y - 0.006, lbl, fontsize=8, color=TEXT_SEC if not bold else TEXT_ACC,
                 va="top", fontweight=fw2, zorder=5)
-            sa.text(0.62, y - 0.006, f"₹{price:,.2f}", fontsize=8, color=col,
+            sa.text(0.62, y - 0.006, f"₹{price:,.2f}" if price is not None else "N/A", fontsize=8, color=col,
                 va="top", ha="right", fontweight=fw2, zorder=5, fontfamily="monospace")
             if pct is not None:
                 rr_str = f"  1:{rr}" if rr is not None else ""
