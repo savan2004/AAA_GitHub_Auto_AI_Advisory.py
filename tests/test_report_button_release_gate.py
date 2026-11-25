@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import logging
 import os
+import sys
 import threading
 import unittest
 from unittest.mock import Mock, patch
@@ -49,6 +50,21 @@ def _world(result_path):
 
 
 class ResearchPdfButtonGateTests(unittest.TestCase):
+    def setUp(self):
+        def quote_line(quote):
+            return "Recent market observation: {:.2f} | {} IST".format(
+                quote["price"], quote["quote_asof_ist"][11:16])
+        snapshot = SimpleNamespace(
+            load_recent_local_report=Mock(return_value=None),
+            load_verified_report=Mock(return_value=None),
+            report_quote_line=quote_line)
+        drive = SimpleNamespace(load_cloud_report=Mock(return_value=None))
+        modules = patch.dict(sys.modules, {
+            "research_pdf_snapshot": snapshot,
+            "research_pdf_drive": drive,
+        })
+        modules.start()
+        self.addCleanup(modules.stop)
     def test_rejects_short_report_and_does_not_send(self):
         from pdf_release_gate import ResearchPDFRefused
         with TemporaryDirectory() as folder:
