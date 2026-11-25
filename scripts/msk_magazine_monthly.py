@@ -60,6 +60,30 @@ def issue_for(now: datetime) -> str:
     return now.astimezone(IST).strftime("%Y-%m")
 
 
+def scheduled_issue_mode(now: datetime, event_name: str,
+                        requested_issue: str = "") -> tuple[str, str]:
+    """Resolve daily scheduled issue or manual continuation without future dates.
+
+    The first Monday initializes the current IST issue; later scheduled days
+    continue that same issue. Manual runs may backfill, but not future issues.
+    """
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise MagazineError("Scheduling requires an aware time")
+    local = now.astimezone(IST)
+    current_issue = local.strftime("%Y-%m")
+    if event_name == "schedule":
+        mode = "first_monday" if is_monthly_due(local) else "continuation"
+        return current_issue, mode
+    if event_name == "workflow_dispatch":
+        issue = requested_issue.strip() or current_issue
+        if not MONTH_RE.fullmatch(issue):
+            raise MagazineError("Manual issue must use YYYY-MM")
+        if issue > current_issue:
+            raise MagazineError("Manual future issue is not allowed")
+        return issue, "manual"
+    raise MagazineError("Unsupported monthly run event")
+
+
 def load_master(path: Path = DEFAULT_MASTER) -> dict:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     index = data.get("locked_index")
