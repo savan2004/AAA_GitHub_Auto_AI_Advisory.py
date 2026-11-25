@@ -89,6 +89,12 @@ class MagazineMonthlyTests(unittest.TestCase):
         preview_day = datetime(2026, 12, 1, 2, 30, tzinfo=timezone.utc)
         self.assertEqual(scheduled_issue_mode(preview_day, "schedule"),
                          ("2026-12", "not_due"))
+    def test_daily_schedule_continues_current_month_after_kickoff(self):
+        issue, mode = scheduled_issue_mode(
+            datetime(2026, 11, 26, 2, 30, tzinfo=timezone.utc), "schedule")
+        self.assertEqual(issue, "2026-11")
+        self.assertEqual(mode, "continuation")
+
     def test_first_mondays(self):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
