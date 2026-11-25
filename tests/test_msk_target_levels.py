@@ -71,6 +71,11 @@ class TargetTests(unittest.TestCase):
         l[40] = 99.9
         self.assertIsNone(self.plan(h,l))
 
+    def test_target_quality_rejects_nonfinite_second_target(self):
+        h,l = chart()
+        p = self.plan(h,l)
+        self.assertFalse(target_quality(dict(p,entry=100.,atr=2.,t2=float("nan"),t2_anchor=120.)))
+
     def test_unverified_metadata_rejected(self):
         h,l = chart()
         p = self.plan(h,l)
