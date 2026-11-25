@@ -110,6 +110,23 @@ class RecoveryTests(unittest.TestCase):
         self.assertIsNone(recover(SYMBOL,history().drop(pd.Timestamp(PREVIOUS))))
         self.assertEqual(calls,[])
 
+    def test_adjusted_price_mismatch_and_volume_mismatch_have_exact_reasons(self):
+        from smart_chart_eod_recovery import stitch_final_day, prior_history
+        base = prior_history(history(), DAY, PREVIOUS)
+        prior = dict(official(),High=102.)
+        latest = official(102.)
+        adjusted = base.copy()
+        adjusted[["Open","High","Low","Close"]] *= .98
+        diagnostics = {}
+        self.assertIsNone(stitch_final_day(adjusted, PREVIOUS, DAY, prior, latest,
+                                           diagnostics=diagnostics))
+        self.assertEqual(diagnostics, {"prior_price_mismatch_Open_High_Low_Close":1})
+        diagnostics = {}
+        self.assertIsNone(stitch_final_day(base, PREVIOUS, DAY, dict(prior,Volume=1001.), latest,
+                                           diagnostics=diagnostics))
+        self.assertEqual(diagnostics, {"prior_volume_mismatch":1})
+        self.assertIsNotNone(stitch_final_day(base, PREVIOUS, DAY, prior, latest))
+
     def test_final_zip_validates_date_duplicate_and_exact_symbol(self):
         def make(day, duplicate=False):
             header = "TckrSymb,SctySrs,TradDt,OpnPric,HghPric,LwPric,ClsPric,PrvsClsgPric,TtlTradgVol\n"

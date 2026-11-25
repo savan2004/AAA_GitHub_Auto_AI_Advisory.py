@@ -161,29 +161,35 @@ def prior_history(frame, expected, previous):
         return None
 
 
-def stitch_final_day(primary, previous, expected, prior, latest):
+def stitch_final_day(primary, previous, expected, prior, latest, *, diagnostics=None):
     """Verify prior OHLCV, exact date and continuity before appending official day."""
-    if primary is None or not prior or not latest:
+    def reject(reason):
+        if diagnostics is not None:
+            diagnostics[reason] = diagnostics.get(reason, 0) + 1
         return None
+    if primary is None or not prior or not latest:
+        return reject("missing_official_rows")
     try:
         last = primary.iloc[-1]
         if str(primary.index[-1].date()) != previous.isoformat():
-            return None
-        if any(not _matches(last[k], prior[k]) for k in ("Open","High","Low","Close")):
-            return None
+            return reject("wrong_prior_date")
+        differences = [k for k in ("Open","High","Low","Close") if not _matches(last[k], prior[k])]
+        if differences:
+            return reject("prior_price_mismatch_" + "_".join(differences))
         if float(last["Volume"]) != float(prior["Volume"]):
-            return None
+            return reject("prior_volume_mismatch")
         reported_volume = primary.attrs.get("target_placeholder_volume")
         if reported_volume is not None and reported_volume != float(latest["Volume"]):
-            return None
+            return reject("latest_volume_mismatch")
         if not _matches(prior["Close"], latest["PreviousClose"]):
-            return None
+            return reject("previous_close_continuity")
         if abs(latest["Open"]/latest["PreviousClose"] - 1) > .40:
-            return None
+            return reject("possible_corporate_action")
         row = pd.DataFrame([{k:latest[k] for k in REQUIRED}], index=[pd.Timestamp(expected)])
-        return validated_daily_history(pd.concat([primary, row]), expected.isoformat())
+        result = validated_daily_history(pd.concat([primary, row]), expected.isoformat())
+        return result if result is not None else reject("merged_history_invalid")
     except (ValueError, TypeError, KeyError, IndexError, OverflowError, ZeroDivisionError):
-        return None
+        return reject("invalid_overlap")
 
 
 class ArchiveRecovery:
@@ -195,6 +201,7 @@ class ArchiveRecovery:
         self.loaded = False
         self.current = self.previous = {}
         self.recovered = 0
+        self.rejection_reasons = {}
 
     def __call__(self, symbol, frame):
         from portfolio_doctor_live import previous_doctor_session, doctor_trading_session
@@ -210,9 +217,15 @@ class ArchiveRecovery:
             if self.current:
                 self.previous = self.fetch(previous, self.symbols)
             print(f"NSE_FINAL_ARCHIVE_COVERAGE latest={len(self.current)} prior={len(self.previous)}", flush=True)
-        result = stitch_final_day(history, previous, self.expected, self.previous.get(symbol), self.current.get(symbol))
+        reasons = {}
+        result = stitch_final_day(history, previous, self.expected, self.previous.get(symbol), self.current.get(symbol), diagnostics=reasons)
         if result is not None:
             self.recovered += 1
+            print(f"NSE_FINAL_RECOVERY_OK symbol={symbol} session={self.expected} rows={len(result)} close={result.Close.iloc[-1]:.2f}", flush=True)
+        else:
+            for reason, count in reasons.items():
+                self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + count
+            print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reasons={reasons}", flush=True)
         return result
 
 

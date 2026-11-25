@@ -155,6 +155,39 @@ class FastSmartChartTests(unittest.TestCase):
                 scan_all=True,min_score=12,individual_history=lambda sym:stale,
                 shortlist_rank=lambda frame,session:10.)
 
+    def test_bounded_raw_shortlist_reuses_downloaded_history_before_individual(self):
+        universe = [(f"STOCK{i}.NS",str(i)) for i in range(60)]
+        fresh = self.history()
+        stale = fresh.copy()
+        stale.iloc[-1] = np.nan
+        downloaded = []
+        recovery_calls = []
+        def bulk(**kwargs):
+            self.assertIs(kwargs["auto_adjust"],False)
+            downloaded.extend(kwargs["tickers"])
+            frames = {}
+            for sym in kwargs["tickers"]:
+                frame = stale.copy()
+                frame.iloc[-2,3] = float(sym[5:-3])
+                frames[sym] = frame
+            return pd.concat(frames,axis=1)
+        def recover(sym,frame):
+            recovery_calls.append(sym)
+            return fresh if sym == "STOCK59.NS" else None
+        def scorer(sym,name,*,df):
+            self.assertEqual(str(df.index[-1].date()),self.SESSION)
+            return {"sym":sym,"close":float(df.Close.iloc[-1]),"score":14,"setup_confirmed":True}
+        result = choose_auto_chart(universe,download=bulk,scorer=scorer,
+            session_key=self.SESSION,scan_all=True,min_score=12,require_confirmed_setup=True,
+            individual_history=lambda sym:self.fail("Already recovered"),
+            shortlist_rank=lambda frame,session:float(frame.Close.iloc[-2]),
+            shortlist_recovery=recover)
+        self.assertEqual(result[0]["sym"],"STOCK59.NS")
+        self.assertEqual(len(downloaded),60)
+        self.assertEqual(len(recovery_calls),24)
+        self.assertEqual(recovery_calls[0],"STOCK59.NS")
+        self.assertEqual(result[0]["_verified_count"],1)
+
     def test_full_scan_missing_completed_bars_uses_bounded_dated_retry(self):
         good = self.history()
         stale = good.copy()

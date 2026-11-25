@@ -42,7 +42,8 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                       sample_limit=60, fallback_history=None, min_score=None,
                       require_confirmed_setup=False, scan_all=False,
                       recover_history=None, alternate_history=None,
-                      individual_history=None, shortlist_rank=None):
+                      individual_history=None, shortlist_rank=None,
+                      shortlist_recovery=None):
     """Return (winning real candidate, sampled, verified, total universe).
 
     The full-sample batch is attempted once. Only when it yields zero verified
@@ -75,7 +76,10 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                  "ICICIBANK.NS", "INFY.NS", "ITC.NS", "LT.NS")
     recovery_symbols = sorted(symbols, key=lambda sym: (sym not in preferred, symbols.index(sym)))
     preliminary = {}
+    shortlist_frames = {}
     individual_attempted = set()
+    # At most 24 histories, not all 501; only two shared exchange archives.
+    shortlist_limit = 24
 
     recovered_symbols = set()
 
@@ -89,6 +93,11 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                 rank = shortlist_rank(frame, session_key)
                 if rank is not None and math.isfinite(float(rank)):
                     preliminary[symbol] = float(rank)
+                    if shortlist_recovery is not None and frame is not None:
+                        shortlist_frames[symbol] = frame.copy()
+                        if len(shortlist_frames) > shortlist_limit:
+                            weakest = min(shortlist_frames, key=lambda sym: (preliminary[sym], sym))
+                            del shortlist_frames[weakest]
             except (ValueError, TypeError, KeyError, RuntimeError):
                 pass
         if complete is None and recover_history is not None and individual_history is None:
@@ -138,7 +147,9 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                           "end": (day + timedelta(days=1)).isoformat()}
             prices = download(
                 tickers=tickers, **window, interval="1d", progress=False,
-                auto_adjust=True, group_by="ticker", threads=threads,
+                # Raw close and OHLC, as reported by the exchange on the
+                # latest day. Never splice dividend-adjusted OHLC into raw NSE.
+                auto_adjust=False, group_by="ticker", threads=threads,
                 timeout=timeout,
             )
         except Exception:
@@ -164,6 +175,23 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     else:
         attempted = len(symbols)
         bulk(symbols, threads=True, timeout=12)
+    if not candidates and shortlist_recovery is not None and shortlist_frames:
+        # The two dated NSE files are shared by the bounded shortlist. No
+        # extra Yahoo calls are needed for histories already in memory.
+        ranked = sorted(shortlist_frames, key=lambda sym: (-preliminary[sym], sym))
+        for sym in ranked:
+            if time.monotonic() - started >= 125:
+                break
+            try:
+                repaired = shortlist_recovery(sym, shortlist_frames[sym])
+                if repaired is not None:
+                    repaired.attrs["history_source"] = "Yahoo raw OHLC + NSE final EOD"
+                    consider(sym, repaired)
+                    if sym in verified_symbols:
+                        recovered_symbols.add(sym)
+            except Exception:
+                diagnostics["download_failures"] += 1
+        shortlist_frames.clear()
     if not candidates and individual_history is not None:
         # Rank only the already-attempted, missing-history symbols. The
         # prior-session rank is not eligible for publication, ever.

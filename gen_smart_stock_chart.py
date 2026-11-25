@@ -657,7 +657,7 @@ def _individual_history(symbol, session, period="1y"):
         return yf.Ticker(sym).history(
             start=(day-pd.Timedelta(days=735 if period == "2y" else 370)).strftime("%Y-%m-%d"),
             end=(day+pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-            interval="1d", auto_adjust=True, timeout=6, raise_errors=True)
+            interval="1d", auto_adjust=False, timeout=6, raise_errors=True)
     return individual_chart_history(symbol, session, fetch=direct,
         alternate=lambda sym: yahoo_host_history(sym, session, recover=recovery),
         official=lambda sym: official_nse_chart_history(sym, session), recovery=recovery)
@@ -681,15 +681,16 @@ else:
     from smart_chart_fast_scan import choose_auto_chart, ChartScanUnavailable
     from market_breadth import expected_completed_session
     from smart_chart_nse_history import official_nse_chart_history
-    from smart_chart_eod_recovery import preliminary_rank
+    from smart_chart_eod_recovery import preliminary_rank, ArchiveRecovery
 
     session_key = str(expected_completed_session())
+    shortlist_recovery = ArchiveRecovery([sym for sym, _ in UNIVERSE], session_key)
     try:
         winner, sampled, valid, universe_size = choose_auto_chart(
             UNIVERSE, download=yf.download, scorer=score_symbol_weighted,
             session_key=session_key, sample_limit=60,
             individual_history=lambda sym: _individual_history(sym, session_key),
-            shortlist_rank=preliminary_rank,
+            shortlist_rank=preliminary_rank, shortlist_recovery=shortlist_recovery,
             min_score=12, require_confirmed_setup=True, scan_all=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
