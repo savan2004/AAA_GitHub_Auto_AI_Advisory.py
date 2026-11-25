@@ -237,23 +237,18 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
             })
             return base
         if passes:
-            swing_low = float(l.iloc[-5:].min())
-            sl = max(ltp - 2.2 * atr, min(swing_low, brk["level"]) - 0.25 * atr)
-            if sl >= ltp - 0.5 * atr:
-                sl = ltp - 1.0 * atr
-            risk = ltp - sl
             from msk_target_levels import calculate_targets
             levels = calculate_targets(h.to_numpy(), l.to_numpy(), len(c)-1,
-                entry=ltp, stop=sl, atr=atr, side="LONG",
-                first_distance=1.5*risk, second_distance=3*risk)
+                entry=ltp, atr=atr, side="LONG")
             base.update({
                 "kind": "BREAKOUT", "label": brk["label"], "level": brk["level"],
                 "age": k, "vol_ratio": brk["vol_ratio"], "clv": clv,
                 "score": round(score, 1), "reasons": reasons, "flags": flags,
-                "entry": ltp, "sl": sl, "risk_pct": risk / ltp * 100,
+                "entry": ltp,
             })
             if levels:
                 base.update(levels)
+                base["risk_pct"] = (ltp - levels["sl"]) / ltp * 100
         return base
 
     # ─────────────────────────── near-breakout watch ──────────────────────
@@ -267,11 +262,6 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
              + (15 if ltp > ema20 else 0)
              + 15 * _clamp((rs3m or 0) / 15.0, 0, 1))
         trigger = near["level"] * 1.002
-        swing_low = float(l.iloc[-5:].min())
-        sl = max(trigger - 2.2 * atr, swing_low - 0.25 * atr)
-        if sl >= trigger - 0.5 * atr:
-            sl = trigger - 1.0 * atr
-        risk = trigger - sl
         reasons = [f"{near['dist']:.1f}% below {near['label']} ₹{near['level']:,.2f}"]
         if squeeze:
             reasons.append("Bollinger squeeze (coiling)")
@@ -284,9 +274,7 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
         base.update({
             "kind": "WATCH", "label": near["label"], "level": near["level"],
             "dist": near["dist"], "score": round(_clamp(w, 0, 100), 1),
-            "reasons": reasons, "entry": trigger, "sl": sl,
-            "risk_pct": risk / trigger * 100,
-            "t1": trigger + 1.5 * risk, "t2": trigger + 3.0 * risk,
+            "reasons": reasons, "entry": trigger,
         })
     return base
 
@@ -543,7 +531,9 @@ def _breakout_card(i: int, r: dict, trade_ready: bool = False) -> str:
     if trade_ready:
         lines.extend([
             f"   🎯 Reference Entry ₹{r['entry']:,.2f}  SL ₹{r['sl']:,.2f} (-{r['risk_pct']:.1f}%)",
-            f"       T1 ₹{r['t1']:,.2f} ({r['t1_basis']}) · T2 ₹{r['t2']:,.2f} ({r['t2_basis']}; conditional)",
+            f"       T1 ₹{r['t1']:,.2f} (resistance; 1:{(r['t1']-r['entry'])/(r['entry']-r['sl']):.1f})",
+            (f"       T2 ₹{r['t2']:,.2f} (conditional; 1:{(r['t2']-r['entry'])/(r['entry']-r['sl']):.1f})"
+             if r.get("t2") is not None else "       T2: no verified resistance above T1"),
         ])
     else:
         blocked = _trade_ready_block_reasons(r)
