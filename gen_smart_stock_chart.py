@@ -666,15 +666,20 @@ else:
     from smart_chart_fast_scan import choose_auto_chart, ChartScanUnavailable
     from market_breadth import expected_completed_session
     from smart_chart_nse_history import official_nse_chart_history
+    from smart_chart_eod_recovery import ArchiveRecovery, yahoo_host_history
 
     def _official_nse_history(yahoo_symbol):
         return official_nse_chart_history(yahoo_symbol, session_key)
     session_key = str(expected_completed_session())
+    archive_recovery = ArchiveRecovery([sym for sym, _ in UNIVERSE], session_key)
+    def _alternate_yahoo(sym):
+        return yahoo_host_history(sym, session_key, recover=archive_recovery)
     try:
         winner, sampled, valid, universe_size = choose_auto_chart(
             UNIVERSE, download=yf.download, scorer=score_symbol_weighted,
             session_key=session_key, sample_limit=60,
             fallback_history=_official_nse_history,
+            recover_history=archive_recovery, alternate_history=_alternate_yahoo,
             min_score=12, require_confirmed_setup=True, scan_all=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
@@ -685,6 +690,7 @@ else:
         f"Setup: {winner['reason']}; EOD {session_key}")
     print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key} score={winner['score']}/20")
     print(f"WINNER: {winner['sym']}|{winner['name']}|{winner['reason']}|{winner['score']:+d}")
+    print(f"CHART_DATA_SOURCE: {winner.get('_history_source','Yahoo')}")
     forced_sym = winner["sym"]; forced_name = winner["name"]
 
 symbol       = forced_sym

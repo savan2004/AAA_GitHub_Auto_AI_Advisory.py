@@ -40,7 +40,8 @@ def _completed_frame(frame, session_key, *, diagnostics=None):
 
 def choose_auto_chart(universe, *, download, scorer, session_key,
                       sample_limit=60, fallback_history=None, min_score=None,
-                      require_confirmed_setup=False, scan_all=False):
+                      require_confirmed_setup=False, scan_all=False,
+                      recover_history=None, alternate_history=None):
     """Return (winning real candidate, sampled, verified, total universe).
 
     The full-sample batch is attempted once. Only when it yields zero verified
@@ -73,10 +74,22 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                  "ICICIBANK.NS", "INFY.NS", "ITC.NS", "LT.NS")
     recovery_symbols = sorted(symbols, key=lambda sym: (sym not in preferred, symbols.index(sym)))
 
+    recovered_symbols = set()
+
     def consider(symbol, frame):
         if symbol in candidates:
             return
+        source = getattr(frame, "attrs", {}).get("history_source", "Yahoo")
         complete = _completed_frame(frame, session_key, diagnostics=rejection_reasons)
+        if complete is None and recover_history is not None:
+            try:
+                repaired = recover_history(symbol, frame)
+                complete = _completed_frame(repaired, session_key) if repaired is not None else None
+                if complete is not None:
+                    recovered_symbols.add(symbol)
+                    source = "Yahoo history + NSE final EOD"
+            except Exception:
+                diagnostics["download_failures"] += 1
         if complete is None:
             diagnostics["rejected"] += 1
             return
@@ -101,6 +114,7 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                 diagnostics["scorer"] += 1
                 return
             candidate["_daily_history"] = complete
+            candidate["_history_source"] = source
             candidates[symbol] = candidate
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
             diagnostics["scorer"] += 1
@@ -153,15 +167,29 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
         if retry:
             bulk(retry, threads=False, timeout=6, explicit_dates=True)
 
+    if not candidates and not verified_symbols and alternate_history is not None:
+        for sym in recovery_symbols[:2]:
+            if time.monotonic() - started >= 135:
+                break
+            try:
+                consider(sym, alternate_history(sym))
+            except Exception:
+                diagnostics["download_failures"] += 1
+
     if not candidates and fallback_history is not None:
         # A narrowly bounded official NSE historical source is independent
         # of Yahoo's batch endpoint. No more than two original sample calls.
         for sym in recovery_symbols[:2]:
             try:
-                consider(sym, fallback_history(sym))
+                frame = fallback_history(sym)
+                if frame is not None:
+                    frame.attrs["history_source"] = "NSE historical API"
+                consider(sym, frame)
             except Exception:
                 diagnostics["download_failures"] += 1
 
+    print(f"CHART_HISTORY_COVERAGE verified={len(verified_symbols)} recovered={len(recovered_symbols)} "
+          f"attempted={attempted} eligible={len(candidates)}", flush=True)
     if not candidates:
         raise ChartScanUnavailable(
             ("No verified current-session histories " if not verified_symbols else
