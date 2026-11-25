@@ -80,7 +80,7 @@ jobs:
               now, os.environ["EVENT_NAME"], os.environ.get("REQUESTED_ISSUE", ""))
           run_root = f"magazine_artifacts/{issue}/runs/{os.environ['GITHUB_RUN_ID']}"
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"due=true\\nissue={issue}\\nmode={mode}\\nrun_root={run_root}\\n")
+              out.write(f"due=true\nissue={issue}\nmode={mode}\nrun_root={run_root}\n")
           print(f"Issue={issue}; mode={mode}; run_root={run_root}")
           PY
       - name: Retrieve official month-end NSE CSV into this run's isolated folder
@@ -137,7 +137,7 @@ jobs:
               "editorial_approved": False, "publication_allowed": False,
               "status": "UNAPPROVED_DRAFT; ORIGINAL_EDITORIAL_RESEARCH_PENDING"
           }
-          (issue_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=2)+"\\n", encoding="utf-8")
+          (issue_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=2)+"\n", encoding="utf-8")
           print(json.dumps(manifest, indent=2))
           PY
       - name: Retain this issue revision and its source evidence as a run artifact
@@ -177,10 +177,10 @@ jobs:
             if gh release download "$TAG" --pattern "ledger.json" --dir "$PREVIOUS"; then
               cp "$PREVIOUS/ledger.json" "$ASSETS/ledger.json"
             else
-              printf '{"issue":"%s","runs":[]}\\n' "$ISSUE" > "$ASSETS/ledger.json"
+              printf '{"issue":"%s","runs":[]}\n' "$ISSUE" > "$ASSETS/ledger.json"
             fi
           else
-            printf '{"issue":"%s","runs":[]}\\n' "$ISSUE" > "$ASSETS/ledger.json"
+            printf '{"issue":"%s","runs":[]}\n' "$ISSUE" > "$ASSETS/ledger.json"
           fi
           python - <<'PY'
           import hashlib, json, os
@@ -195,7 +195,7 @@ jobs:
               "pdf_asset": pdf.name, "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
               "source_authenticity_verified": False, "publication_allowed": False,
           })
-          ledger_file.write_text(json.dumps(ledger, indent=2)+"\\n", encoding="utf-8")
+          ledger_file.write_text(json.dumps(ledger, indent=2)+"\n", encoding="utf-8")
           PY
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$PDF_ASSET" "$GATE_ASSET" "$ARCHIVE_ASSET" "$ASSETS/ledger.json" --clobber
