@@ -18,10 +18,12 @@ LOG = logging.getLogger(__name__)
 FOLDER = "1ue3u-6-CCpromy4hHX24g_m0uHWDkY6x"
 OWNER = "aiautofintech@gmail.com"
 TAG = "msk-research-v1"
+SECTOR_FOLDER = "1kuPEh2-Ysx9CoMjRHBgWVlO2LYjoGuYS"
+SECTOR_TAG = "msk-sector-v1"
 LIMIT = 500
 MAX_BYTES = 8_000_000
 API = "https://www.googleapis.com/drive/v3"
-FIELDS = "id,name,mimeType,parents,trashed,size,md5Checksum,createdTime,appProperties"
+FIELDS = "id,name,mimeType,parents,trashed,size,md5Checksum,createdTime,description,appProperties"
 _LOCK = threading.Lock()
 
 
@@ -52,11 +54,11 @@ def _session():
     return str(expected_completed_session())
 
 
-def _managed(item):
+def _managed(item, folder=FOLDER, tag=TAG):
     p = item.get("appProperties") or {}
-    return (bool(item.get("id")) and item.get("parents") == [FOLDER]
+    return (bool(item.get("id")) and item.get("parents") == [folder]
             and item.get("mimeType") == "application/pdf"
-            and item.get("trashed") is False and p.get("archive") == TAG)
+            and item.get("trashed") is False and p.get("archive") == tag)
 
 
 def _order(item):
@@ -76,9 +78,9 @@ def _fresh(item, symbol, session, now):
         return False
 
 
-def _verify_bytes(item, raw):
+def _verify_bytes(item, raw, minimum=25_000, maximum=MAX_BYTES):
     p = item["appProperties"]
-    if (not 25_000 <= len(raw) <= MAX_BYTES or not raw.startswith(b"%PDF-")
+    if (not minimum <= len(raw) <= maximum or not raw.startswith(b"%PDF-")
             or len(raw) != int(item["size"])
             or hashlib.sha256(raw).hexdigest() != p["sha256"]
             or hashlib.md5(raw).hexdigest() != item["md5Checksum"]):
@@ -86,7 +88,12 @@ def _verify_bytes(item, raw):
 
 
 class Drive:
-    def __init__(self):
+    def __init__(self, folder=FOLDER, tag=TAG):
+        if (folder, tag) not in ((FOLDER, TAG), (SECTOR_FOLDER, SECTOR_TAG)):
+            raise ValueError("Unknown archive")
+        self.folder, self.tag = folder, tag
+        self.minimum, self.maximum = ((25_000, MAX_BYTES) if folder == FOLDER
+                                      else (10_000, 15_000_000))
         secret = {k: os.environ["MSK_DRIVE_" + k.upper()]
                   for k in ("client_id", "client_secret", "refresh_token")}
         response = requests.post("https://oauth2.googleapis.com/token",
@@ -96,9 +103,9 @@ class Drive:
         self.http = requests.Session()
         self.http.headers["Authorization"] = "Bearer " + response.json()["access_token"]
         try:
-            folder = self._json("GET", API + "/files/" + FOLDER,
+            folder = self._json("GET", API + "/files/" + self.folder,
                                 params={"fields": "id,mimeType,trashed,shared,owners(emailAddress)"})
-            if (folder.get("id") != FOLDER or folder.get("trashed") is not False
+            if (folder.get("id") != self.folder or folder.get("trashed") is not False
                     or folder.get("shared") is not False
                     or folder.get("mimeType") != "application/vnd.google-apps.folder"
                     or [o.get("emailAddress") for o in folder.get("owners", [])] != [OWNER]):
@@ -118,15 +125,15 @@ class Drive:
     def list(self):
         result, token, seen = [], None, set()
         for _ in range(20):
-            params = {"q": f"'{FOLDER}' in parents and trashed = false and "
+            params = {"q": f"'{self.folder}' in parents and trashed = false and "
                            f"mimeType = 'application/pdf' and appProperties has "
-                           f"{{ key='archive' and value='{TAG}' }}",
+                           f"{{ key='archive' and value='{self.tag}' }}",
                       "fields": f"nextPageToken,incompleteSearch,files({FIELDS})",
                       "pageSize": 1000}
             if token:
                 params["pageToken"] = token
             data = self._json("GET", API + "/files", params=params)
-            if data.get("incompleteSearch") or any(not _managed(x) for x in data.get("files", [])):
+            if data.get("incompleteSearch") or any(not _managed(x, self.folder, self.tag) for x in data.get("files", [])):
                 raise ValueError("Incomplete or unsafe archive listing")
             result.extend(data.get("files", []))
             token = data.get("nextPageToken")
@@ -163,14 +170,18 @@ class Drive:
             buf = bytearray()
             for block in r.iter_content(65536):
                 buf.extend(block)
-                if len(buf) > MAX_BYTES:
+                if len(buf) > self.maximum:
                     raise ValueError("Oversize PDF")
         raw = bytes(buf)
-        _verify_bytes(item, raw)
+        if not _managed(item, self.folder, self.tag):
+            raise ValueError("Unsafe download")
+        _verify_bytes(item, raw, self.minimum, self.maximum)
         return raw
 
     def delete(self, item):
         # Recheck immediately; never remove unrelated, moved or untagged files.
+        if self.folder != FOLDER or self.tag != TAG:
+            raise ValueError("Only stock archive supports FIFO deletion")
         actual = self.get(item["id"])
         if not _managed(actual) or actual["appProperties"] != item["appProperties"]:
             raise ValueError("FIFO candidate changed")
