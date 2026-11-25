@@ -9,7 +9,7 @@ import unittest
 
 from scripts.msk_magazine_monthly import (
     DEFAULT_MASTER, MagazineError, audit_pdf, first_monday,
-    generate, is_monthly_due, issue_for, load_master, validate_evidence,
+    generate, is_monthly_due, issue_for, scheduled_issue_mode, load_master, validate_evidence,
 )
 
 
@@ -42,14 +42,48 @@ class MagazineMonthlyTests(unittest.TestCase):
     def test_github_archives_monthly_pdf_as_unpublished_draft_only(self):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/msk-magazine-monthly.yml").read_text()
-        self.assertIn('cron: "30 2 * * 1"', workflow)
+        self.assertIn('cron: "30 2 * * *"', workflow)
         self.assertIn("gh release create", workflow)
+        self.assertIn("gh release upload", workflow)
         self.assertIn("--draft", workflow)
         self.assertIn("contents: write", workflow)
         self.assertIn("GITHUB_RUN_ID", workflow)
+        self.assertIn("first_monday", workflow)
+        self.assertIn("continuation", workflow)
+        self.assertIn('TAG="msk-magazine-$ISSUE-draft"', workflow)
         self.assertNotIn("gh release publish", workflow)
         self.assertNotIn("sendDocument", workflow)
+        self.assertNotIn('draft-$GITHUB_RUN_ID', workflow)
 
+    def test_daily_schedule_starts_on_first_monday_and_continues(self):
+        first = datetime(2026, 12, 7, 2, 30, tzinfo=timezone.utc)
+        next_day = datetime(2026, 12, 8, 2, 30, tzinfo=timezone.utc)
+        self.assertEqual(scheduled_issue_mode(first, "schedule"),
+                         ("2026-12", "first_monday"))
+        self.assertEqual(scheduled_issue_mode(next_day, "schedule"),
+                         ("2026-12", "continuation"))
+
+    def test_manual_run_allows_current_or_past_issue_but_not_future(self):
+        now = datetime(2026, 11, 25, 2, 30, tzinfo=timezone.utc)
+        self.assertEqual(scheduled_issue_mode(now, "workflow_dispatch", "2026-10"),
+                         ("2026-10", "manual"))
+        self.assertEqual(scheduled_issue_mode(now, "workflow_dispatch"),
+                         ("2026-11", "manual"))
+        with self.assertRaises(MagazineError):
+            scheduled_issue_mode(now, "workflow_dispatch", "2026-12")
+
+    def test_manual_schedule_requires_timezone_and_supported_event(self):
+        with self.assertRaises(MagazineError):
+            scheduled_issue_mode(datetime(2026, 12, 7, 8), "schedule")
+        with self.assertRaises(MagazineError):
+            scheduled_issue_mode(datetime(2026, 12, 7, 8, tzinfo=timezone.utc),
+                                "pull_request")
+
+    def test_december_preview_is_manual_not_scheduled(self):
+        preview = (Path(__file__).resolve().parents[1] /
+                   ".github/workflows/msk-magazine-dec1-private-preview.yml").read_text()
+        self.assertNotIn("cron:", preview)
+        self.assertIn("workflow_dispatch", preview)
     def test_first_mondays(self):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
