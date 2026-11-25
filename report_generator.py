@@ -1304,6 +1304,15 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
                 pass
             raise ValueError("Research report withheld: PDF validation unavailable") from exc
         name = R["name"]
+        # Cache the unchanged validated file using its actual dated price session.
+        # Cache failure cannot block an otherwise valid PDF.
+        try:
+            from research_pdf_snapshot import remember_local_report
+            if R.get("price_session"):
+                remember_local_report(sym, out, R["price_session"], inspected)
+        except Exception as exc:
+            logger.warning("MSK_RESEARCH_PDF_LOCAL_CACHE_FAILED type=%s",
+                           type(exc).__name__)
         success = True
         return True, out, name
     except ValueError as e:
