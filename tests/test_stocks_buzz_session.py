@@ -272,7 +272,7 @@ class SessionSafety(unittest.TestCase):
             "logger": Mock(), "_state": {}, "_state_lock": threading.Lock(),
         })
         secondary = types.SimpleNamespace(
-            fetch_tej_history=lambda sym, *_args: frame.iloc[:-1] if sym == "TEST0" else frame)
+            fetch_tej_history=lambda sym, *_args: frame.iloc[:-1] if sym in ("TEST0", "TEST1") else frame)
         with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
                 patch.dict(sys.modules, {"overnight_index_sources": secondary}):
             with self.assertRaisesRegex(ValueError, "valid stock histories"):
