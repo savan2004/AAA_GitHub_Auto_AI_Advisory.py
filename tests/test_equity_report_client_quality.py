@@ -88,7 +88,7 @@ class EquityReportQuality(unittest.TestCase):
                         {"candle_date": "2026-11-19"}):
             with self.subTest(market=invalid), self.assertRaisesRegex(ValueError, "latest completed"):
                 check(invalid, expected)
-        self.assertIn("_require_latest_completed_eod(market, expected_completed_session())", REPORT)
+        self.assertIn("verified_pdf_history", REPORT)
 
     def test_unsourced_headlines_and_unverified_probability_are_suppressed(self):
         news = fn(REPORT, "_real_news", {"List": list, "logger": type("Log", (), {"info": lambda *a: None})()})
