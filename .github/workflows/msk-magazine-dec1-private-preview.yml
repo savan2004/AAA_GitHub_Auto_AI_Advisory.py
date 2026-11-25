@@ -1,11 +1,13 @@
-name: MSK Magazine - Manual Private Preview
+name: MSK Magazine - Dec 1 Private Live Review
 
-# Scheduled monthly generation/continuation lives in msk-magazine-monthly.yml.
-# This workflow is manual or PR validation only; no duplicate calendar schedule.
+# One-time December 1 test. Even if this workflow remains in the repo,
+# the date guard prevents accidental repeats in later years.
 on:
   pull_request:
     paths:
       - ".github/workflows/msk-magazine-dec1-private-preview.yml"
+  schedule:
+    - cron: "30 2 1 12 *" # 08:00 IST on 1 December (GitHub cron may be delayed)
   workflow_dispatch:
 
 permissions:
@@ -39,17 +41,17 @@ jobs:
           from zoneinfo import ZoneInfo
           now = datetime.now(ZoneInfo("Asia/Kolkata")).date()
           event = os.environ["EVENT_NAME"]
-          # Manual/PR preview is limited to the current IST issue; scheduled
-          # monthly work is handled by the daily first-Monday continuation job.
-          if event in {"pull_request", "workflow_dispatch"}:
-              issue, should_run = now.strftime("%Y-%m"), True
+          # PR validation uses a November structure-only draft. Do not pretend
+          # December market data is already available in November.
+          if event == "pull_request":
+              issue, should_run = "2026-11", True
           else:
-              issue, should_run = now.strftime("%Y-%m"), False
+              issue, should_run = "2026-12", now == date(2026, 12, 1)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
               stream.write(f"run={'true' if should_run else 'false'}\nissue={issue}\n")
           print(f"event={event} date_IST={now} issue={issue} run={should_run}")
           PY
-      - name: Download official NSE monthly closing CSV for manual preview only
+      - name: Download official NSE monthly closing CSV if and only if Dec 1
         if: steps.date_guard.outputs.run == 'true' && github.event_name != 'pull_request'
         env:
           ISSUE: ${{ steps.date_guard.outputs.issue }}
