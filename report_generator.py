@@ -1313,6 +1313,14 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
         except Exception as exc:
             logger.warning("MSK_RESEARCH_PDF_LOCAL_CACHE_FAILED type=%s",
                            type(exc).__name__)
+        # Archive only actual verified generated public reports, never portfolio PDFs.
+        # Cloud errors do not block delivery of an otherwise validated document.
+        try:
+            from research_pdf_drive import store_cloud_report
+            if R.get("price_session"):
+                store_cloud_report(sym, out, R["price_session"])
+        except Exception as exc:
+            logger.warning("MSK_RESEARCH_PDF_DRIVE_FAILED type=%s", type(exc).__name__)
         success = True
         return True, out, name
     except ValueError as e:
