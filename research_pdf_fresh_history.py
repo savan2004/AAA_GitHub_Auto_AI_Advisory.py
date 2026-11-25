@@ -55,8 +55,13 @@ def verified_pdf_history(symbol, base_fetch, expected_session, alternate_fetch=N
     # Keep the existing publisher's full-year minimum. Other research reports
     # previously accepted 60 sessions; do not silently increase their minimum.
     minimum = 200 if symbol in ("SBIN", "DLF") else 60
-    original = base_fetch(symbol, "1y")
-    verified = normalize_real_history(original, expected_session, minimum=minimum)
+    try:
+        original = base_fetch(symbol, "1y")
+        verified = normalize_real_history(original, expected_session, minimum=minimum)
+    except Exception as exc:
+        LOG.warning("MSK_PDF_PRIMARY_FAILED symbol=%s type=%s",
+                    symbol, type(exc).__name__)
+        verified = None
     if verified is not None:
         return verified
     LOG.warning("MSK_PDF_STALE_PRIMARY symbol=%s required=%s", symbol, expected_session)
