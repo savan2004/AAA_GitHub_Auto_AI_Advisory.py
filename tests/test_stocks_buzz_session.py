@@ -100,7 +100,9 @@ class SessionSafety(unittest.TestCase):
             "MAX_EXTENSION_PCT": 10., "MIN_TRADED_VALUE": 2e7,
         })
         clean = dict(sym="CLEAN", kind="BREAKOUT", risk_pct=6.,
-                     rsi=63., ext_pct=5., vol_ratio=3., tv_cr=10.)
+                     rsi=63., ext_pct=5., vol_ratio=3., tv_cr=10.,
+                     entry=100., sl=94., t1=109., t2=118.,
+                     target_model="structure-v1", t1_basis="projection", t2_basis="projection")
         high_risk = dict(clean, sym="HIGH_RISK", risk_pct=12.)
         hot_rsi = dict(clean, sym="HOT_RSI", rsi=85.)
         confirmed, ready, extended = ns["_partition_breakouts"]({
@@ -122,7 +124,9 @@ class SessionSafety(unittest.TestCase):
             "MAX_EXTENSION_PCT": 10., "MIN_TRADED_VALUE": 2e7,
         })
         clean = dict(sym="CLEAN", risk_pct=5., rsi=60.,
-                     ext_pct=2., vol_ratio=3., tv_cr=10.)
+                     ext_pct=2., vol_ratio=3., tv_cr=10.,
+                     entry=100., sl=95., t1=107.5, t2=115.,
+                     target_model="structure-v1", t1_basis="projection", t2_basis="projection")
         stretched = dict(clean, sym="EXTENDED", ext_pct=10.1)
         confirmed, ready, extended = ns["_partition_breakouts"]({
             "breakouts": [clean, stretched]})
@@ -143,7 +147,8 @@ class SessionSafety(unittest.TestCase):
         row = dict(sym="CLEAN", kind="BREAKOUT", ltp=100., chg=2.,
                    score=84., rsi=63., ext_pct=5., risk_pct=6.,
                    vol_ratio=3., tv_cr=10., atr_pct=3., reasons=["breakout"],
-                   flags=[], entry=100., sl=94., t1=109., t2=118.)
+                   flags=[], entry=100., sl=94., t1=109., t2=118.,
+                   target_model="structure-v1", t1_basis="projection", t2_basis="projection")
         scan = {
             "ts": datetime(2026, 11, 14, 12, tzinfo=IST),
             "data_session": date(2026, 11, 13), "coverage": .918,
