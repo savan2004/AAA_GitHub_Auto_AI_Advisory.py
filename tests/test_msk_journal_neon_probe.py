@@ -51,7 +51,7 @@ class StagingProbeTests(unittest.TestCase):
         self.assertEqual(key, RUN_ID)
 
     def test_accepts_sqlalchemy_psycopg_schemes_and_normalizes_for_driver(self):
-        for driver in ("psycopg", "psycopg2"):
+        for driver in ("psycopg", "psycopg2", "psycopg3"):
             with self.subTest(driver=driver):
                 alias = SAMPLE_DSN.replace("postgresql://", f"postgresql+{driver}://")
                 normalized, key = load_config(env(**{DSN_ENV: alias}))
