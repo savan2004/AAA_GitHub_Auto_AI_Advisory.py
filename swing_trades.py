@@ -77,7 +77,7 @@ MAX_LONG, MAX_SHORT, MAX_PER_SECTOR = 4, 2, 2
 HOLD_BARS = 10          # max holding period, also used by the backtest
 MIN_TURNOVER = 5e7      # ₹5 Cr average daily traded value (20d)
 MIN_RR1 = 1.2           # reject setups whose T1 reward < 1.2 × risk
-CACHE_KEY, CACHE_TTL = "swing_v7_structure_v1", 1800
+CACHE_KEY, CACHE_TTL = "swing_v7_structure_v2", 1800
 _LOCK = threading.Lock()
 
 
@@ -210,19 +210,10 @@ def _prep(df, nifty_close):
 
 # ── SIGNAL + LEVELS (same function for live bar and backtest) ────────────────
 def _levels(A, i, side):
-    c, atr = A["c"][i], A["atr"][i]
-    if side == "LONG":
-        dist = c - (A["l"][max(0, i - 6):i + 1].min() - 0.2 * atr)
-        sgn = 1
-    else:
-        dist = (A["h"][max(0, i - 6):i + 1].max() + 0.2 * atr) - c
-        sgn = -1
-    dist = min(max(dist, 1.0 * atr), 2.0 * atr)
     from msk_target_levels import calculate_targets
-    stop = c - sgn * dist
-    targets = calculate_targets(A["h"], A["l"], i, entry=c, stop=stop,
-        atr=atr, side=side, first_distance=2.0*atr, second_distance=3.5*atr)
-    return dict(targets, sl=stop, atr=atr) if targets else None
+    c, atr = A["c"][i], A["atr"][i]
+    targets = calculate_targets(A["h"], A["l"], i, entry=c, atr=atr, side=side)
+    return dict(targets, atr=atr) if targets else None
 
 
 def _signal(A, i, side):
@@ -297,7 +288,7 @@ def _backtest(A):
             lv, entry = res["lv"], A["o"][i + 1]
             sl, t1 = lv["sl"], lv["t1"]
             risk = (entry - sl) * sgn
-            if risk <= 0 or (entry - t1) * sgn >= 0:        # gapped through stop/target
+            if risk <= 0 or (t1 - entry) * sgn / risk < MIN_RR1: # recheck actual next-open reward/risk
                 i += 1
                 continue
             R, hit, stop, end = None, False, False, i + HOLD_BARS
@@ -390,10 +381,8 @@ def _scan():
                                  ltp=float(res["ltp"]), rsi=float(res["rsi"]), adx=float(res["adx"]),
                                  volx=float(res["volx"]), rs=res["rs"], parts=res["parts"],
                                  sector=_sector_of(s),
-                                 sl=float(lv["sl"]), t1=float(lv["t1"]), t2=float(lv["t2"]),
-                                 rr1=float(lv["rr1"]), rr2=float(lv["rr2"]), atr=float(lv["atr"]),
-                                 target_model=lv["target_model"], t1_basis=lv["t1_basis"],
-                                 t2_basis=lv["t2_basis"]))
+                                 **{k: (float(v) if isinstance(v, (float, np.floating)) else v)
+                                    for k, v in lv.items()}))
             else:
                 fails.append(f"{side}:{reason}")
         if len(fails) == 2:
@@ -457,7 +446,9 @@ def _card(p):
         f"{esc(p['sector'] or '—')} · ₹{c:,.2f} · RSI {p['rsi']:.0f} · ADX {p['adx']:.0f} · Vol {p['volx']:.1f}×",
         f"📥 Entry ₹{min(lo, hi):,.2f}–₹{max(lo, hi):,.2f}",
         f"🛑 SL ₹{p['sl']:,.2f} ({pc(p['sl'])})",
-        f"🎯 T1 ₹{p['t1']:,.2f} ({pc(p['t1'])}) 1:{p['rr1']:.1f} · T2 ₹{p['t2']:,.2f} ({pc(p['t2'])}) 1:{p['rr2']:.1f}",
+        f"🎯 T1 ₹{p['t1']:,.2f} ({pc(p['t1'])}) 1:{p['rr1']:.1f}",
+        (f"T2 ₹{p['t2']:,.2f} ({pc(p['t2'])}) 1:{p['rr2']:.1f} conditional"
+         if p.get("t2") is not None else "T2: no verified next chart level"),
         f"✓ Trend {pt['trend']}/2 · Weekly {'✓' if pt['weekly'] else '–'} · Mom {pt['mom']}/2 · "
         f"ADX {'✓' if pt['adx'] else '–'} · Vol {'✓' if pt['vol'] else '–'} · {rs}",
     ]
@@ -492,23 +483,17 @@ def _verified_swing_row(p):
         sym = p["sym"].strip()
         if not sym or len(sym) > 25:
             return None
-        c, sl, t1, t2, atr, volx = (
-            float(p[k]) for k in ("ltp", "sl", "t1", "t2", "atr", "volx"))
-        if (not all(math.isfinite(x) for x in (c, sl, t1, t2, atr, volx))
-                or min(c, sl, t1, t2, atr) <= 0 or volx < 0):
+        c, sl, t1, atr, volx = (
+            float(p[k]) for k in ("ltp", "sl", "t1", "atr", "volx"))
+        if (not all(math.isfinite(x) for x in (c, sl, t1, atr, volx))
+                or min(c, sl, t1, atr) <= 0 or volx < 0):
             return None
-        sgn = 1 if p["side"] == "LONG" else -1
-        if not ((c - sl) * sgn > 0 and (t1 - c) * sgn > 0
-                and (t2 - t1) * sgn > 0):
-            return None
-        risk = abs(c - sl)
-        rr1 = abs(t1 - c) / risk
-        rr2 = abs(t2 - c) / risk
         from msk_target_levels import target_quality
         if not target_quality(p, entry_key="ltp", min_rr=MIN_RR1):
             return None
-        if rr1 + 0.02 < MIN_RR1 or rr2 <= rr1:
-            return None
+        risk = abs(c-sl)
+        rr1 = abs(t1-c)/risk
+        rr2 = abs(float(p["t2"])-c)/risk if p.get("t2") is not None else None
         # Missing actual observed volume or technical factors must not
         # turn an invented idea into an investor-facing watchlist card.
         parts = p.get("parts")
@@ -594,8 +579,8 @@ def _format_swing_watchlist(mode, data, thr):
                       "liquidity, trend, R:R and stop levels.",
                       "No sample prices have been substituted."])
     for i, p in enumerate(picks, 1):
-        c, sl, t1, t2, atr = (
-            float(p[k]) for k in ("ltp", "sl", "t1", "t2", "atr"))
+        c, sl, t1, atr = (float(p[k]) for k in ("ltp", "sl", "t1", "atr"))
+        t2 = float(p["t2"]) if p.get("t2") is not None else None
         low = max(0.01, c - 0.25 * atr)
         high = c + 0.25 * atr
         risk = p["risk_pct"]
@@ -605,9 +590,12 @@ def _format_swing_watchlist(mode, data, thr):
             f"Sector: {esc(p.get('sector') or 'Unclassified')} | "
             f"Direction: {p['side']}",
             f"Entry watch zone: ₹{low:,.2f}–₹{high:,.2f}",
-            f"SL: ₹{sl:,.2f} | T1: ₹{t1:,.2f} ({p['t1_basis']}) | T2: ₹{t2:,.2f} ({p['t2_basis']}; conditional)",
-            f"R:R = 1:{p['rr1_calc']:.1f} / 1:{p['rr2_calc']:.1f} "
-            "(at reference close)",
+            f"SL: ₹{sl:,.2f} ({p['stop_basis']}) | T1: ₹{t1:,.2f} ({p['t1_basis']})",
+            (f"T2: ₹{t2:,.2f} ({p['t2_basis']}; conditional)"
+             if t2 is not None else "T2: no verified next chart level"),
+            (f"R:R = 1:{p['rr1_calc']:.1f}" +
+             (f" / 1:{p['rr2_calc']:.1f}" if t2 is not None else "") +
+             " (at reference close)"),
             f"Stop risk: {risk:.1f}% | 🟡 <b>Status: WAIT</b>",
             f"Reason: {esc(_swing_reason(p, max_stop))}",
         ])
