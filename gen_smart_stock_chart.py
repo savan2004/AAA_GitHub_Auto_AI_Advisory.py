@@ -648,6 +648,21 @@ except Exception:
         ("NTPC.NS","NTPC"),("TATAMOTORS.NS","Tata Motors"),
     ]
 
+def _individual_history(symbol, session, period="1y"):
+    from smart_chart_eod_recovery import ArchiveRecovery, yahoo_host_history, individual_chart_history
+    from smart_chart_nse_history import official_nse_chart_history
+    day = pd.Timestamp(session)
+    recovery = ArchiveRecovery([symbol], session)
+    def direct(sym):
+        return yf.Ticker(sym).history(
+            start=(day-pd.Timedelta(days=735 if period == "2y" else 370)).strftime("%Y-%m-%d"),
+            end=(day+pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            interval="1d", auto_adjust=True, timeout=6, raise_errors=True)
+    return individual_chart_history(symbol, session, fetch=direct,
+        alternate=lambda sym: yahoo_host_history(sym, session, recover=recovery),
+        official=lambda sym: official_nse_chart_history(sym, session), recovery=recovery)
+
+
 # ── ARGUMENT PARSING ─────────────────────────────────────────────────────────
 VALID_PERIODS = {"1mo","3mo","6mo","1y","2y"}
 CHART_PERIOD  = "6mo"
@@ -666,27 +681,22 @@ else:
     from smart_chart_fast_scan import choose_auto_chart, ChartScanUnavailable
     from market_breadth import expected_completed_session
     from smart_chart_nse_history import official_nse_chart_history
-    from smart_chart_eod_recovery import ArchiveRecovery, yahoo_host_history
+    from smart_chart_eod_recovery import preliminary_rank
 
-    def _official_nse_history(yahoo_symbol):
-        return official_nse_chart_history(yahoo_symbol, session_key)
     session_key = str(expected_completed_session())
-    archive_recovery = ArchiveRecovery([sym for sym, _ in UNIVERSE], session_key)
-    def _alternate_yahoo(sym):
-        return yahoo_host_history(sym, session_key, recover=archive_recovery)
     try:
         winner, sampled, valid, universe_size = choose_auto_chart(
             UNIVERSE, download=yf.download, scorer=score_symbol_weighted,
             session_key=session_key, sample_limit=60,
-            fallback_history=_official_nse_history,
-            recover_history=archive_recovery, alternate_history=_alternate_yahoo,
+            individual_history=lambda sym: _individual_history(sym, session_key),
+            shortlist_rank=preliminary_rank,
             min_score=12, require_confirmed_setup=True, scan_all=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
         sys.exit(1)
     winner["scope_note"] = (
         f"Sample: {valid}/{sampled} qualifying NSE setups from {universe_size}; "
-        f"{'full-universe scan' if sampled == universe_size else 'partial-universe scan'}; "
+        f"{'full-universe scan' if winner['_verified_count'] == universe_size else 'partial-universe scan'}; "
         f"Setup: {winner['reason']}; EOD {session_key}")
     print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key} score={winner['score']}/20")
     print(f"WINNER: {winner['sym']}|{winner['name']}|{winner['reason']}|{winner['score']:+d}")
@@ -702,16 +712,15 @@ OUT_FILE     = os.path.join(OUT_DIR, f"chart_{_sym_safe}_{int(_time.time())}.png
 # Auto-selection already fetched one full year of real daily OHLCV.
 # Reuse that data instead of making another two Yahoo requests on the button.
 auto_history = winner.pop("_daily_history", None)
-if auto_history is None:
-    data = yf.download(symbol, period=CHART_PERIOD, interval="1d",
-                       progress=False, auto_adjust=True)
-else:
-    data = auto_history.copy()
-# Both manual and auto charts use the same completed-candle validator.
 from market_breadth import expected_completed_session
 from smart_chart_fast_scan import _ticker_frame
 from msk_chart_release import validated_daily_history
 expected_eod = str(expected_completed_session())
+if auto_history is None:
+    data = _individual_history(symbol, expected_eod, CHART_PERIOD)
+else:
+    data = auto_history.copy()
+# Both manual and auto charts use the same completed-candle validator.
 data = validated_daily_history(_ticker_frame(data, symbol, 1), expected_eod)
 if data is None:
     print(f"[ERROR] Latest completed NSE session {expected_eod} unavailable or invalid for {symbol}", file=sys.stderr)
@@ -726,9 +735,11 @@ else:
 # A still-forming Mon-Thu weekly candle must never count as completed.
 from msk_chart_context import completed_weekly_reference
 weekly_data = completed_weekly_reference(data)
-if auto_history is not None and CHART_PERIOD == "6mo":
-    cutoff = data.index.max() - pd.DateOffset(months=6)
-    data = data.loc[data.index >= cutoff].copy()
+months = {"1mo":1, "3mo":3, "6mo":6, "1y":12, "2y":24}[CHART_PERIOD]
+cutoff = data.index.max() - pd.DateOffset(months=months)
+# Preserve at least 55 actual bars for the existing indicator calculations.
+window = data.loc[data.index >= cutoff]
+data = window.copy() if len(window) >= 55 else data.tail(55).copy()
 
 # Auto-chart uses verified price-derived metrics instead of blocking on
 # optional, potentially slow company-info HTTP requests. Manual behavior

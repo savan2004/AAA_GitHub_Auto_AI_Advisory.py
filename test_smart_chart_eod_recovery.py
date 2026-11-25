@@ -54,6 +54,34 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(calls,[DAY,PREVIOUS])
         self.assertEqual(recover.recovered,2)
 
+    def test_year_boundary_does_not_reject_real_older_candles(self):
+        old = history().iloc[:1].copy()
+        old.index = pd.DatetimeIndex(["2025-12-01"])
+        frame = pd.concat([old,history()])
+        def fetch(day,wanted):
+            return {SYMBOL:(dict(official(),High=102.) if day == PREVIOUS else official(102.))}
+        recovered = ArchiveRecovery([SYMBOL],DAY,fetch=fetch)(SYMBOL,frame)
+        self.assertIsNotNone(recovered)
+        self.assertEqual(recovered.index[0].year,2025)
+
+    def test_individual_fetch_keeps_exact_ticker_and_never_uses_stale(self):
+        from smart_chart_eod_recovery import individual_chart_history
+        calls = []
+        def fetch(sym):
+            calls.append(sym)
+            return history()
+        def alternate(sym):
+            calls.append(sym)
+            fresh = history().drop(pd.Timestamp("2026-11-24"))
+            fresh.loc[pd.Timestamp(DAY)] = [100.,103.,99.,102.,1000.]
+            return fresh
+        result = individual_chart_history("ASIANPAINT.NS",DAY,fetch=fetch,alternate=alternate,
+                                          recovery=lambda *_:None)
+        self.assertEqual(calls,["ASIANPAINT.NS","ASIANPAINT.NS"])
+        self.assertEqual(result.Close.iloc[-1],102.)
+        self.assertIsNone(individual_chart_history("ASIANPAINT.NS",DAY,fetch=fetch,
+                                                    recovery=lambda *_:None))
+
     def test_price_missing_with_zero_volume_or_verified_positive_volume(self):
         def fetch(day,wanted):
             return {SYMBOL:(dict(official(),High=102.) if day == PREVIOUS else official(102.))}

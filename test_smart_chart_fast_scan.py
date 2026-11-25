@@ -124,6 +124,37 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertEqual((attempted, valid, whole), (85, 1, 85))
         self.assertEqual([len(x) for x in batches], [40, 40, 5])
 
+    def test_individual_recovery_only_shortlisted_stock_then_rescores(self):
+        universe = [("SBIN.NS","SBI"),("ASIANPAINT.NS","Asian Paints"),("TCS.NS","TCS")]
+        fresh = self.history()
+        stale = fresh.copy()
+        stale.iloc[-1] = np.nan
+        calls = []
+        def download(**kw):
+            return pd.concat({s:stale for s in kw["tickers"]},axis=1)
+        # Higher preliminary rank for Asian Paints from the synthetic history.
+        stale_by_symbol = {s:stale.copy() for s,_ in universe}
+        stale_by_symbol["ASIANPAINT.NS"].iloc[-2,3] = 500.
+        def bulk(**kw):
+            return pd.concat({s:stale_by_symbol[s] for s in kw["tickers"]},axis=1)
+        def individual(sym):
+            calls.append(sym)
+            return fresh
+        def score(sym,name,*,df):
+            self.assertEqual(str(df.index[-1].date()),self.SESSION)
+            return {"sym":sym,"close":float(df.Close.iloc[-1]),"score":13,"setup_confirmed":True}
+        result = choose_auto_chart(universe,download=bulk,scorer=score,session_key=self.SESSION,
+            scan_all=True,min_score=12,require_confirmed_setup=True,individual_history=individual,
+            shortlist_rank=lambda frame,session:float(frame.Close.iloc[-2]))
+        self.assertEqual(calls,["ASIANPAINT.NS"])
+        self.assertEqual(result[0]["sym"],"ASIANPAINT.NS")
+        self.assertEqual(result[0]["_verified_count"],1)
+        # A shortlist cannot be emitted if the individual history is still stale.
+        with self.assertRaises(ChartScanUnavailable):
+            choose_auto_chart(universe,download=download,scorer=score,session_key=self.SESSION,
+                scan_all=True,min_score=12,individual_history=lambda sym:stale,
+                shortlist_rank=lambda frame,session:10.)
+
     def test_full_scan_missing_completed_bars_uses_bounded_dated_retry(self):
         good = self.history()
         stale = good.copy()

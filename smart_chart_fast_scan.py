@@ -41,7 +41,8 @@ def _completed_frame(frame, session_key, *, diagnostics=None):
 def choose_auto_chart(universe, *, download, scorer, session_key,
                       sample_limit=60, fallback_history=None, min_score=None,
                       require_confirmed_setup=False, scan_all=False,
-                      recover_history=None, alternate_history=None):
+                      recover_history=None, alternate_history=None,
+                      individual_history=None, shortlist_rank=None):
     """Return (winning real candidate, sampled, verified, total universe).
 
     The full-sample batch is attempted once. Only when it yields zero verified
@@ -73,6 +74,8 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     preferred = ("RELIANCE.NS", "SBIN.NS", "TCS.NS", "HDFCBANK.NS",
                  "ICICIBANK.NS", "INFY.NS", "ITC.NS", "LT.NS")
     recovery_symbols = sorted(symbols, key=lambda sym: (sym not in preferred, symbols.index(sym)))
+    preliminary = {}
+    individual_attempted = set()
 
     recovered_symbols = set()
 
@@ -81,7 +84,14 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
             return
         source = getattr(frame, "attrs", {}).get("history_source", "Yahoo")
         complete = _completed_frame(frame, session_key, diagnostics=rejection_reasons)
-        if complete is None and recover_history is not None:
+        if complete is None and individual_history is not None and shortlist_rank is not None:
+            try:
+                rank = shortlist_rank(frame, session_key)
+                if rank is not None and math.isfinite(float(rank)):
+                    preliminary[symbol] = float(rank)
+            except (ValueError, TypeError, KeyError, RuntimeError):
+                pass
+        if complete is None and recover_history is not None and individual_history is None:
             try:
                 repaired = recover_history(symbol, frame)
                 complete = _completed_frame(repaired, session_key) if repaired is not None else None
@@ -154,7 +164,24 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     else:
         attempted = len(symbols)
         bulk(symbols, threads=True, timeout=12)
-    if not candidates and (not scan_all or attempted < 10):
+    if not candidates and individual_history is not None:
+        # Rank only the already-attempted, missing-history symbols. The
+        # prior-session rank is not eligible for publication, ever.
+        attempted_set = set(symbols[:attempted])
+        ranked = sorted(preliminary, key=lambda sym: (-preliminary[sym], sym))
+        order = list(dict.fromkeys(ranked + recovery_symbols))
+        for sym in (s for s in order if s in attempted_set and s not in verified_symbols):
+            if len(individual_attempted) >= 3 or time.monotonic() - started >= 135:
+                break
+            individual_attempted.add(sym)
+            print(f"CHART_INDIVIDUAL_ATTEMPT symbol={sym}", flush=True)
+            try:
+                consider(sym, individual_history(sym))
+            except Exception:
+                diagnostics["download_failures"] += 1
+            if sym in candidates:
+                break
+    elif not candidates and (not scan_all or attempted < 10):
         # Yahoo can rate-limit a 60-name request while serving a 10-name
         # serial batch. Retry once, without concurrent ticker workers.
         bulk(symbols[:min(10, len(symbols))], threads=False, timeout=9)
@@ -167,7 +194,7 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
         if retry:
             bulk(retry, threads=False, timeout=6, explicit_dates=True)
 
-    if not candidates and not verified_symbols and alternate_history is not None:
+    if individual_history is None and not candidates and not verified_symbols and alternate_history is not None:
         for sym in recovery_symbols[:2]:
             if time.monotonic() - started >= 135:
                 break
@@ -176,7 +203,7 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
             except Exception:
                 diagnostics["download_failures"] += 1
 
-    if not candidates and fallback_history is not None:
+    if individual_history is None and not candidates and fallback_history is not None:
         # A narrowly bounded official NSE historical source is independent
         # of Yahoo's batch endpoint. No more than two original sample calls.
         for sym in recovery_symbols[:2]:
@@ -204,4 +231,5 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
 
     # Sort by the FINAL 11-check score, not by preliminary EMA crossover.
     winner = max(candidates.values(), key=lambda c: float(c["score"]))
+    winner["_verified_count"] = len(verified_symbols)
     return winner, attempted, len(candidates), whole

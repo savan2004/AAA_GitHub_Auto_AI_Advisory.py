@@ -141,9 +141,18 @@ def prior_history(frame, expected, previous):
                     return None
                 reported_volume = volume if volume > 0 else None
         data = data.loc[data.index <= pd.Timestamp(previous)]
-        empty = data.isna().all(axis=1)
-        holidays = [not doctor_trading_session(d.date()) for d in data.index]
-        data = data.loc[~(empty & holidays)]
+        # Valid older bars do not need a calendar lookup. The existing
+        # reviewed calendar covers 2026 only; never discard an unknown-year gap.
+        empty = data[["Open","High","Low","Close"]].isna().all(axis=1)
+        empty &= data["Volume"].isna() | data["Volume"].eq(0)
+        drop = []
+        for stamp in data.index[empty]:
+            try:
+                if not doctor_trading_session(stamp.date()):
+                    drop.append(stamp)
+            except RuntimeError:
+                pass
+        data = data.drop(index=drop)
         verified = validated_daily_history(data, previous.isoformat())
         if verified is not None:
             verified.attrs["target_placeholder_volume"] = reported_volume
@@ -252,4 +261,50 @@ def yahoo_host_history(symbol, session, *, get=None, recover=None):
         except (requests.RequestException, ValueError, TypeError, KeyError,
                 IndexError, AttributeError, OverflowError, OSError) as exc:
             print(f"YAHOO_CHART host={host} symbol={symbol} unavailable={type(exc).__name__}", flush=True)
+    return None
+
+def preliminary_rank(frame, session):
+    """Prior-session shortlist only. Never used as a trade signal."""
+    from portfolio_doctor_live import previous_doctor_session
+    try:
+        day = date.fromisoformat(str(session))
+        history = prior_history(frame, day, previous_doctor_session(day))
+        if history is None:
+            return None
+        close = history.Close
+        turnover = float((close * history.Volume).tail(20).mean())
+        if not math.isfinite(turnover) or turnover < 20_000_000:
+            return None
+        momentum = float(close.iloc[-1] / close.iloc[-21] - 1)
+        trend = float(close.iloc[-1] / close.rolling(50).mean().iloc[-1] - 1)
+        return momentum + trend
+    except (ValueError, TypeError, KeyError, IndexError, RuntimeError, ZeroDivisionError):
+        return None
+
+
+def individual_chart_history(symbol, session, *, fetch, alternate=None, official=None,
+                             recovery=None):
+    """Fetch just this ticker, never return a preliminary or stale history."""
+    if not re.fullmatch(r"[A-Z0-9&._-]{1,25}\.NS", symbol):
+        return None
+    if recovery is None:
+        recovery = ArchiveRecovery([symbol], session)
+    for label, provider in (("Yahoo individual", fetch), ("Yahoo chart hosts", alternate),
+                            ("NSE historical API", official)):
+        if provider is None:
+            continue
+        try:
+            frame = provider(symbol)
+            if frame is None:
+                continue
+            complete = validated_daily_history(frame, session)
+            if complete is None and label == "Yahoo individual":
+                complete = recovery(symbol, frame)
+                if complete is not None:
+                    label += " + NSE final archive"
+            if complete is not None:
+                complete.attrs["history_source"] = getattr(frame, "attrs", {}).get("history_source", label)
+                return complete
+        except Exception as exc:
+            print(f"CHART_INDIVIDUAL_SOURCE symbol={symbol} source={label} error={type(exc).__name__}", flush=True)
     return None
