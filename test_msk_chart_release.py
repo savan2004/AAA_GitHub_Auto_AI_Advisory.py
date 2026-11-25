@@ -46,6 +46,26 @@ class ChartReleaseTests(unittest.TestCase):
         leading.iloc[10] = np.nan
         self.assertIsNone(validated_daily_history(leading, SESSION))
 
+    def test_adjustment_ulp_only_and_diagnostic_reasons(self):
+        data = history()
+        data.loc[data.index[20], "High"] = np.nextafter(100., 0.)
+        got = validated_daily_history(data, SESSION)
+        self.assertIsNotNone(got)
+        self.assertEqual(got.High.iloc[20], 100.)
+        self.assertEqual(got.Close.iloc[20], 100.)
+        data.loc[data.index[20], "High"] = 99.99
+        reasons = {}
+        self.assertIsNone(validated_daily_history(data, SESSION, diagnostics=reasons))
+        self.assertEqual(reasons, {"inconsistent_ohlc": 1})
+        reasons = {}
+        self.assertIsNone(validated_daily_history(history().iloc[:-1], SESSION, diagnostics=reasons))
+        self.assertEqual(reasons, {"stale_last_date": 1})
+        data = history()
+        data.iloc[-1] = np.nan
+        reasons = {}
+        self.assertIsNone(validated_daily_history(data, SESSION, diagnostics=reasons))
+        self.assertEqual(reasons, {"missing_expected_session": 1})
+
     def test_wilder_rsi_monotonic_flat_and_seed(self):
         self.assertEqual(wilder_rsi(np.arange(1., 40.))[-1], 100.)
         self.assertEqual(wilder_rsi(np.arange(40., 1., -1))[-1], 0.)

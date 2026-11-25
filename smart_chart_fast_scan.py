@@ -31,10 +31,10 @@ def _ticker_frame(prices, symbol, ticker_count):
     return prices if ticker_count == 1 else None
 
 
-def _completed_frame(frame, session_key):
+def _completed_frame(frame, session_key, *, diagnostics=None):
     """Same strict completed-bar contract for scanner and renderer."""
     from msk_chart_release import validated_daily_history
-    return validated_daily_history(frame, session_key)
+    return validated_daily_history(frame, session_key, diagnostics=diagnostics)
 
 
 def choose_auto_chart(universe, *, download, scorer, session_key,
@@ -66,11 +66,12 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     symbols = list(names)
     candidates = {}
     diagnostics = {"rejected": 0, "scorer": 0, "download_failures": 0}
+    rejection_reasons = {}
 
     def consider(symbol, frame):
         if symbol in candidates:
             return
-        complete = _completed_frame(frame, session_key)
+        complete = _completed_frame(frame, session_key, diagnostics=rejection_reasons)
         if complete is None:
             diagnostics["rejected"] += 1
             return
@@ -153,7 +154,8 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
             f"(session={session_key}; sampled={len(selected)}; "
             f"attempted={attempted}/{whole}; rejected={diagnostics['rejected']}; "
             f"scorer_rejected={diagnostics['scorer']}; "
-            f"provider_errors={diagnostics['download_failures']})."
+            f"provider_errors={diagnostics['download_failures']}; "
+            f"history_reasons={dict(sorted(rejection_reasons.items()))})."
         )
 
     # Sort by the FINAL 11-check score, not by preliminary EMA crossover.

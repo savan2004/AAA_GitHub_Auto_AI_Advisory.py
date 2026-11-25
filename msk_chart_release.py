@@ -8,48 +8,75 @@ REQUIRED = ("Open", "High", "Low", "Close", "Volume")
 MIN_RR = 1.5
 
 
-def validated_daily_history(frame, session):
+def validated_daily_history(frame, session, *, diagnostics=None):
     """Normalize one completed-session history; reject conflicting or bad bars.
 
     Leading all-missing rows in a bulk provider frame are not candles. Missing
     interior observations, invalid OHLCV and conflicting duplicate days fail.
     Future/still-forming rows are excluded before validating price values.
+    Numeric tolerance covers only binary floating point adjustment artifacts,
+    never a material difference, and never changes an observed open/close.
     """
+    def reject(reason):
+        if diagnostics is not None:
+            diagnostics[reason] = diagnostics.get(reason, 0) + 1
+        return None
+
     try:
-        if frame is None or frame.empty or not frame.columns.is_unique:
-            return None
+        if frame is None or frame.empty:
+            return reject("empty_history")
+        if not frame.columns.is_unique or not all(c in frame.columns for c in REQUIRED):
+            return reject("missing_or_duplicate_columns")
         data = frame.loc[:, list(REQUIRED)].copy()
         index = pd.DatetimeIndex(pd.to_datetime(data.index, errors="raise"))
         if index.hasnans:
-            return None
+            return reject("invalid_dates")
         if index.tz is not None:
             index = index.tz_convert("Asia/Kolkata").tz_localize(None)
         data.index = index.normalize()
         data = data.loc[data.index <= pd.Timestamp(session)].sort_index(kind="stable")
         if data.empty:
-            return None
+            return reject("no_completed_dates")
         for col in REQUIRED:
             data[col] = pd.to_numeric(data[col], errors="coerce")
-        # Only skip leading empty slots from an outer-joined bulk download.
         nonempty = np.flatnonzero(~data.isna().all(axis=1).to_numpy())
         if not len(nonempty):
-            return None
+            return reject("all_missing")
         data = data.iloc[nonempty[0]:]
+        if str(data.index[-1].date()) != str(session):
+            return reject("stale_last_date")
+        if data.iloc[-1].isna().any():
+            return reject("missing_expected_session")
+        if data.isna().all(axis=1).any():
+            return reject("interior_empty_row")
         if not np.isfinite(data.to_numpy(dtype=float)).all():
-            return None
+            return reject("nonfinite_or_partial_bar")
         if not data.index.is_unique:
             for _, same in data.loc[data.index.duplicated(keep=False)].groupby(level=0):
                 if not (same.to_numpy() == same.iloc[0].to_numpy()).all():
-                    return None
+                    return reject("conflicting_duplicate")
             data = data.loc[~data.index.duplicated(keep="first")]
-        good = ((data.Low > 0) & (data.Low <= data.Open) & (data.Open <= data.High)
-                & (data.Low <= data.Close) & (data.Close <= data.High)
-                & (data.Volume >= 0))
-        if not good.all() or len(data) < 55 or str(data.index[-1].date()) != str(session):
-            return None
+        if len(data) < 55:
+            return reject("insufficient_history")
+        if not ((data.Low > 0) & (data.High > 0) & (data.Open > 0)
+                & (data.Close > 0) & (data.Volume >= 0)).all():
+            return reject("nonpositive_price_or_negative_volume")
+        # Yahoo adjusted OHLC can differ from a mathematically equal open or
+        # close by a handful of ULPs. Reconcile only machine-scale error using
+        # the observed extrema, not interpolation or synthetic candles.
+        observed_high = data[["High", "Open", "Close"]].max(axis=1)
+        observed_low = data[["Low", "Open", "Close"]].min(axis=1)
+        scale = np.maximum(observed_high.to_numpy(), 1.0)
+        tolerance = 1e-12 * scale
+        if ((observed_high.to_numpy() - data.High.to_numpy() > tolerance).any()
+                or (data.Low.to_numpy() - observed_low.to_numpy() > tolerance).any()
+                or (data.Low.to_numpy() - data.High.to_numpy() > tolerance).any()):
+            return reject("inconsistent_ohlc")
+        data["High"] = observed_high
+        data["Low"] = observed_low
         return data
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
-        return None
+        return reject("invalid_frame")
 
 
 def wilder_rsi(prices, period=14):
