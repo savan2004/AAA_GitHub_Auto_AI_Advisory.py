@@ -52,11 +52,11 @@ def normalize_real_history(history, expected_session, minimum=200):
 
 def verified_pdf_history(symbol, base_fetch, expected_session, alternate_fetch=None):
     """Latest confirmed full-year issuer OHLCV; recover only if base is stale."""
-    if symbol not in ("SBIN", "DLF"):
-        # This narrow repair serves independently audited PDF publishers only.
-        return base_fetch(symbol, "1y")
+    # Keep the existing publisher's full-year minimum. Other research reports
+    # previously accepted 60 sessions; do not silently increase their minimum.
+    minimum = 200 if symbol in ("SBIN", "DLF") else 60
     original = base_fetch(symbol, "1y")
-    verified = normalize_real_history(original, expected_session)
+    verified = normalize_real_history(original, expected_session, minimum=minimum)
     if verified is not None:
         return verified
     LOG.warning("MSK_PDF_STALE_PRIMARY symbol=%s required=%s", symbol, expected_session)
@@ -72,7 +72,7 @@ def verified_pdf_history(symbol, base_fetch, expected_session, alternate_fetch=N
 
     try:
         alternate = alternate_fetch(symbol)
-        verified = normalize_real_history(alternate, expected_session)
+        verified = normalize_real_history(alternate, expected_session, minimum=minimum)
     except Exception as exc:
         LOG.warning("MSK_PDF_FRESH_ALT_FAILED symbol=%s type=%s",
                     symbol, type(exc).__name__)
@@ -80,7 +80,7 @@ def verified_pdf_history(symbol, base_fetch, expected_session, alternate_fetch=N
     if verified is None:
         raise ValueError(
             "Research report withheld: historical price session stale or "
-            "unverified; no current completed-session full-year NSE OHLCV "
+            "unverified; no sufficient completed-session NSE OHLCV "
             "from either real source"
         )
     LOG.info("MSK_PDF_FRESH_ALT_ACCEPTED symbol=%s session=%s rows=%d",
