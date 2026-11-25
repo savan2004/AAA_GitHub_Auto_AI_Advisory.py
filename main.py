@@ -2919,6 +2919,10 @@ if __name__ == "__main__":
             from msk_sbin_pdf_probe import run_once as run_sbin_pdf_acceptance
             threading.Thread(target=run_sbin_pdf_acceptance, args=(globals(),),
                              name="msk-sbin-pdf-release", daemon=True).start()
+        if os.getenv("MSK_RESEARCH_DAILY_ENABLED") == "1":
+            from research_cloud_daily import loop as research_cloud_loop
+            threading.Thread(target=research_cloud_loop,
+                             name="msk-research-cloud-daily", daemon=True).start()
         from waitress import serve
         logger.info("Production HTTP server listening on port %s", os.getenv("PORT", "8000"))
         serve(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), threads=12, connection_limit=200)
