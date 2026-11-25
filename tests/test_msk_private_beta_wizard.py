@@ -34,3 +34,23 @@ class BetaWizardTests(unittest.TestCase):
         self.assertFalse(submitted)
         self.assertFalse(ns["_builder_form"])
         self.assertFalse(ns["_portfolio_doctor_running"])
+
+    def test_preview_cancels_doctor_and_audit_sessions(self):
+        ns, sent, submitted, _, msg, _, clock = harness()
+        node = copy.deepcopy(next(x for x in TREE.body
+                                  if isinstance(x, ast.FunctionDef)
+                                  and x.name == "portfolio_builder_private_beta"))
+        node.decorator_list = []
+        exec(compile(ast.fix_missing_locations(
+            ast.Module(body=[node], type_ignores=[])), "<beta>", "exec"), ns)
+        ns["_portfolio_doctor_waiting"][UID] = clock.t + 180
+        ns["_portfolio_audit_mode"][UID] = clock.t + 180
+        with patch.dict(os.environ, ENV):
+            ns["portfolio_builder_private_beta"](msg("/builder_v2_preview"))
+        self.assertEqual(ns["_portfolio_doctor_waiting"], {})
+        self.assertEqual(ns["_portfolio_audit_mode"], {})
+        self.assertEqual(ns["_builder_form"][UID]["mode"], "private_beta")
+        self.assertEqual(ns["_builder_form"][UID]["step"], "amount")
+        self.assertIn("Step 1/3", sent[-1][1])
+        self.assertEqual(submitted, [])
+

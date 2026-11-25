@@ -126,7 +126,8 @@ class RewritePDFTests(unittest.TestCase):
         pages = PdfReader(io.BytesIO(raw), strict=True).pages
         text = "\n".join(page.extract_text() or "" for page in pages)
         self.assertIn("999,999,999,130,000,000.00", text)
-        self.assertIn("Mixed / insufficient trend confirmation", " ".join(text.split()))
+        self.assertIn("Trend: Below EMA20/50 | EMA20>EMA50", " ".join(text.split()))
+        self.assertNotIn("Mixed / insufficient trend confirmation", text)
         overflow = []
         for page in pages:
             def visit(text, cm, tm, font, size):

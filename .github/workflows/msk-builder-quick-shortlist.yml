@@ -1,0 +1,32 @@
+name: MSK Builder quick shortlist — 3 NSE indexes
+on:
+  pull_request:
+    paths:
+      - 'msk_builder_quick_shortlist.py'
+      - 'tests/test_msk_builder_quick_shortlist.py'
+      - '.github/workflows/msk-builder-quick-shortlist.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shortlist-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile simple selection and run eight fail-closed tests
+        run: |
+          python -m py_compile msk_builder_quick_shortlist.py
+          python -m unittest discover -s tests -p 'test_msk_builder_quick_shortlist.py' -v
+      - name: No production customer research without audit
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          raw = json.loads(Path("msk_builder_research_release_registry.json").read_text())
+          assert raw["publication_status"] == "WITHHELD"
+          assert raw["approved"] == []
+          PY

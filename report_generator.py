@@ -51,6 +51,7 @@ from reportlab.platypus import (
 
 import research_engine as eng
 from research_reasoning import build_reasoning
+from research_filing_evidence import (reconcile_official_quarter, annual_exchange_comparison, official_four_quarter_eps)
 import report_charts as charts
 from pdf_technical_setup import build_setup_charts
 from report_quarterly_charts import render_quarterly_chart
@@ -193,8 +194,8 @@ def img(path, width=W):
         return None
 
 
-def section(title, sub=None):
-    out = [CondPageBreak(60 * mm), P(esc(title), "h1"),
+def section(title, sub=None, *, min_space_mm=60):
+    out = [CondPageBreak(min_space_mm * mm), P(esc(title), "h1"),
            HRFlowable(width="100%", thickness=1.2, color=NAVY, spaceAfter=5)]
     if sub:
         out += [P(esc(sub), "small"), Spacer(1, 3)]
@@ -297,10 +298,28 @@ def _find_peers(sym: str, max_peers: int = 5, timeout: int = 25):
     from nifty500_collector import get_stock_sector, SECTOR_STOCKS
     from fundamentals import get_fundamentals
     from market_data import bulk_history
+    from research_peer_identity import verified_industry_candidates
+
     sector = get_stock_sector(sym)
-    if not sector or "Others" in sector:
+    exact = verified_industry_candidates(sym)
+    if exact is not None:
+        # A time-limited official basic-industry identity screen takes priority
+        # over the old heterogeneous "Retail & Lifestyle" hardcoded group.
+        if exact["expired"]:
+            logger.warning("[Report] official basic-industry peer identities expired for %s", sym)
+            return sector, []
+        candidates = list(exact["candidates"])[:max_peers]
+        cands = [symbol for symbol, _name, _url in candidates]
+        identities = {symbol: (name, url) for symbol, name, url in candidates}
+    else:
+        if not sector or "Others" in sector:
+            return sector, []
+        cands = [s for s in SECTOR_STOCKS.get(sector, []) if s != sym][:max_peers + 4]
+        identities = {}
+
+    if not cands:
         return sector, []
-    cands = [s for s in SECTOR_STOCKS.get(sector, []) if s != sym][: max_peers + 4]
+
     peers = []
     pool = ThreadPoolExecutor(max_workers=min(6, max(1, len(cands))))
     try:
@@ -308,42 +327,71 @@ def _find_peers(sym: str, max_peers: int = 5, timeout: int = 25):
         done, _ = wait(futs.keys(), timeout=timeout)
         for f in done:
             c = futs[f]
-            d = f.result()
-            if d and d.get("mcap"):
-                peers.append({"sym": c, "name": d.get("name") or c, "mcap": d["mcap"],
-                              "pe": d.get("pe"), "roe": d.get("roe")})
+            d = f.result() or {}
+            label, url = identities.get(c, (None, None))
+            # Exact peers retain identity even when a downstream financial
+            # provider fails: missing numbers are shown as dashes, not invented.
+            if d.get("mcap") or label:
+                peers.append({
+                    "sym": c,
+                    "name": d.get("name") or label or c,
+                    "mcap": d.get("mcap"),
+                    "pe": d.get("pe"),
+                    "roe": d.get("roe"),
+                    **({"industry": exact["industry"],
+                        "industry_asof": exact["observed_date"],
+                        "industry_source": url} if label else {}),
+                })
     finally:
         pool.shutdown(wait=False)
+
+    # Even a timed-out request has a documented industry identity; it may
+    # appear with N/A metrics rather than silently disappearing.
+    if identities:
+        found = {p["sym"] for p in peers}
+        for c in cands:
+            if c not in found:
+                label, url = identities[c]
+                peers.append({
+                    "sym": c, "name": label, "mcap": None, "pe": None, "roe": None,
+                    "industry": exact["industry"],
+                    "industry_asof": exact["observed_date"],
+                    "industry_source": url,
+                })
     peers.sort(key=lambda p: p["mcap"] or 0, reverse=True)
     peers = peers[:max_peers]
     if peers:
         hist = _safe(bulk_history, [p["sym"] for p in peers], "1y", default={}) or {}
         for p in peers:
             df = hist.get(p["sym"])
-            p["ret_1y"] = (round((float(df["Close"].iloc[-1]) / float(df["Close"].iloc[0]) - 1) * 100, 1)
-                           if df is not None and len(df) > 100 else None)
+            p["ret_1y"] = (
+                round((float(df["Close"].iloc[-1]) / float(df["Close"].iloc[0]) - 1) * 100, 1)
+                if df is not None and len(df) > 100 else None
+            )
     return sector, peers
 
-
 def _real_news(sym: str) -> List[str]:
-    """Headlines only — drops the generic placeholder text market_news falls back to."""
-    from market_news import get_stock_news
-    try:
-        from market_news import _STOCK_NEWS_FALLBACK as FB
-        fb_vals = {str(v).strip() for v in FB.values()}
-    except Exception:
-        fb_vals = set()
-    raw = get_stock_news(sym, 5) or ""
-    out = []
-    for line in raw.split("\n"):
-        line = _html.unescape(re.sub(r"<[^>]+>", "", line))
-        line = strip_emoji(line).lstrip("• ").strip()
-        if (not line or "Recommend checking company announcements" in line
-                or line.startswith("Latest market conditions") or line in fb_vals):
-            continue
-        out.append(line)
-    return out[:5]
+    """Fail closed: plain-text search results are not dated, attributable news.
 
+    Keep news out of client PDFs until the provider supplies individually
+    verified article URLs, publisher names and publication timestamps.
+    """
+    logger.info("[Report] unsourced text headlines withheld for %s", sym)
+    return []
+
+
+def _require_latest_completed_eod(market: dict, expected_session) -> str:
+    """Reject current intraday and stale daily bars before publishing an EOD PDF.
+
+    The central market_breadth calendar helper applies the 16:00 IST buffer
+    and conservative weekend/holiday treatment. Never relabel an incomplete
+    same-day candle as a completed close.
+    """
+    observed = market.get("candle_date") if isinstance(market, dict) else None
+    expected = expected_session.isoformat() if hasattr(expected_session, "isoformat") else None
+    if not expected or observed != expected:
+        raise ValueError("Research report withheld: latest completed NSE EOD session not verified")
+    return observed
 
 def collect_inputs(sym: str) -> dict:
     from data_engine import get_hist, get_info
@@ -369,6 +417,8 @@ def collect_inputs(sym: str) -> dict:
     market = technical_price_context(df)
     if market is None:
         raise ValueError("Research report withheld: historical price session stale or unverified")
+    from market_breadth import expected_completed_session
+    _require_latest_completed_eod(market, expected_completed_session())
     ltp = market["historical_close"]
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -403,10 +453,41 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     t = eng.compute_technicals(df, nifty)
     rk = eng.compute_risk(df, nifty)
     fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
+    filing_evidence = reconcile_official_quarter(sym, inp.get("stm"))
+    annual_evidence = annual_exchange_comparison(sym, inp.get("stm"))
+    if filing_evidence.get("status") == "partial_match":
+        exchange_ttm = official_four_quarter_eps(sym, filing_evidence.get("period_end"))
+        if exchange_ttm is not None and fv.get("pe") and t["ltp"] > 0:
+            if abs(exchange_ttm * float(fv["pe"]) / t["ltp"] - 1) <= 0.15:
+                old_eps = fv.get("eps")
+                fv["eps"] = exchange_ttm
+                fv["eps_basis"] = (
+                    "sum of four reported basic quarterly EPS from dated issuer filings; "
+                    "weighted-average shares may differ"
+                )
+                fv["eps_secondary"] = old_eps
+                # Previously derived peer equivalents (if any) used the old EPS.
+                # Suppress rather than leave a mismatched mixed-source value.
+                fv["implied_peer_value"] = None
+                fv["implied_upside"] = None
     sc = eng.compute_scores(t, rk, fv)
     plan = eng.build_trade_plan(t, rk, sc)
     reasoning = build_reasoning(nifty, t, fv, sc, inp.get("sector"))
     fl = eng.build_flags(t, rk, fv, sh, inp.get("consensus"))
+    if filing_evidence.get("status") == "partial_match":
+        h1_cf = filing_evidence.get("h1_operating_cash_flow_crore")
+        h1_profit = filing_evidence.get("h1_profit_crore")
+        if h1_cf is not None and h1_profit and h1_profit > 0:
+            h1_conversion = h1_cf / h1_profit
+            if h1_conversion < 0.60:
+                fl["risks"].append({
+                    "sev": "Medium",
+                    "title": "Low half-year cash conversion",
+                    "evidence": (
+                        f"FY27 H1 consolidated operating cash flow ₹{h1_cf:,.2f} Cr "
+                        f"versus PAT ₹{h1_profit:,.2f} Cr ({h1_conversion:.2f}×). "
+                        "Seasonal working capital can affect half-year figures."),
+                })
     nar = eng.deterministic_narrative(name, sym, t, rk, fv, sc, plan, sh)
     # LLM commentary is opt-in until its qualitative claims can be verified.
     ai_note = eng.ai_analyst_note(name, sym, inp.get("sector"), t, rk, fv, sc, plan, sh) if (use_ai and
@@ -437,6 +518,7 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
     return dict(sym=sym, name=name, sector=strip_emoji(inp.get("sector") or ""), t=t, rk=rk, fv=fv, sc=sc, reasoning=reasoning,
                 plan=plan, flags=fl, nar=nar, ai_note=ai_note, buzz=buzz, ch=ch, sh=sh,
                 stm=inp.get("stm"), peers=peers, consensus=inp.get("consensus"),
+                filing_evidence=filing_evidence, annual_evidence=annual_evidence,
                 news=inp.get("news") or [], fund=fund, price_session=price_session,
                 generated=datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %H:%M IST"))
 
@@ -459,7 +541,7 @@ def _cover(R, story):
     banner = Table([
         [P(esc(R["name"]), "title"), P(inr(t["ltp"]), "px")],
         [P(f"NSE: {esc(R['sym'])}" + (f"  ·  {esc(R['sector'])}" if R["sector"] else "") + "  ·  Equity Research", "sub"),
-         P(f"<font color='{chg_hex}'>{t['chg']:+.2f}% today</font>", "pxs")],
+         P(f"<font color='{chg_hex}'>{t['chg']:+.2f}% session change</font>", "pxs")],
     ], colWidths=[W * 0.66, W * 0.34])
     banner.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), NAVY), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                 ("TOPPADDING", (0, 0), (-1, 0), 13), ("BOTTOMPADDING", (0, 1), (-1, 1), 12),
@@ -541,7 +623,7 @@ def _investment_view(R, story):
     last_date = setup.get("date") or "last available closing candle"
     combined = ("RESEARCH ONLY - insufficient verified financial evidence"
                 if evidence_warning else
-                "WATCHLIST / independent due diligence before any transaction")
+                "EDUCATIONAL RESEARCH / independent source verification pending")
     story += [P("FUNDAMENTAL + TECHNICAL | ONE-PAGE DECISION SNAPSHOT", "h2"),
               table([[P("Dimension", "th"), P("Evidence", "th")],
                      [P("Business quality", "cellb"), P(_pillar("Quality"), "cell")],
@@ -615,7 +697,7 @@ def _investment_view(R, story):
 
 def _technical(R, story):
     t = R["t"]
-    story += section("Technical Analysis", "Multi-timeframe trend, momentum, volume and key price levels")
+    story += section("Technical Analysis", "Multi-timeframe trend, momentum, volume and key price levels", min_space_mm=115)
     # The standalone Telegram chart does its own download and is not safe to
     # embed: both views MUST be calculated from the report's same OHLCV.
     if R["ch"].get("tech_price") and R["ch"].get("tech_momentum"):
@@ -645,7 +727,7 @@ def _technical(R, story):
         ["EMA 20 / 50", f"{inr(t['ema20'])} / {inr(t['ema50'])}", "EMA 200", inr(t.get("ema200"))],
         ["Bollinger band", f"{inr(t['bb_lo'])} – {inr(t['bb_up'])}", "%B / bandwidth", f"{n(t.get('pct_b'), 0)}%  /  {n(t.get('bandwidth'), 1)}%"],
         ["52W position", f"{n(t.get('pos52'), 0)}% of range  ({t['dist_high']:+.1f}% from high)", "Volume vs 20D avg", f"{n(t.get('vol_ratio'), 2)}×"],
-        ["Up/down volume (20D)", f"{n(t.get('updown_vol'), 2)}  —  {t['accumulation'].title()}", "Avg daily turnover", f"₹{n(t.get('traded_cr'), 1)} Cr"],
+        ["Up/down volume (20D)", f"{n(t.get('updown_vol'), 2)}× (up/down sessions)", "Avg daily turnover", f"₹{n(t.get('traded_cr'), 1)} Cr"],
     ]))
 
     rets = t.get("returns") or {}
@@ -687,7 +769,7 @@ def _risk(R, story):
     rk = R["rk"]
     if not rk.get("ann_vol"):
         return
-    story += section("Risk & Relative Performance", "How much the stock moves, how deep it falls, and how it tracks the market")
+    story += section("Risk & Relative Performance", "How much the stock moves, how deep it falls, and how it tracks the market", min_space_mm=115)
     if R["ch"].get("rel"):
         im = img(R["ch"]["rel"], W)
         if im:
@@ -717,6 +799,47 @@ def _fundamentals(R, story):
     if not (any(fv.get(k) is not None for k in ("pe", "roe", "pb", "eps")) or fv["has_statements"]):
         return
     story += section("Fundamental Analysis", "Valuation, growth, profitability, balance sheet and cash flow")
+    proof = R.get("filing_evidence") or {}
+    if proof.get("status") == "partial_match":
+        matched = proof["matched"]
+        details = "; ".join(
+            f"{r['field'].replace('_', ' ').title()} "
+            + (f"₹{r['official']:,.2f} Cr" if r["unit"] == "₹ Cr" else f"₹{r['official']:.2f}")
+            for r in matched
+        )
+        story += [P("<b>NSE Q2 source cross-check:</b> " + esc(details) +
+                    ". Matched " + str(len(matched)) + "/3 fields to the " +
+                    esc(proof["period_end"]) +
+                    " consolidated, unaudited issuer filing (limited review). "
+                    "This is field-level comparison, not a full financial audit.", "small"),
+                  P('<link href="' + esc(proof["source_url"]) +
+                    '" color="#0B2545">Open official NSE iXBRL filing</link>' +
+                    " · Reviewed " + esc(proof["reviewed_date"]), "tiny")]
+        official_de, vendor_de = proof.get("exchange_debt_equity"), fv.get("de")
+        if official_de is not None and vendor_de is not None and abs(official_de-vendor_de) > 0.02:
+            story.append(P(
+                f"<b>Debt/equity period difference:</b> Sep 2026 filing {official_de:.2f}× "
+                f"versus secondary provider {vendor_de:.2f}× (FY26 year-end filing: 0.10×). "
+                "Current and annual periods must not be presented as identical.", "tiny"))
+        half_cf, half_pat = proof.get("h1_operating_cash_flow_crore"), proof.get("h1_profit_crore")
+        if half_cf is not None and half_pat and half_pat > 0:
+            story.append(P(
+                f"<b>Half-year cash flow (NSE filing):</b> FY27 H1 consolidated "
+                f"operating cash flow ₹{half_cf:,.2f} Cr / net profit ₹{half_pat:,.2f} Cr = "
+                f"{half_cf/half_pat:.2f}×. Seasonality matters; this is not the 3Y cash-conversion ratio.",
+                "tiny"))
+        kpi = proof.get("operating_kpis") or {}
+        if kpi.get("period_end") == proof.get("period_end"):
+            story.append(P(
+                f"<b>Operating KPIs, Sep 2026:</b> {kpi['stores']} stores "
+                f"({kpi['stores_added_h1']} added in H1); Q2 like-for-like sales growth "
+                f"{kpi['like_for_like_q2_pct']:.1f}% vs Q1 "
+                f"{kpi['like_for_like_q1_pct']:.1f}%; "
+                f"retail area {kpi['retail_area_million_sqft']:.1f} mn sq ft. "
+                "Company-reported operational measures, not audited forecasts. "
+                '<link href="' + esc(kpi["source_url"]) +
+                '" color="#0B2545">Issuer investor presentation</link>.',
+                "tiny"))
     if R["nar"].get("fundamental"):
         story += [P(R["nar"]["fundamental"], "just"), Spacer(1, 6)]
 
@@ -731,6 +854,15 @@ def _fundamentals(R, story):
         ["ROE", n(fv.get("roe"), 1, "%"), "ROCE", n(fv.get("roce"), 1, "%")],
         ["Dividend yield", n(fv.get("div_y"), 2, "%"), "Debt / Equity", n(fv.get("de"), 2, "×") if not fv["fin"] else "n.m. (financial)"],
     ]))
+    if fv.get("eps_basis") and fv["eps_basis"].startswith("four consecutive"):
+        story.append(P("TTM EPS is derived from four consecutive secondary-source quarters; "
+                       "its price/P-E reconciliation is a consistency check, not independent audit.", "tiny"))
+    elif fv.get("eps_basis") and fv["eps_basis"].startswith("sum of four"):
+        story.append(P(
+            "TTM EPS is the sum of four reported consolidated basic quarterly EPS "
+            "(Dec 2025–Sep 2026) from two issuer filings. "
+            "It is an approximation, not weighted-average 12-month basic EPS. "
+            "P/E and market price are separate provider observations.", "tiny"))
 
     if fv["has_statements"] or fv["has_quarters"]:
         story += [Spacer(1, 6), P("Growth & earnings quality", "h2"), kv([
@@ -751,19 +883,41 @@ def _fundamentals(R, story):
     if R["ch"].get("quarters"):
         im = img(R["ch"]["quarters"], W)
         if im:
-            story += [Spacer(1, 6), P("Verified quarterly visual trends", "h2"),
-                      im, P("Charts show reported periods only. Quarterly figures are "
-                            "not management guidance or forward projections.", "tiny")]
+            story.append(KeepTogether([
+                Spacer(1, 6), P("Quarterly trends (provider-reported; not independently reconciled)", "h2"),
+                im, P("Quarterly values and periods are secondary-source observations, "
+                      "not independently matched to exchange filings or forecasts.", "tiny")
+            ]))
 
     years = (stm or {}).get("years") or []
+    annual = R.get("annual_evidence") or {}
     if len(years) >= 3:
-        ann_head = [Spacer(1, 6), P(f"Annual financials ({stm['unit']}; source: {esc(stm['source'])})", "h2")]
+        # Correct only an audited FY26 EPS if revenue and net profit match.
+        # This is a presentation copy, not mutation of cached source statements.
+        years_display = [dict(row) for row in years]
+        replaced_annual_eps = None
+        if annual.get("status") == "core_match":
+            for row in years_display:
+                if row.get("label") == "Mar 2026":
+                    replaced_annual_eps = row.get("eps")
+                    row["eps"] = annual["eps"]
+        ann_head = [Spacer(1, 6), P(f"Annual financials ({stm['unit']}; source: {esc(stm['source'])}; FY26 EPS NSE-audited where reconciled)", "h2")]
         data, widths = _fin_table([("Revenue", "revenue", cr), ("Operating profit", "op_profit", cr),
                                    ("OPM %", "opm", lambda v: n(v, 1)), ("Net profit", "net_profit", cr),
                                    ("EPS (₹)", "eps", lambda v: n(v, 2)), ("Operating cash flow", "ocf", cr),
                                    ("Borrowings", "borrowings", cr), ("Net worth", "networth", cr),
-                                   ("ROCE %", "roce", lambda v: n(v, 1))], years[-6:])
+                                   ("ROCE %", "roce", lambda v: n(v, 1))], years_display[-6:])
         story.append(KeepTogether(ann_head + [table(data, widths)]))
+        if annual.get("status") == "core_match":
+            secondary = n(replaced_annual_eps, 2)
+            story.append(P(
+                f"FY26 consolidated audited revenue ₹{annual['revenue']:,.2f} Cr and "
+                f"PAT ₹{annual['net_profit']:,.2f} Cr agree after rounding. "
+                f"Audited FY26 basic EPS ₹{annual['eps']:.2f} replaces "
+                f"secondary figure ₹{secondary}. "
+                '<link href="' + esc(annual["source_url"]) +
+                '" color="#0B2545">Official 2 May 2026 audited results</link>.',
+                "tiny"))
 
     qs = (stm or {}).get("quarters") or []
     if len(qs) >= 4:
@@ -789,7 +943,7 @@ def _fundamentals(R, story):
 def _ownership_peers(R, story):
     sh, peers, fv = R["sh"], R["peers"], R["fv"]
     if len(sh) >= 3:
-        story += section("Ownership Pattern", "Who owns the stock and which way the institutional money is moving")
+        story += section("Ownership Pattern", "Who owns the stock and which way the institutional money is moving", min_space_mm=110)
         if R["ch"].get("sh"):
             im = img(R["ch"]["sh"], W)
             if im:
@@ -808,15 +962,29 @@ def _ownership_peers(R, story):
                          P(colored(f"{d:+.1f}", GREEN_H if good else RED_H), "cellr")])
         story += [Spacer(1, 4), table([hdr] + rows, [50 * mm, 40 * mm, 40 * mm, 48 * mm])]
 
+    if not peers:
+        story.append(P("Peer comparison withheld: no comparable peers with usable sourced "
+                       "financial data were supplied; no peer valuation conclusion is made.", "tiny"))
     if peers:
-        story += section(f"Peer Comparison — {R['sector']}" if R["sector"] else "Peer Comparison",
-                         "Same-sector companies ranked by market capitalisation")
+        industry = next((p.get("industry") for p in peers if p.get("industry")), None)
+        source_asof = next((p.get("industry_asof") for p in peers if p.get("industry_asof")), None)
+        story += section(
+            f"Peer Comparison — NSE {esc(industry)}" if industry else
+            (f"Peer Comparison — {R['sector']}" if R["sector"] else "Peer Comparison"),
+            (f"Basic-industry identities checked {source_asof}; provider financials may be missing."
+             if industry else "Same broad-sector companies ranked by market capitalisation")
+        )
         hdr = [P("Company", "th"), P("Mkt cap", "thr"), P("P/E", "thr"), P("ROE %", "thr"), P("1Y return", "thr")]
         r1 = (R["t"].get("returns") or {}).get("1Y") or {}
         me = [P(f"<b>{esc(R['name'])}</b> (this stock)", "cell"), P(mcap_txt(fv.get("mcap")), "cellrb"),
               P(n(fv.get("pe"), 1), "cellrb"), P(n(fv.get("roe"), 1), "cellrb"),
               P(f"{r1['stock']:+.1f}%" if r1.get("stock") is not None else "—", "cellrb")]
         rows = [me]
+        if industry:
+            story.append(P(
+                "Peer identities follow NSE basic-industry classification, not market-cap "
+                "or business-model equivalence. Missing provider prices or ratios remain blank.",
+                "tiny"))
         for p in peers:
             rows.append([P(esc(p["name"]), "cell"), P(mcap_txt(p["mcap"]), "cellr"), P(n(p.get("pe"), 1), "cellr"),
                          P(n(p.get("roe"), 1), "cellr"), P(f"{p['ret_1y']:+.1f}%" if p.get("ret_1y") is not None else "—", "cellr")])
@@ -939,9 +1107,10 @@ def _plan(R, story):
     r1 = plan.get("range_1m")
     if r1:
         story += [Spacer(1, 6), P("One-month statistical range (from realised volatility)", "h2"),
-                  P(f"±1σ ({r1['sigma_pct']}%): <b>{inr(r1['s1_lo'])} – {inr(r1['s1_hi'])}</b> (about 68% of outcomes)  ·  "
-                    f"±2σ: <b>{inr(r1['s2_lo'])} – {inr(r1['s2_hi'])}</b> (about 95%). "
-                    f"This is a volatility-implied range, not a forecast.", "just")]
+                  P(f"±1σ ({r1['sigma_pct']}%): <b>{inr(r1['s1_lo'])} – {inr(r1['s1_hi'])}</b>  ·  "
+                    f"±2σ: <b>{inr(r1['s2_lo'])} – {inr(r1['s2_hi'])}</b>. "
+                    "These arithmetic volatility bands are not forecasts or validated "
+                    "probability/coverage intervals; returns can be non-normal.", "just")]
 
 
 def _risks_catalysts(R, story):
@@ -953,10 +1122,8 @@ def _risks_catalysts(R, story):
         story.append(table([[P("Severity", "th"), P("Risk", "th"), P("Evidence", "th")]] + rows, [22 * mm, 46 * mm, 110 * mm]))
     else:
         story.append(callout("No major red flags were triggered by the available price, risk and fundamental data.", GREEN_H, "#F1FAF5"))
-    if R["news"]:
-        story += [Spacer(1, 8), P("Recent headlines", "h2")]
-        story += bullets([esc(x) for x in R["news"]])
-        story.append(P("Headlines are listed for context only and have not been used in the scoring.", "tiny"))
+    # Do not render undated search pages as news. Verified article provenance
+    # must precede a future structured headline feature.
 
 
 def _appendix(R, story):
@@ -1010,6 +1177,7 @@ def _appendix(R, story):
         ("Commentary: " +
          ("AI-assisted; financial facts require independent confirmation."
           if R["ai_note"] else "rule-generated, no AI text.")),
+        ("News headlines: withheld unless individually sourced, dated and linked."),
         ("Financial figures and ratios were not independently reconciled "
          "to stock-exchange filings; verify consolidated/standalone scope, "
          "fiscal period and restatements before any client use."),
@@ -1066,6 +1234,14 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
     try:
         inputs = collect_inputs(sym)
         R = assemble(inputs)
+        if (R.get("filing_evidence") or {}).get("status") == "mismatch":
+            raise ValueError(
+                "Research report withheld: secondary quarter does not reconcile "
+                "to the dated NSE issuer filing")
+        if (R.get("annual_evidence") or {}).get("status") == "mismatch":
+            raise ValueError(
+                "Research report withheld: FY26 secondary statement does not "
+                "reconcile to audited issuer filing")
         # CI-only provenance of the exact inputs used to draw the report.
         # Normal Telegram callers continue receiving the unchanged 3-tuple.
         if evidence_out is not None:

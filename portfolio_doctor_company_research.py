@@ -9,7 +9,7 @@ from datetime import datetime
 from portfolio_doctor_calculations import _ema, _rsi
 from portfolio_doctor_live import IST, verified_completed_daily_frame
 
-MAX_COMPANIES = 5
+MAX_COMPANIES = 10
 MAX_CHART_DAYS = 160
 
 
@@ -88,8 +88,14 @@ def _financial_evidence(fund):
         value = _safe_float(detail.get("value"))
         if value is None or (unit == "x" and value < 0):
             continue
-        period = str(detail.get("period") or "not supplied")[:22]
-        # No fabricated period for undated vendor ratios.
+        supplied_period = detail.get("period")
+        # A missing vendor date is unknown, not a literal fiscal period.
+        # Preserve explicitly dated/TTM/Current ratios, never invent a TTM.
+        period = (str(supplied_period).strip()[:22]
+                  if supplied_period is not None and
+                  str(supplied_period).strip().lower() not in (
+                      "", "not supplied", "unknown", "none", "null", "n/a")
+                  else None)
         values.append({"label": label, "value": value, "unit": unit,
                        "period": period})
     return {
@@ -184,6 +190,11 @@ def prepare_company_pages(holdings, frames, *, fundamentals=None,
                 chart=[round(x, 4) for x in closes_chart],
                 chart_ema20=[round(x, 4) for x in _ema_series(closes, 20)[-MAX_CHART_DAYS:]],
                 chart_ema50=[round(x, 4) for x in _ema_series(closes, 50)[-MAX_CHART_DAYS:]],
+                # EMA200 only exists when 200 verified daily candles are available;
+                # never seed a counterfeit "200-day" line from 60/150 sessions.
+                chart_ema200=([round(x, 4) for x in
+                               _ema_series(closes, 200)[-MAX_CHART_DAYS:]]
+                              if len(closes) >= 200 else []),
                 chart_dates=dates,
             )
         except Exception:

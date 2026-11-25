@@ -19,7 +19,7 @@ def _unavailable(reason):
 
 def _common_history(holdings, frames, *, now):
     from portfolio_doctor_live import verified_completed_daily_frame
-    if not isinstance(frames, dict) or not 1 <= len(holdings) <= 5:
+    if not isinstance(frames, dict) or not 1 <= len(holdings) <= 10:
         return None
     dates = {str(row["date"]) for row in holdings}
     if len(dates) != 1:
