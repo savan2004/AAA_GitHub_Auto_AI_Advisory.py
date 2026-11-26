@@ -105,18 +105,16 @@ jobs:
               if symbol in focus:
                   diagnostics.setdefault(symbol, {})["numeric_comparison"] = data
                   print("FOCUS_NUMERIC", json.dumps(data, sort_keys=True))
+          def verify_candidate(member, evidence):
+              observation = diagnose_quarter(member, evidence, listing=diagnosed_listing, audit=record_numeric)
+              print("PRIMARY_PROGRESS", json.dumps(observation, sort_keys=True))
+              return observation
           def diagnosed_refresh(bank, **kwargs):
-              result, version = stage_week(bank, **kwargs)
+              result, version = stage_week(bank, quarter_verifier=verify_candidate, **kwargs)
               print("PUBLIC_PERIOD_FAILURES", json.dumps(result.failures, sort_keys=True))
-              # Bounded verification: each staged issuer (maximum 20), irrespective of scope.
-              print("PRIMARY_PILOT_SCOPES", json.dumps({c.member.symbol: c.evidence.scope for c in result.companies[:20]}, sort_keys=True))
-              for company in result.companies[:20]:
-                  observation = diagnose_quarter(
-                      company.member, company.evidence,
-                      listing=diagnosed_listing, audit=record_numeric)
-                  primary_checks.append(observation)
-                  print("PRIMARY_PROGRESS", json.dumps(observation, sort_keys=True))
-                  persist()
+              primary_checks.extend(result.primary_checks)
+              persist(primary_rejections=result.primary_rejections, reserves=result.reserves)
+              print("PRIMARY_REJECTIONS", json.dumps(result.primary_rejections, sort_keys=True))
               print("PRIMARY_QUARTER_CHECKS", json.dumps(primary_checks, sort_keys=True))
               return result, version
           first = run_weekly_job(environ=env, bank_factory=factory, refresh=diagnosed_refresh)

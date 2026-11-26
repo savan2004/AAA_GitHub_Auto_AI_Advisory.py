@@ -42,6 +42,16 @@ class WeeklyJobTests(unittest.TestCase):
         self.assertEqual(result["failure_counts"], {"EOD_MISSING": 1})
         self.assertEqual(result["publication_status"], "WITHHELD")
 
+    def test_default_enabled_job_uses_primary_verification(self):
+        bank=Mock()
+        result=SimpleNamespace(status="INTERNAL_SECONDARY_STAGING",attempted=(),
+            companies=(),failures={},primary_checks=(),primary_rejections=(),reserves=())
+        with patch("msk_ai_builder_weekly_job.stage_week",return_value=(result,"new")) as stage:
+            run_weekly_job(environ={"MSK_BUILDER_WEEKLY_JOB_ENABLED":"1"},
+                           bank_factory=Mock(return_value=bank))
+        self.assertTrue(stage.call_args.kwargs["once_per_week"])
+        self.assertTrue(callable(stage.call_args.kwargs["quarter_verifier"]))
+
     def test_same_session_week_skips_before_provider_calls(self):
         bank, roster, closes = Mock(), Mock(), Mock()
         bank.read_for_review.return_value = ("old", {"close_date": CLOSE.isoformat()})

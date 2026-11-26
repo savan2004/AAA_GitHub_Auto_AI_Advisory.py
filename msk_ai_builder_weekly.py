@@ -23,6 +23,9 @@ class WeeklyReview:
     reviews: dict
     failures: dict
     status: str
+    reserves: tuple = ()
+    primary_checks: tuple = ()
+    primary_rejections: tuple = ()
 
 def preliminary_score(e):
     """Range 0–100; provisional research triage only, not investment ranking."""
@@ -49,7 +52,8 @@ def preliminary_score(e):
     return round(points,2)
 
 def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=None,
-                max_attempts=40,deadline_seconds=300,clock=time.monotonic,utc_clock=None):
+                max_attempts=40,deadline_seconds=300,clock=time.monotonic,utc_clock=None,
+                quarter_verifier=None):
     """Review incumbents first; don't drop one due to a transient fetch failure.
 
     A bounded candidate batch is never reported as a full 500-company analysis.
@@ -136,11 +140,71 @@ def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=Non
         sector_counts[c.sector]=sector_counts.get(c.sector,0)+1
         if c.member.symbol in incumbent_set:
             decisions[c.member.symbol]="retained"
+    initial_symbols={c.member.symbol for c in selected}
+    reserves=[c for _,c in candidates if c.member.symbol not in initial_symbols]
+    primary_checks,primary_rejections=[],[]
+    if quarter_verifier is not None:
+        # Keep the original 20 in priority order. Verify each once, then fill
+        # only failed slots from already scored alternatives, not the entire index.
+        primary_start=clock()
+        verified=[]
+        sector_counts={}
+        def verify(c):
+            try:
+                obs=quarter_verifier(c.member,c.evidence)
+                if not isinstance(obs,dict) or obs.get("symbol")!=c.member.symbol:
+                    raise EvidenceError("PRIMARY_OBSERVATION_IDENTITY")
+                if obs.get("status")=="LATEST_QUARTER_MATCHED_ONLY":
+                    if (obs.get("isin")!=c.member.isin
+                            or obs.get("period")!=c.evidence.quarterly[-1].end.isoformat()
+                            or obs.get("scope")!=c.evidence.scope
+                            or obs.get("publication_status")!="WITHHELD"):
+                        raise EvidenceError("PRIMARY_OBSERVATION_IDENTITY")
+                    primary_checks.append(obs)
+                    verified.append(c)
+                    sector_counts[c.sector]=sector_counts.get(c.sector,0)+1
+                    return
+                if obs.get("publication_status")!="WITHHELD":
+                    raise EvidenceError("PRIMARY_OBSERVATION_IDENTITY")
+            except Exception:
+                obs={"symbol":c.member.symbol,"status":"PRIMARY_CHECK_UNAVAILABLE",
+                     "stage":"PRIMARY_VERIFICATION","publication_status":"WITHHELD"}
+            primary_rejections.append(obs)
+            if c.member.symbol in incumbent_set:
+                decisions[c.member.symbol]="removed: latest quarter evidence unavailable or mismatched"
+        for c in selected:
+            if clock()-primary_start>=180:
+                break
+            verify(c)
+        reserve_attempts=0
+        for c in reserves:
+            if len(verified)>=20 or reserve_attempts>=10 or clock()-primary_start>=180:
+                break
+            if sector_counts.get(c.sector,0)>=5:
+                continue
+            reserve_attempts+=1
+            verify(c)
+        selected=verified
+        selected_symbols={c.member.symbol for c in selected}
+        for symbol in incumbent_set:
+            if symbol in selected_symbols:
+                decisions[symbol]="retained"
+            elif decisions.get(symbol)=="retained":
+                decisions[symbol]="removed: latest quarter review incomplete"
+        rejected_symbols={r["symbol"] for r in primary_rejections}
+        remaining=tuple(c.member.symbol for c in reserves
+                        if c.member.symbol not in selected_symbols|rejected_symbols)[:10]
+        # A partial bank cannot replace the previous snapshot in verified mode.
+        status="INTERNAL_SECONDARY_STAGING" if len(selected)==20 else "WITHHELD_PRIMARY_COVERAGE"
+        return WeeklyReview(500,len(closes),tuple(attempts),tuple(scored),tuple(selected),
+                            decisions,failures,status,remaining,tuple(primary_checks),tuple(primary_rejections))
     return WeeklyReview(500,len(closes),tuple(attempts),tuple(scored),tuple(selected),decisions,failures,
-                        "INTERNAL_SECONDARY_STAGING" if selected else "WITHHELD_NO_QUALIFIERS")
+                        "INTERNAL_SECONDARY_STAGING" if selected else "WITHHELD_NO_QUALIFIERS",
+                        tuple(c.member.symbol for c in reserves[:10]))
 
 def stage_week(bank,*,now=None,roster_provider=fetch_roster,close_provider=fetch_closes,
-               evidence_provider=None,max_attempts=40,deadline_seconds=300,once_per_week=False):
+               evidence_provider=None,max_attempts=40,deadline_seconds=300,once_per_week=False,
+               quarter_verifier=None):
     """Internal staging refresh; optional one successful review per ISO session week."""
     if type(once_per_week) is not bool:
         raise BankError('INVALID_WEEKLY_MODE')
@@ -173,7 +237,8 @@ def stage_week(bank,*,now=None,roster_provider=fetch_roster,close_provider=fetch
         raise BankError('INCUMBENT_IDENTITY_CHANGED')
     closes=close_provider(close_date,roster)
     result=plan_review(roster,closes,previous=previous,close_date=close_date,now=now,
-                       evidence_provider=evidence_provider,max_attempts=max_attempts,deadline_seconds=deadline_seconds,utc_clock=utc_clock)
+                       evidence_provider=evidence_provider,max_attempts=max_attempts,deadline_seconds=deadline_seconds,utc_clock=utc_clock,
+                       quarter_verifier=quarter_verifier)
     if result.status!="INTERNAL_SECONDARY_STAGING":
         return result,None
     finished=utc_clock()

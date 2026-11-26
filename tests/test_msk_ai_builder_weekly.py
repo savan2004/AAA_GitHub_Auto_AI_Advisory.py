@@ -111,6 +111,51 @@ class WeeklyTests(unittest.TestCase):
         self.assertEqual(r.status,"INTERNAL_SECONDARY_STAGING")
         self.assertTrue(all(not c.evidence.eligible_for_selection for c in r.companies))
         self.assertTrue(all(sum(x.sector==c.sector for x in r.companies)<=5 for c in r.companies))
+    @staticmethod
+    def quarter_observation(member,evidence):
+        return {"symbol":member.symbol,"isin":member.isin,
+                "period":evidence.quarterly[-1].end.isoformat(),
+                "scope":evidence.scope,"status":"LATEST_QUARTER_MATCHED_ONLY",
+                "publication_status":"WITHHELD"}
+
+    def test_primary_failure_replaced_by_next_ranked_reserve_without_rechecking(self):
+        baseline=self.plan()
+        original=[c.member.symbol for c in baseline.companies]
+        failed=original[4]
+        calls=[]
+        def verify(member,evidence):
+            calls.append(member.symbol)
+            if member.symbol==failed:
+                return {"symbol":failed,"status":"FILING_METADATA_COVERAGE",
+                        "publication_status":"WITHHELD"}
+            return self.quarter_observation(member,evidence)
+        r=self.plan(quarter_verifier=verify)
+        chosen=[c.member.symbol for c in r.companies]
+        self.assertEqual(calls[:20],original)
+        self.assertEqual(len(calls),21)
+        self.assertEqual(len(set(calls)),21)
+        self.assertEqual(set(chosen)-set(original),{baseline.reserves[0]})
+        self.assertEqual(set(original)-set(chosen),{failed})
+        self.assertEqual(len(r.primary_checks),20)
+        self.assertEqual(r.primary_rejections[0]["symbol"],failed)
+        self.assertEqual(r.status,"INTERNAL_SECONDARY_STAGING")
+        self.assertTrue(all(sum(x.sector==c.sector for x in r.companies)<=5 for c in r.companies))
+
+    def test_primary_reserve_exhaustion_does_not_store_partial_snapshot(self):
+        roster,closes=inputs()
+        bank=Mock()
+        bank.read_for_review.side_effect=BankError("BANK_EMPTY")
+        verifier=Mock(return_value={"symbol":"wrong","status":"LATEST_QUARTER_MATCHED_ONLY"})
+        with patch.dict("sys.modules",{"portfolio_doctor_live":SimpleNamespace(expected_doctor_session=lambda now:CLOSE)}):
+            r,version=stage_week(bank,now=NOW,roster_provider=lambda:roster,
+                close_provider=lambda day,rows:closes,evidence_provider=provider,
+                quarter_verifier=verifier)
+        self.assertEqual(verifier.call_count,30)
+        self.assertEqual(r.status,"WITHHELD_PRIMARY_COVERAGE")
+        self.assertEqual(len(r.primary_checks),0)
+        self.assertIsNone(version)
+        bank.replace.assert_not_called()
+
     def test_incumbents_first_and_no_churn(self):
         previous=tuple(f"TEST{i:03}" for i in range(480,500))
         r=self.plan(previous)

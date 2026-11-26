@@ -7,7 +7,7 @@ from msk_ai_builder_bank import BankError, build_weekly_bank
 from msk_ai_builder_weekly import stage_week
 
 
-def run_weekly_job(*, environ=None, bank_factory=build_weekly_bank, refresh=stage_week):
+def run_weekly_job(*, environ=None, bank_factory=build_weekly_bank, refresh=None):
     env = os.environ if environ is None else environ
     flag = env.get("MSK_BUILDER_WEEKLY_JOB_ENABLED", "0")
     if flag == "0":
@@ -17,7 +17,11 @@ def run_weekly_job(*, environ=None, bank_factory=build_weekly_bank, refresh=stag
     bank = bank_factory(environ=env)
     if bank is None:
         raise BankError("WEEKLY_BANK_DISABLED")
-    result, version = refresh(bank, once_per_week=True)
+    if refresh is None:
+        from msk_ai_builder_diagnostics import diagnose_quarter
+        result, version = stage_week(bank, once_per_week=True, quarter_verifier=diagnose_quarter)
+    else:
+        result, version = refresh(bank, once_per_week=True)
     return {
         "status": result.status,
         "publication_status": "WITHHELD",
@@ -25,6 +29,9 @@ def run_weekly_job(*, environ=None, bank_factory=build_weekly_bank, refresh=stag
         "selected": len(result.companies),
         "failure_counts": dict(Counter(result.failures.values())),
         "version": version,
+        "primary_matched": len(getattr(result,"primary_checks",())),
+        "primary_rejected": [r["symbol"] for r in getattr(result,"primary_rejections",())],
+        "reserves": list(getattr(result,"reserves",())),
     }
 
 
