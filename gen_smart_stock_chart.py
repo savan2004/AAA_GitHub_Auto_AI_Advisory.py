@@ -627,32 +627,12 @@ def _cleanup_old_charts(directory, max_age_sec=7200):
 
 _cleanup_old_charts(OUT_DIR)
 
-# Universe
-try:
-    import sys as _sys, os as _os
-    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-    from smart_chart_universe import load_nifty500_universe
-    UNIVERSE, _source = load_nifty500_universe()
-    print(f"SCAN: {len(UNIVERSE)} stocks source={_source}")
-except Exception:
-    UNIVERSE = [
-        ("RELIANCE.NS","Reliance Industries"),("TCS.NS","TCS"),
-        ("HDFCBANK.NS","HDFC Bank"),("INFY.NS","Infosys"),
-        ("ICICIBANK.NS","ICICI Bank"),("SBIN.NS","SBI"),
-        ("BHARTIARTL.NS","Airtel"),("ITC.NS","ITC"),
-        ("KOTAKBANK.NS","Kotak Bank"),("LT.NS","L&T"),
-        ("AXISBANK.NS","Axis Bank"),("BAJFINANCE.NS","Bajaj Finance"),
-        ("SUNPHARMA.NS","Sun Pharma"),("MARUTI.NS","Maruti"),
-        ("TITAN.NS","Titan"),("WIPRO.NS","Wipro"),
-        ("HCLTECH.NS","HCL Tech"),("ADANIENT.NS","Adani Ent"),
-        ("NTPC.NS","NTPC"),("TATAMOTORS.NS","Tata Motors"),
-    ]
-
-def _individual_history(symbol, session, period="1y"):
+def _individual_history(symbol, session, period="1y", *, recovery=None):
     from smart_chart_eod_recovery import ArchiveRecovery, yahoo_host_history, individual_chart_history
     from smart_chart_nse_history import official_nse_chart_history
     day = pd.Timestamp(session)
-    recovery = ArchiveRecovery([symbol], session)
+    if recovery is None:
+        recovery = ArchiveRecovery([symbol], session)
     def direct(sym):
         return yf.Ticker(sym).history(
             start=(day-pd.Timedelta(days=735 if period == "2y" else 370)).strftime("%Y-%m-%d"),
@@ -683,20 +663,28 @@ else:
     from smart_chart_nse_history import official_nse_chart_history
     from smart_chart_eod_recovery import preliminary_rank, ArchiveRecovery
 
+    from smart_chart_universe import load_nifty100_universe
+
+    try:
+        UNIVERSE, _source = load_nifty100_universe()
+    except RuntimeError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"SCAN: {len(UNIVERSE)} stocks source={_source}")
     session_key = str(expected_completed_session())
     shortlist_recovery = ArchiveRecovery([sym for sym, _ in UNIVERSE], session_key)
     try:
         winner, sampled, valid, universe_size = choose_auto_chart(
             UNIVERSE, download=yf.download, scorer=score_symbol_weighted,
             session_key=session_key, sample_limit=60,
-            individual_history=lambda sym: _individual_history(sym, session_key),
+            individual_history=lambda sym: _individual_history(sym, session_key, recovery=shortlist_recovery),
             shortlist_rank=preliminary_rank, shortlist_recovery=shortlist_recovery,
             min_score=12, require_confirmed_setup=True, scan_all=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
         sys.exit(1)
     winner["scope_note"] = (
-        f"Sample: {valid}/{sampled} qualifying NSE setups from {universe_size}; "
+        f"Nifty 100: {valid}/{sampled} qualifying setups from {universe_size}; "
         f"{'full-universe scan' if winner['_verified_count'] == universe_size else 'partial-universe scan'}; "
         f"Setup: {winner['reason']}; EOD {session_key}")
     print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key} score={winner['score']}/20")
