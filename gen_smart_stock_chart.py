@@ -1174,9 +1174,12 @@ try:
         ha="center", va="bottom", color=TEXT_SEC, fontsize=6.5)
 
     # ── SAVE ──────────────────────────────────────────────────────────────────
-    fig.savefig(OUT_FILE, dpi=160, bbox_inches="tight",
-        facecolor=BG_DARK, format="png")
-    plt.close(fig)
+    from smart_chart_snapshot import save_bounded_chart_png
+    try:
+        size, dpi = save_bounded_chart_png(fig, OUT_FILE, BG_DARK)
+        print(f"CHART_PNG_SIZE bytes={size} dpi={dpi}")
+    finally:
+        plt.close(fig)
 
     print(f"OUTPUT: {OUT_FILE}")
     print(f"META: {symbol}|{company_name}|{signal_text}|{score_str}|{last_close:.2f}|{sl_val:.2f}|{t1_val:.2f}|{t2_val:.2f}|{winner.get('scope_note', '')}")

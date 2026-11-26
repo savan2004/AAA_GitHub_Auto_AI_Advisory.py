@@ -33,6 +33,41 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
             image.save(stream, format="PNG")
             cls.image = stream.getvalue()
 
+    def test_strict_two_mb_gate(self):
+        self.assertEqual(store.MAX_PNG_BYTES, 1_999_999)
+        with self.assertRaisesRegex(ValueError, "size range"):
+            store._validate(self.image.ljust(2_000_000, b"x"), META, SESSION)
+
+    def test_renderer_keeps_highest_dpi_that_fits(self):
+        fig = MagicMock()
+        attempts = []
+        def render(path, **kwargs):
+            attempts.append(kwargs["dpi"])
+            self.assertEqual(kwargs["pil_kwargs"]["compress_level"], 9)
+            payload = self.image if kwargs["dpi"] == 144 else b"x" * 2_000_000
+            Path(path).write_bytes(payload)
+        fig.savefig.side_effect = render
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "chart.png"
+            size, dpi = store.save_bounded_chart_png(fig, destination, "#ffffff")
+            self.assertEqual(attempts, [160, 144])
+            self.assertEqual(dpi, 144)
+            self.assertLess(size, 2_000_000)
+            self.assertEqual(destination.read_bytes(), self.image)
+            self.assertEqual(list(Path(folder).iterdir()), [destination])
+
+    def test_renderer_rejects_oversize_without_exposing_file(self):
+        fig = MagicMock()
+        fig.savefig.side_effect = lambda path, **kwargs: Path(path).write_bytes(
+            b"x" * 2_000_000)
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "chart.png"
+            with self.assertRaisesRegex(ValueError, "2 MB"):
+                store.save_bounded_chart_png(fig, destination, "#ffffff")
+            self.assertEqual(fig.savefig.call_count, 4)
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
     def test_real_png_metadata_and_no_fake_trades(self):
         match = store._validate(self.image, META, SESSION)
         self.assertEqual(match.group(9), "52")

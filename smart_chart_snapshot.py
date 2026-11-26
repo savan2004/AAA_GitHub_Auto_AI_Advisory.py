@@ -13,7 +13,7 @@ from pathlib import Path
 
 LOG_PREFIX = "MSK_SMART_CHART"
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-MAX_PNG_BYTES = 8 * 1024 * 1024
+MAX_PNG_BYTES = 1_999_999  # Strictly below 2 decimal MB.
 MIN_PNG_BYTES = 25_000
 META = re.compile(
     r"^([A-Z0-9&._-]+\.NS)\|([^|]{2,100})\|"
@@ -27,6 +27,31 @@ META = re.compile(
     r"Trend confirmation: higher highs/lows \+ weekly trend); "
     r"EOD (\d{4}-\d{2}-\d{2}); Chart V8$"
 )
+
+
+def save_bounded_chart_png(fig, destination, facecolor):
+    """Preserve chart content and use the highest tested DPI under 2 MB.
+
+    PNG compression is lossless; only if necessary, re-render at a lower
+    DPI. Never expose an oversized or partially written output file.
+    """
+    destination = Path(destination)
+    fd, temporary = tempfile.mkstemp(prefix=".chart-render-", suffix=".png",
+                                     dir=destination.parent)
+    os.close(fd)
+    try:
+        for dpi in (160, 144, 132, 120):
+            fig.savefig(temporary, dpi=dpi, bbox_inches="tight",
+                        facecolor=facecolor, format="png",
+                        pil_kwargs={"compress_level": 9})
+            size = os.path.getsize(temporary)
+            if MIN_PNG_BYTES <= size <= MAX_PNG_BYTES:
+                os.replace(temporary, destination)
+                return size, dpi
+        raise ValueError("Chart PNG cannot meet the 2 MB limit at readable DPI")
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _dsn():
