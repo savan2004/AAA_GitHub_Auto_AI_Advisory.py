@@ -56,6 +56,23 @@ class BuzzSnapshotTests(unittest.TestCase):
         self.botpatch.start()
         self.addCleanup(self.botpatch.stop)
 
+    def test_github_worker_saves_once_and_surfaces_neon_failure(self):
+        """No double save after a successful scan; no silent database failure."""
+        result = scan()
+        run = unittest.mock.Mock(return_value=result)
+        self.botmod.run_scan = run
+        saved = unittest.mock.Mock(return_value="synthetic-sha256")
+        with patch.object(snap, "save_verified_scan", saved):
+            snap.main()
+        run.assert_called_once_with(save_snapshot=False)
+        saved.assert_called_once_with(result)
+        run.reset_mock()
+        with patch.object(snap, "save_verified_scan",
+                          side_effect=RuntimeError("Neon unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "Neon unavailable"):
+                snap.main()
+        run.assert_called_once_with(save_snapshot=False)
+
     def test_valid_completed_session_and_coverage_encode(self):
         value = scan()
         value["data_session"] = self.day.isoformat()

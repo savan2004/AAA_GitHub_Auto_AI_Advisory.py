@@ -50,7 +50,7 @@ def _matches(a, b):
 def final_archive_rows(day, wanted, *, get=None):
     """Fetch one final official ZIP; keep only exact requested EQ symbols."""
     wanted = set(wanted)
-    if not wanted or len(wanted) > 550:
+    if not wanted or len(wanted) > 1000:
         return {}
     get = get or requests.get
     try:
