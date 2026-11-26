@@ -54,6 +54,29 @@ class MonetaryReconciliation(unittest.TestCase):
         self.assertEqual(groups[0]["industry"], "Unclassified / no official match")
         self.assertAlmostEqual(groups[0]["weight"], 75)
 
+    def test_roster_classification_survives_unavailable_peer_screen(self):
+        rows = [holding("SAMPLEA", 1, 100, 100),
+                holding("SAMPLEB", 3, 100, 100)]
+        evidence = {"status": "UNAVAILABLE", "roster_verified": True,
+                    "universe": 500,
+                    "held_industries": {"SAMPLEA": "Capital Goods"}}
+        groups = industry_exposure(_report_records(rows), evidence)
+        self.assertAlmostEqual(sum(g["weight"] for g in groups), 100)
+        self.assertEqual(groups[0]["industry"], "Unclassified / no official match")
+        self.assertAlmostEqual(groups[0]["weight"], 75)
+        pages = PdfReader(io.BytesIO(build_pdf_bytes(rows, peers=evidence))).pages
+        self.assertEqual(len(pages), 4)
+        self.assertIn("CURRENT INDUSTRY ALLOCATION", pages[2].extract_text())
+        self.assertIn("Capital Goods", pages[2].extract_text())
+
+    def test_ten_stock_unavailable_roster_retains_full_unknown_allocation(self):
+        rows = [holding("SAMPLE" + chr(65 + i), i + 1, 100, 100)
+                for i in range(10)]
+        pages = PdfReader(io.BytesIO(build_pdf_bytes(rows))).pages
+        self.assertEqual(len(pages), 5)
+        self.assertIn("Unclassified / no verified roster | 100%", pages[3].extract_text())
+        self.assertIn("SAMPLEJ", pages[2].extract_text())
+
     def test_four_page_pdf_explains_real_metrics_without_trade_orders(self):
         rows = [
             holding("SAMPLEA", 2, 100, 130, ema20=120, ema50=110, rsi=74),
