@@ -403,9 +403,9 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
         if nearest_dist <= 1.5:
             # Price at key level — is it support or resistance?
             if above_sr:
-                sr_pts = +3; sr_lbl = f"At S/R Support ₹{nearest_p:,.0f} ({nearest_dist:.1f}%)"; sr_col = TV_GREEN
+                sr_pts = +3; sr_lbl = f"Near pivot S ₹{nearest_p:,.0f} ({nearest_dist:.1f}%)"; sr_col = TV_GREEN
             else:
-                sr_pts = -3; sr_lbl = f"At S/R Resist  ₹{nearest_p:,.0f} ({nearest_dist:.1f}%)"; sr_col = TV_RED
+                sr_pts = -3; sr_lbl = f"Near pivot R ₹{nearest_p:,.0f} ({nearest_dist:.1f}%)"; sr_col = TV_RED
         else:
             sr_pts = 0; sr_lbl = f"Mid-Range  Δ{nearest_dist:.1f}% from ₹{nearest_p:,.0f}"; sr_col = TEXT_SEC
     checks.append((sr_lbl, sr_pts, sr_col, "S/R proximity check"))
@@ -933,13 +933,7 @@ try:
     _view_color = (TV_GREEN if chart_context["outlook"] == "POSITIVE MOMENTUM"
                    else TV_RED if chart_context["outlook"] == "NEGATIVE MOMENTUM"
                    else TEXT_SEC)
-    ax0.text(.985, .975,
-             chart_context["outlook"] + "\n" + chart_context["level"] + "\n"
-             + chart_context["periods"],
-             transform=ax0.transAxes, ha="right", va="top", fontsize=7.3,
-             color=_view_color, fontweight="bold",
-             bbox=dict(boxstyle="round,pad=0.45", fc=BG_CARD,
-                       ec=BORDER_COL, lw=.7, alpha=.95), zorder=18)
+    # Place context outside the plotted candle/legend area after layout.
 
     # BB fill
     _xs = np.arange(n)
@@ -985,10 +979,10 @@ try:
     if ew:      draw_ew_labels(ax0, ew, data)
     if top_pat: draw_pattern(ax0, top_pat, data)
 
-    ax0.annotate(f"S: ₹{support:,.0f}", xy=(1.002, support),
+    ax0.annotate(f"20D S: ₹{support:,.0f}", xy=(1.002, support),
         xycoords=("axes fraction","data"), color=TV_GREEN, fontsize=7, va="center", fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.2", fc=TV_GREEN_L, ec=TV_GREEN, lw=0.8, alpha=0.92))
-    ax0.annotate(f"R: ₹{resistance:,.0f}", xy=(1.002, resistance),
+    ax0.annotate(f"20D R: ₹{resistance:,.0f}", xy=(1.002, resistance),
         xycoords=("axes fraction","data"), color=TV_RED, fontsize=7, va="center", fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.2", fc=TV_RED_L, ec=TV_RED, lw=0.8, alpha=0.92))
 
@@ -999,8 +993,8 @@ try:
         mlines.Line2D([],[],color=TV_GOLD,  lw=1.2,ls="--",label=f"EMA 50 ({e50l:,.0f})"),
         mlines.Line2D([],[],color=TV_VIOLET,lw=1.0,ls="--",label=f"SMA 20 ({s20l:,.0f})"),
         mlines.Line2D([],[],color=TV_TEAL,  lw=1.0,ls="--",label=f"BB({_bb_l:,.0f}–{_bb_u:,.0f})"),
-        mlines.Line2D([],[],color=TV_GREEN, lw=0.8,ls=":",label=f"Sup {support:,.0f}"),
-        mlines.Line2D([],[],color=TV_RED,   lw=0.8,ls=":",label=f"Res {resistance:,.0f}"),
+        mlines.Line2D([],[],color=TV_GREEN, lw=0.8,ls=":",label=f"20D Sup {support:,.0f}"),
+        mlines.Line2D([],[],color=TV_RED,   lw=0.8,ls=":",label=f"20D Res {resistance:,.0f}"),
     ]
     legend = ax0.legend(handles=leg, loc="upper left", fontsize=6.5,
         facecolor=BG_CARD, edgecolor=BORDER_COL, framealpha=0.95,
@@ -1014,7 +1008,14 @@ try:
     ratio   = fw / (fw + panel_w)
     for ax_i in fig.get_axes():
         p = ax_i.get_position()
-        ax_i.set_position([p.x0 * ratio, p.y0, p.width * ratio, p.height])
+        # Use the reserved plot column instead of shrinking mplfinance's
+        # already-inset axes a second time. Twin axes share identical bounds.
+        ax_i.set_position([0.075, p.y0, ratio - 0.15, p.height])
+    fig.text(0.075, 0.925,
+             f"EOD {expected_eod}  |  " + chart_context["outlook"] + "  |  "
+             + chart_context["level"] + "\n" + chart_context["periods"],
+             ha="left", va="top", fontsize=8, color=_view_color,
+             fontweight="bold", zorder=18)
 
     # ── HEADER ────────────────────────────────────────────────────────────────
     header_h = 0.055
@@ -1075,8 +1076,7 @@ try:
     if bar_fill > 0:
         sa.add_patch(FancyBboxPatch((0.06,bar_y), 0.88*bar_fill, bar_h,
             boxstyle="round,pad=0.003", fc=sig_fg, ec="none", zorder=5))
-    sa.text(0.5, bar_y + bar_h/2, "BEARISH ◄──────────────► BULLISH",
-        fontsize=5.5, color=TEXT_SEC, ha="center", va="center", zorder=6)
+    # Keep the score bar unlabelled: text over its coloured fill is illegible.
     sa.plot([0.05,0.95],[0.848,0.848], color=BORDER_COL, lw=0.8, zorder=5)
 
     # Reason
