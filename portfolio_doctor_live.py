@@ -310,7 +310,8 @@ def price_holdings(holdings, *, include_frames=False):
                 raise PortfolioDoctorError("STALE_PRICES")
             close = values[-1]
             amounts = position_values(holding, close)
-            out.append({**holding, "close": close, "date": price_date.isoformat(),
+            out.append({**holding, "exchange": "BSE" if price_sources[holding["symbol"]].startswith("BSE:") else "NSE",
+                        "close": close, "date": price_date.isoformat(),
                         "price_source": price_sources[holding["symbol"]],
                         **amounts,
                         "ema20": _ema(values, 20), "ema50": _ema(values, 50),
@@ -358,12 +359,19 @@ def worker_environment(source=None):
     return result
 
 
-def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
+def run_isolated_memory(filename, payload, timeout=150, *, audit=False, preferences=None):
     """No customer file/DB writes: stdin bytes -> killable process -> PDF bytes."""
     if not (isinstance(payload, bytes) and 0 < len(payload) <= MAX_BYTES and
             str(filename).lower().endswith((".csv", ".xlsx"))):
         raise PortfolioDoctorError("BAD_INPUT")
     env = worker_environment()
+    if preferences is not None and not audit:
+        from portfolio_doctor_allocation import parse_preferences
+        risk, months = parse_preferences("Model {} {}".format(*preferences))
+        env["MSK_DOCTOR_PROFILE"] = f"Model {risk} {months}"
+        for key in ("MSK_BUILDER_V2_ENABLED", "MSK_BUILDER_V2_APPROVED_RESEARCH"):
+            if key in os.environ and len(os.environ[key].encode()) <= 64000:
+                env[key] = os.environ[key]
     worker_name = "input.xlsx" if str(filename).lower().endswith(".xlsx") else "input.csv"
     command = [sys.executable, os.path.abspath(__file__),
                "--audit-worker" if audit else "--worker", worker_name]
@@ -406,11 +414,45 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
         # Validate the expanded contract rather than relaxing the old limit.
         count = len(pdf.pages)
         submitted = parse_holdings(filename, payload)
+        # Check the request-bound appendix separately, then apply the original
+        # price/report structure gate to every core page, including dossiers.
+        all_titles = [page.extract_text() or "" for page in pdf.pages]
+        appendix_title = "CURRENT AND PROPOSED ALLOCATION"
+        appendix_at = next((i for i, t in enumerate(all_titles)
+                           if appendix_title in t.splitlines()), None)
+        core = all_titles[:appendix_at]
+        if (not core or any("ILLUSTRATIVE REBALANCING" in page.splitlines() for page in core)
+                or (preferences is not None and appendix_at is None)):
+            raise PortfolioDoctorError("PDF_FAILED")
+        if appendix_at is not None:
+            extra = all_titles[appendix_at:]
+            if (len(extra) > 3 or "BROAD SECTOR / NSE MACRO-ECONOMIC SECTOR" not in extra[0]
+                    or (preferences and f"Selected profile: {preferences[0]} risk | {preferences[1]} months" not in extra[0])
+                    or (not preferences and "Selected profile:" in extra[0])
+                    or any("ILLUSTRATIVE REBALANCING" not in t.splitlines() for t in extra[1:])
+                    or (len(extra) > 1 and (not preferences or
+                        f"Illustrative approved model | {preferences[0]} risk | {preferences[1]} months" not in extra[0]))
+                    or any("MSK | PORTFOLIO DOCTOR" not in t or
+                           f"Page {i} of {count}" not in t for i, t in enumerate(all_titles, 1))):
+                raise PortfolioDoctorError("PDF_FAILED")
+            from decimal import Decimal
+            import re
+            current = re.findall(r"^Current holding (NSE|BSE):([A-Z0-9&-]+) \| qty ([0-9.]+) \|",
+                                 extra[0], flags=re.MULTILINE)
+            if len(current) != len(submitted):
+                raise PortfolioDoctorError("PDF_FAILED")
+            for (exchange, symbol, quantity), row in zip(current, submitted):
+                if (row["symbol"] != symbol or Decimal(quantity) != Decimal(str(row["qty"]))
+                        or row.get("exchange", exchange) != exchange):
+                    raise PortfolioDoctorError("PDF_FAILED")
+        full_count = count
+        if appendix_at is not None:
+            count = appendix_at
+        titles = all_titles[:count]
         if len(submitted) > 5:
             holding_count = len(submitted)
             if not 5 <= count <= 6 + holding_count:
                 raise PortfolioDoctorError("PDF_FAILED")
-            titles = [page.extract_text() or "" for page in pdf.pages]
             required = (
                 "01 / PORTFOLIO DASHBOARD",
                 "02 / HOLDING-WISE VERIFIED RESULTS",
@@ -420,7 +462,7 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
             )
             if (any("MSK | PORTFOLIO DOCTOR" not in t for t in titles)
                     or any(title not in titles[i] for i, title in enumerate(required))
-                    or any("Page {} of {}".format(i + 1, count) not in t
+                    or any("Page {} of {}".format(i + 1, full_count) not in t
                            for i, t in enumerate(titles))):
                 raise PortfolioDoctorError("PDF_FAILED")
             symbols = [row["symbol"] for row in submitted]
@@ -443,7 +485,6 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
         if not 1 <= count <= 10:
             raise PortfolioDoctorError("PDF_FAILED")
         if env.get("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED") != "1" and count > 5:
-            titles = [p.extract_text() or "" for p in pdf.pages]
             dossiers = [i for i, body in enumerate(titles)
                         if "COMPANY RESEARCH:" in body]
             if (not dossiers or dossiers[0] not in (4, 5) or
@@ -531,8 +572,11 @@ def build_optional_pdf(recs, frames, *, seconds=20, peers=None):
                 index_history("^NSEI", "1y", retries=0, timeout=12))
         except Exception:
             benchmark = None
+        from portfolio_doctor_allocation import MACRO
+        labels = (peers or {}).get("held_industries", {})
         review = assemble_review(
-            recs, frames, benchmark=benchmark, advanced_fundamentals=(
+            recs, frames, sector_lookup=lambda sym: MACRO.get(labels.get(sym)),
+            benchmark=benchmark, advanced_fundamentals=(
                 os.getenv("MSK_PORTFOLIO_DOCTOR_ADVANCED_FUNDAMENTALS", "0") == "1"))
         review["peer_watchlist"] = peers
         return render_advanced_pdf(review)
@@ -548,23 +592,26 @@ def _safe_peer_watchlist(recs):
         )
         # Classification is independent of historical peer screening. Keep
         # validated roster labels even if the optional OHLCV screen times out.
+        provenance = {}
         with optional_review_deadline(9):
-            members = official_nifty500_industries()
+            members = official_nifty500_industries(provenance=provenance)
         if not isinstance(members, dict) or not MIN_MEMBERS <= len(members) <= MAX_MEMBERS:
             return None
         matched = {
             row["symbol"]: members[row["symbol"]]
             for row in recs if row.get("exchange") != "BSE"
+            and not str(row.get("price_source", "")).startswith("BSE:")
             and row["symbol"] in members
         }
         fallback = {"status": "UNAVAILABLE", "universe": len(members),
-                    "held_industries": matched, "roster_verified": True}
+                    "held_industries": matched, "roster_verified": True, **provenance}
         try:
             with optional_review_deadline(26):
                 result = research_industry_peers(recs, members=members)
             if isinstance(result, dict):
                 result["held_industries"] = matched
                 result["roster_verified"] = True
+                result.update(provenance)
                 return result
         except (Exception, OptionalReviewTimeout):
             pass
@@ -643,7 +690,7 @@ def worker_main(filename):
             remaining = max(1, min(58, 118 - (time.monotonic() - worker_started)))
             result = build_verified_audit(holdings, recs, frames,
                                           budget_seconds=remaining)
-        elif (advanced and len(holdings) <= 5
+        elif (advanced and not os.getenv("MSK_DOCTOR_PROFILE") and len(holdings) <= 5
               and not any(h.get("exchange") == "BSE" for h in holdings)):
             recs, frames = price_holdings(holdings, include_frames=True)
             peers = _safe_peer_watchlist(recs)
@@ -664,6 +711,9 @@ def worker_main(filename):
             risk = _safe_historical_risk(recs, frames)
             peers = _safe_peer_watchlist(recs)
             # Reserve space in the hard worker deadline for PDF creation.
+            if os.getenv("MSK_DOCTOR_PROFILE"):
+                from portfolio_doctor_allocation import parse_preferences
+                peers = dict(peers or {}, doctor_preferences=parse_preferences(os.environ["MSK_DOCTOR_PROFILE"]))
             remaining = max(0, min(15, 120 - (time.monotonic() - worker_started)))
             companies = _safe_company_dossiers(recs, frames, peers,
                                                 seconds=remaining)

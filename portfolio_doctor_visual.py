@@ -101,6 +101,12 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                  and row.get("symbol") in held][:10]
     holding_pages = (len(holdings) + 4) // 5
     total_pages = (5 if has_risk else 4) + holding_pages - 1 + len(companies)
+    from portfolio_doctor_allocation import allocation_review
+    preferences = peers.get("doctor_preferences")
+    review = allocation_review(holdings, peers, preferences)
+    appendix = bool(peers.get("roster_observed") or preferences)
+    model_keys = sorted(review["stocks"].keys() | review["proposed"].keys()) if review["cash"] is not None else []
+    total_pages += int(appendix) + (len(model_keys) + 14) // 15
     out = io.BytesIO()
     pdf = canvas.Canvas(out, pagesize=A4, pageCompression=1)
     w, h = A4
@@ -520,8 +526,10 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                     group['industry'], group['weight']), 8, leading=14)
         else:
             line('Unclassified / no verified roster | 100% of current value', 8)
-            line('Sector weights unavailable; no classification guessed.', 8, color=MUTED)
+            line('Broad sector: Unknown / unclassified = 100% of current value.', 8, color=MUTED)
     subhead('INTERPRETING THE SHORTLIST')
+    if not appendix:
+        line('Model portfolio unavailable: no approved model and selected profile for this report.', 8)
     line('NOT a ranking of all 500 companies; {} of {} same-industry peers attempted.'.format(
         peers.get('screened', 0), peers.get('pool', 0)), 8)
     line('Technical strength is not fundamental quality, suitability or expected returns.', 8)
@@ -579,7 +587,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     else:
         line('Fundamentals: issuer and secondary financial facts unavailable.', 8)
     line('Company governance: NOT independently verified.', 8)
-    line('Sector target weights, tax impact, health score and replacements: NOT CALCULATED.', 8)
+    line('Tax impact and an overall portfolio health score are not calculated.', 8)
     line('Privacy: PDF created in memory for one request; MSK does not store holdings.', 8)
 
     if has_risk:
@@ -725,6 +733,45 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         else:
             line('No verified same-industry peer shares all 21 closing dates.', 8)
             line('Peer valuation and financial quality are unverified.', 8, color=MUTED)
+    if appendix:
+        new_page('CURRENT AND PROPOSED ALLOCATION', 'Allocation uses the verified current value of the submitted holdings.')
+        if preferences:
+            line(f'Selected profile: {preferences[0]} risk | {preferences[1]} months', 8)
+        line(review["status"], 10, True)
+        subhead('CURRENT HOLDINGS AND ROSTER INDUSTRY')
+        labels = peers.get("held_industries") or {}
+        for row in holdings:
+            exchange = row.get("exchange", "NSE")
+            label = labels.get(row["symbol"]) if exchange == "NSE" else None
+            line(f'Current holding {exchange}:{row["symbol"]} | qty {row["qty"]:f} | '
+                 f'{row["weight"]:.2f}% | {label or "Unclassified"}', 8, leading=13)
+        subhead('BROAD SECTOR / NSE MACRO-ECONOMIC SECTOR')
+        total = review["total"]
+        for sector in sorted(review["sectors"].keys() | review["targets"].keys()):
+            current = 100 * review["sectors"].get(sector, 0) / total
+            value = f'{sector} | current {current:.2f}%'
+            if review["cash"] is not None:
+                value += f' | proposed {100 * review["targets"].get(sector, 0) / total:.2f}%'
+            line(value, 8, leading=13)
+        if review["cash"] is not None:
+            line(f'Modeled cash {money(review["cash"])} ({100 * review["cash"] / total:.2f}%). '
+                 f'Positions plus cash: {money(total)}.', 9, True)
+        line('Current weights cover submitted equity holdings only. Percentages are rounded.', 8)
+        if peers.get("roster_observed"):
+            line('Nifty 500 roster retrieved ' + peers["roster_observed"] + ' | ' + peers["roster_url"], 7)
+        line('Broad grouping: NSE Indices Industry Classification Structure, July 2023. '
+             'An unmatched holding remains in the unknown bucket.', 8)
+        for start in range(0, len(model_keys), 15):
+            new_page('ILLUSTRATIVE REBALANCING', review["status"])
+            line('Model prices use the approved completed session. Costs, brokerage, slippage and taxes are excluded.', 8)
+            for key in model_keys[start:start+15]:
+                qty, value, close = review["stocks"].get(key, (0, 0, 0))
+                target, amount, price = review["proposed"].get(key, (0, 0, close))
+                line(f'{key[0]}:{key[1]}  |  current {100*value/total:.2f}%  |  proposed {100*amount/total:.2f}%'
+                     f'  |  target {target} shares / {money(amount)}', 8.5, True, leading=13)
+                line(f'Illustrative change {target-qty:+f} shares at {money(price)}'
+                     f'  |  amount {money(amount-value)}', 8, leading=17)
+            line('Illustration only. No automatic orders.', 8)
     footer()
     pdf.save()
     data = out.getvalue()
