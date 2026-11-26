@@ -689,9 +689,9 @@ def _investment_view(R, story):
         rows.append([P("Street consensus (Yahoo)"), P(f"Mean target <b>{inr(cons['mean'], 0)}</b>{rng}"),
                      P(colored(f"{cons['upside']:+.1f}% vs CMP", sgn_color(cons["upside"])))])
     if rows:
-        story += [Spacer(1, 6), P("Valuation reference points", "h2"),
+        story.append(KeepTogether([Spacer(1, 6), P("Valuation reference points", "h2"),
                   table([[P("Method", "th"), P("Derivation", "th"), P("Implied", "th")]] + rows, [40 * mm, 98 * mm, 40 * mm]),
-                  P("Illustrative references only — a peer-multiple value assumes the stock deserves the sector median multiple; it is not a price target.", "tiny")]
+                  P("Illustrative references only — a peer-multiple value assumes the stock deserves the sector median multiple; it is not a price target.", "tiny")]))
 
 
 def _technical(R, story):
@@ -1030,8 +1030,15 @@ def conditional_watch_levels(t, plan):
         return None
 
 
+def _report_plan_mode(plan):
+    """Model trend is not a verified timing or independent filing approval."""
+    mode = plan.get("mode")
+    return "CONDITIONAL" if mode == "ACTIVE" else mode
+
+
 def _plan(R, story):
-    t, plan = R["t"], R["plan"]
+    t, plan = R["t"], dict(R["plan"])
+    plan["mode"] = _report_plan_mode(plan)
     if R["sc"].get("insufficient_evidence") or plan.get("mode") == "NO_TRADE":
         story += section("Research Eligibility", "Insufficient evidence — trading levels suppressed")
         story.append(P("<b>No trade recommendation.</b> At least two fundamental pillars and "
@@ -1040,8 +1047,7 @@ def _plan(R, story):
         return
     story += section("Scenarios & Trade Plan", "Rule-based levels derived from ATR, support/resistance and realised volatility")
     label, hexcol, bg, msg = {
-        "ACTIVE": ("Active setup", GREEN_H, "#F1FAF5", "Trend and momentum support a long setup. Use staggered entries near the zone below and respect the stop."),
-        "CONDITIONAL": ("Conditional setup", AMBER_H, "#FFF9E8", "No clean edge yet. Treat the levels below as valid only after the bullish trigger confirms."),
+        "CONDITIONAL": ("Conditional model scenario — WAIT", AMBER_H, "#FFF9E8", "Trend scoring is separate from the chart timing gate. These illustrative levels are not a BUY call. Require a fresh confirmed setup and independent financial verification before reconsidering."),
         "DEFENSIVE": ("Defensive — no fresh long setup", RED_H, "#FDF1F1", "Price structure and/or the composite score do not support new long positions. Wait for the reclaim level below."),
     }[plan["mode"]]
     story += [callout(f"<b>{label}.</b> {msg}", hexcol, bg), Spacer(1, 6)]
@@ -1054,15 +1060,15 @@ def _plan(R, story):
             return f"{(p / t['ltp'] - 1) * 100:+.1f}%"
         hdr = [P("Level", "th"), P("Price", "thr"), P("vs CMP", "thr"), P("Reward : risk", "thr")]
         rows = [
-            [P("Entry zone", "cellb"), P(f"{inr(plan['entry_lo'])} – {inr(plan['entry_hi'])}", "cellrb"), P("—", "cellr"), P("—", "cellr")],
+            [P("Illustrative entry zone", "cellb"), P(f"{inr(plan['entry_lo'])} – {inr(plan['entry_hi'])}", "cellrb"), P("—", "cellr"), P("—", "cellr")],
             [P(colored("Stop-loss", RED_H), "cellb"), P(inr(plan["sl"]), "cellrb"), P(pct(plan["sl"]), "cellr"), P("1R risk", "cellr")],
             [P(colored("Target 1", GREEN_H), "cellb"), P(inr(plan["t1"]), "cellrb"), P(pct(plan["t1"]), "cellr"), P(rr(plan["t1"]), "cellr")],
             [P(colored("Target 2", GREEN_H), "cellb"), P(inr(plan["t2"]), "cellrb"), P(pct(plan["t2"]), "cellr"), P(rr(plan["t2"]), "cellr")],
             [P(colored("Target 3", GREEN_H), "cellb"), P(inr(plan["t3"]), "cellrb"), P(pct(plan["t3"]), "cellr"), P(rr(plan["t3"]), "cellr")],
         ]
-        story.append(table([hdr] + rows, [48 * mm, 52 * mm, 36 * mm, 42 * mm]))
+        story.append(KeepTogether([table([hdr] + rows, [48 * mm, 52 * mm, 36 * mm, 42 * mm])]))
         story.append(P(f"Stop sits below the nearest support (or 2×ATR where none is close). Targets are 1.5R / 2.5R / 4R. "
-                       f"Daily ATR is {inr(t['atr'])} ({t['atr_pct']}% of price).", "tiny"))
+                       f"Daily ATR is {inr(t['atr'])} ({t['atr_pct']}% of price). Recalculate all levels after a fresh confirmed setup.", "tiny"))
         sz = plan["sizing"]
         if sz["qty"] > 0:
             story += [Spacer(1, 5), P("Position-sizing example", "h2"),

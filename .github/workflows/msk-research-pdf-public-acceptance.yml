@@ -53,6 +53,10 @@ jobs:
                       raise ValueError("generator withheld")
                   path = Path(result)
                   q = validate_research_pdf(path, expected_symbol=sym, min_pages=8)
+                  from pypdf import PdfReader
+                  rendered_text = " ".join(page.extract_text() or "" for page in PdfReader(path).pages)
+                  if "Use staggered entries" in rendered_text or "Active setup." in rendered_text:
+                      raise ValueError("unverified active instruction")
                   actual = datetime.strptime(evidence["price_session"], "%d-%b-%Y").date()
                   close = float(evidence["historical_close"])
                   if (evidence["symbol"] != sym or actual != expected or sym not in reference

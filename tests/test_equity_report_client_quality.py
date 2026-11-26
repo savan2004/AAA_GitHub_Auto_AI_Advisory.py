@@ -74,6 +74,16 @@ class EquityReportQuality(unittest.TestCase):
         self.assertNotIn("Senior Market Analyst Desk",REPORT)
         self.assertIn("if plan[\"mode\"] != \"DEFENSIVE\":",REPORT)
 
+    def test_pdf_does_not_turn_model_trend_into_active_trade(self):
+        mode = fn(REPORT, "_report_plan_mode", {})
+        self.assertEqual(mode({"mode":"ACTIVE"}), "CONDITIONAL")
+        self.assertEqual(mode({"mode":"CONDITIONAL"}), "CONDITIONAL")
+        self.assertEqual(mode({"mode":"DEFENSIVE"}), "DEFENSIVE")
+        self.assertEqual(mode({"mode":"NO_TRADE"}), "NO_TRADE")
+        self.assertIn('plan["mode"] = _report_plan_mode(plan)', REPORT)
+        self.assertNotIn("Use staggered entries", REPORT)
+        self.assertIn("Conditional model scenario — WAIT", REPORT)
+
     def test_summary_mentions_source_period_and_not_live_price(self):
         self.assertIn("price_session=price_session",REPORT)
         self.assertIn("price as of {esc(R.get('price_session')",REPORT)
