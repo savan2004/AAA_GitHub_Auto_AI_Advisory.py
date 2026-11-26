@@ -76,6 +76,45 @@ class PdfCacheSafetyTests(unittest.TestCase):
             self.assertNotIn("portfolio", all_sql.lower())
             self.assertNotIn("telegram", all_sql.lower())
 
+    def test_local_cache_same_bytes_no_sliding_expiry_and_new_session_rejected(self):
+        from collections import OrderedDict
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(cache, "_LOCAL", OrderedDict()), \
+             patch.object(cache, "_LOCAL_DIR", None), \
+             patch.object(cache, "_current_session", return_value="2026-11-13") as session, \
+             patch.object(cache.time, "monotonic", return_value=100.0) as clock:
+            report = Path(folder) / "original.pdf"
+            report.write_bytes(self.raw)
+            quality = {"pages": 8, "bytes": len(self.raw)}
+            try:
+                cache.remember_local_report("SBIN", report, "13-Nov-2026", quality)
+                first = cache.load_recent_local_report("SBIN", output_dir=folder)
+                self.assertEqual(Path(first[0]).read_bytes(), self.raw)
+                Path(first[0]).unlink()
+                clock.return_value = 100.0 + cache.LOCAL_TTL_SECONDS - 1
+                second = cache.load_recent_local_report("SBIN", output_dir=folder)
+                self.assertEqual(Path(second[0]).read_bytes(), self.raw)
+                Path(second[0]).unlink()
+                clock.return_value += 1
+                self.assertIsNone(cache.load_recent_local_report("SBIN", output_dir=folder))
+                cache.remember_local_report("SBIN", report, "13-Nov-2026", quality)
+                session.return_value = "2026-11-16"
+                self.assertIsNone(cache.load_recent_local_report("SBIN", output_dir=folder))
+            finally:
+                if cache._LOCAL_DIR is not None:
+                    cache._LOCAL_DIR.cleanup()
+
+    def test_separate_quote_is_timestamped_and_missing_quote_is_safe(self):
+        quote = {"price": 123.45, "quote_source": "NSE India",
+                 "quote_asof_ist": "2026-11-13T14:10:00+05:30",
+                 "quote_status": "recent_observation"}
+        text = cache.report_quote_line(quote)
+        self.assertIn("123.45", text)
+        self.assertIn("14:10 IST", text)
+        self.assertIn("NSE India", text)
+        self.assertIn("unavailable", cache.report_quote_line(None))
+        self.assertIn("unavailable", cache.report_quote_line(dict(quote, price=float("nan"))))
+
 
 if __name__ == "__main__":
     unittest.main()

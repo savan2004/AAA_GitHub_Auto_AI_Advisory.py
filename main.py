@@ -999,8 +999,11 @@ def run_report(chat_id, query):
 
         # A genuine, fully validated completed-session PDF can be delivered
         # immediately. Cold symbols still use the existing real generator.
-        from research_pdf_snapshot import load_verified_report
-        cached = load_verified_report(sym)
+        from research_pdf_snapshot import (
+            load_recent_local_report, load_verified_report, report_quote_line)
+        from research_pdf_drive import load_cloud_report
+        cached = (load_recent_local_report(sym) or load_cloud_report(sym)
+                  or load_verified_report(sym))
         if cached is not None:
             ok, result, name = True, cached[0], (cname or sym)
             logger.info("MSK_PDF_CACHE_HIT symbol=%s session=%s", sym, cached[1])
@@ -1056,13 +1059,22 @@ def run_report(chat_id, query):
                           "source disclosures or content verification failed.")
                 return
             try:
+                # Keep the immutable PDF separate from the timestamped market quote.
+                # An unavailable quote must never block a verified report.
+                try:
+                    quote = get_verified_quote(sym)
+                except Exception:
+                    quote = None
+                quote_text = report_quote_line(quote)
+                from html import escape
                 with open(result, "rb") as f:
                     sent = bot.send_document(
                         chat_id, f,
                         visible_file_name=f"{sym}_Research_Report.pdf",
-                        caption=(f"📄 <b>{name or sym} — Equity Research Report</b>\n"
+                        caption=(f"📄 <b>{escape(str(name or sym))} — Equity Research Report</b>\n"
                                  f"Stance · Technicals · Fundamentals · Ownership · Peers · Trade plan · Risks\n"
-                                 f"Generated {datetime.now().strftime('%d-%b-%Y %H:%M')}\n\n"
+                                 f"PDF: dated completed-session research; short-term levels may change.\n"
+                                 f"{escape(quote_text)}\n\n"
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
                     )
@@ -2874,6 +2886,10 @@ if __name__ == "__main__":
             from msk_sbin_pdf_probe import run_once as run_sbin_pdf_acceptance
             threading.Thread(target=run_sbin_pdf_acceptance, args=(globals(),),
                              name="msk-sbin-pdf-release", daemon=True).start()
+        if os.getenv("MSK_RESEARCH_DAILY_ENABLED") == "1":
+            from research_cloud_daily import loop as research_cloud_loop
+            threading.Thread(target=research_cloud_loop,
+                             name="msk-research-cloud-daily", daemon=True).start()
         from waitress import serve
         logger.info("Production HTTP server listening on port %s", os.getenv("PORT", "8000"))
         serve(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), threads=12, connection_limit=200)

@@ -30,6 +30,8 @@ import re
 import html as _html
 import logging
 import math
+import tempfile
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -51,7 +53,7 @@ from reportlab.platypus import (
 
 import research_engine as eng
 from research_reasoning import build_reasoning
-from research_filing_evidence import (reconcile_official_quarter, annual_exchange_comparison, official_four_quarter_eps)
+from research_filing_evidence import (repair_verified_quarter_eps, annual_exchange_comparison, official_four_quarter_eps)
 import report_charts as charts
 from pdf_technical_setup import build_setup_charts
 from report_quarterly_charts import render_quarterly_chart
@@ -60,6 +62,8 @@ logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = os.path.join("output", "reports")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Bound the expensive on-demand report pipeline per bot process.
+_REPORT_GENERATION_LOCK = threading.Lock()
 
 # ══════════════════════════════════════════════════════════════════════════
 # Fonts — DejaVu ships with matplotlib and has the ₹ glyph (Helvetica does not)
@@ -399,16 +403,12 @@ def collect_inputs(sym: str) -> dict:
     from market_data import index_history
     import research_data as rd
 
-    if sym in ("SBIN", "DLF"):
-        # Publisher-only strict recovery: primary history can lag one session.
-        # Require genuine full-year bars ending at the latest completed NSE
-        # session; use one bounded alternative provider or withhold the PDF.
-        from research_pdf_fresh_history import verified_pdf_history
-        from market_breadth import expected_completed_session
-        df = verified_pdf_history(
-            sym, get_hist, str(expected_completed_session()))
-    else:
-        df = get_hist(sym, "1y")
+    # Apply the existing completed-session recovery to every NSE report.
+    # It removes current incomplete bars and never splices separate sources.
+    from research_pdf_fresh_history import verified_pdf_history
+    from market_breadth import expected_completed_session
+    expected_session = expected_completed_session()
+    df = verified_pdf_history(sym, get_hist, str(expected_session))
     if df is None or df.empty or len(df) < 60:
         raise ValueError(f"Not enough price history for {sym} (need at least 60 sessions).")
     # A complete-looking but year-old chart must never publish current
@@ -417,8 +417,7 @@ def collect_inputs(sym: str) -> dict:
     market = technical_price_context(df)
     if market is None:
         raise ValueError("Research report withheld: historical price session stale or unverified")
-    from market_breadth import expected_completed_session
-    _require_latest_completed_eod(market, expected_completed_session())
+    _require_latest_completed_eod(market, expected_session)
     ltp = market["historical_close"]
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -452,8 +451,22 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
 
     t = eng.compute_technicals(df, nifty)
     rk = eng.compute_risk(df, nifty)
-    fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
-    filing_evidence = reconcile_official_quarter(sym, inp.get("stm"))
+    # Reconcile before any fundamentals, charts, model scores or narrative.
+    statements, filing_evidence = repair_verified_quarter_eps(sym, inp.get("stm"))
+    inp = {**inp, "stm": statements}
+    eps_correction = filing_evidence.get("eps_correction")
+    if eps_correction:
+        # The raw provider TTM EPS has an unknown basis. Reuse the existing
+        # four-consecutive-quarter / price-P/E check instead of patching TTM.
+        fund = {**fund, "eps": None}
+    fv = eng.compute_fundamentals(fund, statements, inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
+    if eps_correction:
+        if fv.get("eps") is not None:
+            fv["eps_basis"] = "mixed quarterly sum with latest basic EPS from official NSE filing"
+        # P/E is a separate provider observation; do not build an implied
+        # fair value from partly reconciled quarterly EPS.
+        fv["implied_peer_value"] = None
+        fv["implied_upside"] = None
     annual_evidence = annual_exchange_comparison(sym, inp.get("stm"))
     if filing_evidence.get("status") == "partial_match":
         exchange_ttm = official_four_quarter_eps(sym, filing_evidence.get("period_end"))
@@ -553,7 +566,7 @@ def _cover(R, story):
     sc_hex = _stance_color(sc["stance"])
     score_display = ("N/R" if sc.get("insufficient_evidence") else f"{sc['composite']}<font size=11 color='{GREY_H}'> / 100</font>")
     core_keys = ("pe", "roe", "eps", "pb", "de", "mcap")
-    core_count = sum(R.get("fund", {}).get(k) is not None for k in core_keys)
+    core_count = sum(R.get("fv", {}).get(k) is not None for k in core_keys)
     left = [P("COMPOSITE SCORE", "lab"), P(score_display, "big"),
             P(f"Model pillar weight covered: {sc['coverage']}%", "tiny"),
             P(f"Core financial ratios available: {core_count}/6 (not audited)", "tiny")]
@@ -815,6 +828,13 @@ def _fundamentals(R, story):
                   P('<link href="' + esc(proof["source_url"]) +
                     '" color="#0B2545">Open official NSE iXBRL filing</link>' +
                     " · Reviewed " + esc(proof["reviewed_date"]), "tiny")]
+        correction = proof.get("eps_correction")
+        if correction:
+            story.append(P(
+                f"<b>Quarter EPS correction:</b> secondary INR {correction['reported']:.2f} "
+                f"replaced by official basic EPS INR {correction['official']:.2f}. "
+                "The exact quarter, revenue and profit reconcile. Other quarters are "
+                "not independently verified; source P/E is a separate observation.", "tiny"))
         official_de, vendor_de = proof.get("exchange_debt_equity"), fv.get("de")
         if official_de is not None and vendor_de is not None and abs(official_de-vendor_de) > 0.02:
             story.append(P(
@@ -854,7 +874,15 @@ def _fundamentals(R, story):
         ["ROE", n(fv.get("roe"), 1, "%"), "ROCE", n(fv.get("roce"), 1, "%")],
         ["Dividend yield", n(fv.get("div_y"), 2, "%"), "Debt / Equity", n(fv.get("de"), 2, "×") if not fv["fin"] else "n.m. (financial)"],
     ]))
-    if fv.get("eps_basis") and fv["eps_basis"].startswith("four consecutive"):
+    if proof.get("eps_correction"):
+        story.append(P(
+            "TTM EPS: " + ("four consecutive quarters including the corrected latest EPS; "
+                           "approximation, not independently verified weighted-average TTM EPS."
+                           if fv.get("eps") is not None else
+                           "withheld because a consistent four-quarter sum could not be established.")
+            + " P/E and its derived ratios are separate provider-based observations. "
+              "EPS-based peer valuation withheld.", "tiny"))
+    elif fv.get("eps_basis") and fv["eps_basis"].startswith("four consecutive"):
         story.append(P("TTM EPS is derived from four consecutive secondary-source quarters; "
                        "its price/P-E reconciliation is a consistency check, not independent audit.", "tiny"))
     elif fv.get("eps_basis") and fv["eps_basis"].startswith("sum of four"):
@@ -884,8 +912,12 @@ def _fundamentals(R, story):
         im = img(R["ch"]["quarters"], W)
         if im:
             story.append(KeepTogether([
-                Spacer(1, 6), P("Quarterly trends (provider-reported; not independently reconciled)", "h2"),
-                im, P("Quarterly values and periods are secondary-source observations, "
+                Spacer(1, 6), P("Quarterly trends (latest EPS reconciled; other periods unverified)"
+                                if proof.get("eps_correction") else
+                                "Quarterly trends (provider-reported; not independently reconciled)", "h2"),
+                im, P("Latest quarter EPS uses the dated NSE filing; remaining provider observations "
+                      "are not independently matched." if proof.get("eps_correction") else
+                      "Quarterly values and periods are secondary-source observations, "
                       "not independently matched to exchange filings or forecasts.", "tiny")
             ]))
 
@@ -1031,8 +1063,15 @@ def conditional_watch_levels(t, plan):
         return None
 
 
+def _report_plan_mode(plan):
+    """Model trend is not a verified timing or independent filing approval."""
+    mode = plan.get("mode")
+    return "CONDITIONAL" if mode == "ACTIVE" else mode
+
+
 def _plan(R, story):
-    t, plan = R["t"], R["plan"]
+    t, plan = R["t"], dict(R["plan"])
+    plan["mode"] = _report_plan_mode(plan)
     if R["sc"].get("insufficient_evidence") or plan.get("mode") == "NO_TRADE":
         story += section("Research Eligibility", "Insufficient evidence — trading levels suppressed")
         story.append(P("<b>No trade recommendation.</b> At least two fundamental pillars and "
@@ -1041,8 +1080,7 @@ def _plan(R, story):
         return
     story += section("Scenarios & Trade Plan", "Rule-based levels derived from ATR, support/resistance and realised volatility")
     label, hexcol, bg, msg = {
-        "ACTIVE": ("Active setup", GREEN_H, "#F1FAF5", "Trend and momentum support a long setup. Use staggered entries near the zone below and respect the stop."),
-        "CONDITIONAL": ("Conditional setup", AMBER_H, "#FFF9E8", "No clean edge yet. Treat the levels below as valid only after the bullish trigger confirms."),
+        "CONDITIONAL": ("Conditional model scenario — WAIT", AMBER_H, "#FFF9E8", "Illustrative only, not a BUY call. Require confirmed timing and independent financial verification."),
         "DEFENSIVE": ("Defensive — no fresh long setup", RED_H, "#FDF1F1", "Price structure and/or the composite score do not support new long positions. Wait for the reclaim level below."),
     }[plan["mode"]]
     story += [callout(f"<b>{label}.</b> {msg}", hexcol, bg), Spacer(1, 6)]
@@ -1055,7 +1093,7 @@ def _plan(R, story):
             return f"{(p / t['ltp'] - 1) * 100:+.1f}%"
         hdr = [P("Level", "th"), P("Price", "thr"), P("vs CMP", "thr"), P("Reward : risk", "thr")]
         rows = [
-            [P("Entry zone", "cellb"), P(f"{inr(plan['entry_lo'])} – {inr(plan['entry_hi'])}", "cellrb"), P("—", "cellr"), P("—", "cellr")],
+            [P("Illustrative entry zone", "cellb"), P(f"{inr(plan['entry_lo'])} – {inr(plan['entry_hi'])}", "cellrb"), P("—", "cellr"), P("—", "cellr")],
             [P(colored("Stop-loss", RED_H), "cellb"), P(inr(plan["sl"]), "cellrb"), P(pct(plan["sl"]), "cellr"), P("1R risk", "cellr")],
             [P(colored("Target 1", GREEN_H), "cellb"), P(inr(plan["t1"]), "cellrb"), P(pct(plan["t1"]), "cellr"), P(rr(plan["t1"]), "cellr")],
             [P(colored("Target 2", GREEN_H), "cellb"), P(inr(plan["t2"]), "cellrb"), P(pct(plan["t2"]), "cellr"), P(rr(plan["t2"]), "cellr")],
@@ -1063,7 +1101,7 @@ def _plan(R, story):
         ]
         story.append(table([hdr] + rows, [48 * mm, 52 * mm, 36 * mm, 42 * mm]))
         story.append(P(f"Stop sits below the nearest support (or 2×ATR where none is close). Targets are 1.5R / 2.5R / 4R. "
-                       f"Daily ATR is {inr(t['atr'])} ({t['atr_pct']}% of price).", "tiny"))
+                       f"Daily ATR is {inr(t['atr'])} ({t['atr_pct']}% of price). Recalculate all levels after a fresh confirmed setup.", "tiny"))
         sz = plan["sizing"]
         if sz["qty"] > 0:
             story += [Spacer(1, 5), P("Position-sizing example", "h2"),
@@ -1159,7 +1197,7 @@ def _appendix(R, story):
 
     story += [Spacer(1, 8), P("Data sources & completeness", "h2")]
     stm = R["stm"]
-    n_core = sum(1 for k in ("pe", "roe", "eps", "pb", "de", "mcap") if R["fund"].get(k) is not None)
+    n_core = sum(1 for k in ("pe", "roe", "eps", "pb", "de", "mcap") if R["fv"].get(k) is not None)
     # Compact publisher's appendix: preserve source/basis and the entire
     # financial-accuracy disclaimer without spilling a few lines onto a nearly
     # empty final page. Stacked source bullets previously produced an orphan.
@@ -1167,8 +1205,11 @@ def _appendix(R, story):
         (f"Prices &amp; volume: public Yahoo / NSE / Stooq daily candles "
          f"({R['t']['bars']} sessions); price as of {esc(R.get('price_session') or 'unverified')}; "
          f"Nifty 50 benchmark."),
-        (f"Statements: {esc(stm['source'])}, {len(stm.get('years') or [])} annual "
-         f"periods, {len(stm.get('quarters') or [])} quarters."
+        (f"Statements: {esc((stm.get('sources') or {}).get('years') or stm['source'])} annual "
+         f"({len(stm.get('years') or [])} periods); "
+         f"{esc((stm.get('sources') or {}).get('quarters') or stm['source'])} quarterly "
+         f"({len(stm.get('quarters') or [])} periods)."
+         + (" Latest quarter EPS: official NSE filing." if (R.get("filing_evidence") or {}).get("eps_correction") else "")
          if stm else "Financial statements: unavailable."),
         (f"Ratios: {n_core}/6 core fields available "
          "(availability is not independent accuracy verification). "
@@ -1229,16 +1270,27 @@ def build_pdf(R: dict, output_path: str, *, compact=False) -> str:
 # ══════════════════════════════════════════════════════════════════════════
 def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, str, Optional[str]]:
     sym = str(symbol).upper().replace(".NS", "").replace(".BO", "").strip()
-    if not sym:
-        return False, "No symbol provided.", None
+    if not re.fullmatch(r"[A-Z0-9&._-]{1,30}", sym):
+        return False, "Invalid research symbol.", None
+    if not _REPORT_GENERATION_LOCK.acquire(blocking=False):
+        logger.info("MSK_RESEARCH_PDF_BUSY symbol=%s", sym)
+        return False, "Research report busy; please retry later.", None
+    out = None
+    success = False
+    stage = "collect_inputs"
+    reason = "INPUTS_UNVERIFIED"
     try:
         inputs = collect_inputs(sym)
+        stage = "assemble"
+        reason = "ASSEMBLY_FAILED"
         R = assemble(inputs)
         if (R.get("filing_evidence") or {}).get("status") == "mismatch":
+            reason = "QUARTER_FILING_MISMATCH"
             raise ValueError(
                 "Research report withheld: secondary quarter does not reconcile "
                 "to the dated NSE issuer filing")
         if (R.get("annual_evidence") or {}).get("status") == "mismatch":
+            reason = "ANNUAL_FILING_MISMATCH"
             raise ValueError(
                 "Research report withheld: FY26 secondary statement does not "
                 "reconcile to audited issuer filing")
@@ -1250,9 +1302,18 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             evidence_out.clear()
             evidence_out.update(
                 symbol=R["sym"], price_session=R["price_session"],
-                historical_close=R["t"]["ltp"])
-        out = os.path.join(OUTPUT_DIR, f"{sym}_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+                historical_close=R["t"]["ltp"],
+                filing_evidence=R.get("filing_evidence") or {},
+                latest_quarter_eps=((R.get("stm") or {}).get("quarters") or [{}])[-1].get("eps"))
+        stage = "render"
+        reason = "PDF_RENDER_FAILED"
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        fd, out = tempfile.mkstemp(prefix=f"{sym}_Report_", suffix=".pdf",
+                                   dir=OUTPUT_DIR)
+        os.close(fd)
         build_pdf(R, out)
+        stage = "release_gate"
+        reason = "PDF_RELEASE_REJECTED"
         # A successful ReportLab write is NOT enough for Telegram delivery:
         # assert readable pages, instrument identity and financial caveats.
         from pdf_release_gate import validate_research_pdf, ResearchPDFRefused
@@ -1280,15 +1341,55 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             raise ValueError(f"Research report withheld: {exc}") from exc
         except Exception as exc:
             logger.error("[Report] PDF release checker crashed for %s (%s)",
-                         sym, type(exc).__name__, exc_info=True)
+                         sym, type(exc).__name__)
             try:
                 os.unlink(out)
             except OSError:
                 pass
             raise ValueError("Research report withheld: PDF validation unavailable") from exc
-        return True, out, R["name"]
+        name = R["name"]
+        # Cache the unchanged validated file using its actual dated price session.
+        # Cache failure cannot block an otherwise valid PDF.
+        try:
+            from research_pdf_snapshot import remember_local_report
+            if R.get("price_session"):
+                remember_local_report(sym, out, R["price_session"], inspected)
+        except Exception as exc:
+            logger.warning("MSK_RESEARCH_PDF_LOCAL_CACHE_FAILED type=%s",
+                           type(exc).__name__)
+        # Archive only actual verified generated public reports, never portfolio PDFs.
+        # Cloud errors do not block delivery of an otherwise validated document.
+        try:
+            from research_pdf_drive import store_cloud_report
+            if R.get("price_session"):
+                store_cloud_report(sym, out, R["price_session"])
+        except Exception as exc:
+            logger.warning("MSK_RESEARCH_PDF_DRIVE_FAILED type=%s", type(exc).__name__)
+        success = True
+        return True, out, name
     except ValueError as e:
+        # Only fixed stage/reason codes enter production logs; raw provider
+        # errors may contain credentials, URLs or private filesystem paths.
+        if stage == "collect_inputs" and str(e).startswith((
+                "Research report withheld: historical price session stale",
+                "Research report withheld: latest completed NSE EOD",
+                "Not enough price history for ")):
+            reason = "COMPLETED_EOD_UNVERIFIED"
+        logger.warning("MSK_RESEARCH_PDF_FAILURE symbol=%s stage=%s reason=%s type=%s",
+                       sym, stage, reason, type(e).__name__)
         return False, str(e), None
     except Exception as e:
-        logger.error(f"[Report] generation failed for {sym}: {e}", exc_info=True)
+        logger.error("MSK_RESEARCH_PDF_FAILURE symbol=%s stage=%s reason=%s type=%s",
+                     sym, stage, reason, type(e).__name__)
         return False, f"Report generation failed: {e}", None
+    finally:
+        try:
+            if out is not None and not success:
+                try:
+                    os.unlink(out)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.warning("MSK_RESEARCH_PDF_CLEANUP_FAILED symbol=%s", sym)
+        finally:
+            _REPORT_GENERATION_LOCK.release()
