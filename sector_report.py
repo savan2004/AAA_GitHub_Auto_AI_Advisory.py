@@ -935,7 +935,9 @@ def generate_sector_report_pdf(progress_cb=None) -> Tuple[bool, str, List[str]]:
         # 250-constituent cold network scan. Corrupt or stale rows fail closed.
         try:
             from sector_report_snapshot import load_verified_sector_report
-            restored = load_verified_sector_report(output_dir=OUTPUT_DIR)
+            from sector_report_drive import load_sector_cloud
+            restored = (load_sector_cloud(output_dir=OUTPUT_DIR)
+                        or load_verified_sector_report(output_dir=OUTPUT_DIR))
             if restored:
                 path, summary = restored
                 _cache.update(ts=time.time(), path=path, summary=summary,
@@ -955,6 +957,10 @@ def generate_sector_report_pdf(progress_cb=None) -> Tuple[bool, str, List[str]]:
             build_pdf(R, out)
             summ = summary_lines(R)
             observed_session = datetime.strptime(R["asof"], "%d-%b-%Y").date()
+            from sector_report_snapshot import _check_file
+            _check_file(out, session=observed_session)
+            from sector_report_drive import store_sector_cloud
+            store_sector_cloud(R, out, summ)
             _cache.update(ts=time.time(), path=out, summary=summ,
                           session=observed_session)
             return True, out, summ

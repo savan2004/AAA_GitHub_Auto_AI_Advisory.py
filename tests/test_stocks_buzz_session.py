@@ -75,6 +75,43 @@ class SessionSafety(unittest.TestCase):
         ns["_last_completed_session"] = lambda: date(2026, 11, 16)
         self.assertIsNone(ns["get_cached"]())
 
+    def test_missing_snapshot_queries_neon_only_once_per_minute(self):
+        """Repeated button clicks never stampede Neon on a cache miss."""
+        from unittest.mock import Mock
+        load = Mock(return_value=None)
+        fake = types.SimpleNamespace(load_verified_scan=load)
+        tick = [1000.0]
+        clock = types.SimpleNamespace(monotonic=lambda: tick[0], time=lambda: tick[0])
+        state = {"result": None, "ts": 0.0}
+        ns = load_functions("get_cached", globals_={
+            "_state_lock": threading.Lock(), "_state": state,
+            "_last_completed_session": lambda: date(2026, 11, 20),
+            "time": clock, "logger": Mock()
+        })
+        with patch.dict(sys.modules, {"stocks_buzz_snapshot": fake}):
+            for _ in range(20):
+                self.assertIsNone(ns["get_cached"]())
+            self.assertEqual(load.call_count, 1)
+            tick[0] += 61
+            self.assertIsNone(ns["get_cached"]())
+        self.assertEqual(load.call_count, 2)
+
+    def test_new_session_retries_failed_snapshot_immediately(self):
+        load = Mock(return_value=None)
+        fake = types.SimpleNamespace(load_verified_scan=load)
+        session = [date(2026, 11, 20)]
+        ns = load_functions("get_cached", globals_={
+            "_state_lock": threading.Lock(),
+            "_state": {"result": None, "ts": 0.0},
+            "_last_completed_session": lambda: session[0],
+            "logger": Mock()
+        })
+        with patch.dict(sys.modules, {"stocks_buzz_snapshot": fake}):
+            self.assertIsNone(ns["get_cached"]())
+            session[0] = date(2026, 11, 23)
+            self.assertIsNone(ns["get_cached"]())
+        self.assertEqual(load.call_count, 2)
+
     def test_ranking_refuses_partial_sample_before_analyzing(self):
         universe = {"symbols": ["A", "B", "C", "D", "E"], "source": "Official"}
         good = series()
@@ -219,6 +256,197 @@ class SessionSafety(unittest.TestCase):
         self.assertEqual(result["coverage"], .8)
         self.assertIn("verified raw NSE EOD", result["price_sources"])
 
+
+
+    def test_scheduled_scan_reuses_prior_history_and_enforces_minimum_after_stitch(self):
+        frame = series()
+        symbols = ["A", "B", "C", "D", "E"]
+        primary = {sym: frame for sym in symbols[:3]}
+        primary.update(D=frame.iloc[:-1], E=frame.iloc[:-1])
+        archive = Mock(side_effect=[frame, frame.tail(20)])
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols},
+            "bulk_history": lambda *_a, **_k: primary,
+            "index_history": lambda *_a: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": lambda *_a: None,
+            "market_regime": lambda *_a: {}, "logger": Mock(),
+            "_state": {}, "_state_lock": threading.Lock(),
+        })
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
+                patch("smart_chart_eod_recovery.ArchiveRecovery", return_value=archive) as build:
+            result = ns["run_scan"](save_snapshot=False)
+        build.assert_called_once()
+        self.assertEqual([call.args[0] for call in archive.call_args_list], ["D.NS", "E.NS"])
+        self.assertEqual(result["downloaded"], 4)
+        self.assertEqual(result["archive_recovered"], 1)
+        self.assertEqual(result["secondary_count"], 0)
+        self.assertIn("NSE final Bhavcopy", result["price_sources"])
+
+    def test_stale_secondary_history_does_not_count_or_rank(self):
+        symbols = [f"TEST{i}" for i in range(10)]
+        frame = series()
+        analyzed = Mock()
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols},
+            "bulk_history": lambda *_args, **_kwargs: {},
+            "index_history": lambda *_args: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": analyzed,
+            "market_regime": lambda *_args: {},
+            "logger": Mock(), "_state": {}, "_state_lock": threading.Lock(),
+        })
+        secondary = types.SimpleNamespace(
+            fetch_tej_history=lambda sym, *_args: frame.iloc[:-1] if sym in ("TEST0", "TEST1", "TEST2") else frame)
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
+                patch.dict(sys.modules, {"overnight_index_sources": secondary}):
+            with self.assertRaisesRegex(ValueError, "valid stock histories"):
+                ns["run_scan"](save_snapshot=False)
+        analyzed.assert_not_called()
+
+    def test_exact_80_percent_secondary_coverage_excludes_stale_symbols(self):
+        symbols = [f"TEST{i}" for i in range(10)]
+        frame = series()
+        analyzed = Mock(return_value=None)
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols},
+            "bulk_history": lambda *_args, **_kwargs: {},
+            "index_history": lambda *_args: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": analyzed,
+            "market_regime": lambda *_args: {},
+            "logger": Mock(), "_state": {}, "_state_lock": threading.Lock(),
+        })
+        stale = {"TEST0", "TEST1"}
+        secondary = types.SimpleNamespace(
+            fetch_tej_history=lambda sym, *_args: frame.iloc[:-1] if sym in stale else frame)
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
+                patch.dict(sys.modules, {"overnight_index_sources": secondary}):
+            result = ns["run_scan"](save_snapshot=False)
+        self.assertEqual(result["coverage"], .8)
+        self.assertEqual(result["downloaded"], 8)
+        self.assertEqual(result["secondary_count"], 8)
+        self.assertEqual([call.args[0] for call in analyzed.call_args_list],
+                         symbols[2:])
+
+    def test_secondary_provider_submits_at_most_eight_histories_per_batch(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        symbols = [f"TEST{i}" for i in range(33)]
+        sizes = []
+        frame = series()
+
+        class MeasuredPool(ThreadPoolExecutor):
+            def map(self, fn, batch):
+                sizes.append(len(batch))
+                return super().map(fn, batch)
+
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols},
+            "bulk_history": lambda *_args, **_kwargs: {},
+            "index_history": lambda *_args: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": lambda *_args: None,
+            "market_regime": lambda *_args: {},
+            "logger": Mock(), "_state": {}, "_state_lock": threading.Lock(),
+        })
+        secondary = types.SimpleNamespace(fetch_tej_history=lambda *_args: frame)
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
+                patch.dict(sys.modules, {"overnight_index_sources": secondary}), \
+                patch("concurrent.futures.ThreadPoolExecutor", MeasuredPool):
+            result = ns["run_scan"](save_snapshot=False)
+        self.assertEqual(result["secondary_count"], len(symbols))
+        self.assertEqual(sizes, [8, 8, 8, 8, 1])
+
+    def test_stock_buzz_streams_250_symbols_with_full_coverage_and_stable_ranking(self):
+        """All 250 synthetic stocks count; no provider batch holds the full universe."""
+        symbols = [f"TEST{i:03d}" for i in range(250)]
+        frame = series()
+        batches, progress, reviewed = [], [], []
+        saved = Mock(return_value=False)
+
+        def fake_bulk(part, period, *, chunk_size, progress_cb):
+            self.assertEqual(period, "1y")
+            self.assertEqual(chunk_size, 100)
+            self.assertLessEqual(len(part), 100)
+            batches.append(tuple(part))
+            if progress_cb:
+                progress_cb(len(part), len(part))
+            return {sym: frame for sym in part}
+
+        def fake_analysis(sym, _df, _nifty, _delivery):
+            # Must not analyze until the entire universe passed the gate.
+            self.assertEqual(len(batches), 3)
+            reviewed.append(sym)
+            i = int(sym[-3:])
+            if i % 25 == 0:
+                return {"kind": "BREAKOUT", "sym": sym,
+                        "score": float(100 - i // 25),
+                        "vol_ratio": 2.0}
+            return {"kind": "NONE", "sym": sym}
+
+        state = {"result": None, "ts": 0.0}
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols, "source": "Synthetic"},
+            "bulk_history": fake_bulk,
+            "index_history": lambda *_args: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": fake_analysis,
+            "market_regime": lambda *_args: {"name": "Nifty"},
+            "logger": Mock(), "_state": state,
+            "_state_lock": threading.Lock(),
+        })
+        snapshot = types.SimpleNamespace(save_verified_scan=saved)
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "false"}), \
+             patch.dict(sys.modules, {"stocks_buzz_snapshot": snapshot}):
+            result = ns["run_scan"](
+                progress_cb=lambda done, total: progress.append((done, total)))
+
+        self.assertEqual([len(b) for b in batches], [100, 100, 50])
+        self.assertEqual(progress, [(100, 250), (200, 250), (250, 250)])
+        self.assertEqual(reviewed, symbols)
+        self.assertEqual(result["downloaded"], 250)
+        self.assertEqual(result["coverage"], 1.0)
+        self.assertEqual(result["liquid"], 250)
+        self.assertEqual(len(result["breakouts"]), 10)
+        self.assertEqual(result["breakouts"][0]["sym"], "TEST000")
+        self.assertIs(state["result"], result)
+        saved.assert_called_once_with(result)
+
+    def test_streaming_never_scores_or_publishes_if_full_coverage_fails(self):
+        """Fail closed even when several 100-symbol provider batches returned data."""
+        symbols = [f"TEST{i:03d}" for i in range(205)]
+        frame = series()
+        batches = []
+        analyze = Mock(side_effect=AssertionError("partial universe must not rank"))
+        save = Mock(side_effect=AssertionError("partial universe must not save"))
+
+        def partial_bulk(part, _period, *, chunk_size, progress_cb):
+            batches.append(len(part))
+            returned = {sym: frame for sym in part[:int(len(part) * .6)]}
+            if progress_cb:
+                progress_cb(len(returned), len(part))
+            return returned
+
+        state = {"result": None, "ts": 0.0}
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols, "source": "Synthetic"},
+            "bulk_history": partial_bulk,
+            "index_history": lambda *_args: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": analyze, "market_regime": Mock(),
+            "logger": Mock(), "_state": state,
+            "_state_lock": threading.Lock(),
+        })
+        snapshot = types.SimpleNamespace(save_verified_scan=save)
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "false"}), \
+             patch.dict(sys.modules, {"stocks_buzz_snapshot": snapshot}):
+            with self.assertRaisesRegex(ValueError, "ranking withheld"):
+                ns["run_scan"]()
+        self.assertEqual(batches, [100, 100, 5])
+        self.assertIsNone(state["result"])
+        analyze.assert_not_called()
+        save.assert_not_called()
 
 
 if __name__ == "__main__":

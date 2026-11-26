@@ -6,6 +6,8 @@ mocking their algorithm, keeping numerical dependencies minimal in CI.
 import ast
 import logging
 import types
+import sys
+from unittest.mock import patch
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -231,9 +233,16 @@ class SectorCompletedSessionCache(unittest.TestCase):
                      "session": date(2026, 11, 12), "summary": ["stale"]}
             source = Mock(return_value={"^NSEI": object()})
             outpath = os.path.join(folder, "new.pdf")
-            def build(_report, dest):
-                with open(dest, "wb") as stream:
-                    stream.write(b"%PDF-" + b"y" * 2048)
+            from reportlab.pdfgen import canvas
+            def build(report, dest):
+                pdf = canvas.Canvas(str(dest), pagesize=(595, 842), pageCompression=0)
+                for page in range(3):
+                    pdf.drawString(45, 800, "Sectoral Update {}".format(report["asof"]))
+                    for line in range(120):
+                        pdf.drawString(45, 780 - line * 5,
+                                      "Offline structural fixture; not live market evidence.")
+                    pdf.showPage()
+                pdf.save()
             ns = load_functions("generate_sector_report_pdf", globals_={
                 "_gen_lock": threading.Lock(), "_cache": cache,
                 "_last_completed_session": lambda: date(2026, 11, 13),
@@ -246,7 +255,11 @@ class SectorCompletedSessionCache(unittest.TestCase):
                 "IST": timezone(timedelta(hours=5, minutes=30)),
                 "CACHE_TTL": 1800, "logger": logging.getLogger(__name__),
             })
-            ok, path, summary = ns["generate_sector_report_pdf"]()
+            fake_drive = types.SimpleNamespace(
+                load_sector_cloud=lambda **_kwargs: None,
+                store_sector_cloud=lambda *_args, **_kwargs: True)
+            with patch.dict(sys.modules, {"sector_report_drive": fake_drive}):
+                ok, path, summary = ns["generate_sector_report_pdf"]()
             self.assertTrue(ok)
             self.assertNotEqual(path, prior)
             self.assertEqual(summary, ["fresh"])

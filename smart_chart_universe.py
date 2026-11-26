@@ -40,3 +40,34 @@ def load_nifty500_universe():
         symbols = sorted({sym for group in SECTOR_STOCKS.values() for sym in group
                           if re.fullmatch(r"[A-Z0-9&_-]{2,25}", sym)})
         return [(f"{sym}.NS", sym) for sym in symbols], "CURATED_PARTIAL_UNIVERSE_FALLBACK"
+
+
+NSE_NIFTY100_URLS = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+    "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
+)
+
+
+def load_nifty100_universe():
+    """Use only published Nifty 100 membership; never substitute a Nifty 500 slice."""
+    for url in NSE_NIFTY100_URLS:
+        try:
+            response = requests.get(url, timeout=8, headers={
+                "User-Agent": "Mozilla/5.0", "Accept": "text/csv,*/*"})
+            response.raise_for_status()
+            if len(response.content) > 2_000_000:
+                raise ValueError("Constituent CSV exceeded maximum size")
+            frame = pd.read_csv(StringIO(response.text))
+            column = next((x for x in frame.columns
+                           if str(x).strip().lower() == "symbol"), None)
+            if column is None or len(frame) != 100:
+                raise ValueError("Expected 100 Nifty 100 constituents")
+            symbols = [str(raw).strip().upper() for raw in frame[column]]
+            if len(set(symbols)) != 100 or not all(
+                    re.fullmatch(r"[A-Z0-9&_-]{2,25}", sym) for sym in symbols):
+                raise ValueError("Invalid or duplicate Nifty 100 constituents")
+            return [(f"{sym}.NS", sym) for sym in symbols], "NSE_NIFTY100_CONSTITUENTS_CSV"
+        except (requests.RequestException, ValueError, KeyError, OSError,
+                pd.errors.ParserError):
+            continue
+    raise RuntimeError("Verified Nifty 100 constituent list unavailable")

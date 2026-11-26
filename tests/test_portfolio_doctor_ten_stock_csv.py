@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 from pypdf import PdfReader
@@ -107,7 +108,27 @@ class TenStocksAcceptance(unittest.TestCase):
         risk = calculate_historical_risk(records, frames, now=NOW)
         self.assertEqual(risk["status"], "VERIFIED")
         self.assertEqual(risk["included"], 10)
-        pages = texts(build_pdf_bytes(records, companies=companies, risk=risk))
+        report = build_pdf_bytes(records, companies=companies, risk=risk)
+        pages = texts(report)
+        # Regression: the live parent, not only the renderer, must accept
+        # the exact 16-page output for a ten-position request.
+        import portfolio_doctor_live as doctor
+        payload = ("Symbol,Qty,Buy Price\n" +
+                   "\n".join(sym + ",1,95" for sym in names)).encode()
+        child = SimpleNamespace(returncode=0, stdout=report, stderr=b"")
+        with patch.object(doctor.subprocess, "run", return_value=child), \
+             patch.dict(doctor.os.environ,
+                        {"MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED": "0"}):
+            self.assertEqual(doctor.run_isolated_memory("holdings.csv", payload),
+                             report)
+            wrong = payload.replace(b"SAMPLE09", b"SAMPLE99")
+            with self.assertRaises(doctor.PortfolioDoctorError) as exc:
+                doctor.run_isolated_memory("holdings.csv", wrong)
+            self.assertEqual(exc.exception.code, "PDF_FAILED")
+            five = b"\n".join(payload.splitlines()[:6])
+            with self.assertRaises(doctor.PortfolioDoctorError) as exc:
+                doctor.run_isolated_memory("holdings.csv", five)
+            self.assertEqual(exc.exception.code, "PDF_FAILED")
         self.assertEqual(len(pages), 16)
         self.assertIn("Page 16 of 16", pages[-1])
         self.assertIn("02 / HOLDING-WISE VERIFIED RESULTS", pages[1])

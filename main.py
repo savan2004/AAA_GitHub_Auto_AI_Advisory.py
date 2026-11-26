@@ -999,8 +999,11 @@ def run_report(chat_id, query):
 
         # A genuine, fully validated completed-session PDF can be delivered
         # immediately. Cold symbols still use the existing real generator.
-        from research_pdf_snapshot import load_verified_report
-        cached = load_verified_report(sym)
+        from research_pdf_snapshot import (
+            load_recent_local_report, load_verified_report, report_quote_line)
+        from research_pdf_drive import load_cloud_report
+        cached = (load_recent_local_report(sym) or load_cloud_report(sym)
+                  or load_verified_report(sym))
         if cached is not None:
             ok, result, name = True, cached[0], (cname or sym)
             logger.info("MSK_PDF_CACHE_HIT symbol=%s session=%s", sym, cached[1])
@@ -1056,13 +1059,22 @@ def run_report(chat_id, query):
                           "source disclosures or content verification failed.")
                 return
             try:
+                # Keep the immutable PDF separate from the timestamped market quote.
+                # An unavailable quote must never block a verified report.
+                try:
+                    quote = get_verified_quote(sym)
+                except Exception:
+                    quote = None
+                quote_text = report_quote_line(quote)
+                from html import escape
                 with open(result, "rb") as f:
                     sent = bot.send_document(
                         chat_id, f,
                         visible_file_name=f"{sym}_Research_Report.pdf",
-                        caption=(f"📄 <b>{name or sym} — Equity Research Report</b>\n"
+                        caption=(f"📄 <b>{escape(str(name or sym))} — Equity Research Report</b>\n"
                                  f"Stance · Technicals · Fundamentals · Ownership · Peers · Trade plan · Risks\n"
-                                 f"Generated {datetime.now().strftime('%d-%b-%Y %H:%M')}\n\n"
+                                 f"PDF: dated completed-session research; short-term levels may change.\n"
+                                 f"{escape(quote_text)}\n\n"
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
                     )
@@ -2289,11 +2301,6 @@ def report_btn(m):
 
 
 # ── 🔥 Stocks Buzz — breakout radar over the top-1000 NSE stocks ─────────────
-_buzz_lock = threading.Lock()
-_buzz_running = False
-_buzz_waiters = set()
-
-
 def _buzz_keyboard(result):
     """One tap per top breakout → opens the Technical / Fundamental / Chart / PDF menu."""
     syms = stocks_buzz.top_symbols(result, 5)
@@ -2315,60 +2322,32 @@ def _deliver_buzz(chat_id, result):
 
 
 def run_buzz(chat_id, *, force_refresh=False):
-    global _buzz_running
-    # Normal requests can reuse a verified completed-session snapshot.
-    cached = None if force_refresh else stocks_buzz.get_cached()
-    if cached:
-        _deliver_buzz(chat_id, cached)
-        return
+    """Render serves completed-session research; GitHub Actions performs scans.
 
-    with _buzz_lock:
-        _buzz_waiters.add(chat_id)
-        if _buzz_running:
-            return
-        _buzz_running = True
-
-    last_ping = time.monotonic()
-
-    def _progress(done, total):
-        nonlocal last_ping
-        now = time.monotonic()
-        if now - last_ping <= 40:
-            return
-        last_ping = now
-        with _buzz_lock:
-            targets = list(_buzz_waiters)
-        for cid in targets:
-            try:
-                safe_send(cid, f"⏳ Stocks Buzz scan: downloaded {done}/{total} stocks…")
-            except Exception as exc:
-                logger.warning("Buzz progress delivery chat=%s: %s", cid, type(exc).__name__)
-
-    result = None
+    A missing or stale verified Neon snapshot must never trigger a 1,000-stock
+    Yahoo/pandas scan in the Telegram process. Keep the customer informed and
+    avoid speculative or old-session trade-ready calls.
+    """
+    if force_refresh:
+        logger.info("MSK_BUZZ_FORCE_REFRESH_DEFERRED github_actions_only=1")
     try:
-        safe_send(chat_id, "🔥 <b>Stocks Buzz</b> — scanning NSE stocks for breakouts…\n"
-                           "Verified completed-session results can be reused for later requests.")
-        result = stocks_buzz.run_scan(progress_cb=_progress)
-    except Exception:
-        logger.exception("Stocks Buzz scan failed")
-
-    # Requests can join while Telegram sends the previous batch. Release the
-    # scan only when the queue is empty, in the same lock as the empty check.
-    while True:
-        with _buzz_lock:
-            if not _buzz_waiters:
-                _buzz_running = False
-                return
-            targets = list(_buzz_waiters)
-            _buzz_waiters.clear()
-        for cid in targets:
-            try:
-                if result is None:
-                    safe_send(cid, "❌ Stocks Buzz could not complete the scan. Please retry shortly.")
-                else:
-                    _deliver_buzz(cid, result)
-            except Exception:
-                logger.exception("Buzz result delivery failed chat=%s", cid)
+        cached = stocks_buzz.get_cached()
+    except Exception as exc:
+        logger.warning("MSK_BUZZ_SNAPSHOT_LOOKUP_FAILED type=%s",
+                       type(exc).__name__)
+        cached = None
+    if cached is None:
+        logger.warning("MSK_BUZZ_SNAPSHOT_MISSING on_demand_scan=disabled")
+        safe_send(
+            chat_id,
+            "⏳ <b>Stocks Buzz research is not ready.</b> "
+            "The verified market-session scan runs on GitHub Actions "
+            "after 5:00 PM IST on weekdays. "
+            "Results appear only after the research database confirms "
+            "current-session coverage. No unverified picks were sent."
+        )
+        return
+    _deliver_buzz(chat_id, cached)
 
 @bot.message_handler(commands=["buzz"])
 def cmd_buzz(m):
@@ -2907,6 +2886,10 @@ if __name__ == "__main__":
             from msk_sbin_pdf_probe import run_once as run_sbin_pdf_acceptance
             threading.Thread(target=run_sbin_pdf_acceptance, args=(globals(),),
                              name="msk-sbin-pdf-release", daemon=True).start()
+        if os.getenv("MSK_RESEARCH_DAILY_ENABLED") == "1":
+            from research_cloud_daily import loop as research_cloud_loop
+            threading.Thread(target=research_cloud_loop,
+                             name="msk-research-cloud-daily", daemon=True).start()
         from waitress import serve
         logger.info("Production HTTP server listening on port %s", os.getenv("PORT", "8000"))
         serve(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), threads=12, connection_limit=200)
