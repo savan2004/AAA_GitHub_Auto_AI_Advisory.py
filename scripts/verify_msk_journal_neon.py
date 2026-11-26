@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -48,9 +49,26 @@ def load_config(env=None):
         raise ProbeError("Provide a unique 14-digit staging probe ID")
     if not isinstance(dsn, str) or not dsn:
         raise ProbeError("Private staging DSN is missing")
+    # Neon Connect can copy either the URL or a complete psql command.
+    # Parse the wrapper as data; never execute a command or infer a password.
+    dsn = dsn.strip()
+    if dsn.startswith("psql ") or dsn[:1] in ("'", '"'):
+        try:
+            tokens = shlex.split(dsn)
+        except ValueError:
+            raise ProbeError("Staging DSN wrapper is malformed") from None
+        if len(tokens) == 2 and tokens[0] == "psql":
+            dsn = tokens[1]
+        elif len(tokens) == 1 and dsn[:1] in ("'", '"'):
+            dsn = tokens[0]
+        else:
+            raise ProbeError("Staging DSN wrapper is unsupported")
     try:
+        if not dsn or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in dsn):
+            raise ValueError("invalid URL")
         parsed = urlsplit(dsn)
         host = parsed.hostname
+        port = parsed.port
         user = parsed.username
         password = parsed.password
     except (ValueError, TypeError):
@@ -59,15 +77,28 @@ def load_config(env=None):
     # Report only fixed, non-secret configuration categories so a GitHub
     # Actions failure can be corrected without revealing the DSN or password.
     if parsed.scheme not in ("postgres", "postgresql", "postgresql+psycopg", "postgresql+psycopg2", "postgresql+psycopg3"):
-        raise ProbeError("Staging DSN scheme unsupported: {} (credentials and connection details suppressed)".format(parsed.scheme or "missing"))
-    if host != STAGING_HOST:
+        # Even an invalid scheme might contain secret material; never echo it.
+        raise ProbeError("Staging DSN scheme unsupported: missing" if not parsed.scheme
+                         else "Staging DSN scheme unsupported: unrecognized")
+    if host != STAGING_HOST or port not in (None, 5432):
         raise ProbeError("Connection is NOT the approved staging direct host; select branch br-delicate-base-b3zz6z20, non-pooled")
     if parsed.path != "/" + STAGING_DATABASE:
         raise ProbeError("Wrong staging database; select msk_index_research")
     if not user or not password:
         raise ProbeError("Staging DSN lacks database username or password")
-    if parse_qs(parsed.query).get("sslmode", [""])[0] != "require":
+    # libpq URI query parameters can override the host, dbname, user or TLS.
+    # Only the exact harmless Neon connection options are allowed.
+    try:
+        query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True,
+                         max_num_fields=4)
+    except ValueError:
+        raise ProbeError("Staging DSN query is malformed") from None
+    if set(query)-{"sslmode", "channel_binding"} or any(len(v)!=1 for v in query.values()):
+        raise ProbeError("Staging DSN query contains unsupported or duplicate options")
+    if query.get("sslmode") != ["require"]:
         raise ProbeError("Staging DSN must include sslmode=require")
+    if "channel_binding" in query and query["channel_binding"] not in (["require"], ["prefer"]):
+        raise ProbeError("Staging DSN channel binding option unsupported")
     if parsed.fragment:
         raise ProbeError("Staging DSN has an unexpected URL fragment")
     # SQLAlchemy adds a driver suffix that psycopg.connect does not accept.
@@ -137,10 +168,15 @@ def write(dsn, run_id):
     with _connect(dsn):
         pass
     with _connect(dsn) as conn:
+        # A newly provisioned staging branch may not yet have the table.
+        # The actual writer owns idempotent schema creation.
+        table = conn.execute(
+            "SELECT to_regclass('msk_signal_journal.events_v1')"
+        ).fetchone()[0]
         existing = conn.execute(
             "SELECT count(*) FROM msk_signal_journal.events_v1 "
             "WHERE signal_id = %s", (plan["signal_id"],)
-        ).fetchone()[0]
+        ).fetchone()[0] if table is not None else 0
         if existing:
             raise ProbeError("Probe ID already used; choose a NEW probe ID")
     if store.append(plan) is not True:

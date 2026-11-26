@@ -16,7 +16,7 @@ Neon endpoint names and branch IDs are not passwords.
 ## Preferred: Cloud-only GitHub Actions acceptance (no computer required)
 
 1. In GitHub, add a **Repository secret** named `MSK_JOURNAL_NEON_STAGING_DSN` under `savan2004/AAA_GitHub_Auto_AI_Advisory.py`.
-2. Copy the **direct (non-pooled)** Neon connection string for staging branch `br-delicate-base-b3zz6z20`, database `msk_index_research`; use `sslmode=require`. The staging Neon compute currently has connection pooling disabled.
+2. Copy the **direct (non-pooled)** Neon connection string for staging branch `br-delicate-base-b3zz6z20`, database `msk_index_research`; use `sslmode=require`. The staging Neon compute currently has connection pooling disabled. Copy the **complete URI**, not the password or hostname alone. The probe also accepts the exact Neon Connect `psql 'postgresql://...'` wrapper or a quoted URI as data, without executing a shell command. It rejects all host/database/TLS query overrides and unsupported options. If the secret contains only a password or a hostname, replace it with the full staging URI; the script cannot reconstruct credentials.
 3. The `neon-staging-python-acceptance` GitHub job on PR #243 runs the script's `write` and `read` commands in separate Python processes. Only a successful job with all five evidence markers proves acceptance.
 4. The script prints a **safe reason** for a failed staging guard without revealing credentials; other connection exceptions suppress details.
 

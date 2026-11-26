@@ -60,10 +60,31 @@ class StagingProbeTests(unittest.TestCase):
 
     def test_rejects_other_driver_schemes(self):
         bad = SAMPLE_DSN.replace("postgresql://", "postgresql+asyncpg://")
-        with self.assertRaisesRegex(ProbeError, r"^Staging DSN scheme unsupported: postgresql\+asyncpg") as caught:
+        with self.assertRaisesRegex(ProbeError, r"^Staging DSN scheme unsupported: unrecognized") as caught:
             load_config(env(**{DSN_ENV: bad}))
         self.assertNotIn("FAKE-NOT-A-SECRET", str(caught.exception))
         self.assertNotIn(STAGING_HOST, str(caught.exception))
+
+    def test_neon_copy_formats_are_normalized_without_shell_execution(self):
+        for wrapped in ("  "+SAMPLE_DSN+"\n", "'"+SAMPLE_DSN+"'", 
+                        '"'+SAMPLE_DSN+'"', "psql '"+SAMPLE_DSN+"'"):
+            self.assertEqual(load_config(env(**{DSN_ENV:wrapped})),(SAMPLE_DSN,RUN_ID))
+        for bad in ("FAKE-NOT-A-SECRET", "psql", "psql '"+SAMPLE_DSN+"' -c anything",
+                    "psql '"+SAMPLE_DSN, "FAKESECRET:invalid"):
+            with self.assertRaises(ProbeError) as caught:
+                load_config(env(**{DSN_ENV:bad}))
+            self.assertNotIn("FAKESECRET",str(caught.exception))
+            self.assertNotIn("FAKE-NOT-A-SECRET",str(caught.exception))
+
+    def test_rejects_libpq_query_overrides_and_other_ports(self):
+        for option in ("&host=other.example", "&hostaddr=127.0.0.1", "&dbname=production",
+                       "&sslmode=disable", "&user=other", "&%68ost=other.example",
+                       "&channel_binding=disable", "&options=-csearch_path%3Dpublic"):
+            with self.assertRaises(ProbeError):
+                load_config(env(**{DSN_ENV:SAMPLE_DSN+option}))
+        for host in (STAGING_HOST+":5433",STAGING_HOST+":invalid"):
+            with self.assertRaises(ProbeError):
+                load_config(env(**{DSN_ENV:SAMPLE_DSN.replace(STAGING_HOST,host)}))
 
     def test_rejects_different_database_and_ssl_disable(self):
         for bad in (
