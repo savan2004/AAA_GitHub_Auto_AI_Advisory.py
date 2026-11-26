@@ -542,11 +542,33 @@ def _safe_peer_watchlist(recs):
     # An unavailable index roster or provider may never prevent a verified
     # holdings-only PDF. The worker already suppresses all sensitive logs.
     try:
-        from portfolio_doctor_peers import research_industry_peers
-        # One bounded batched fetch for up to 200 peers. Preserve a hard
-        # timeout and never withhold the holdings-only PDF on provider failure.
-        with optional_review_deadline(35):
-            return research_industry_peers(recs)
+        from portfolio_doctor_peers import (
+            official_nifty500_industries, research_industry_peers,
+            MIN_MEMBERS, MAX_MEMBERS,
+        )
+        # Classification is independent of historical peer screening. Keep
+        # validated roster labels even if the optional OHLCV screen times out.
+        with optional_review_deadline(9):
+            members = official_nifty500_industries()
+        if not isinstance(members, dict) or not MIN_MEMBERS <= len(members) <= MAX_MEMBERS:
+            return None
+        matched = {
+            row["symbol"]: members[row["symbol"]]
+            for row in recs if row.get("exchange") != "BSE"
+            and row["symbol"] in members
+        }
+        fallback = {"status": "UNAVAILABLE", "universe": len(members),
+                    "held_industries": matched, "roster_verified": True}
+        try:
+            with optional_review_deadline(26):
+                result = research_industry_peers(recs, members=members)
+            if isinstance(result, dict):
+                result["held_industries"] = matched
+                result["roster_verified"] = True
+                return result
+        except (Exception, OptionalReviewTimeout):
+            pass
+        return fallback
     except (Exception, OptionalReviewTimeout):
         return None
 
