@@ -74,6 +74,16 @@ class EquityReportQuality(unittest.TestCase):
         self.assertNotIn("Senior Market Analyst Desk",REPORT)
         self.assertIn("if plan[\"mode\"] != \"DEFENSIVE\":",REPORT)
 
+    def test_pdf_does_not_turn_model_trend_into_active_trade(self):
+        mode = fn(REPORT, "_report_plan_mode", {})
+        self.assertEqual(mode({"mode":"ACTIVE"}), "CONDITIONAL")
+        self.assertEqual(mode({"mode":"CONDITIONAL"}), "CONDITIONAL")
+        self.assertEqual(mode({"mode":"DEFENSIVE"}), "DEFENSIVE")
+        self.assertEqual(mode({"mode":"NO_TRADE"}), "NO_TRADE")
+        self.assertIn('plan["mode"] = _report_plan_mode(plan)', REPORT)
+        self.assertNotIn("Use staggered entries", REPORT)
+        self.assertIn("Conditional model scenario — WAIT", REPORT)
+
     def test_summary_mentions_source_period_and_not_live_price(self):
         self.assertIn("price_session=price_session",REPORT)
         self.assertIn("price as of {esc(R.get('price_session')",REPORT)
@@ -88,7 +98,7 @@ class EquityReportQuality(unittest.TestCase):
                         {"candle_date": "2026-11-19"}):
             with self.subTest(market=invalid), self.assertRaisesRegex(ValueError, "latest completed"):
                 check(invalid, expected)
-        self.assertIn("_require_latest_completed_eod(market, expected_completed_session())", REPORT)
+        self.assertIn("verified_pdf_history", REPORT)
 
     def test_unsourced_headlines_and_unverified_probability_are_suppressed(self):
         news = fn(REPORT, "_real_news", {"List": list, "logger": type("Log", (), {"info": lambda *a: None})()})
@@ -106,6 +116,53 @@ class EquityReportQuality(unittest.TestCase):
         self.assertIn("valuation is scored separately", scores["action"])
         self.assertNotIn("valuation are not the problem", scores["action"])
 
+
+
+class QuarterlyFilingRepair(unittest.TestCase):
+    def test_isolated_eps_conflict_uses_official_basis_without_mutating_source(self):
+        from research_filing_evidence import repair_verified_quarter_eps
+        raw = {"source": "Screener.in", "quarters": [
+            {"label": "Jun 2026", "revenue": 5607, "net_profit": 263, "eps": 9.5},
+            {"label": "Sep 2026", "revenue": 7002, "net_profit": 382, "eps": 13.77},
+        ]}
+        repaired, proof = repair_verified_quarter_eps("APLAPOLLO", raw)
+        self.assertEqual(raw["quarters"][-1]["eps"], 13.77)
+        self.assertEqual(repaired["quarters"][-1]["eps"], 13.62)
+        self.assertEqual(repaired["quarters"][0], raw["quarters"][0])
+        self.assertEqual(proof["status"], "partial_match")
+        self.assertEqual(len(proof["matched"]), 3)
+        self.assertEqual(proof["eps_correction"]["reported"], 13.77)
+
+    def test_other_conflicts_or_unmatched_period_never_override(self):
+        from research_filing_evidence import repair_verified_quarter_eps
+        for changes, expected in [
+            ({"revenue": 6900}, "mismatch"),
+            ({"net_profit": None}, "mismatch"),
+            ({"label": "Jun 2026"}, "period_not_comparable"),
+        ]:
+            raw = {"quarters": [dict({"label": "Sep 2026", "revenue": 7002,
+                                      "net_profit": 382, "eps": 13.77}, **changes)]}
+            result, proof = repair_verified_quarter_eps("APLAPOLLO", raw)
+            self.assertIs(result, raw)
+            self.assertEqual(proof["status"], expected)
+            self.assertNotIn("eps_correction", proof)
+
+    def test_correct_source_and_unregistered_symbol_unchanged(self):
+        from research_filing_evidence import repair_verified_quarter_eps
+        raw = {"quarters": [{"label": "Sep 2026", "revenue": 7002,
+                             "net_profit": 382, "eps": 13.62}]}
+        for symbol, status in [("APLAPOLLO", "partial_match"), ("SBIN", "not_registered")]:
+            result, proof = repair_verified_quarter_eps(symbol, raw)
+            self.assertIs(result, raw)
+            self.assertEqual(proof["status"], status)
+            self.assertNotIn("eps_correction", proof)
+
+    def test_reconciliation_precedes_calculation_and_visuals(self):
+        self.assertLess(REPORT.index("statements, filing_evidence = repair_verified_quarter_eps"),
+                        REPORT.index("fv = eng.compute_fundamentals"))
+        self.assertIn('fund = {**fund, "eps": None}', REPORT)
+        self.assertIn('fv["implied_peer_value"] = None', REPORT)
+        self.assertIn('render_quarterly_chart((inp.get("stm")', REPORT)
 
 if __name__=="__main__":
     unittest.main()

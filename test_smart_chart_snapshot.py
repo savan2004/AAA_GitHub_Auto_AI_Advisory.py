@@ -20,7 +20,7 @@ META = (
     "CONCOR.NS|Concor|BUY|+13/20|442.15|425.00|470.00|490.00|"
     "Sample: 52/60 qualifying NSE setups from 250; "
     "partial-universe scan; Setup: Breakout confirmed: 20-session high + volume; "
-    "EOD 2026-11-13"
+    "EOD 2026-11-13; Chart V8"
 )
 
 
@@ -33,6 +33,41 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
             image.save(stream, format="PNG")
             cls.image = stream.getvalue()
 
+    def test_strict_two_mb_gate(self):
+        self.assertEqual(store.MAX_PNG_BYTES, 1_999_999)
+        with self.assertRaisesRegex(ValueError, "size range"):
+            store._validate(self.image.ljust(2_000_000, b"x"), META, SESSION)
+
+    def test_renderer_keeps_highest_dpi_that_fits(self):
+        fig = MagicMock()
+        attempts = []
+        def render(path, **kwargs):
+            attempts.append(kwargs["dpi"])
+            self.assertEqual(kwargs["pil_kwargs"]["compress_level"], 9)
+            payload = self.image if kwargs["dpi"] == 144 else b"x" * 2_000_000
+            Path(path).write_bytes(payload)
+        fig.savefig.side_effect = render
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "chart.png"
+            size, dpi = store.save_bounded_chart_png(fig, destination, "#ffffff")
+            self.assertEqual(attempts, [160, 144])
+            self.assertEqual(dpi, 144)
+            self.assertLess(size, 2_000_000)
+            self.assertEqual(destination.read_bytes(), self.image)
+            self.assertEqual(list(Path(folder).iterdir()), [destination])
+
+    def test_renderer_rejects_oversize_without_exposing_file(self):
+        fig = MagicMock()
+        fig.savefig.side_effect = lambda path, **kwargs: Path(path).write_bytes(
+            b"x" * 2_000_000)
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "chart.png"
+            with self.assertRaisesRegex(ValueError, "2 MB"):
+                store.save_bounded_chart_png(fig, destination, "#ffffff")
+            self.assertEqual(fig.savefig.call_count, 4)
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
     def test_real_png_metadata_and_no_fake_trades(self):
         match = store._validate(self.image, META, SESSION)
         self.assertEqual(match.group(9), "52")
@@ -42,6 +77,20 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
         self.assertNotIn("No-Trade Zone", caption)
         self.assertIn("52/60", caption)
         self.assertIn("SL: ₹", caption)
+
+    def test_nifty100_real_scan_metadata_contract(self):
+        source = (Path(__file__).resolve().parent /
+                  "gen_smart_stock_chart.py").read_text(encoding="utf-8")
+        self.assertIn('f"Sample: {valid}/{sampled} qualifying NSE setups from {universe_size}; "', source)
+        meta = ("AXISBANK.NS|AXISBANK|BUY|+14/20|1418.10|0.00|0.00|0.00|"
+                "Sample: 6/100 qualifying NSE setups from 100; partial-universe scan; "
+                "Setup: Trend confirmation: higher highs/lows + weekly trend; "
+                "EOD 2026-11-25; Chart V8")
+        match = store._validate(self.image, meta, "2026-11-25")
+        self.assertEqual(match.group(11), "100")
+        self.assertIn("OBSERVATION ONLY", store.format_chart_meta(meta, "2026-11-25"))
+        with self.assertRaises(ValueError):
+            store._validate(self.image, meta, "2026-11-26")
 
     def test_reject_stale_metadata_and_corrupt_png(self):
         with self.assertRaisesRegex(ValueError, "session"):
@@ -58,6 +107,20 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
                 store._validate(
                     self.image,
                     META.replace("BUY|+13/20", weak), SESSION)
+
+    def test_chart_v8_rejects_legacy_or_invalid_levels_and_displays_missing_targets(self):
+        with self.assertRaises(ValueError):
+            store._validate(self.image, META.replace("; Chart V8", ""), SESSION)
+        with self.assertRaises(ValueError):
+            store._validate(self.image, META.replace("425.00|470.00", "450.00|470.00"), SESSION)
+        one = META.replace("490.00", "0.00")
+        store._validate(self.image, one, SESSION)
+        self.assertIn("T2: unavailable", store.format_chart_meta(one, SESSION))
+        none = META.replace("425.00|470.00|490.00", "0.00|0.00|0.00")
+        store._validate(self.image, none, SESSION)
+        caption = store.format_chart_meta(none, SESSION)
+        self.assertIn("OBSERVATION ONLY", caption)
+        self.assertNotIn("₹0.00", caption)
 
     def test_cannot_claim_full_universe_when_only_partially_scanned(self):
         with self.assertRaisesRegex(ValueError, "full-universe"):

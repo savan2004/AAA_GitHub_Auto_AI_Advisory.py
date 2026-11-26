@@ -244,10 +244,11 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
                 "kind": "BREAKOUT", "label": brk["label"], "level": brk["level"],
                 "age": k, "vol_ratio": brk["vol_ratio"], "clv": clv,
                 "score": round(score, 1), "reasons": reasons, "flags": flags,
-                "entry": ltp,
+                "entry": ltp, "level_status": "OBSERVATION_ONLY",
             })
             if levels:
                 base.update(levels)
+                base["level_status"] = "STRUCTURE"
                 base["risk_pct"] = (ltp - levels["sl"]) / ltp * 100
         return base
 
@@ -275,6 +276,7 @@ def analyze_stock(sym: str, df: pd.DataFrame, nifty_close: Optional[pd.Series] =
             "kind": "WATCH", "label": near["label"], "level": near["level"],
             "dist": near["dist"], "score": round(_clamp(w, 0, 100), 1),
             "reasons": reasons, "entry": trigger,
+            "level_status": "OBSERVATION_ONLY",
         })
     return base
 
@@ -327,29 +329,48 @@ def _completed_session_frame(frame, session):
 
 
 def get_cached() -> Optional[dict]:
+    """Reuse a verified completed-session result; coalesce Neon cache misses.
+
+    Only one reader per process may query Neon at a time. Missing or failed
+    lookups are throttled for 60 seconds, never treated as valid stock data.
+    A new completed NSE session bypasses the previous session's miss.
+    """
+    completed = _last_completed_session()
+    now = time.monotonic()
     with _state_lock:
         result = _state["result"]
-        # Completed candles do not age inside the same NSE session.
-        if (result and result.get("data_session") == _last_completed_session() and
+        if (result and result.get("data_session") == completed and
                 result.get("coverage", 0) >= MIN_SCAN_COVERAGE):
             return result
-    # Render restarts wipe RAM. Reuse ONLY a verified completed-session scan
-    # produced after market close by the independent research Neon worker.
-    try:
-        from stocks_buzz_snapshot import load_verified_scan
-        result = load_verified_scan()
-        if result is not None:
-            result["coverage"] = result["downloaded"] / result["universe_size"]
-            with _state_lock:
-                _state.update(result=result, ts=time.time())
-            return result
-    except Exception as exc:
-        logger.warning("Stocks Buzz durable snapshot unavailable: %s",
-                       type(exc).__name__)
-    return None
+        if (_state.get("buzz_miss_session") == completed and
+                now - _state.get("buzz_miss_checked", -1e12) < 60):
+            return None
+        try:
+            from stocks_buzz_snapshot import load_verified_scan
+            result = load_verified_scan()
+            if result is not None:
+                result["coverage"] = result["downloaded"] / result["universe_size"]
+                _state.update(result=result, ts=time.time(), buzz_miss_session=None)
+                return result
+        except Exception as exc:
+            logger.warning("Stocks Buzz durable snapshot unavailable: %s",
+                           type(exc).__name__)
+        _state.update(buzz_miss_session=completed, buzz_miss_checked=now)
+        return None
 
+def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None, *,
+             save_snapshot: bool = True) -> dict:
+    """Full-universe scan with bounded OHLCV RAM and the original coverage gate.
 
-def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
+    Keep at most one 100-symbol batch of DataFrames in memory. Stage verified
+    candles in an anonymous temporary file, then score only after the full
+    universe meets the completed-session coverage requirement. The temporary
+    file is local to this scan, never a customer/DB cache, and always closes.
+    No stock, trading threshold, fallback source, or coverage limit changes.
+    """
+    import pickle
+    import tempfile
+
     t0 = time.time()
     uni = get_universe()
     symbols: List[str] = uni["symbols"]
@@ -358,58 +379,112 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
         raise ValueError("Stock universe degraded: not enough NSE companies for a Top-1000 scan")
 
     completed = _last_completed_session()
-    downloaded = bulk_history(symbols, "1y", chunk_size=100, progress_cb=progress_cb)
     nifty = _completed_session_frame(index_history("^NSEI", "1y"), completed)
     if nifty is None or len(nifty) < 65:
         raise ValueError("Nifty benchmark has no verified completed-session candles")
     nifty_close = nifty["Close"]
-    hist = {sym: clean for sym, df in downloaded.items()
-            if (clean := _completed_session_frame(df, completed)) is not None}
-    secondary_count = 0
-    coverage = len(hist) / len(symbols) if symbols else 0.0
-    # Only the scheduled after-close research worker may make hundreds of
-    # slower keyless fallback requests. Telegram button calls stay bounded.
-    # Every fallback requires matching NSE symbol, exchange and completed
-    # session; no quote is inferred or substituted.
-    if (coverage < MIN_SCAN_COVERAGE and
-            os.getenv("MSK_BUZZ_ALLOW_SECONDARY_EOD", "").lower() == "true"):
-        from concurrent.futures import ThreadPoolExecutor
-        from overnight_index_sources import fetch_tej_history
-        missing = [sym for sym in symbols if sym not in hist]
-        def fetch_verified(sym):
-            frame = fetch_tej_history(sym, completed)
-            return sym, _completed_session_frame(frame, completed)
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for sym, frame in pool.map(fetch_verified, missing):
-                if frame is not None:
-                    hist[sym] = frame
-                    secondary_count += 1
-        coverage = len(hist) / len(symbols) if symbols else 0.0
-        logger.info("MSK_BUZZ_SECONDARY_EOD session=%s recovered=%d total=%d",
-                    completed, secondary_count, len(symbols))
-    if coverage < MIN_SCAN_COVERAGE:
-        raise ValueError(
-            f"Current NSE session {completed}: only {len(hist)}/{len(symbols)} "
-            "valid stock histories; ranking withheld")
 
+    # Preserve the old provider request shape (100 symbols per Yahoo batch)
+    # and its per-batch fallback ceiling, but never retain the full 1y history
+    # of all 1000 NSE stocks as a single large Python dictionary.
+    batch_size = 100
+    valid_count = 0
+    primary_downloaded = 0
+    secondary_count = 0
+    archive_count = 0
+    allow_secondary = os.getenv("MSK_BUZZ_ALLOW_SECONDARY_EOD", "").lower() == "true"
+    archive = None
+    if allow_secondary:
+        from smart_chart_eod_recovery import ArchiveRecovery
+        from portfolio_doctor_live import doctor_trading_session, PortfolioDoctorError
+        try:
+            if doctor_trading_session(completed):
+                archive = ArchiveRecovery((sym + ".NS" for sym in symbols), completed)
+        except PortfolioDoctorError:
+            logger.info("Stocks Buzz exchange calendar unavailable for %s", completed)
+    missing: List[str] = []
     breakouts, watch, liquid, extended = [], [], 0, 0
     extended_setups = []
-    for sym, df in hist.items():
-        try:
-            r = analyze_stock(sym, df, nifty_close, delivery.get(sym))
-        except Exception as e:
-            logger.debug(f"[buzz] analyze {sym} failed: {e}")
-            continue
-        if r is None:
-            continue
-        liquid += 1
-        if r["kind"] == "BREAKOUT":
-            breakouts.append(r)
-        elif r["kind"] == "WATCH":
-            watch.append(r)
-        elif r["kind"] == "EXTENDED":
-            extended += 1
-            extended_setups.append(r)
+
+    with tempfile.TemporaryFile(mode="w+b") as staged:
+        for start in range(0, len(symbols), batch_size):
+            part = symbols[start:start + batch_size]
+
+            def batch_progress(done, _total):
+                if progress_cb:
+                    progress_cb(min(primary_downloaded + done, len(symbols)),
+                                len(symbols))
+
+            batch = bulk_history(part, "1y", chunk_size=batch_size,
+                                 progress_cb=batch_progress)
+            primary_downloaded += len(batch)
+            for sym in part:
+                frame = batch.get(sym)
+                clean = _completed_session_frame(frame, completed)
+                if clean is None and archive is not None and frame is not None and len(frame) >= MIN_BARS - 1:
+                    clean = _completed_session_frame(archive(sym + ".NS", frame), completed)
+                    if clean is not None:
+                        archive_count += 1
+                if clean is None:
+                    missing.append(sym)
+                    continue
+                # Anonymous local file stores exact pandas candle values:
+                # no rounding, no additional dependencies or DB writes.
+                pickle.dump((sym, clean), staged, protocol=pickle.HIGHEST_PROTOCOL)
+                valid_count += 1
+            del batch
+
+        coverage = valid_count / len(symbols) if symbols else 0.0
+        # This existing optional fallback is restricted to the scheduled
+        # after-close worker. A Telegram button cannot enable it by default.
+        if coverage < MIN_SCAN_COVERAGE and allow_secondary:
+            from concurrent.futures import ThreadPoolExecutor
+            from overnight_index_sources import fetch_tej_history
+
+            def fetch_verified(sym):
+                frame = fetch_tej_history(sym, completed)
+                return sym, _completed_session_frame(frame, completed)
+
+            # map() eagerly submits its iterable. Bound completed frames retained
+            # behind a slow response while preserving the original symbol order.
+            workers = 8
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for start in range(0, len(missing), workers):
+                    for sym, frame in pool.map(fetch_verified, missing[start:start + workers]):
+                        if frame is not None:
+                            pickle.dump((sym, frame), staged,
+                                        protocol=pickle.HIGHEST_PROTOCOL)
+                            valid_count += 1
+                            secondary_count += 1
+            coverage = valid_count / len(symbols) if symbols else 0.0
+            logger.info("MSK_BUZZ_SECONDARY_EOD session=%s recovered=%d total=%d",
+                        completed, secondary_count, len(symbols))
+
+        # Fail closed BEFORE loading or scoring any staged candidate. A
+        # partially downloaded universe cannot produce a ranking or snapshot.
+        if coverage < MIN_SCAN_COVERAGE:
+            raise ValueError(
+                f"Current NSE session {completed}: only {valid_count}/{len(symbols)} "
+                "valid stock histories; ranking withheld")
+
+        staged.seek(0)
+        for _ in range(valid_count):
+            sym, df = pickle.load(staged)
+            try:
+                r = analyze_stock(sym, df, nifty_close, delivery.get(sym))
+            except Exception as exc:
+                logger.debug("[buzz] analyze %s failed: %s", sym, exc)
+                continue
+            if r is None:
+                continue
+            liquid += 1
+            if r["kind"] == "BREAKOUT":
+                breakouts.append(r)
+            elif r["kind"] == "WATCH":
+                watch.append(r)
+            elif r["kind"] == "EXTENDED":
+                extended += 1
+                extended_setups.append(r)
 
     breakouts.sort(key=lambda x: (x["score"], x["vol_ratio"]), reverse=True)
     watch.sort(key=lambda x: x["score"], reverse=True)
@@ -418,11 +493,13 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
     result = {
         "ts": datetime.now(IST), "elapsed": time.time() - t0,
         "data_session": completed, "coverage": coverage,
-        "universe_size": len(symbols), "downloaded": len(hist), "liquid": liquid,
-        "source": uni.get("source", "?"), "note": uni.get("note"), "degraded": uni.get("degraded", False),
+        "universe_size": len(symbols), "downloaded": valid_count, "liquid": liquid,
+        "source": uni.get("source", "?"), "note": uni.get("note"),
+        "degraded": uni.get("degraded", False),
         "secondary_count": secondary_count,
-        "price_sources": ("Yahoo EOD + TejHQ verified raw NSE EOD" if secondary_count
-                          else "Yahoo EOD"),
+        "archive_recovered": archive_count,
+        "price_sources": "Yahoo EOD" + (" + NSE final Bhavcopy" if archive_count else "")
+                         + (" + TejHQ verified raw NSE EOD" if secondary_count else ""),
         "breakouts": breakouts, "watch": watch, "extended": extended,
         "extended_setups": extended_setups,
         "regime": market_regime(nifty),
@@ -430,17 +507,21 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict:
     with _state_lock:
         _state["result"] = result
         _state["ts"] = time.time()
-    logger.info(f"[buzz] scan done in {result['elapsed']:.0f}s: {len(hist)}/{len(symbols)} "
-                f"downloaded, {liquid} liquid, {len(breakouts)} breakouts, {len(watch)} watch")
-    # Save only after the genuine index-wide scan passed all coverage gates.
-    try:
-        from stocks_buzz_snapshot import save_verified_scan
-        if save_verified_scan(result):
-            logger.info("MSK_BUZZ_SCAN_DURABLE session=%s", completed)
-    except Exception as exc:
-        logger.warning("MSK_BUZZ_SCAN_DURABLE_FAILED type=%s", type(exc).__name__)
+    logger.info("[buzz] scan done in %.0fs: %d/%d downloaded, %d liquid, "
+                "%d breakouts, %d watch (bounded batches)",
+                result["elapsed"], valid_count, len(symbols), liquid,
+                len(breakouts), len(watch))
+    # Live callers retain the legacy optional durable save. The scheduled
+    # worker saves once explicitly and must surface a failed Neon write.
+    if save_snapshot:
+        try:
+            from stocks_buzz_snapshot import save_verified_scan
+            if save_verified_scan(result):
+                logger.info("MSK_BUZZ_SCAN_DURABLE session=%s", completed)
+        except Exception as exc:
+            logger.warning("MSK_BUZZ_SCAN_DURABLE_FAILED type=%s",
+                           type(exc).__name__)
     return result
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # Telegram formatting
