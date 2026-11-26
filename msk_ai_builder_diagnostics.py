@@ -9,7 +9,8 @@ import argparse
 import json
 import os
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
+from html.parser import HTMLParser
 
 from msk_ai_builder_evidence import EvidenceError
 from msk_ai_builder_discovery import fetch_listing, parse_listing
@@ -50,6 +51,91 @@ def classify_failure(error):
             return {"reason_code": code, "stage": stage, "next_action": action}
     return {"reason_code": code, "stage": "UNKNOWN_VERIFICATION",
             "next_action": "Inspect the isolated failing source contract; publication stays withheld."}
+
+
+# Reviewed issuer identity and official archive. A new company needs a
+# separately reviewed symbol/ISIN/host mapping, never a model-generated host.
+_ISSUER_ARCHIVES = {
+    ("MCX", "INE745G01043"): "https://www.mcxindia.com/investor-relations/archive",
+}
+_ISSUER_PRESS = {
+    ("MCX", "INE745G01043", date(2026, 9, 30)):
+        "https://www.mcxindia.com/docs/default-source/media/press-release/english/2026/november/q2-fy27---press-release---03nov2026-_final.pdf",
+}
+
+class _ArchiveRows(HTMLParser):
+    """Read actual archive table rows; never guess a document filename."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows, self.row = [], None
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self.row = {"text": [], "links": []}
+        elif self.row is not None and tag == "a":
+            href = dict(attrs).get("href")
+            if href:
+                self.row["links"].append(href)
+    def handle_data(self, data):
+        if self.row is not None:
+            self.row["text"].append(data)
+    def handle_endtag(self, tag):
+        if tag == "tr" and self.row is not None:
+            self.rows.append(self.row)
+            self.row = None
+
+
+def issuer_source_hints(member, period, *, fetch=None):
+    """Bounded official issuer discovery, independent of AI and exchange listings."""
+    key = (member.symbol, member.isin)
+    archive = _ISSUER_ARCHIVES.get(key)
+    if archive is None or type(period) is not date or (period.month, period.day) not in (
+            (3,31), (6,30), (9,30), (12,31)):
+        return {"status":"NO_REVIEWED_ISSUER_ROUTE", "urls":[]}
+    press = _ISSUER_PRESS.get((*key, period))
+    result = {"status":"ISSUER_ARCHIVE_UNAVAILABLE", "archive_url":archive,
+              "press_release_url":press, "urls":[]}
+    try:
+        if fetch is None:
+            import requests
+            def fetch(url):
+                with requests.get(url, headers={"User-Agent":"Mozilla/5.0"},
+                                  timeout=(3,6), allow_redirects=False, stream=True) as response:
+                    if response.status_code != 200 or response.url != url:
+                        raise ValueError("archive unavailable")
+                    body = bytearray()
+                    for chunk in response.iter_content(16384):
+                        body.extend(chunk)
+                        if len(body) > 2_000_000:
+                            raise ValueError("archive oversized")
+                    return bytes(body)
+        body = fetch(archive)
+        if not isinstance(body,bytes) or not 0 < len(body) <= 2_000_000:
+            raise ValueError("archive invalid")
+        parser = _ArchiveRows()
+        parser.feed(body.decode("utf-8-sig"))
+        q = {6:1,9:2,12:3,3:4}[period.month]
+        start = period.year if period.month != 3 else period.year-1
+        title = f"financial results q{q} fy {start}-{start+1}"
+        links = []
+        for row in parser.rows:
+            label = " ".join(" ".join(row["text"]).split()).lower()
+            if label not in (title, title+" view pdf"):
+                continue
+            for href in row["links"]:
+                url = urljoin(archive, href)
+                u = urlsplit(url)
+                if (u.scheme == "https" and u.netloc == "www.mcxindia.com"
+                        and u.path.startswith("/docs/default-source/")
+                        and u.path.lower().endswith(".pdf")
+                        and not u.query and not u.fragment and len(url)<=512
+                        and ".." not in u.path and "%" not in u.path
+                        and url not in links):
+                    links.append(url)
+        result["status"] = "ISSUER_DOCUMENT_DISCOVERED_ONLY" if len(links)==1 else "ISSUER_DOCUMENT_NOT_UNIQUE"
+        result["urls"] = links if len(links)==1 else []
+    except Exception:
+        pass
+    return result
 
 
 def ai_source_hints(symbol, period, scope, *, environ=None, request=None):
@@ -150,16 +236,19 @@ def diagnose_quarter(member, evidence, *, listing=fetch_listing,
                    "listing_total": coverage.get("listing_total"),
                    "listing_rows": coverage.get("listing_rows"),
                    "publication_status": "WITHHELD"}
-        # Only missing source listings may request AI help; never numerical
-        # mismatches or existing verified companies. The status remains failed.
+        # Missing exchange listing only. Prefer reviewed issuer archive
+        # discovery, then optional AI leads. Never promote a press summary.
         if (failure["status"] == "FILING_METADATA_COVERAGE"
-                and failure["listing_total"] == 0 and failure["listing_rows"] == 0
-                and os.getenv("MSK_BUILDER_AI_SOURCE_HINTS") == "1"):
+                and failure["listing_total"] == 0 and failure["listing_rows"] == 0):
             try:
-                failure["ai_source_hints"] = ai_source_hints(
-                    symbol, evidence.quarterly[-1].end, evidence.scope)
+                period = evidence.quarterly[-1].end
+                if (member.symbol, member.isin) in _ISSUER_ARCHIVES:
+                    failure["issuer_source_hints"] = issuer_source_hints(member, period)
+                if (not failure.get("issuer_source_hints", {}).get("urls")
+                        and os.getenv("MSK_BUILDER_AI_SOURCE_HINTS") == "1"):
+                    failure["ai_source_hints"] = ai_source_hints(symbol, period, evidence.scope)
             except Exception:
-                failure["ai_source_hints"] = {"status": "AI_HINTS_UNAVAILABLE", "urls": []}
+                failure["source_discovery_status"] = "SOURCE_HINTS_UNAVAILABLE"
         return failure
 
 
@@ -175,7 +264,7 @@ def diagnostic_summary(rows, *, requested=None):
               "failure_counts_by_stage": dict(sorted(counts.items())),
               "failures": [
                   {k: r.get(k) for k in (
-                      "symbol", "status", "stage", "next_action", "listing_total", "listing_rows", "ai_source_hints")}
+                      "symbol", "status", "stage", "next_action", "listing_total", "listing_rows", "issuer_source_hints", "ai_source_hints")}
                   for r in errors
               ]}
     output["rehearsal_passed"] = (

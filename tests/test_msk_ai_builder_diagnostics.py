@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from msk_ai_builder_diagnostics import (
     classify_failure, diagnose_quarter, diagnostic_summary,
-    diagnostic_markdown, main, ai_source_hints,
+    diagnostic_markdown, main, ai_source_hints, issuer_source_hints,
 )
 from msk_ai_builder_evidence import EvidenceError
 from msk_ai_builder_filings import DownloadedFiling
@@ -48,6 +48,28 @@ class ResearchFailureDiagnostics(unittest.TestCase):
         self.assertIn("FIXTURE", diagnostic_markdown(summary))
         self.assertIn("FILING_METADATA_COVERAGE", diagnostic_markdown(summary))
         self.assertEqual(summary["publication_status"], "WITHHELD")
+
+    def test_mcx_official_archive_exact_period_and_identity(self):
+        from datetime import date
+        from msk_ai_builder_primary import IndexMember
+        member = IndexMember("MCX","INE745G01043")
+        period = date(2026,9,30)
+        archive = b'<table><tr><td>Financial Results Q2 FY 2026-2027</td><td><a href="/docs/default-source/fixture.pdf">View PDF</a></td></tr><tr><td>Financial Results Q1 FY 2026-2027</td><td><a href="/docs/default-source/old.pdf">View PDF</a></td></tr></table>'
+        fetch = Mock(return_value=archive)
+        result = issuer_source_hints(member,period,fetch=fetch)
+        self.assertEqual(result["status"],"ISSUER_DOCUMENT_DISCOVERED_ONLY")
+        self.assertEqual(result["urls"],["https://www.mcxindia.com/docs/default-source/fixture.pdf"])
+        self.assertIn("press-release",result["press_release_url"])
+        fetch.assert_called_once_with("https://www.mcxindia.com/investor-relations/archive")
+        fetch.reset_mock()
+        self.assertEqual(issuer_source_hints(IndexMember("MCX","WRONG"),period,fetch=fetch)["urls"],[])
+        fetch.assert_not_called()
+        for bad in (archive.replace(b'/docs/default-source/fixture.pdf',b'https://evil.example/fixture.pdf'),
+                    archive.replace(b'/docs/default-source/fixture.pdf',b'/docs/default-source/../fixture.pdf'),
+                    archive.replace(b'Q2 FY 2026-2027',b'Q2 FY 2025-2026')):
+            self.assertEqual(issuer_source_hints(member,period,fetch=lambda _:bad)["urls"],[])
+        self.assertEqual(issuer_source_hints(member,period,fetch=lambda _:b'error')["status"],"ISSUER_DOCUMENT_NOT_UNIQUE")
+        self.assertEqual(issuer_source_hints(member,period,fetch=lambda _:None)["status"],"ISSUER_ARCHIVE_UNAVAILABLE")
 
     def test_ai_only_proposes_allowlisted_sources_without_paid_fallback(self):
         from types import SimpleNamespace
