@@ -76,7 +76,9 @@ def diagnose_portfolio(holdings):
 
 def industry_exposure(holdings, peer_evidence):
     """Weight industry labels only when the verified official roster supplied them."""
-    if not isinstance(peer_evidence, dict) or peer_evidence.get("status") != "SCREENED":
+    if not isinstance(peer_evidence, dict) or not (
+            peer_evidence.get("status") == "SCREENED"
+            or peer_evidence.get("roster_verified") is True):
         return []
     mapping = peer_evidence.get("held_industries") or {}
     total = sum((_decimal(row["value"]) for row in holdings), Decimal("0"))
