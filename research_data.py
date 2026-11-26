@@ -587,7 +587,9 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
     s_fresh = freshness(s_quarters, today) if s_quarters else {"status": "MISSING"}
 
     y_years, y_quarters = [], []
-    if len(s_years) < 4 or s_fresh["status"] != "FRESH":
+    latest_core_missing = not s_quarters or any(s_quarters[-1].get(k) is None
+        for k in ("revenue", "net_profit", "eps"))
+    if len(s_years) < 4 or s_fresh["status"] != "FRESH" or latest_core_missing:
         try:
             y = _yahoo_statements(sym)
             y_years, y_quarters = y["years"], y["quarters"]
@@ -613,6 +615,11 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
     years, ysrc = _fresher(usable(s_years), usable(y_years))
     quarters, qsrc = _fresher(usable(s_quarters), usable(y_quarters))
     if not years and not quarters:
+        # Discover a public filing lead but preserve the no-data return contract.
+        # The bounded cache is internal to the optional discovery module.
+        if today is None:
+            from msk_ai_data_recovery import discover_filing
+            discover_filing(sym, expected_latest_quarter(cutoff), ["latest_quarter", "annual_history"], today=cutoff)
         _cset(f"stm_{sym}", {}, ttl=45)
         logger.warning("[research_data] %s annual/quarter statements unavailable "
                        "from both sources; short retry cache (45s)", sym)
@@ -625,6 +632,18 @@ def get_statements(sym: str, today: Optional[date] = None) -> Optional[dict]:
         "unit": "₹ Cr", "years": years, "quarters": quarters, "layout": ext.get("layout", "corporate"),
     }
     result["freshness"] = freshness(quarters, today) if quarters else {"status": "MISSING"}
+    # AI is permitted to locate a filing candidate, never to fill a number.
+    missing = [k for k in ("revenue", "net_profit", "eps")
+               if not quarters or quarters[-1].get(k) is None]
+    if result["freshness"].get("status") != "FRESH":
+        missing.append("latest_quarter")
+    if len(years) < 4:
+        missing.append("annual_history")
+    if missing:
+        from msk_ai_data_recovery import discover_filing
+        lead = discover_filing(sym, expected_latest_quarter(cutoff), missing, today=cutoff)
+        if lead.get("status") != "disabled":
+            result["ai_recovery"] = lead
     if today is None:
         # Partial or stale statements must be refreshed much sooner than a
         # verified multi-year, current-quarter source response.
