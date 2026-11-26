@@ -83,6 +83,32 @@ class ArchiveTests(unittest.TestCase):
         self.assertFalse(a._fresh(i,"SBIN","2026-01-24",NOW))
         i["parents"]=["sector-folder"]
         self.assertFalse(a._managed(i))
+    def test_activation_diagnostics_do_not_expose_secrets(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(a._archive_config_status(), "DISABLED")
+            os.environ["MSK_RESEARCH_DRIVE_ENABLED"] = "1"
+            self.assertEqual(a._archive_config_status(), "FOLDER_NOT_CONFIGURED")
+            os.environ["MSK_RESEARCH_DRIVE_FOLDER_ID"] = a.FOLDER
+            self.assertEqual(a._archive_config_status(), "OAUTH_CONFIGURATION_MISSING")
+            with self.assertLogs(a.LOG, level="WARNING") as logs:
+                with self.assertRaises(ValueError):
+                    a.Drive()
+            self.assertIn("OAUTH_CONFIGURATION_MISSING", " ".join(logs.output))
+            for key in ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN"):
+                os.environ["MSK_DRIVE_" + key] = "private-test-value"
+            self.assertEqual(a._archive_config_status(), "CONFIGURED")
+
+    def test_disabled_archive_logs_reason(self):
+        with patch.dict(os.environ, {"MSK_RESEARCH_DRIVE_ENABLED":"0"}):
+            with self.assertLogs(a.LOG, level="WARNING") as logs:
+                self.assertFalse(a.store_cloud_report("SBIN", "missing", "23-Jan-2026"))
+            self.assertIn("reason=DISABLED", " ".join(logs.output))
+
+    def test_upload_failure_logs_exact_stage(self):
+        with self.assertLogs(a.LOG, level="WARNING") as logs:
+            self.assertFalse(self.store(FakeDrive([], fail=True)))
+        self.assertIn("stage=upload", " ".join(logs.output))
+
     def test_disabled(self):
         with patch.dict(os.environ,{"MSK_RESEARCH_DRIVE_ENABLED":"0"}), patch.object(a,"Drive") as d:
             self.assertIsNone(a.load_cloud_report("SBIN"))
