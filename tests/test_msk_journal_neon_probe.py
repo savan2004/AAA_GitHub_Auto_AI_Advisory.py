@@ -60,8 +60,10 @@ class StagingProbeTests(unittest.TestCase):
 
     def test_rejects_other_driver_schemes(self):
         bad = SAMPLE_DSN.replace("postgresql://", "postgresql+asyncpg://")
-        with self.assertRaisesRegex(ProbeError, "scheme must be"):
+        with self.assertRaisesRegex(ProbeError, r"^Staging DSN scheme unsupported: postgresql\+asyncpg") as caught:
             load_config(env(**{DSN_ENV: bad}))
+        self.assertNotIn("FAKE-NOT-A-SECRET", str(caught.exception))
+        self.assertNotIn(STAGING_HOST, str(caught.exception))
 
     def test_rejects_different_database_and_ssl_disable(self):
         for bad in (
