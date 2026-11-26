@@ -1268,7 +1268,7 @@ def build_pdf(R: dict, output_path: str, *, compact=False) -> str:
 # ══════════════════════════════════════════════════════════════════════════
 # Public entrypoint (signature unchanged)
 # ══════════════════════════════════════════════════════════════════════════
-def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, str, Optional[str]]:
+def generate_stock_report_pdf(symbol: str, *, evidence_out=None, archive_cloud=True) -> Tuple[bool, str, Optional[str]]:
     sym = str(symbol).upper().replace(".NS", "").replace(".BO", "").strip()
     if not re.fullmatch(r"[A-Z0-9&._-]{1,30}", sym):
         return False, "Invalid research symbol.", None
@@ -1357,14 +1357,15 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
         except Exception as exc:
             logger.warning("MSK_RESEARCH_PDF_LOCAL_CACHE_FAILED type=%s",
                            type(exc).__name__)
-        # Archive only actual verified generated public reports, never portfolio PDFs.
-        # Cloud errors do not block delivery of an otherwise validated document.
-        try:
-            from research_pdf_drive import store_cloud_report
-            if R.get("price_session"):
-                store_cloud_report(sym, out, R["price_session"])
-        except Exception as exc:
-            logger.warning("MSK_RESEARCH_PDF_DRIVE_FAILED type=%s", type(exc).__name__)
+        # Batch callers retain synchronous archive behavior. Interactive
+        # Telegram requests defer it until after the document API attempt.
+        if archive_cloud:
+            try:
+                from research_pdf_drive import store_cloud_report
+                if R.get("price_session"):
+                    store_cloud_report(sym, out, R["price_session"])
+            except Exception as exc:
+                logger.warning("MSK_RESEARCH_PDF_DRIVE_FAILED type=%s", type(exc).__name__)
         success = True
         return True, out, name
     except ValueError as e:
