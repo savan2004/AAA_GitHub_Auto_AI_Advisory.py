@@ -993,6 +993,7 @@ def cmd_help(m):
 
 def run_report(chat_id, query):
     """Shared worker for /report SYMBOL and the 📄 Report button flow."""
+    evidence = {}
     try:
         ticker, cname = resolve_symbol(query)
         sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else query.upper().replace(" ", "")
@@ -1031,7 +1032,8 @@ def run_report(chat_id, query):
 
             threading.Thread(target=_ping, daemon=True).start()
             try:
-                ok, result, name = generate_stock_report_pdf(sym)
+                ok, result, name = generate_stock_report_pdf(
+                    sym, evidence_out=evidence, archive_cloud=False)
             finally:
                 done_event.set()
         if ok:
@@ -1067,6 +1069,7 @@ def run_report(chat_id, query):
                     quote = None
                 quote_text = report_quote_line(quote)
                 from html import escape
+                logger.info("MSK_RESEARCH_PDF_SEND_START symbol=%s", sym)
                 with open(result, "rb") as f:
                     sent = bot.send_document(
                         chat_id, f,
@@ -1077,8 +1080,28 @@ def run_report(chat_id, query):
                                  f"{escape(quote_text)}\n\n"
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
+                        timeout=90,
                     )
-                    _record_telegram_api_ack(chat_id, sent, "document")
+                message_id = getattr(sent, "message_id", None)
+                file_id = getattr(getattr(sent, "document", None), "file_id", None)
+                if type(message_id) is not int or message_id <= 0 or not isinstance(file_id, str) or not file_id.strip():
+                    logger.error("MSK_RESEARCH_PDF_SEND_UNVERIFIED symbol=%s", sym)
+                    safe_send(chat_id, "⚠️ Research PDF delivery not confirmed. Check your chat before requesting it again.")
+                    return
+                _record_telegram_api_ack(chat_id, sent, "document")
+                logger.info("MSK_RESEARCH_PDF_SEND_CONFIRMED symbol=%s message_id=%d", sym, message_id)
+                # The report has reached Telegram. Optional archive work must
+                # never delay the document or trigger another send.
+                if evidence.get("price_session"):
+                    try:
+                        from research_pdf_drive import store_cloud_report
+                        store_cloud_report(sym, result, evidence["price_session"])
+                    except Exception as exc:
+                        logger.warning("MSK_RESEARCH_PDF_DRIVE_FAILED type=%s", type(exc).__name__)
+            except Exception as exc:
+                logger.warning("MSK_RESEARCH_PDF_SEND_UNVERIFIED symbol=%s type=%s",
+                               sym, type(exc).__name__)
+                safe_send(chat_id, "⚠️ Research PDF delivery not confirmed. Check your chat before requesting it again.")
             finally:
                 try:
                     os.remove(result)
