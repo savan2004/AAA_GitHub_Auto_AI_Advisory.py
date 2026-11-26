@@ -7,7 +7,7 @@ from unittest.mock import Mock,patch
 
 from msk_ai_builder_bank import BankError
 from msk_ai_builder_evidence import EvidenceError,normalize_secondary
-from msk_ai_builder_weekly_sources import parse_roster,parse_closes,CLOSE_CSV
+from msk_ai_builder_weekly_sources import parse_roster,parse_closes,parse_final_closes,fetch_closes,CLOSE_CSV,FINAL_ZIP
 from msk_ai_builder_weekly import plan_review,stage_week,preliminary_score
 from test_msk_ai_builder_evidence import fixture,NOW
 
@@ -31,6 +31,40 @@ def provider(symbol,timeout):
     return normalize_secondary(symbol,d,now=NOW)
 
 class SourceTests(unittest.TestCase):
+    def test_official_final_archive_identity_and_turnover(self):
+        import io
+        import zipfile
+        roster=parse_roster(roster_csv())
+        raw="TckrSymb,SctySrs,TradDt,ISIN,Sgmt,ClsPric,TtlTrfVal\n"+"\n".join(
+            f"TEST{i:03},EQ,2026-11-20,INE{i:09},CM,123.45,{(1000-i)*100000}" for i in range(500))
+        def pack(body):
+            out=io.BytesIO()
+            with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED) as z:
+                z.writestr("final.csv",body)
+            return out.getvalue()
+        payload=pack(raw)
+        rows=parse_final_closes(payload,CLOSE,roster)
+        self.assertEqual(len(rows),500)
+        self.assertEqual(rows["TEST001"].turnover_lakh,Decimal(999))
+        self.assertEqual(rows["TEST001"].price,Decimal("123.45"))
+        self.assertEqual(rows["TEST001"].source,FINAL_ZIP.format(d="20261120"))
+        with patch("msk_ai_builder_weekly_sources._download",
+                   side_effect=[EvidenceError("OFFICIAL_SOURCE_HTTP"),payload]) as fetch:
+            self.assertEqual(fetch_closes(CLOSE,roster),rows)
+            self.assertTrue(fetch.call_args.kwargs["binary"])
+        for bad in (raw.replace("INE000000001","INE000000000"),
+                    raw.replace("2026-11-20","2026-11-19"),
+                    raw+"\n"+raw.splitlines()[1],
+                    "\n".join(raw.splitlines()[:400])):
+            with self.assertRaises(EvidenceError):
+                parse_final_closes(pack(bad),CLOSE,roster)
+        with self.assertRaises(EvidenceError):
+            parse_final_closes(b"bad zip",CLOSE,roster)
+        with patch("msk_ai_builder_weekly_sources._download",return_value="bad CSV") as fetch:
+            with self.assertRaises(EvidenceError):
+                fetch_closes(CLOSE,roster)
+            self.assertEqual(fetch.call_count,1)
+
     def test_roster_and_close_schema(self):
         roster,prices=inputs()
         self.assertEqual(len(roster),500)

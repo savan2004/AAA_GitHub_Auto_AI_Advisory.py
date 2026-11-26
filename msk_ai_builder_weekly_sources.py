@@ -1,6 +1,7 @@
 """Strict official public source adapters for internal weekly research staging."""
 import csv
 import io
+import zipfile
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -10,6 +11,7 @@ from msk_ai_builder_evidence import EvidenceError
 
 INDEX_CSV="https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 CLOSE_CSV="https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{d}.csv"
+FINAL_ZIP="https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{d}_F_0000.csv.zip"
 HEADERS={"User-Agent":"Mozilla/5.0","Accept":"text/csv,text/plain,*/*",
          "Referer":"https://www.nseindia.com/"}
 
@@ -28,7 +30,7 @@ class WeeklyClose:
     turnover_lakh: Decimal
     source: str
 
-def _download(url,limit,*,get=None):
+def _download(url,limit,*,get=None,binary=False):
     import requests
     get=get or requests.get
     try:
@@ -40,7 +42,7 @@ def _download(url,limit,*,get=None):
                 if len(chunks)+len(chunk)>limit:
                     raise EvidenceError("OFFICIAL_SOURCE_SIZE")
                 chunks.extend(chunk)
-            return bytes(chunks).decode("utf-8-sig")
+            return bytes(chunks) if binary else bytes(chunks).decode("utf-8-sig")
     except EvidenceError:
         raise
     except (requests.RequestException,UnicodeError,ValueError) as exc:
@@ -118,8 +120,52 @@ def parse_closes(raw,day,roster):
         raise EvidenceError("EOD_COVERAGE_INSUFFICIENT")
     return output
 
+def parse_final_closes(payload,day,roster):
+    """Parse the final official CM UDiFF archive, matching both symbol and ISIN."""
+    if type(day) is not date or not isinstance(payload,bytes) or not 0<len(payload)<=4_000_000:
+        raise EvidenceError("FINAL_ARCHIVE_INVALID")
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            files=[f for f in archive.infolist() if not f.is_dir()]
+            if len(files)!=1 or not files[0].filename.lower().endswith(".csv") or not 0<files[0].file_size<=20*1024*1024:
+                raise EvidenceError("FINAL_ARCHIVE_INVALID")
+            raw=archive.read(files[0]).decode("utf-8-sig")
+        wanted={c.member.symbol:c.member.isin for c in roster if c.series=="EQ"}
+        url=FINAL_ZIP.format(d=day.strftime("%Y%m%d"))
+        result={}
+        for row in _rows(raw,{"TCKRSYMB","SCTYSRS","TRADDT","ISIN","SGMT","CLSPRIC","TTLTRFVAL"}):
+            if row["SCTYSRS"]!="EQ" or row["TCKRSYMB"] not in wanted:
+                continue
+            symbol=row["TCKRSYMB"]
+            if row["SGMT"]!="CM" or row["ISIN"]!=wanted[symbol]:
+                raise EvidenceError("FINAL_IDENTITY_MISMATCH")
+            if date.fromisoformat(row["TRADDT"])!=day:
+                raise EvidenceError("EOD_DATE_MISMATCH")
+            if symbol in result:
+                raise EvidenceError("DUPLICATE_EOD_SYMBOL")
+            # UDiFF turnover is in INR; legacy weekly ranking uses lakhs.
+            result[symbol]=WeeklyClose(symbol,day,_positive(row["CLSPRIC"]),
+                                       _positive(row["TTLTRFVAL"])/Decimal(100000),url)
+        if len(result)<400:
+            raise EvidenceError("EOD_COVERAGE_INSUFFICIENT")
+        return result
+    except EvidenceError:
+        raise
+    except (zipfile.BadZipFile,UnicodeError,csv.Error,ValueError,RuntimeError,OSError,KeyError) as exc:
+        raise EvidenceError("FINAL_ARCHIVE_INVALID") from exc
+
+
 def fetch_closes(day,roster,*,get=None):
     if type(day) is not date:
         raise EvidenceError("EOD_DATE_INVALID")
+    roster=tuple(roster)
     url=CLOSE_CSV.format(d=day.strftime("%d%m%Y"))
-    return parse_closes(_download(url,20*1024*1024,get=get),day,roster)
+    try:
+        raw=_download(url,20*1024*1024,get=get)
+    except EvidenceError as exc:
+        # Recover an unavailable transport only; don't conceal contradictory data.
+        if str(exc) not in ("OFFICIAL_SOURCE_HTTP","OFFICIAL_SOURCE_UNAVAILABLE"):
+            raise
+        final_url=FINAL_ZIP.format(d=day.strftime("%Y%m%d"))
+        return parse_final_closes(_download(final_url,4_000_000,get=get,binary=True),day,roster)
+    return parse_closes(raw,day,roster)
