@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from msk_ai_builder_diagnostics import (
     classify_failure, diagnose_quarter, diagnostic_summary,
-    diagnostic_markdown, main,
+    diagnostic_markdown, main, ai_source_hints,
 )
 from msk_ai_builder_evidence import EvidenceError
 from msk_ai_builder_filings import DownloadedFiling
@@ -48,6 +48,37 @@ class ResearchFailureDiagnostics(unittest.TestCase):
         self.assertIn("FIXTURE", diagnostic_markdown(summary))
         self.assertIn("FILING_METADATA_COVERAGE", diagnostic_markdown(summary))
         self.assertEqual(summary["publication_status"], "WITHHELD")
+
+    def test_ai_only_proposes_allowlisted_sources_without_paid_fallback(self):
+        from types import SimpleNamespace
+        from datetime import date
+        url = "https://www.bseindia.com/XBRLFILES/filing.xml"
+        request = Mock(return_value=SimpleNamespace(ok=True, text=json.dumps([
+            url, "https://evil.example/filing.xml",
+            "https://www.bseindia.com/XBRLFILES/../private.xml"])))
+        self.assertEqual(ai_source_hints("MCX", date(2026,9,30), "consolidated",
+                         environ={}, request=request)["status"], "DISABLED")
+        request.assert_not_called()
+        result = ai_source_hints("MCX", date(2026,9,30), "consolidated",
+                         environ={"MSK_BUILDER_AI_SOURCE_HINTS":"1",
+                                  "GROQ_API_KEY":"fixture", "MSK_AI_ALLOW_PAID":"1",
+                                  "OPENAI_API_KEY":"not-forwarded"}, request=request)
+        self.assertEqual(result, {"status":"UNVERIFIED_SOURCE_HINTS","urls":[url]})
+        self.assertEqual(request.call_args.kwargs["env"], {"GROQ_API_KEY":"fixture"})
+
+    def test_ai_recovery_never_turns_missing_listing_into_pass(self):
+        snap, listing, download = self.inputs()
+        listing.return_value = {"totalCount":0,"data":[]}
+        hint = {"status":"UNVERIFIED_SOURCE_HINTS","urls":["https://www.bseindia.com/XBRLFILES/filing.xml"]}
+        with patch.dict("os.environ", {"MSK_BUILDER_AI_SOURCE_HINTS":"1"}), \
+             patch("msk_ai_builder_diagnostics.ai_source_hints", return_value=hint) as ai:
+            result = diagnose_quarter(MEMBER, snap, listing=listing, download=download, clock=lambda: NOW)
+            ai.assert_called_once()
+        self.assertEqual(result["ai_source_hints"],hint)
+        self.assertEqual(result["status"],"FILING_METADATA_COVERAGE")
+        self.assertEqual(result["publication_status"],"WITHHELD")
+        self.assertFalse(diagnostic_summary([result],requested=1)["rehearsal_passed"])
+        download.assert_not_called()
 
     def test_numeric_revenue_disagreement_shows_comparison_stage(self):
         snap, listing, download = self.inputs()

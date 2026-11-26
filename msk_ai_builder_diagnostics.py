@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+from urllib.parse import urlsplit
 
 from msk_ai_builder_evidence import EvidenceError
 from msk_ai_builder_discovery import fetch_listing, parse_listing
@@ -49,6 +50,55 @@ def classify_failure(error):
             return {"reason_code": code, "stage": stage, "next_action": action}
     return {"reason_code": code, "stage": "UNKNOWN_VERIFICATION",
             "next_action": "Inspect the isolated failing source contract; publication stays withheld."}
+
+
+def ai_source_hints(symbol, period, scope, *, environ=None, request=None):
+    """Opt-in source discovery only; no AI numbers, downloads or approval."""
+    env = os.environ if environ is None else environ
+    result = {"status": "DISABLED", "urls": []}
+    if env.get("MSK_BUILDER_AI_SOURCE_HINTS") != "1":
+        return result
+    from msk_ai_builder_primary import SYMBOL
+    if not isinstance(symbol, str) or not SYMBOL.fullmatch(symbol) or type(period) is not date or scope not in ("consolidated", "standalone"):
+        return {"status": "INVALID_REQUEST", "urls": []}
+    # Restrict to existing configured free-provider candidates. Never inherit
+    # OpenAI/AskFuzz paid opt-ins or send customer holdings or financial data.
+    free_env = {k: v for k, v in env.items() if k in (
+        "GROQ_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+        "MSK_GROQ_MODEL", "MSK_GEMINI_MODEL")}
+    try:
+        if request is None:
+            from msk_ai_connector_v2 import request_ai
+            request = request_ai
+        response = request([{"role": "user", "content":
+            f"Find exact original public exchange filing document URLs for NSE symbol {symbol}, "
+            f"quarter ended {period.isoformat()}, {scope} results. NSE/BSE only. "
+            "Return JSON array of up to three HTTPS PDF, XML or iXBRL document URLs. "
+            "If you cannot locate exact URLs, return []. No financial numbers or guesses."}],
+            system="Source discovery only. URLs are unverified leads, never financial evidence.",
+            max_tokens=450, financial=False, env=free_env)
+        if not response.ok:
+            return {"status": "AI_UNAVAILABLE", "urls": []}
+        values = json.loads(response.text)
+        if not isinstance(values, list) or len(values) > 3:
+            raise ValueError("invalid hints")
+        urls = []
+        for value in values:
+            if not isinstance(value, str) or len(value) > 512 or not re.fullmatch(r"https://[A-Za-z0-9./_-]+", value):
+                continue
+            u = urlsplit(value)
+            if u.netloc in ("www.bseindia.com", "bseindia.com"):
+                valid = (u.path.startswith("/xml-data/corpfiling/AttachLive/") and u.path.lower().endswith(".pdf")
+                         or u.path.startswith("/XBRLFILES/") and u.path.lower().endswith(".xml"))
+            elif u.netloc in ("nsearchives.nseindia.com", "nsearchives.nseindia.in", "archives.nseindia.com"):
+                valid = u.path.startswith("/corporate/") and u.path.lower().endswith((".pdf", ".xml", ".html"))
+            else:
+                valid = False
+            if valid and ".." not in u.path and value not in urls:
+                urls.append(value)
+        return {"status": "UNVERIFIED_SOURCE_HINTS" if urls else "NO_SOURCE_HINTS", "urls": urls}
+    except Exception:
+        return {"status": "AI_HINTS_UNAVAILABLE", "urls": []}
 
 
 def diagnose_quarter(member, evidence, *, listing=fetch_listing,
@@ -95,11 +145,22 @@ def diagnose_quarter(member, evidence, *, listing=fetch_listing,
                 "publication_status": "WITHHELD"}
     except EvidenceError as exc:
         diagnostic = classify_failure(exc)
-        return {"symbol": symbol, "status": diagnostic["reason_code"],
-                "stage": diagnostic["stage"], "next_action": diagnostic["next_action"],
-                "listing_total": coverage.get("listing_total"),
-                "listing_rows": coverage.get("listing_rows"),
-                "publication_status": "WITHHELD"}
+        failure = {"symbol": symbol, "status": diagnostic["reason_code"],
+                   "stage": diagnostic["stage"], "next_action": diagnostic["next_action"],
+                   "listing_total": coverage.get("listing_total"),
+                   "listing_rows": coverage.get("listing_rows"),
+                   "publication_status": "WITHHELD"}
+        # Only missing source listings may request AI help; never numerical
+        # mismatches or existing verified companies. The status remains failed.
+        if (failure["status"] == "FILING_METADATA_COVERAGE"
+                and failure["listing_total"] == 0 and failure["listing_rows"] == 0
+                and os.getenv("MSK_BUILDER_AI_SOURCE_HINTS") == "1"):
+            try:
+                failure["ai_source_hints"] = ai_source_hints(
+                    symbol, evidence.quarterly[-1].end, evidence.scope)
+            except Exception:
+                failure["ai_source_hints"] = {"status": "AI_HINTS_UNAVAILABLE", "urls": []}
+        return failure
 
 
 def diagnostic_summary(rows, *, requested=None):
@@ -114,7 +175,7 @@ def diagnostic_summary(rows, *, requested=None):
               "failure_counts_by_stage": dict(sorted(counts.items())),
               "failures": [
                   {k: r.get(k) for k in (
-                      "symbol", "status", "stage", "next_action", "listing_total", "listing_rows")}
+                      "symbol", "status", "stage", "next_action", "listing_total", "listing_rows", "ai_source_hints")}
                   for r in errors
               ]}
     output["rehearsal_passed"] = (
@@ -174,6 +235,8 @@ def main(argv=None):
     except EvidenceError as exc:
         out = {"symbol": args.symbol, "status": classify_failure(exc)["reason_code"],
                **classify_failure(exc), "publication_status": "WITHHELD"}
+        if out["status"] == "FILING_METADATA_COVERAGE" and os.getenv("MSK_BUILDER_AI_SOURCE_HINTS") == "1":
+            out["ai_source_hints"] = ai_source_hints(args.symbol, period, args.scope)
         status = 1
     print(json.dumps(out, sort_keys=True))
     return status
