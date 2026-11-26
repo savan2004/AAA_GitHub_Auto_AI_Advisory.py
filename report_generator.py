@@ -53,7 +53,7 @@ from reportlab.platypus import (
 
 import research_engine as eng
 from research_reasoning import build_reasoning
-from research_filing_evidence import (reconcile_official_quarter, annual_exchange_comparison, official_four_quarter_eps)
+from research_filing_evidence import (repair_verified_quarter_eps, annual_exchange_comparison, official_four_quarter_eps)
 import report_charts as charts
 from pdf_technical_setup import build_setup_charts
 from report_quarterly_charts import render_quarterly_chart
@@ -451,8 +451,22 @@ def assemble(inp: dict, use_ai: bool = True) -> dict:
 
     t = eng.compute_technicals(df, nifty)
     rk = eng.compute_risk(df, nifty)
-    fv = eng.compute_fundamentals(fund, inp.get("stm"), inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
-    filing_evidence = reconcile_official_quarter(sym, inp.get("stm"))
+    # Reconcile before any fundamentals, charts, model scores or narrative.
+    statements, filing_evidence = repair_verified_quarter_eps(sym, inp.get("stm"))
+    inp = {**inp, "stm": statements}
+    eps_correction = filing_evidence.get("eps_correction")
+    if eps_correction:
+        # The raw provider TTM EPS has an unknown basis. Reuse the existing
+        # four-consecutive-quarter / price-P/E check instead of patching TTM.
+        fund = {**fund, "eps": None}
+    fv = eng.compute_fundamentals(fund, statements, inp.get("extras") or {}, peers, inp.get("sector"), t["ltp"])
+    if eps_correction:
+        if fv.get("eps") is not None:
+            fv["eps_basis"] = "mixed quarterly sum with latest basic EPS from official NSE filing"
+        # P/E is a separate provider observation; do not build an implied
+        # fair value from partly reconciled quarterly EPS.
+        fv["implied_peer_value"] = None
+        fv["implied_upside"] = None
     annual_evidence = annual_exchange_comparison(sym, inp.get("stm"))
     if filing_evidence.get("status") == "partial_match":
         exchange_ttm = official_four_quarter_eps(sym, filing_evidence.get("period_end"))
@@ -552,7 +566,7 @@ def _cover(R, story):
     sc_hex = _stance_color(sc["stance"])
     score_display = ("N/R" if sc.get("insufficient_evidence") else f"{sc['composite']}<font size=11 color='{GREY_H}'> / 100</font>")
     core_keys = ("pe", "roe", "eps", "pb", "de", "mcap")
-    core_count = sum(R.get("fund", {}).get(k) is not None for k in core_keys)
+    core_count = sum(R.get("fv", {}).get(k) is not None for k in core_keys)
     left = [P("COMPOSITE SCORE", "lab"), P(score_display, "big"),
             P(f"Model pillar weight covered: {sc['coverage']}%", "tiny"),
             P(f"Core financial ratios available: {core_count}/6 (not audited)", "tiny")]
@@ -814,6 +828,13 @@ def _fundamentals(R, story):
                   P('<link href="' + esc(proof["source_url"]) +
                     '" color="#0B2545">Open official NSE iXBRL filing</link>' +
                     " · Reviewed " + esc(proof["reviewed_date"]), "tiny")]
+        correction = proof.get("eps_correction")
+        if correction:
+            story.append(P(
+                f"<b>Quarter EPS correction:</b> secondary INR {correction['reported']:.2f} "
+                f"replaced by official basic EPS INR {correction['official']:.2f}. "
+                "The exact quarter, revenue and profit reconcile. Other quarters are "
+                "not independently verified; source P/E is a separate observation.", "tiny"))
         official_de, vendor_de = proof.get("exchange_debt_equity"), fv.get("de")
         if official_de is not None and vendor_de is not None and abs(official_de-vendor_de) > 0.02:
             story.append(P(
@@ -853,7 +874,15 @@ def _fundamentals(R, story):
         ["ROE", n(fv.get("roe"), 1, "%"), "ROCE", n(fv.get("roce"), 1, "%")],
         ["Dividend yield", n(fv.get("div_y"), 2, "%"), "Debt / Equity", n(fv.get("de"), 2, "×") if not fv["fin"] else "n.m. (financial)"],
     ]))
-    if fv.get("eps_basis") and fv["eps_basis"].startswith("four consecutive"):
+    if proof.get("eps_correction"):
+        story.append(P(
+            "TTM EPS: " + ("four consecutive quarters including the corrected latest EPS; "
+                           "approximation, not independently verified weighted-average TTM EPS."
+                           if fv.get("eps") is not None else
+                           "withheld because a consistent four-quarter sum could not be established.")
+            + " P/E and its derived ratios are separate provider-based observations. "
+              "EPS-based peer valuation withheld.", "tiny"))
+    elif fv.get("eps_basis") and fv["eps_basis"].startswith("four consecutive"):
         story.append(P("TTM EPS is derived from four consecutive secondary-source quarters; "
                        "its price/P-E reconciliation is a consistency check, not independent audit.", "tiny"))
     elif fv.get("eps_basis") and fv["eps_basis"].startswith("sum of four"):
@@ -883,8 +912,12 @@ def _fundamentals(R, story):
         im = img(R["ch"]["quarters"], W)
         if im:
             story.append(KeepTogether([
-                Spacer(1, 6), P("Quarterly trends (provider-reported; not independently reconciled)", "h2"),
-                im, P("Quarterly values and periods are secondary-source observations, "
+                Spacer(1, 6), P("Quarterly trends (latest EPS reconciled; other periods unverified)"
+                                if proof.get("eps_correction") else
+                                "Quarterly trends (provider-reported; not independently reconciled)", "h2"),
+                im, P("Latest quarter EPS uses the dated NSE filing; remaining provider observations "
+                      "are not independently matched." if proof.get("eps_correction") else
+                      "Quarterly values and periods are secondary-source observations, "
                       "not independently matched to exchange filings or forecasts.", "tiny")
             ]))
 
@@ -1164,7 +1197,7 @@ def _appendix(R, story):
 
     story += [Spacer(1, 8), P("Data sources & completeness", "h2")]
     stm = R["stm"]
-    n_core = sum(1 for k in ("pe", "roe", "eps", "pb", "de", "mcap") if R["fund"].get(k) is not None)
+    n_core = sum(1 for k in ("pe", "roe", "eps", "pb", "de", "mcap") if R["fv"].get(k) is not None)
     # Compact publisher's appendix: preserve source/basis and the entire
     # financial-accuracy disclaimer without spilling a few lines onto a nearly
     # empty final page. Stacked source bullets previously produced an orphan.
@@ -1172,8 +1205,11 @@ def _appendix(R, story):
         (f"Prices &amp; volume: public Yahoo / NSE / Stooq daily candles "
          f"({R['t']['bars']} sessions); price as of {esc(R.get('price_session') or 'unverified')}; "
          f"Nifty 50 benchmark."),
-        (f"Statements: {esc(stm['source'])}, {len(stm.get('years') or [])} annual "
-         f"periods, {len(stm.get('quarters') or [])} quarters."
+        (f"Statements: {esc((stm.get('sources') or {}).get('years') or stm['source'])} annual "
+         f"({len(stm.get('years') or [])} periods); "
+         f"{esc((stm.get('sources') or {}).get('quarters') or stm['source'])} quarterly "
+         f"({len(stm.get('quarters') or [])} periods)."
+         + (" Latest quarter EPS: official NSE filing." if (R.get("filing_evidence") or {}).get("eps_correction") else "")
          if stm else "Financial statements: unavailable."),
         (f"Ratios: {n_core}/6 core fields available "
          "(availability is not independent accuracy verification). "
@@ -1266,7 +1302,9 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             evidence_out.clear()
             evidence_out.update(
                 symbol=R["sym"], price_session=R["price_session"],
-                historical_close=R["t"]["ltp"])
+                historical_close=R["t"]["ltp"],
+                filing_evidence=R.get("filing_evidence") or {},
+                latest_quarter_eps=((R.get("stm") or {}).get("quarters") or [{}])[-1].get("eps"))
         stage = "render"
         reason = "PDF_RENDER_FAILED"
         os.makedirs(OUTPUT_DIR, exist_ok=True)

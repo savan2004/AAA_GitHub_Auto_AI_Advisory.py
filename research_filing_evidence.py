@@ -243,3 +243,31 @@ def reconcile_official_quarter(symbol, statements):
     return {**base, "status": status, "matched": matches,
             "mismatched": mismatches, "missing": unknown,
             "secondary_period_end": latest_day}
+
+def repair_verified_quarter_eps(symbol, statements):
+    """Use dated official basic EPS only for the reviewed isolated APL mismatch.
+
+    Two comparable core financial fields and the exact period must match first.
+    Leave other contradictions fail-closed. Do not mutate cached provider data.
+    Older quarterly EPS and provider P/E are not independently verified here.
+    """
+    proof = reconcile_official_quarter(symbol, statements)
+    key = str(symbol or "").upper().replace(".NS", "")
+    if key != "APLAPOLLO" or proof.get("status") != "mismatch":
+        return statements, proof
+    if ({row["field"] for row in proof.get("matched", [])} != {"revenue", "net_profit"}
+            or [row["field"] for row in proof.get("mismatched", [])] != ["eps"]
+            or proof.get("missing")):
+        return statements, proof
+    original = proof["mismatched"][0]
+    # The official filing specifies basic EPS for the exact consolidated quarter.
+    # Revenue and profit agree within source rounding; do not substitute values
+    # from a different period or override any other unresolved discrepancy.
+    quarters = [dict(row) for row in statements["quarters"]]
+    quarters[-1]["eps"] = original["official"]
+    corrected = {**statements, "quarters": quarters}
+    checked = reconcile_official_quarter(symbol, corrected)
+    if checked.get("status") != "partial_match" or len(checked["matched"]) != 3:
+        return statements, proof
+    return corrected, {**checked, "eps_correction": dict(original)}
+

@@ -117,5 +117,52 @@ class EquityReportQuality(unittest.TestCase):
         self.assertNotIn("valuation are not the problem", scores["action"])
 
 
+
+class QuarterlyFilingRepair(unittest.TestCase):
+    def test_isolated_eps_conflict_uses_official_basis_without_mutating_source(self):
+        from research_filing_evidence import repair_verified_quarter_eps
+        raw = {"source": "Screener.in", "quarters": [
+            {"label": "Jun 2026", "revenue": 5607, "net_profit": 263, "eps": 9.5},
+            {"label": "Sep 2026", "revenue": 7002, "net_profit": 382, "eps": 13.77},
+        ]}
+        repaired, proof = repair_verified_quarter_eps("APLAPOLLO", raw)
+        self.assertEqual(raw["quarters"][-1]["eps"], 13.77)
+        self.assertEqual(repaired["quarters"][-1]["eps"], 13.62)
+        self.assertEqual(repaired["quarters"][0], raw["quarters"][0])
+        self.assertEqual(proof["status"], "partial_match")
+        self.assertEqual(len(proof["matched"]), 3)
+        self.assertEqual(proof["eps_correction"]["reported"], 13.77)
+
+    def test_other_conflicts_or_unmatched_period_never_override(self):
+        from research_filing_evidence import repair_verified_quarter_eps
+        for changes, expected in [
+            ({"revenue": 6900}, "mismatch"),
+            ({"net_profit": None}, "mismatch"),
+            ({"label": "Jun 2026"}, "period_not_comparable"),
+        ]:
+            raw = {"quarters": [dict({"label": "Sep 2026", "revenue": 7002,
+                                      "net_profit": 382, "eps": 13.77}, **changes)]}
+            result, proof = repair_verified_quarter_eps("APLAPOLLO", raw)
+            self.assertIs(result, raw)
+            self.assertEqual(proof["status"], expected)
+            self.assertNotIn("eps_correction", proof)
+
+    def test_correct_source_and_unregistered_symbol_unchanged(self):
+        from research_filing_evidence import repair_verified_quarter_eps
+        raw = {"quarters": [{"label": "Sep 2026", "revenue": 7002,
+                             "net_profit": 382, "eps": 13.62}]}
+        for symbol, status in [("APLAPOLLO", "partial_match"), ("SBIN", "not_registered")]:
+            result, proof = repair_verified_quarter_eps(symbol, raw)
+            self.assertIs(result, raw)
+            self.assertEqual(proof["status"], status)
+            self.assertNotIn("eps_correction", proof)
+
+    def test_reconciliation_precedes_calculation_and_visuals(self):
+        self.assertLess(REPORT.index("statements, filing_evidence = repair_verified_quarter_eps"),
+                        REPORT.index("fv = eng.compute_fundamentals"))
+        self.assertIn('fund = {**fund, "eps": None}', REPORT)
+        self.assertIn('fv["implied_peer_value"] = None', REPORT)
+        self.assertIn('render_quarterly_chart((inp.get("stm")', REPORT)
+
 if __name__=="__main__":
     unittest.main()

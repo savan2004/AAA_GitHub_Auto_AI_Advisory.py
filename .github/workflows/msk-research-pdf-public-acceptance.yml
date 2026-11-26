@@ -5,6 +5,8 @@ on:
     paths:
       - 'report_generator.py'
       - 'research_pdf_fresh_history.py'
+      - 'research_filing_evidence.py'
+      - 'tests/test_equity_report_client_quality.py'
       - '.github/workflows/msk-research-pdf-public-acceptance.yml'
 permissions:
   contents: read
@@ -28,6 +30,8 @@ jobs:
           python-version: '3.11'
       - name: Install existing research dependencies
         run: python -m pip install -r requirements.txt
+      - name: Offline financial reconciliation regression
+        run: python -m unittest discover -s tests -p 'test_equity_report_client_quality.py' -v
       - name: Generate and independently verify real public issuer PDFs
         run: |
           python - <<'PY'
@@ -62,6 +66,14 @@ jobs:
                   if (evidence["symbol"] != sym or actual != expected or sym not in reference
                           or abs(close-reference[sym]["Close"]) > .05):
                       raise ValueError("official closing price or date mismatch")
+                  if sym == "APLAPOLLO" and expected.isoformat() >= "2026-09-30":
+                      filing = evidence.get("filing_evidence") or {}
+                      if filing.get("period_end") == "2026-09-30":
+                          if (filing.get("status") != "partial_match"
+                                  or len(filing.get("matched", [])) != 3
+                                  or abs(float(evidence["latest_quarter_eps"]) - 13.62) > .001
+                                  or "13.62" not in rendered_text):
+                              raise ValueError("APLAPOLLO official quarter EPS missing")
                   path.replace(output / (sym + ".pdf"))
                   print(f"PUBLIC_PDF_PASS symbol={sym} session={actual} close={close} pages={q['pages']} bytes={q['bytes']}")
                   passed += 1
