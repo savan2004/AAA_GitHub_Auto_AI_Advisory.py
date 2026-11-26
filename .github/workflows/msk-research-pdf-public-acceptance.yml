@@ -1,0 +1,79 @@
+name: MSK Research PDF Public Acceptance
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'report_generator.py'
+      - 'research_pdf_fresh_history.py'
+      - '.github/workflows/msk-research-pdf-public-acceptance.yml'
+permissions:
+  contents: read
+jobs:
+  public-pdf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      MSK_RESEARCH_ONLY: '1'
+      MSK_RESEARCH_DRIVE_ENABLED: '0'
+      ALLOW_UNVERIFIED_AI_NARRATIVE: '0'
+      MPLBACKEND: Agg
+      TZ: Asia/Kolkata
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing research dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Generate and independently verify real public issuer PDFs
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from pathlib import Path
+          from market_breadth import expected_completed_session
+          from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows
+          from report_generator import generate_stock_report_pdf
+          from pdf_release_gate import validate_research_pdf
+
+          symbols = ["DCXINDIA", "APLAPOLLO", "SBIN", "DMART"]
+          expected = expected_completed_session()
+          reference = fetch_nse_bhavcopy_rows(expected, symbols)
+          passed = 0
+          output = Path("public-pdf-evidence")
+          output.mkdir(exist_ok=True)
+          for sym in symbols:
+              evidence = {}
+              path = None
+              try:
+                  ok, result, _ = generate_stock_report_pdf(sym, evidence_out=evidence)
+                  if not ok:
+                      raise ValueError("generator withheld")
+                  path = Path(result)
+                  q = validate_research_pdf(path, expected_symbol=sym, min_pages=8)
+                  actual = datetime.strptime(evidence["price_session"], "%d-%b-%Y").date()
+                  close = float(evidence["historical_close"])
+                  if (evidence["symbol"] != sym or actual != expected or sym not in reference
+                          or abs(close-reference[sym]["Close"]) > .05):
+                      raise ValueError("official closing price or date mismatch")
+                  path.replace(output / (sym + ".pdf"))
+                  print(f"PUBLIC_PDF_PASS symbol={sym} session={actual} close={close} pages={q['pages']} bytes={q['bytes']}")
+                  passed += 1
+              except Exception as exc:
+                  print(f"PUBLIC_PDF_WITHHELD symbol={sym} type={type(exc).__name__}")
+              finally:
+                  if path is not None:
+                      path.unlink(missing_ok=True)
+          print(f"PUBLIC_PDF_MATCHED={passed}/{len(symbols)}")
+          if passed != len(symbols):
+              raise SystemExit("Public report evidence incomplete")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-research-pdf-evidence
+          path: public-pdf-evidence/*.pdf
+          if-no-files-found: ignore
+          retention-days: 1

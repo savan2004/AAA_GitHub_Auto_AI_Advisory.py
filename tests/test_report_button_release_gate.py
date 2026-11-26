@@ -51,9 +51,8 @@ def _world(result_path):
 
 class ResearchPdfButtonGateTests(unittest.TestCase):
     def setUp(self):
-        def quote_line(quote):
-            return "Recent market observation: {:.2f} | {} IST".format(
-                quote["price"], quote["quote_asof_ist"][11:16])
+        # Exercise the production formatter, including a missing quote.
+        from research_pdf_snapshot import report_quote_line as quote_line
         snapshot = SimpleNamespace(
             load_recent_local_report=Mock(return_value=None),
             load_verified_report=Mock(return_value=None),
@@ -125,6 +124,7 @@ class ResearchPdfButtonGateTests(unittest.TestCase):
             bot.send_document.assert_called_once()
             ack.assert_called_once()
             self.assertEqual(ack.call_args.args[2], "document")
+            self.assertIn("Latest verified price unavailable", bot.send_document.call_args.kwargs["caption"])
             self.assertFalse(file.exists())
 
     def test_verified_daily_cache_skips_all_slow_downloads(self):
