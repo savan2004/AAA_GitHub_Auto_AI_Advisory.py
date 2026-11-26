@@ -512,6 +512,15 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
              color=MUTED)
     else:
         line('Unavailable: official membership, same-industry peers or fresh data not verified.', 9)
+        subhead('CURRENT INDUSTRY ALLOCATION')
+        if exposures:
+            line('Official roster labels; weighted by verified current value, not target allocation.', 8)
+            for group in exposures:
+                line('{} | {:.1f}% of current value'.format(
+                    group['industry'], group['weight']), 8, leading=14)
+        else:
+            line('Unclassified / no verified roster | 100% of current value', 8)
+            line('Sector weights unavailable; no classification guessed.', 8, color=MUTED)
     subhead('INTERPRETING THE SHORTLIST')
     line('NOT a ranking of all 500 companies; {} of {} same-industry peers attempted.'.format(
         peers.get('screened', 0), peers.get('pool', 0)), 8)
