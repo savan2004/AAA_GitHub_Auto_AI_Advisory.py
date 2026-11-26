@@ -181,14 +181,8 @@ def detect_patterns(data, pivots, lookback=60):
 
 # ── INDICATORS ────────────────────────────────────────────────────────────────
 def calc_rsi(prices, period=14):
-    d  = np.diff(prices)
-    g  = np.where(d > 0, d, 0.0)
-    l  = np.where(d < 0, -d, 0.0)
-    ag = np.convolve(g, np.ones(period)/period, "full")[:len(g)]
-    al = np.convolve(l, np.ones(period)/period, "full")[:len(l)]
-    rs = np.where(al != 0, ag/al, 100.0)
-    rsi= np.concatenate([[np.nan]*period, (100 - 100/(1+rs))[period-1:]])
-    return rsi[:len(prices)]
+    from msk_chart_release import wilder_rsi
+    return wilder_rsi(prices, period)
 
 def build_cross_signals(fast, slow, data):
     diff = fast.values - slow.values
@@ -256,9 +250,8 @@ def score_symbol_weighted(sym, name, df=None):
         df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
         if len(df) < 55:
             return None
-        weekly_close = df["Close"].resample("W-FRI").last().dropna()
-        weekly_data = (pd.DataFrame({"Close": weekly_close})
-                       if len(weekly_close) >= 10 else None)
+        from msk_chart_context import completed_weekly_reference
+        weekly_data = completed_weekly_reference(df)
         cutoff = df.index.max() - pd.DateOffset(months=6)
         data = df.loc[df.index >= cutoff].copy()
         if len(data) < 55:
@@ -283,7 +276,7 @@ def score_symbol_weighted(sym, name, df=None):
         checks, score, max_score, signal, _ = compute_full_score(
             data, weekly_data, pivots, rsi_last, hist, macd,
             ema9, ema21, sma20, sma50, bb_upper, bb_lower, bb_pct,
-            float(close_s.iloc[-1]), volume, volume.rolling(20).mean())
+            float(close_s.iloc[-1]), volume, volume.shift(1).rolling(20, min_periods=20).mean())
         if max_score != 20 or not np.isfinite(score):
             return None
 
@@ -293,8 +286,11 @@ def score_symbol_weighted(sym, name, df=None):
         # an aligned higher-high/higher-low and weekly bullish structure.
         last = float(close_s.iloc[-1])
         prior_high = float(data["High"].iloc[-21:-1].max())
-        avg_vol = float(volume.iloc[-21:-1].mean())
-        vol_ratio = float(volume.iloc[-1]) / avg_vol if avg_vol > 0 else 0
+        prior_vol = volume.iloc[-21:-1]
+        avg_vol = float(prior_vol.mean())
+        vol_ratio = (float(volume.iloc[-1]) / avg_vol
+                     if len(prior_vol) == 20 and (prior_vol > 0).all()
+                     and float(volume.iloc[-1]) > 0 else 0.0)
         weekly_bull = any("Weekly BULLISH" in row[0] and row[1] > 0
                           for row in checks)
         bullish_cross = any("Bull Cross" in row[0] and row[1] > 0
@@ -349,16 +345,18 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
             break
     if cross_age is None:
         e9l = float(ema9.iloc[-1]); e21l = float(ema21.iloc[-1])
-        pts = +1 if e9l > e21l else -1
-        col = TV_GREEN if pts > 0 else TV_RED
-        checks.append(("EMA 9 > EMA 21" if pts > 0 else "EMA 9 < EMA 21", pts, col, "No fresh cross"))
+        pts = +1 if e9l > e21l else (-1 if e9l < e21l else 0)
+        col = TV_GREEN if pts > 0 else (TV_RED if pts < 0 else TEXT_SEC)
+        checks.append(("EMA 9 > EMA 21" if pts > 0 else ("EMA 9 < EMA 21" if pts < 0 else "EMA 9 = EMA 21"), pts, col, "No fresh cross"))
 
     # ── CHECK 2: SMA 20/50 alignment + slope (+2) ─────────────────────────────
     s20l = float(sma20.dropna().iloc[-1]) if sma20.dropna().shape[0] > 0 else last_close
     s50l = float(sma50.dropna().iloc[-1]) if sma50.dropna().shape[0] > 0 else last_close
     sma_align = s20l > s50l
     sma_slope = float(sma20.iloc[-1]) - float(sma20.iloc[-3]) if len(sma20) >= 3 else 0
-    sma_pts   = 2 if (sma_align and sma_slope > 0) else (-2 if (not sma_align and sma_slope < 0) else (1 if sma_align else -1))
+    sma_pts   = (0 if s20l == s50l else
+                 2 if (sma_align and sma_slope > 0) else
+                 -2 if (not sma_align and sma_slope < 0) else (1 if sma_align else -1))
     sma_col   = TV_GREEN if sma_pts > 0 else TV_RED
     checks.append((f"SMA 20{'>'if sma_align else '<'}SMA 50  slope={'↑' if sma_slope>0 else '↓'}",
         sma_pts, sma_col, f"Slope {sma_slope:+.1f}"))
@@ -405,9 +403,9 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
         if nearest_dist <= 1.5:
             # Price at key level — is it support or resistance?
             if above_sr:
-                sr_pts = +3; sr_lbl = f"At S/R Support ₹{nearest_p:,.0f} ({nearest_dist:.1f}%)"; sr_col = TV_GREEN
+                sr_pts = +3; sr_lbl = f"Near pivot S ₹{nearest_p:,.0f} ({nearest_dist:.1f}%)"; sr_col = TV_GREEN
             else:
-                sr_pts = -3; sr_lbl = f"At S/R Resist  ₹{nearest_p:,.0f} ({nearest_dist:.1f}%)"; sr_col = TV_RED
+                sr_pts = -3; sr_lbl = f"Near pivot R ₹{nearest_p:,.0f} ({nearest_dist:.1f}%)"; sr_col = TV_RED
         else:
             sr_pts = 0; sr_lbl = f"Mid-Range  Δ{nearest_dist:.1f}% from ₹{nearest_p:,.0f}"; sr_col = TEXT_SEC
     checks.append((sr_lbl, sr_pts, sr_col, "S/R proximity check"))
@@ -445,51 +443,46 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
     signal_dir = "bullish" if last_close > e21l_c else "bearish"
     if candle_name:
         if candle_dir == signal_dir:
-            ck_pts = +1; ck_col = TV_GREEN
+            ck_pts = +1 if candle_dir == "bullish" else -1
+            ck_col = TV_GREEN if ck_pts > 0 else TV_RED
             ck_lbl = f"Candle: {candle_name}  confirms {candle_dir.upper()}"
         elif candle_dir == "neutral":
             ck_pts = 0; ck_col = TEXT_SEC
             ck_lbl = f"Candle: {candle_name}  (Doji — indecision)"
         else:
-            ck_pts = -1; ck_col = TV_RED
+            ck_pts = 0; ck_col = TV_AMBER
             ck_lbl = f"Candle: {candle_name}  OPPOSES signal ⚠"
     else:
         ck_pts = 0; ck_col = TEXT_SEC
         ck_lbl = "Candle: No clear pattern"
     checks.append((ck_lbl, ck_pts, ck_col, f"Bar: {candle_name or 'plain'}"))
 
-    # ── CHECK 8: ADX strength ≥ 28 (+1) ──────────────────────────────────────
-    try:
-        high_v = data["High"].values; low_v = data["Low"].values; close_v = data["Close"].values
-        tr = np.maximum(high_v[1:]-low_v[1:], np.maximum(np.abs(high_v[1:]-close_v[:-1]),
-                                                           np.abs(low_v[1:]-close_v[:-1])))
-        dm_p = np.where((high_v[1:]-high_v[:-1]) > (low_v[:-1]-low_v[1:]),
-                        np.maximum(high_v[1:]-high_v[:-1], 0.0), 0.0)
-        dm_n = np.where((low_v[:-1]-low_v[1:]) > (high_v[1:]-high_v[:-1]),
-                        np.maximum(low_v[:-1]-low_v[1:], 0.0), 0.0)
-        p=14
-        tr14 = pd.Series(tr).rolling(p).mean().values
-        dp14 = pd.Series(dm_p).rolling(p).mean().values
-        dn14 = pd.Series(dm_n).rolling(p).mean().values
-        dip  = np.where(tr14>0, 100*dp14/tr14, 0.0)
-        din  = np.where(tr14>0, 100*dn14/tr14, 0.0)
-        dx   = np.where((dip+din)>0, 100*np.abs(dip-din)/(dip+din), 0.0)
-        adx_val = float(pd.Series(dx).rolling(p).mean().iloc[-1])
-    except Exception:
-        adx_val = 20.0
-    adx_pts = +1 if adx_val >= 28 else -1
-    adx_col = TV_GREEN if adx_val >= 28 else TEXT_SEC
-    checks.append((f"ADX {adx_val:.1f}  {'Strong trend ≥28' if adx_val>=28 else 'Weak trend <28'}",
-        adx_pts, adx_col, f"ADX={adx_val:.1f}"))
+    # ── CHECK 8: directional Wilder ADX (+1 bullish, -1 bearish) ────────────
+    from msk_indicator_math import directional_series
+    _, adx_s, plus_di, minus_di = directional_series(data["High"], data["Low"], data["Close"])
+    adx_val, pdi, mdi = (float(x.iloc[-1]) for x in (adx_s, plus_di, minus_di))
+    if not all(np.isfinite(x) for x in (adx_val, pdi, mdi)):
+        adx_pts, adx_lbl = 0, "ADX unavailable"
+    elif adx_val >= 28 and pdi != mdi:
+        adx_pts = 1 if pdi > mdi else -1
+        adx_lbl = f"ADX {adx_val:.1f}  {'Bullish' if adx_pts>0 else 'Bearish'} trend"
+    else:
+        adx_pts, adx_lbl = 0, f"ADX {adx_val:.1f}  No directional confirmation"
+    adx_col = TV_GREEN if adx_pts > 0 else (TV_RED if adx_pts < 0 else TEXT_SEC)
+    checks.append((adx_lbl, adx_pts, adx_col, "Wilder ADX / +DI / -DI"))
 
-    # ── CHECK 9: Volume confirmation ≥ 2× avg (+1) ───────────────────────────
+    # ── CHECK 9: genuine, directional volume confirmation ──────────────────
+    prior = vol_s.iloc[-21:-1]
     lv = float(vol_s.iloc[-1])
-    av = float(vol_ma20.dropna().iloc[-1]) if vol_ma20.dropna().shape[0] > 0 else lv
-    vr = lv / av if av > 0 else 1.0
-    vol_pts = +1 if vr >= 2.0 else (-1 if vr < 0.5 else 0)
+    vr = lv / float(prior.mean()) if len(prior) == 20 and (prior > 0).all() and lv > 0 else None
+    if vr is None:
+        vol_pts, vol_lbl = 0, "Volume confirmation unavailable"
+    else:
+        change = last_close - float(data["Close"].iloc[-2])
+        vol_pts = (1 if change > 0 else -1 if change < 0 else 0) if vr >= 2 else 0
+        vol_lbl = f"Volume {vr:.1f}×avg  {'Directional surge' if vr>=2 else 'No surge'}"
     vol_col = TV_GREEN if vol_pts > 0 else (TV_RED if vol_pts < 0 else TEXT_SEC)
-    vol_lbl = f"Volume {vr:.1f}×avg  {'Surge ✓' if vr>=2 else ('Low ×' if vr<0.5 else 'Normal')}"
-    checks.append((vol_lbl, vol_pts, vol_col, f"Vol ratio {vr:.2f}"))
+    checks.append((vol_lbl, vol_pts, vol_col, "Previous 20 completed sessions"))
 
     # ── CHECK 10: BB squeeze breakout (+1) ───────────────────────────────────
     bw     = (bb_upper - bb_lower) / bb_lower.replace(0, 1)       # bandwidth
@@ -537,8 +530,10 @@ def compute_full_score(data, weekly_data, pivots, rsi_last, hist, macd,
     checks.append((hhhl_lbl, hhhl_pts, hhhl_col, "Price structure"))
 
     # ── FINAL SCORE ───────────────────────────────────────────────────────────
-    score     = sum(pts for _, pts, _, _ in checks)
-    max_score = 20   # theoretical max from all checks combined
+    # Keep the established /20 release scale and threshold; individual raw
+    # factors can sum to 21. Saturate only at the documented endpoints.
+    max_score = 20
+    score = max(-max_score, min(max_score, sum(pts for _, pts, _, _ in checks)))
 
     # Signal tiers (team agreement)
     if   score >= 16: signal_text, sig_col = "STRONG BUY",  "#00E676"
@@ -632,26 +627,21 @@ def _cleanup_old_charts(directory, max_age_sec=7200):
 
 _cleanup_old_charts(OUT_DIR)
 
-# Universe
-try:
-    import sys as _sys, os as _os
-    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-    from smart_chart_universe import load_nifty500_universe
-    UNIVERSE, _source = load_nifty500_universe()
-    print(f"SCAN: {len(UNIVERSE)} stocks source={_source}")
-except Exception:
-    UNIVERSE = [
-        ("RELIANCE.NS","Reliance Industries"),("TCS.NS","TCS"),
-        ("HDFCBANK.NS","HDFC Bank"),("INFY.NS","Infosys"),
-        ("ICICIBANK.NS","ICICI Bank"),("SBIN.NS","SBI"),
-        ("BHARTIARTL.NS","Airtel"),("ITC.NS","ITC"),
-        ("KOTAKBANK.NS","Kotak Bank"),("LT.NS","L&T"),
-        ("AXISBANK.NS","Axis Bank"),("BAJFINANCE.NS","Bajaj Finance"),
-        ("SUNPHARMA.NS","Sun Pharma"),("MARUTI.NS","Maruti"),
-        ("TITAN.NS","Titan"),("WIPRO.NS","Wipro"),
-        ("HCLTECH.NS","HCL Tech"),("ADANIENT.NS","Adani Ent"),
-        ("NTPC.NS","NTPC"),("TATAMOTORS.NS","Tata Motors"),
-    ]
+def _individual_history(symbol, session, period="1y", *, recovery=None):
+    from smart_chart_eod_recovery import ArchiveRecovery, yahoo_host_history, individual_chart_history
+    from smart_chart_nse_history import official_nse_chart_history
+    day = pd.Timestamp(session)
+    if recovery is None:
+        recovery = ArchiveRecovery([symbol], session)
+    def direct(sym):
+        return yf.Ticker(sym).history(
+            start=(day-pd.Timedelta(days=735 if period == "2y" else 370)).strftime("%Y-%m-%d"),
+            end=(day+pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            interval="1d", auto_adjust=False, timeout=6, raise_errors=True)
+    return individual_chart_history(symbol, session, fetch=direct,
+        alternate=lambda sym: yahoo_host_history(sym, session, recover=recovery),
+        official=lambda sym: official_nse_chart_history(sym, session), recovery=recovery)
+
 
 # ── ARGUMENT PARSING ─────────────────────────────────────────────────────────
 VALID_PERIODS = {"1mo","3mo","6mo","1y","2y"}
@@ -671,25 +661,35 @@ else:
     from smart_chart_fast_scan import choose_auto_chart, ChartScanUnavailable
     from market_breadth import expected_completed_session
     from smart_chart_nse_history import official_nse_chart_history
+    from smart_chart_eod_recovery import preliminary_rank, ArchiveRecovery
 
-    def _official_nse_history(yahoo_symbol):
-        return official_nse_chart_history(yahoo_symbol, session_key)
+    from smart_chart_universe import load_nifty100_universe
+
+    try:
+        UNIVERSE, _source = load_nifty100_universe()
+    except RuntimeError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"SCAN: {len(UNIVERSE)} stocks source={_source}")
     session_key = str(expected_completed_session())
+    shortlist_recovery = ArchiveRecovery([sym for sym, _ in UNIVERSE], session_key)
     try:
         winner, sampled, valid, universe_size = choose_auto_chart(
             UNIVERSE, download=yf.download, scorer=score_symbol_weighted,
             session_key=session_key, sample_limit=60,
-            fallback_history=_official_nse_history,
+            individual_history=lambda sym: _individual_history(sym, session_key, recovery=shortlist_recovery),
+            shortlist_rank=preliminary_rank, shortlist_recovery=shortlist_recovery,
             min_score=12, require_confirmed_setup=True, scan_all=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
         sys.exit(1)
     winner["scope_note"] = (
         f"Sample: {valid}/{sampled} qualifying NSE setups from {universe_size}; "
-        f"{'full-universe scan' if sampled == universe_size else 'partial-universe scan'}; "
+        f"{'full-universe scan' if winner['_verified_count'] == universe_size else 'partial-universe scan'}; "
         f"Setup: {winner['reason']}; EOD {session_key}")
     print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key} score={winner['score']}/20")
     print(f"WINNER: {winner['sym']}|{winner['name']}|{winner['reason']}|{winner['score']:+d}")
+    print(f"CHART_DATA_SOURCE: {winner.get('_history_source','Yahoo')}")
     forced_sym = winner["sym"]; forced_name = winner["name"]
 
 symbol       = forced_sym
@@ -701,41 +701,34 @@ OUT_FILE     = os.path.join(OUT_DIR, f"chart_{_sym_safe}_{int(_time.time())}.png
 # Auto-selection already fetched one full year of real daily OHLCV.
 # Reuse that data instead of making another two Yahoo requests on the button.
 auto_history = winner.pop("_daily_history", None)
+from market_breadth import expected_completed_session
+from smart_chart_fast_scan import _ticker_frame
+from msk_chart_release import validated_daily_history
+expected_eod = str(expected_completed_session())
 if auto_history is None:
-    data = yf.download(symbol, period=CHART_PERIOD, interval="1d",
-                       progress=False, auto_adjust=True)
+    data = _individual_history(symbol, expected_eod, CHART_PERIOD)
 else:
     data = auto_history.copy()
-if data.empty:
-    print(f"[ERROR] No verified daily data for {symbol}", file=sys.stderr)
+# Both manual and auto charts use the same completed-candle validator.
+data = validated_daily_history(_ticker_frame(data, symbol, 1), expected_eod)
+if data is None:
+    print(f"[ERROR] Latest completed NSE session {expected_eod} unavailable or invalid for {symbol}", file=sys.stderr)
     sys.exit(1)
-if isinstance(data.columns, pd.MultiIndex):
-    data.columns = data.columns.get_level_values(0)
-data = data.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
-if len(data) < 55:
-    print(f"[ERROR] Insufficient completed daily data for {symbol}", file=sys.stderr)
-    sys.exit(1)
-
-# Weekly trend derives from genuine DAILY closes using Friday week-end; a
-# manual chart keeps its existing 1-year weekly provider request.
-if auto_history is not None:
-    weekly_close = data["Close"].resample("W-FRI").last().dropna()
-    weekly_data = (pd.DataFrame({"Close": weekly_close})
-                   if len(weekly_close) >= 10 else None)
-    if CHART_PERIOD == "6mo":
-        cutoff = data.index.max() - pd.DateOffset(months=6)
-        data = data.loc[data.index >= cutoff].copy()
+structure_data = data
+if auto_history is None:
+    winner["scope_note"] = f"EOD {expected_eod}; Chart V8"
 else:
-    try:
-        weekly_data = yf.download(symbol, period="1y", interval="1wk",
-                                  progress=False, auto_adjust=True)
-        if isinstance(weekly_data.columns, pd.MultiIndex):
-            weekly_data.columns = weekly_data.columns.get_level_values(0)
-        weekly_data = weekly_data.dropna(subset=["Close"])
-        if len(weekly_data) < 5:
-            weekly_data = None
-    except Exception:
-        weekly_data = None
+    winner["scope_note"] += "; Chart V8"
+
+# Reuse the same source-validated daily history for the weekly picture.
+# A still-forming Mon-Thu weekly candle must never count as completed.
+from msk_chart_context import completed_weekly_reference
+weekly_data = completed_weekly_reference(data)
+months = {"1mo":1, "3mo":3, "6mo":6, "1y":12, "2y":24}[CHART_PERIOD]
+cutoff = data.index.max() - pd.DateOffset(months=months)
+# Preserve at least 55 actual bars for the existing indicator calculations.
+window = data.loc[data.index >= cutoff]
+data = window.copy() if len(window) >= 55 else data.tail(55).copy()
 
 # Auto-chart uses verified price-derived metrics instead of blocking on
 # optional, potentially slow company-info HTTP requests. Manual behavior
@@ -775,7 +768,7 @@ ema26    = close_s.ewm(span=26, adjust=False).mean()
 macd     = ema12 - ema26
 macd_sig = macd.ewm(span=9, adjust=False).mean()
 hist     = macd - macd_sig
-vol_ma20 = vol_s.rolling(20).mean()
+vol_ma20 = vol_s.shift(1).rolling(20, min_periods=20).mean()
 
 bb_mid   = sma20
 bb_std   = close_s.rolling(20).std()
@@ -788,10 +781,14 @@ rsi_s    = pd.Series(calc_rsi(close)[:n], index=data.index)
 eb_s, er_s = build_cross_signals(ema9,  ema21, data)
 db_s, dr_s = build_cross_signals(sma20, sma50, data)
 
-# Key scalars
-recent     = data.tail(20)
-support    = float(recent["Low"].min())
-resistance = float(recent["High"].max())
+# Key scalars. The candidate's candle cannot set its own prior resistance.
+from msk_chart_context import summarize_chart
+chart_context = summarize_chart(
+    structure_data["High"].values, structure_data["Low"].values,
+    structure_data["Close"].values, structure_data["Volume"].values,
+    float(ema9.iloc[-1]), float(ema21.iloc[-1]), float(hist.iloc[-1]))
+support = chart_context["support"]
+resistance = chart_context["resistance"]
 last_close = float(close[-1])
 prev_close = float(close[-2]) if n >= 2 else last_close
 change_pct = (last_close - prev_close) / prev_close * 100
@@ -804,14 +801,19 @@ _bb_u = float(bb_upper.dropna().iloc[-1]); _bb_l = float(bb_lower.dropna().iloc[
 s20l = float(sma20.dropna().iloc[-1]) if sma20.dropna().shape[0] > 0 else e9l
 s50l = float(sma50.dropna().iloc[-1]) if sma50.dropna().shape[0] > 0 else e21l
 
-_h = data["High"].values; _l = data["Low"].values; _c = data["Close"].values
-_tr= np.maximum(_h[1:]-_l[1:], np.maximum(np.abs(_h[1:]-_c[:-1]), np.abs(_l[1:]-_c[:-1])))
-atr_val = round(float(np.mean(_tr[-14:])), 2) if len(_tr) >= 14 else round(float(np.mean(_tr)), 2)
+from msk_indicator_math import atr_series
+atr_val = float(atr_series(structure_data["High"], structure_data["Low"], structure_data["Close"]).iloc[-1])
+if not np.isfinite(atr_val) or atr_val <= 0:
+    print("[ERROR] Verified ATR unavailable; no chart released", file=sys.stderr)
+    sys.exit(1)
 
-hist_n = min(252, n)
-if _52h is None: _52h = float(data["High"].rolling(hist_n).max().iloc[-1])
-if _52l is None: _52l = float(data["Low"].rolling(hist_n).min().iloc[-1])
-_52w_pct = round((last_close - _52l) / (_52h - _52l) * 100, 1) if _52h != _52l else 50.0
+# Only use dated, completed chart history for the range position.
+hist_n = min(252, len(structure_data))
+range_history = structure_data.tail(hist_n)
+_52h = float(range_history["High"].max())
+_52l = float(range_history["Low"].min())
+_range_label = "52W%" if (range_history.index[-1] - range_history.index[0]).days >= 350 else f"{hist_n}D%"
+_52w_pct = round((last_close - _52l) / (_52h - _52l) * 100, 1) if _52h > _52l else None
 
 # ── 11-CHECK WEIGHTED SCORING ─────────────────────────────────────────────────
 pivots = find_pivots(data, left=5, right=5)
@@ -829,28 +831,18 @@ if auto_history is not None and (
 is_bull   = score >= 0
 is_wait   = signal_text == "WAIT"
 
-# ── TARGETS (only shown when NOT in WAIT zone) ────────────────────────────────
-if not is_wait:
-    if is_bull:
-        sl_val = min(float(data["Low"].tail(5).min()), e21l) * 0.997
-        sl_pct = (last_close - sl_val) / last_close * 100
-        t1_val = last_close + 1.5 * (last_close - sl_val)
-        t2_val = last_close + 2.5 * (last_close - sl_val)
-        t1_pct = (t1_val - last_close) / last_close * 100
-        t2_pct = (t2_val - last_close) / last_close * 100
-    else:
-        sl_val = max(float(data["High"].tail(5).max()), e21l) * 1.003
-        sl_pct = (sl_val - last_close) / last_close * 100
-        t1_val = last_close - 1.5 * (sl_val - last_close)
-        t2_val = last_close - 2.5 * (sl_val - last_close)
-        t1_pct = (last_close - t1_val) / last_close * 100
-        t2_pct = (last_close - t2_val) / last_close * 100
-    _risk = abs(last_close - sl_val)
-    _rr1  = round(abs(t1_val - last_close) / _risk, 1) if _risk > 0 else 0
-    _rr2  = round(abs(t2_val - last_close) / _risk, 1) if _risk > 0 else 0
-else:
-    sl_val = t1_val = t2_val = 0.0
-    sl_pct = t1_pct = t2_pct = _rr1 = _rr2 = 0.0
+# ── CHART-FIRST LEVELS ────────────────────────────────────────────────────────
+from msk_chart_release import chart_plan
+level_plan = chart_plan(structure_data, signal_text, atr_val)
+has_levels = level_plan is not None
+sl_val = t1_val = t2_val = 0.0  # wire-only absence; never printed as a target
+sl_pct = t1_pct = t2_pct = _rr1 = _rr2 = 0.0
+if has_levels:
+    sl_val, t1_val, second, _rr1, _rr2 = level_plan
+    t2_val = second if second is not None else 0.0
+    sl_pct = abs(last_close - sl_val) / last_close * 100
+    t1_pct = abs(t1_val - last_close) / last_close * 100
+    t2_pct = abs(t2_val - last_close) / last_close * 100 if second is not None else 0.0
 
 # ── MPLFINANCE STYLE ──────────────────────────────────────────────────────────
 mc = mpf.make_marketcolors(
@@ -878,7 +870,7 @@ tv_style = mpf.make_mpf_style(
 hc = [TV_GREEN if v >= 0 else TV_RED for v in hist.fillna(0)]
 
 from datetime import datetime
-today    = datetime.now().strftime("%d %b %Y")
+today    = expected_eod  # Explicitly the completed EOD candle, not wall-clock today.
 ticker   = symbol.replace(".NS","").replace(".BO","")
 chg_icon = "▲" if change_pct >= 0 else "▼"
 title    = f"{ticker}  |  {company_name}  |  ₹{last_close:,.2f}  {chg_icon} {change_pct:+.2f}%  |  {today}"
@@ -936,6 +928,13 @@ try:
         for spine in ax.spines.values(): spine.set_edgecolor(BORDER_COL)
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
 
+    # One glance on a phone: causal multi-period structure from the same
+    # verified OHLCV as the candles. No score, target or trade instruction.
+    _view_color = (TV_GREEN if chart_context["outlook"] == "POSITIVE MOMENTUM"
+                   else TV_RED if chart_context["outlook"] == "NEGATIVE MOMENTUM"
+                   else TEXT_SEC)
+    # Place context outside the plotted candle/legend area after layout.
+
     # BB fill
     _xs = np.arange(n)
     ax0.fill_between(_xs, bb_upper.values, bb_lower.values, alpha=0.06, color=TV_TEAL, zorder=1)
@@ -980,10 +979,10 @@ try:
     if ew:      draw_ew_labels(ax0, ew, data)
     if top_pat: draw_pattern(ax0, top_pat, data)
 
-    ax0.annotate(f"S: ₹{support:,.0f}", xy=(1.002, support),
+    ax0.annotate(f"20D S: ₹{support:,.0f}", xy=(1.002, support),
         xycoords=("axes fraction","data"), color=TV_GREEN, fontsize=7, va="center", fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.2", fc=TV_GREEN_L, ec=TV_GREEN, lw=0.8, alpha=0.92))
-    ax0.annotate(f"R: ₹{resistance:,.0f}", xy=(1.002, resistance),
+    ax0.annotate(f"20D R: ₹{resistance:,.0f}", xy=(1.002, resistance),
         xycoords=("axes fraction","data"), color=TV_RED, fontsize=7, va="center", fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.2", fc=TV_RED_L, ec=TV_RED, lw=0.8, alpha=0.92))
 
@@ -994,8 +993,8 @@ try:
         mlines.Line2D([],[],color=TV_GOLD,  lw=1.2,ls="--",label=f"EMA 50 ({e50l:,.0f})"),
         mlines.Line2D([],[],color=TV_VIOLET,lw=1.0,ls="--",label=f"SMA 20 ({s20l:,.0f})"),
         mlines.Line2D([],[],color=TV_TEAL,  lw=1.0,ls="--",label=f"BB({_bb_l:,.0f}–{_bb_u:,.0f})"),
-        mlines.Line2D([],[],color=TV_GREEN, lw=0.8,ls=":",label=f"Sup {support:,.0f}"),
-        mlines.Line2D([],[],color=TV_RED,   lw=0.8,ls=":",label=f"Res {resistance:,.0f}"),
+        mlines.Line2D([],[],color=TV_GREEN, lw=0.8,ls=":",label=f"20D Sup {support:,.0f}"),
+        mlines.Line2D([],[],color=TV_RED,   lw=0.8,ls=":",label=f"20D Res {resistance:,.0f}"),
     ]
     legend = ax0.legend(handles=leg, loc="upper left", fontsize=6.5,
         facecolor=BG_CARD, edgecolor=BORDER_COL, framealpha=0.95,
@@ -1009,7 +1008,14 @@ try:
     ratio   = fw / (fw + panel_w)
     for ax_i in fig.get_axes():
         p = ax_i.get_position()
-        ax_i.set_position([p.x0 * ratio, p.y0, p.width * ratio, p.height])
+        # Use the reserved plot column instead of shrinking mplfinance's
+        # already-inset axes a second time. Twin axes share identical bounds.
+        ax_i.set_position([0.075, p.y0, ratio - 0.15, p.height])
+    fig.text(0.075, 0.925,
+             f"EOD {expected_eod}  |  " + chart_context["outlook"] + "  |  "
+             + chart_context["level"] + "\n" + chart_context["periods"],
+             ha="left", va="top", fontsize=8, color=_view_color,
+             fontweight="bold", zorder=18)
 
     # ── HEADER ────────────────────────────────────────────────────────────────
     header_h = 0.055
@@ -1022,12 +1028,12 @@ try:
     header.add_patch(FancyBboxPatch((0.15,0.15), 0.22, 0.70,
         boxstyle="round,pad=0.02", fc=price_bg, ec=price_col, lw=1.0, zorder=5))
     header.text(0.17, 0.58, f"₹{last_close:,.2f}", fontsize=11, fontweight="bold", color=price_col, va="center", zorder=8)
-    header.text(0.17, 0.24, f"{chg_icon} {change_pct:+.2f}%  Today", fontsize=7.5, color=price_col, va="center", zorder=8)
+    header.text(0.17, 0.24, f"{chg_icon} {change_pct:+.2f}%  vs prior EOD", fontsize=7.5, color=price_col, va="center", zorder=8)
     pills = []
     if _mcap_str: pills.append(("MCap", _mcap_str))
     if _pe_str:   pills.append(("",     _pe_str))
     pills += [("ATR", f"₹{atr_val:,.1f}"), ("Vol", f"{vr:.1f}x avg"),
-              ("52W%", f"{_52w_pct:.0f}%"), ("Period", CHART_PERIOD.upper()),
+              (_range_label, f"{_52w_pct:.0f}%" if _52w_pct is not None else "N/A"), ("Period", CHART_PERIOD.upper()),
               ("Score", score_str)]
     px = 0.40
     for lbl, val in pills:
@@ -1052,11 +1058,12 @@ try:
     # Signal header
     sa.add_patch(FancyBboxPatch((0.03,0.89), 0.94, 0.08,
         boxstyle="round,pad=0.01", lw=0, fc=sig_bg_c, zorder=3))
-    sa.text(0.5, 0.968, "AUTOAI ADVISORY  v7.0", fontsize=6.5, color=TEXT_SEC,
+    sa.text(0.5, 0.968, "AUTOAI ADVISORY  v8.0", fontsize=6.5, color=TEXT_SEC,
         ha="center", va="top", style="italic", zorder=5)
     hmap = {"STRONG BUY":"STRONG BUY","BUY":"BUY","WAIT":"WAIT — No Setup",
             "SELL":"SELL","STRONG SELL":"STRONG SELL"}
-    sa.text(0.5, 0.950, hmap.get(signal_text, signal_text), fontsize=12,
+    score_heading = hmap.get(signal_text, signal_text) if has_levels or is_wait else ("BULLISH SCORE" if is_bull else "BEARISH SCORE")
+    sa.text(0.5, 0.950, score_heading, fontsize=12,
         fontweight="bold", color=sig_fg, ha="center", va="top", zorder=5)
 
     # Score + bar
@@ -1069,8 +1076,7 @@ try:
     if bar_fill > 0:
         sa.add_patch(FancyBboxPatch((0.06,bar_y), 0.88*bar_fill, bar_h,
             boxstyle="round,pad=0.003", fc=sig_fg, ec="none", zorder=5))
-    sa.text(0.5, bar_y + bar_h/2, "BEARISH ◄──────────────► BULLISH",
-        fontsize=5.5, color=TEXT_SEC, ha="center", va="center", zorder=6)
+    # Keep the score bar unlabelled: text over its coloured fill is illegible.
     sa.plot([0.05,0.95],[0.848,0.848], color=BORDER_COL, lw=0.8, zorder=5)
 
     # Reason
@@ -1108,22 +1114,21 @@ try:
 
     # ── TRADE LEVELS or No-Trade Zone ────────────────────────────────────────
     tl_top = 0.188; tl_gap = 0.048
-    if is_wait:
-        # No-Trade Zone — show no levels, just explanation
+    if not has_levels:
+        # A technical score is not a trade plan. Missing chart levels stay absent.
         sa.add_patch(FancyBboxPatch((0.04,0.042), 0.92, 0.145,
             boxstyle="round,pad=0.01", fc="#2A2410", ec=TV_YELLOW, lw=1.2, zorder=4))
         sa.text(0.5, 0.172, "NO TRADE ZONE", fontsize=9, fontweight="bold",
             color=TV_YELLOW, ha="center", va="top", zorder=5)
-        sa.text(0.5, 0.145, f"Score {score:+d} — need ≥+12 for BUY", fontsize=7.5,
+        sa.text(0.5, 0.145, "Score only — no verified trade levels", fontsize=7.5,
             color=TEXT_SEC, ha="center", va="top", zorder=5)
         sa.text(0.5, 0.120, "Wait for stronger confirmation:", fontsize=7,
             color=TEXT_SEC, ha="center", va="top", zorder=5)
         needs = []
-        if score < 12:
-            gap = 12 - score
-            needs.append(f"Need +{gap} more pts for BUY signal")
-        if weekly_data is not None:
-            needs.append("Check weekly trend first")
+        if is_wait:
+            needs.append("Wait for directional confirmation")
+        else:
+            needs.append("Need chart support/resistance and R:R ≥1.5")
         sa.text(0.5, 0.098, "\n".join(needs[:2]), fontsize=6.5, color=TV_YELLOW,
             ha="center", va="top", zorder=5)
         sa.text(0.5, 0.052, "ATR(14): ₹" + f"{atr_val:,.2f}", fontsize=7.5,
@@ -1134,10 +1139,11 @@ try:
         sa.text(0.93, tl_top + tl_gap*0.5, f"₹{atr_val:,.2f}", fontsize=7.5, color=TEXT_PRI,
             va="top", ha="right", zorder=5, fontfamily="monospace")
         trows = [
-            ("Entry",     last_close, None,   None, TEXT_ACC, True),
-            ("Stop Loss", sl_val,    -sl_pct, None, TV_RED,   False),
-            ("Target 1",  t1_val,     t1_pct, _rr1, TV_GREEN, False),
-            ("Target 2",  t2_val,     t2_pct, _rr2, TV_GREEN, False),
+            ("Ref. close", last_close, None, None, TEXT_ACC, True),
+            ("SL (S/R)", sl_val, -sl_pct, None, TV_RED, False),
+            ("Target 1", t1_val, t1_pct, round(_rr1, 1), TV_GREEN, False),
+            ("Target 2", t2_val if t2_val else None, t2_pct if t2_val else None,
+             round(_rr2, 1) if _rr2 is not None else None, TV_GREEN, False),
         ]
         for i, (lbl, price, pct, rr, col, bold) in enumerate(trows):
             y   = tl_top - i * tl_gap
@@ -1148,7 +1154,7 @@ try:
                     boxstyle="round,pad=0.003", fc=bg_c, ec="none", zorder=3))
             sa.text(0.07, y - 0.006, lbl, fontsize=8, color=TEXT_SEC if not bold else TEXT_ACC,
                 va="top", fontweight=fw2, zorder=5)
-            sa.text(0.62, y - 0.006, f"₹{price:,.2f}", fontsize=8, color=col,
+            sa.text(0.62, y - 0.006, f"₹{price:,.2f}" if price is not None else "N/A", fontsize=8, color=col,
                 va="top", ha="right", fontweight=fw2, zorder=5, fontfamily="monospace")
             if pct is not None:
                 rr_str = f"  1:{rr}" if rr is not None else ""
@@ -1168,9 +1174,12 @@ try:
         ha="center", va="bottom", color=TEXT_SEC, fontsize=6.5)
 
     # ── SAVE ──────────────────────────────────────────────────────────────────
-    fig.savefig(OUT_FILE, dpi=160, bbox_inches="tight",
-        facecolor=BG_DARK, format="png")
-    plt.close(fig)
+    from smart_chart_snapshot import save_bounded_chart_png
+    try:
+        size, dpi = save_bounded_chart_png(fig, OUT_FILE, BG_DARK)
+        print(f"CHART_PNG_SIZE bytes={size} dpi={dpi}")
+    finally:
+        plt.close(fig)
 
     print(f"OUTPUT: {OUT_FILE}")
     print(f"META: {symbol}|{company_name}|{signal_text}|{score_str}|{last_close:.2f}|{sl_val:.2f}|{t1_val:.2f}|{t2_val:.2f}|{winner.get('scope_note', '')}")
