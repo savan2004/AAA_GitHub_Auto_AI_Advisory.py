@@ -1,0 +1,67 @@
+name: MSK Central Public Data Evidence
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/msk-central-public-data-evidence.yml'
+      - 'market_data.py'
+      - 'data_engine.py'
+      - 'msk_history_quality.py'
+      - 'portfolio_doctor_bhavcopy.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-eod:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing market data dependencies
+        run: python -m pip install numpy==1.26.4 pandas==2.2.2 requests==2.32.3 yfinance==0.2.61 curl_cffi==0.7.4
+      - name: Cross-check actual completed NSE bars against Yahoo
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from market_data import bulk_history
+          from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows
+          from portfolio_doctor_live import IST, expected_doctor_session, verified_completed_daily_frame, PortfolioDoctorError
+          from msk_core_data_guard import wilder_rsi_values
+          from msk_history_quality import clean_daily_history
+
+          symbols = ["DMART", "TCS", "INFY"]
+          now = datetime.now(IST)
+          expected = expected_doctor_session(now)
+          official = fetch_nse_bhavcopy_rows(expected, symbols)
+          print(f"OFFICIAL_EOD session={expected} coverage={len(official)}/{len(symbols)}")
+          frames = bulk_history(symbols, "1y", chunk_size=3, retries=0,
+                                max_fallbacks=0, download_timeout=12)
+          matched = 0
+          for sym in symbols:
+              raw = frames.get(sym)
+              try:
+                  frame = verified_completed_daily_frame(clean_daily_history(raw), now=now)
+              except PortfolioDoctorError as exc:
+                  print(f"PUBLIC_EOD_WITHHELD symbol={sym} reason={exc.code}")
+                  continue
+              if sym not in official or len(frame) < 60:
+                  print(f"PUBLIC_EOD_WITHHELD symbol={sym} reason=missing_official_or_short_history")
+                  continue
+              row = frame.iloc[-1]
+              ref = official[sym]
+              prices = all(abs(float(row[k])-ref[k]) <= .05 for k in ("Open","High","Low","Close"))
+              volume = float(row["Volume"]) == ref["Volume"]
+              rsi = wilder_rsi_values(frame["Close"])[-1]
+              print(f"PUBLIC_EOD symbol={sym} session={expected} yahoo_close={float(row['Close']):.2f} nse_close={ref['Close']:.2f} ohlc_match={prices} volume_match={volume} rows={len(frame)} rsi={rsi}")
+              if prices and volume and rsi is not None and 0 <= rsi <= 100:
+                  matched += 1
+          print(f"PUBLIC_EOD_MATCHED={matched}/{len(symbols)}")
+          if matched != len(symbols):
+              raise SystemExit("Public sample incomplete or mismatched; no release approval")
+          PY
