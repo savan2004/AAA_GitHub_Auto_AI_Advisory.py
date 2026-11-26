@@ -689,9 +689,9 @@ def _investment_view(R, story):
         rows.append([P("Street consensus (Yahoo)"), P(f"Mean target <b>{inr(cons['mean'], 0)}</b>{rng}"),
                      P(colored(f"{cons['upside']:+.1f}% vs CMP", sgn_color(cons["upside"])))])
     if rows:
-        story.append(KeepTogether([Spacer(1, 6), P("Valuation reference points", "h2"),
+        story += [Spacer(1, 6), P("Valuation reference points", "h2"),
                   table([[P("Method", "th"), P("Derivation", "th"), P("Implied", "th")]] + rows, [40 * mm, 98 * mm, 40 * mm]),
-                  P("Illustrative references only — a peer-multiple value assumes the stock deserves the sector median multiple; it is not a price target.", "tiny")]))
+                  P("Illustrative references only — a peer-multiple value assumes the stock deserves the sector median multiple; it is not a price target.", "tiny")]
 
 
 def _technical(R, story):
@@ -1047,7 +1047,7 @@ def _plan(R, story):
         return
     story += section("Scenarios & Trade Plan", "Rule-based levels derived from ATR, support/resistance and realised volatility")
     label, hexcol, bg, msg = {
-        "CONDITIONAL": ("Conditional model scenario — WAIT", AMBER_H, "#FFF9E8", "Trend scoring is separate from the chart timing gate. These illustrative levels are not a BUY call. Require a fresh confirmed setup and independent financial verification before reconsidering."),
+        "CONDITIONAL": ("Conditional model scenario — WAIT", AMBER_H, "#FFF9E8", "Illustrative only, not a BUY call. Require confirmed timing and independent financial verification."),
         "DEFENSIVE": ("Defensive — no fresh long setup", RED_H, "#FDF1F1", "Price structure and/or the composite score do not support new long positions. Wait for the reclaim level below."),
     }[plan["mode"]]
     story += [callout(f"<b>{label}.</b> {msg}", hexcol, bg), Spacer(1, 6)]
@@ -1066,7 +1066,7 @@ def _plan(R, story):
             [P(colored("Target 2", GREEN_H), "cellb"), P(inr(plan["t2"]), "cellrb"), P(pct(plan["t2"]), "cellr"), P(rr(plan["t2"]), "cellr")],
             [P(colored("Target 3", GREEN_H), "cellb"), P(inr(plan["t3"]), "cellrb"), P(pct(plan["t3"]), "cellr"), P(rr(plan["t3"]), "cellr")],
         ]
-        story.append(KeepTogether([table([hdr] + rows, [48 * mm, 52 * mm, 36 * mm, 42 * mm])]))
+        story.append(table([hdr] + rows, [48 * mm, 52 * mm, 36 * mm, 42 * mm]))
         story.append(P(f"Stop sits below the nearest support (or 2×ATR where none is close). Targets are 1.5R / 2.5R / 4R. "
                        f"Daily ATR is {inr(t['atr'])} ({t['atr_pct']}% of price). Recalculate all levels after a fresh confirmed setup.", "tiny"))
         sz = plan["sizing"]
