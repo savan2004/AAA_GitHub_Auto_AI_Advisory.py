@@ -13,6 +13,7 @@ import os
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from urllib.parse import parse_qs, urlsplit
 
 STRATEGIES = frozenset({"swing_safe", "swing_aggressive", "intraday_nifty200"})
 KINDS = frozenset({"OBSERVED", "WITHHELD", "PAPER_OPEN", "PAPER_CLOSE"})
@@ -57,8 +58,9 @@ def _price(value, field: str) -> str:
         v = Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         raise ValueError(f"{field} requires a positive finite price") from None
-    if not v.is_finite() or v <= 0:
-        raise ValueError(f"{field} requires a positive finite price")
+    if (not v.is_finite() or v <= 0 or v > Decimal("1000000000")
+            or v.as_tuple().exponent < -8):
+        raise ValueError(f"{field} requires a bounded positive finite price")
     return format(v, "f")
 
 
@@ -139,6 +141,121 @@ def make_event(*, strategy: str, version: str, symbol: str, direction: str,
     return data
 
 
+def _validated_dsn(dsn):
+    """Reject libpq query overrides; never echo connection credentials."""
+    try:
+        if not isinstance(dsn, str) or not dsn or any(c.isspace() or ord(c)<32 for c in dsn):
+            raise ValueError()
+        uri = urlsplit(dsn)
+        if (uri.scheme not in ("postgresql", "postgres") or not uri.hostname
+                or uri.fragment or uri.port not in (None,5432)
+                or not re.fullmatch(r"/[A-Za-z0-9_-]+",uri.path)):
+            raise ValueError()
+        params = parse_qs(uri.query,keep_blank_values=True,strict_parsing=True,max_num_fields=4)
+        if (set(params)-{"sslmode","channel_binding"} or params.get("sslmode")!=["require"]
+                or ("channel_binding" in params and params["channel_binding"] not in (["require"],["prefer"]))):
+            raise ValueError()
+        return dsn
+    except (ValueError,TypeError):
+        raise JournalError("Dedicated TLS PostgreSQL journal is not configured") from None
+
+
+def summarize_paper_accuracy(events, *, verify_evidence, strategy, version, cost_bps):
+    """Read-only research metric, never a live performance claim.
+
+    Caller must independently verify each observation/fill/exit against actual
+    market evidence. No default trust in source strings. Synthetic/CI signals
+    excluded even if an external verifier erroneously accepts them. Cost is
+    explicit round-trip basis points of entry notional (per share).
+    """
+    if (not callable(verify_evidence) or strategy not in STRATEGIES
+            or not isinstance(version,str) or not _VERSION.fullmatch(version)):
+        raise ValueError("Explicit evidence verifier and strategy version required")
+    try:
+        cost=Decimal(str(cost_bps))
+    except (InvalidOperation,ValueError,TypeError):
+        raise ValueError("Explicit valid cost assumption required") from None
+    if not cost.is_finite() or not 0<=cost<=10000:
+        raise ValueError("Explicit valid cost assumption required")
+    groups={}
+    for raw in events:
+        if not isinstance(raw,dict):
+            raise ValueError("Malformed journal event")
+        clean=_revalidate_event(raw)
+        if clean["strategy"]!=strategy or clean["version"]!=version:
+            continue
+        group=groups.setdefault(clean["signal_id"],{})
+        prior=group.get(clean["kind"])
+        if prior is not None and prior!=clean:
+            raise JournalError("Conflicting immutable event in accuracy input")
+        group[clean["kind"]]=clean
+    wins=losses=breakeven=unverified=synthetic=open_trades=observations=withheld=0
+    target_exits=0
+    for group in groups.values():
+        if any(e["symbol"]=="MSKPROBE" or
+               e["version"].lower().startswith(("ci-","neon-probe-")) or
+               any(part in ("synthetic","fixture","test","ci","staging") for part in re.split(r"[:/._-]",e["source_ref"].lower()))
+               for e in group.values()):
+            synthetic+=1
+            continue
+        if "WITHHELD" in group:
+            withheld+=1
+            continue
+        plan=group.get("OBSERVED")
+        opened=group.get("PAPER_OPEN")
+        closed=group.get("PAPER_CLOSE")
+        if not plan or (closed and not opened):
+            unverified+=1
+            continue
+        if not opened:
+            observations+=1
+            continue
+        if not closed:
+            open_trades+=1
+            continue
+        if (not plan["event_at"]<opened["event_at"]<closed["event_at"]
+                or any(plan[k]!=opened[k] for k in ("stop","target1","target2"))
+                or any(opened[k]!=closed[k] for k in ("entry","stop","target1","target2"))):
+            unverified+=1
+            continue
+        try:
+            verified=all(verify_evidence(e) is True for e in (plan,opened,closed))
+        except Exception:
+            verified=False
+        if not verified:
+            unverified+=1
+            continue
+        entry,exit_px=Decimal(opened["entry"]),Decimal(closed["exit_price"])
+        net=(exit_px-entry if opened["direction"]=="LONG" else entry-exit_px)-entry*cost/Decimal(10000)
+        if net>0: wins+=1
+        elif net<0: losses+=1
+        else: breakeven+=1
+        if closed["outcome"] in ("TARGET1","TARGET2"):
+            target_exits+=1
+    n=wins+losses+breakeven
+    return {"strategy":strategy,"version":version,"cost_bps":str(cost),
+            "closed_verified":n,"wins":wins,"losses":losses,"breakeven":breakeven,
+            "win_rate_pct":str((Decimal(wins)*100/n).quantize(Decimal("0.01"))) if n else None,
+            "target_exits":target_exits,"open_trades":open_trades,"observations":observations,
+            "withheld":withheld,"unverified":unverified,"synthetic_excluded":synthetic,
+            "publication_status":"WITHHELD","mode":"PAPER_RESEARCH_ONLY"}
+
+
+def _revalidate_event(event):
+    try:
+        clean=make_event(strategy=event["strategy"],version=event["version"],
+            symbol=event["symbol"],direction=event["direction"],
+            candle_at=datetime.fromisoformat(event["candle_at"]),kind=event["kind"],
+            event_at=datetime.fromisoformat(event["event_at"]),source_ref=event["source_ref"],
+            entry=event.get("entry"),stop=event.get("stop"),target1=event.get("target1"),
+            target2=event.get("target2"),exit_price=event.get("exit_price"),outcome=event.get("outcome"))
+    except (KeyError,TypeError) as exc:
+        raise ValueError("Malformed journal event") from exc
+    if clean!=event:
+        raise ValueError("Journal event checksum or fields have been modified")
+    return clean
+
+
 class PostgresSignalJournal:
     """Append-only event store with strict transition and conflict rules.
 
@@ -147,11 +264,7 @@ class PostgresSignalJournal:
     """
 
     def __init__(self, dsn: str | None = None, *, connector=None):
-        self._dsn = dsn if dsn is not None else os.environ.get(_DSN_ENV, "")
-        if (not isinstance(self._dsn, str)
-                or not self._dsn.startswith(("postgresql://", "postgres://"))
-                or "sslmode=require" not in self._dsn):
-            raise JournalError("Dedicated TLS PostgreSQL journal is not configured")
+        self._dsn = _validated_dsn(dsn if dsn is not None else os.environ.get(_DSN_ENV, ""))
         if connector is None:
             try:
                 import psycopg
@@ -164,21 +277,7 @@ class PostgresSignalJournal:
         """True on new write, False on identical retry; conflicting retries fail."""
         if not isinstance(event, dict):
             raise ValueError("Journal event must be a dictionary")
-        try:
-            clean = make_event(
-                strategy=event["strategy"], version=event["version"],
-                symbol=event["symbol"], direction=event["direction"],
-                candle_at=datetime.fromisoformat(event["candle_at"]),
-                kind=event["kind"], event_at=datetime.fromisoformat(event["event_at"]),
-                source_ref=event["source_ref"], entry=event.get("entry"),
-                stop=event.get("stop"), target1=event.get("target1"),
-                target2=event.get("target2"), exit_price=event.get("exit_price"),
-                outcome=event.get("outcome"),
-            )
-        except (KeyError, TypeError) as exc:
-            raise ValueError("Malformed journal event") from exc
-        if clean != event:
-            raise ValueError("Journal event checksum or fields have been modified")
+        clean = _revalidate_event(event)
 
         payload = json.dumps(clean, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()

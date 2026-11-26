@@ -81,3 +81,7 @@ type and whether the staging branch is reachable, without sharing a DSN.
   alone. Separate approval is required for least-privilege schema permissions,
   Render deployment/restart proof, source provenance, and live paper collection.
 - No win-rate/profit-factor/drawdown claim is supported by synthetic events.
+
+## Internal paper accuracy calculation
+
+The read-only `summarize_paper_accuracy` requires an independent market evidence verifier, an exact strategy/version and an explicit round-trip cost assumption in basis points. It counts only complete chronological verified paper lifecycles; excludes synthetic/staging/CI rows, observation-only, open and unverified trades; reports net-positive exits rather than target labels as wins. Identical inputs are deduplicated; conflicting immutable events fail closed. No scanner wiring or customer publication is authorized. No verified sample means no win rate. This is a calculation helper, not a market evidence collector or proof of actual returns.

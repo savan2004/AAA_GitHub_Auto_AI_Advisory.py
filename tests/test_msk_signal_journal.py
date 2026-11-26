@@ -2,7 +2,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from msk_signal_journal import JournalError, PostgresSignalJournal, make_event
+from msk_signal_journal import JournalError, PostgresSignalJournal, make_event, summarize_paper_accuracy
 
 UTC = timezone.utc
 BAR = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
@@ -179,6 +179,49 @@ class JournalTests(unittest.TestCase):
             PostgresSignalJournal("sqlite:///tmp/example.db", connector=lambda _: None)
         with self.assertRaises(JournalError):
             PostgresSignalJournal("postgresql://example.invalid/msk", connector=lambda _: None)
+
+    def test_connection_overrides_and_unbounded_prices_rejected(self):
+        for suffix in ("&sslmode=disable","&host=other.example","&dbname=other",
+                       "&options=-csearch_path%3Dpublic","&channel_binding=disable"):
+            with self.assertRaises(JournalError):
+                PostgresSignalJournal(DSN+suffix,connector=lambda _:None)
+        for bad in ("1e999999","1e-999999","0.000000001"):
+            with self.assertRaises(ValueError):
+                event(entry=bad)
+
+    def test_accuracy_requires_independent_evidence_and_counts_only_closed_net_profit(self):
+        def lifecycle(symbol,direction="LONG",exit_price="108",outcome="TARGET1",**kw):
+            prices={"entry":"100","stop":"96","target1":"108","target2":"114"} if direction=="LONG" else {
+                "entry":"100","stop":"104","target1":"92","target2":"86"}
+            common=dict(symbol=symbol,direction=direction,**prices,**kw)
+            return [event(**common),event("PAPER_OPEN",event_at=WHEN+timedelta(minutes=1),**common),
+                    event("PAPER_CLOSE",event_at=WHEN+timedelta(days=1),
+                          exit_price=exit_price,outcome=outcome,**common)]
+        good=lifecycle("SBIN")
+        short=lifecycle("INFY","SHORT","92")
+        loss=lifecycle("TCS","LONG","96","STOP")
+        cost_loss=lifecycle("LT","LONG","100.05","TIME")
+        fake=lifecycle("MSKPROBE",source_ref="staging:synthetic:fill")
+        unknown=lifecycle("RELIANCE")
+        pending=lifecycle("HDFCBANK")[:2]
+        observations=lifecycle("ITC")[:1]
+        all_events=good+short+loss+cost_loss+fake+unknown+pending+observations+good
+        result=summarize_paper_accuracy(all_events,verify_evidence=lambda e:e["symbol"]!="RELIANCE",
+            strategy="swing_safe",version="v1",cost_bps=10)
+        self.assertEqual(result["closed_verified"],4)
+        self.assertEqual(result["wins"],2)
+        self.assertEqual(result["losses"],2)
+        self.assertEqual(result["win_rate_pct"],"50.00")
+        self.assertEqual(result["synthetic_excluded"],1)
+        self.assertEqual(result["unverified"],1)
+        self.assertEqual(result["open_trades"],1)
+        self.assertEqual(result["observations"],1)
+        self.assertEqual(result["publication_status"],"WITHHELD")
+        self.assertIsNone(summarize_paper_accuracy(good,verify_evidence=lambda e:False,
+            strategy="swing_safe",version="v1",cost_bps=10)["win_rate_pct"])
+        with self.assertRaises(JournalError):
+            summarize_paper_accuracy(good+[event(entry="101")],verify_evidence=lambda e:True,
+                strategy="swing_safe",version="v1",cost_bps=10)
 
     def test_no_personal_data_in_record(self):
         payload = event()
