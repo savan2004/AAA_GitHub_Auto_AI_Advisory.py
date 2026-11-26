@@ -84,6 +84,12 @@ class TenStocksAcceptance(unittest.TestCase):
         self.assertEqual(len(pages), 17)
         self.assertIn("Industrials | current", pages[-1])
         self.assertIn("Unknown / unclassified | current", pages[-1])
+        from portfolio_doctor_report import _report_records
+        from decimal import Decimal
+        normalized = _report_records(rows)
+        current_total = sum((r["value"] for r in normalized), Decimal(0))
+        self.assertIn(f"Current total: Rs {current_total:,.2f} (100.00%).", pages[-1])
+        self.assertIn(f"(Rs {normalized[-1]['value']:,.2f})", pages[-1])
         self.assertIn("Unavailable: no approved research", pages[-1])
         self.assertNotIn("ILLUSTRATIVE REBALANCING", "".join(pages))
         data = ("\n".join([s+",1,95" for s in symbols[:-1]]+["BSE:"+symbols[-1]+",1,95"])).encode()
@@ -117,6 +123,9 @@ class TenStocksAcceptance(unittest.TestCase):
             model_pdf = build_pdf_bytes([rec, other], peers={"doctor_preferences": ("medium", 36)})
         model_pages = texts(model_pdf)
         self.assertIn("Modeled cash", model_pages[-2])
+        self.assertIn("Current total: Rs 100,300.47 (100.00%).", model_pages[-2])
+        self.assertIn("proposed", model_pages[-2])
+        self.assertIn("(Rs 15,000.00)", model_pages[-2])
         self.assertIn("ILLUSTRATIVE REBALANCING", model_pages[-1])
         self.assertIn("NSE:SAMPLE01", model_pages[-1])
         self.assertIn("BSE:SAMPLE01", model_pages[-1])

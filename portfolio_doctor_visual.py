@@ -526,7 +526,8 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                     group['industry'], group['weight']), 8, leading=14)
         else:
             line('Unclassified / no verified roster | 100% of current value', 8)
-            line('Broad sector: Unknown / unclassified = 100% of current value.', 8, color=MUTED)
+            line('Broad sector: Unknown / unclassified = 100% of current value ({}).'.format(
+                money(review["total"])), 8, color=MUTED)
     subhead('INTERPRETING THE SHORTLIST')
     if not appendix:
         line('Model portfolio unavailable: no approved model and selected profile for this report.', 8)
@@ -739,7 +740,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             line(f'Selected profile: {preferences[0]} risk | {preferences[1]} months', 8)
         line(review["status"], 10, True)
         subhead('CURRENT HOLDINGS AND ROSTER INDUSTRY')
-        labels = peers.get("held_industries") or {}
+        labels = (peers.get("held_industries") or {}) if peers.get("roster_verified") is True else {}
         for row in holdings:
             exchange = row.get("exchange", "NSE")
             label = labels.get(row["symbol"]) if exchange == "NSE" else None
@@ -748,11 +749,14 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         subhead('BROAD SECTOR / NSE MACRO-ECONOMIC SECTOR')
         total = review["total"]
         for sector in sorted(review["sectors"].keys() | review["targets"].keys()):
-            current = 100 * review["sectors"].get(sector, 0) / total
-            value = f'{sector} | current {current:.2f}%'
+            current_amount = review["sectors"].get(sector, 0)
+            current = 100 * current_amount / total
+            value = f'{sector} | current {current:.2f}% ({money(current_amount)})'
             if review["cash"] is not None:
-                value += f' | proposed {100 * review["targets"].get(sector, 0) / total:.2f}%'
-            line(value, 8, leading=13)
+                target_amount = review["targets"].get(sector, 0)
+                value += f' | proposed {100 * target_amount / total:.2f}% ({money(target_amount)})'
+            line(value, 8, leading=12)
+        line(f'Current total: {money(total)} (100.00%).', 8, True, leading=13)
         if review["cash"] is not None:
             line(f'Modeled cash {money(review["cash"])} ({100 * review["cash"] / total:.2f}%). '
                  f'Positions plus cash: {money(total)}.', 9, True)
