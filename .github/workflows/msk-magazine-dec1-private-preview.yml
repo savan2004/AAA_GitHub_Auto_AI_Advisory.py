@@ -1,13 +1,11 @@
 name: MSK Magazine - Dec 1 Private Live Review
 
-# One-time December 1 test. Even if this workflow remains in the repo,
-# the date guard prevents accidental repeats in later years.
+# One-time private review workflow; manual only.
+# The regular monthly workflow starts December on the first Monday (7 Dec).
 on:
   pull_request:
     paths:
       - ".github/workflows/msk-magazine-dec1-private-preview.yml"
-  schedule:
-    - cron: "30 2 1 12 *" # 08:00 IST on 1 December (GitHub cron may be delayed)
   workflow_dispatch:
 
 permissions:
