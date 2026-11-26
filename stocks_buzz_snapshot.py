@@ -165,7 +165,9 @@ def load_verified_scan():
 def main():
     """Run after NSE close from scheduled GitHub Actions; never send Telegram."""
     from stocks_buzz import run_scan
-    result = run_scan()
+    # The scan calculates and validates data but must not perform a second
+    # implicit save: the scheduled worker owns exactly one required Neon write.
+    result = run_scan(save_snapshot=False)
     save_verified_scan(result)
     print("BUZZ_PRECOMPUTE_OK session=%s count=%s/%s" % (
           result["data_session"], result["downloaded"], result["universe_size"]))

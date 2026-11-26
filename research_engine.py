@@ -100,6 +100,89 @@ def _cluster(levels: List[float], tol: float = 0.012) -> List[float]:
     return [sum(g) / len(g) for g in out]
 
 
+def _date_aligned_returns(stock_close, index_close, sessions):
+    """Return both returns from identical completed sessions, never row offsets.
+
+    Fails closed if today's stock candle lacks a matching benchmark close.
+    Partial 1Y histories (e.g. 247 sessions) use the same available common
+    lookback for both instruments. Does not fill missing days or fabricate
+    an index performance figure.
+    """
+    if (index_close is None or not isinstance(stock_close.index, pd.DatetimeIndex)
+            or not isinstance(index_close.index, pd.DatetimeIndex)):
+        return None
+    try:
+        def normalise(series):
+            frame = pd.to_numeric(series, errors="coerce").copy()
+            idx = frame.index
+            if idx.tz is not None:
+                idx = idx.tz_convert("Asia/Kolkata").tz_localize(None)
+            frame.index = idx.normalize()
+            return frame[~frame.index.duplicated(keep="last")].sort_index()
+
+        one = normalise(stock_close).rename("stock")
+        two = normalise(index_close).rename("index")
+        pair = pd.concat([one, two], axis=1, join="inner").dropna()
+        if pair.empty or pair.index[-1] != one.index[-1]:
+            return None
+        lookback = min(sessions, len(pair) - 1)
+        if lookback < 3 or (sessions > 5 and lookback < sessions * 0.8):
+            return None
+        start = pair.iloc[-1-lookback]
+        end = pair.iloc[-1]
+        if min(start["stock"], start["index"], end["stock"], end["index"]) <= 0:
+            return None
+        stock_return = (end["stock"] / start["stock"] - 1) * 100
+        benchmark_return = (end["index"] / start["index"] - 1) * 100
+        if not (np.isfinite(stock_return) and np.isfinite(benchmark_return)):
+            return None
+        return (round(float(stock_return), 1), round(float(benchmark_return), 1),
+                round(float(stock_return - benchmark_return), 1))
+    except (TypeError, ValueError, KeyError, IndexError, AttributeError):
+        return None
+
+
+def secondary_trailing_eps(quarters, *, last_price, trailing_pe):
+    """Conservative trailing EPS from four consecutive secondary quarter reports.
+
+    No extrapolation, no gaps, no zero/negative profit. Cross-check against
+    observed reported P/E and price to reject splits and unit/basis mismatches.
+    """
+    from research_filing_evidence import _period
+
+    if not isinstance(quarters, list) or len(quarters) < 4:
+        return None
+    last_four = quarters[-4:]
+    months, eps = [], []
+    for row in last_four:
+        if not isinstance(row, dict):
+            return None
+        stamp = _period(row.get("label"))
+        if not stamp:
+            return None
+        try:
+            value = float(row.get("eps"))
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(value):
+            return None
+        year, month = (int(stamp[:4]), int(stamp[5:7]))
+        months.append(year * 12 + month)
+        eps.append(value)
+    if len(set(months)) != 4 or any(months[i]-months[i-1] != 3 for i in range(1, 4)):
+        return None
+    total = round(sum(eps), 2)
+    try:
+        close, pe = float(last_price), float(trailing_pe)
+    except (TypeError, ValueError):
+        return None
+    if not all(np.isfinite(v) for v in (close, pe, total)) or min(close, pe, total) <= 0:
+        return None
+    if abs(total * pe / close - 1) > 0.15:
+        return None
+    return total
+
+
 def compute_technicals(df: pd.DataFrame, nifty: Optional[pd.DataFrame]) -> dict:
     c, h, l, v = df["Close"], df["High"], df["Low"], df["Volume"]
     n = len(c)
@@ -117,12 +200,10 @@ def compute_technicals(df: pd.DataFrame, nifty: Optional[pd.DataFrame]) -> dict:
         if kk < 3 or (k > 5 and n - 1 < k * 0.8):
             continue
         s_ret = (ltp / float(c.iloc[-1 - kk]) - 1) * 100
-        n_ret = None
-        if nc is not None and len(nc) > kk:
-            n_ret = (float(nc.iloc[-1]) / float(nc.iloc[-1 - kk]) - 1) * 100
-        rets[lab] = {"stock": round(s_ret, 1),
-                     "nifty": round(n_ret, 1) if n_ret is not None else None,
-                     "rel": round(s_ret - n_ret, 1) if n_ret is not None else None}
+        aligned = _date_aligned_returns(c, nc, k)
+        rets[lab] = {"stock": aligned[0] if aligned else round(s_ret, 1),
+                     "nifty": aligned[1] if aligned else None,
+                     "rel": aligned[2] if aligned else None}
     t["returns"] = rets
 
     # ── trend structure ─────────────────────────────────────────────────
@@ -342,10 +423,20 @@ def compute_fundamentals(fund: dict, stm: Optional[dict], extras: dict, peers: L
     fv["de"] = None if fv["fin"] else _de_ratio(fund, last)
     fv["pe"], fv["fwd_pe"], fv["pb"] = fund.get("pe"), fund.get("fwd_pe"), fund.get("pb")
     fv["eps"], fv["div_y"], fv["mcap"], fv["rev_ttm"] = fund.get("eps"), fund.get("div_y"), fund.get("mcap"), fund.get("rev")
+    fv["eps_basis"] = "primary provider" if fv["eps"] is not None else None
+    if fv["eps"] is None:
+        derived_eps = secondary_trailing_eps(
+            quarters, last_price=ltp, trailing_pe=fv["pe"])
+        if derived_eps is not None:
+            fv["eps"] = derived_eps
+            fv["eps_basis"] = "four consecutive secondary-source quarters; price/P-E cross-checked"
 
     # ── valuation vs peers ──────────────────────────────────────────────
-    peer_pe = _median([p.get("pe") for p in peers if (p.get("pe") or 0) > 0])
-    peer_roe = _median([p.get("roe") for p in peers])
+    valid_peer_pe = [p.get("pe") for p in peers if (p.get("pe") or 0) > 0]
+    valid_peer_roe = [p.get("roe") for p in peers if p.get("roe") is not None]
+    # A one-company "median" is misleading and may distort valuation scoring.
+    peer_pe = _median(valid_peer_pe) if len(valid_peer_pe) >= 2 else None
+    peer_roe = _median(valid_peer_roe) if len(valid_peer_roe) >= 2 else None
     fv["peer_pe"], fv["peer_roe"] = _f(peer_pe, 1), _f(peer_roe, 1)
     fv["pe_prem"] = (round((fv["pe"] / peer_pe - 1) * 100, 0)
                      if fv["pe"] and fv["pe"] > 0 and peer_pe else None)
@@ -495,15 +586,15 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
                              not has_statements or not has_valuation_basis)
     fund_missing = fundamental_pillars == 0
     if display_comp >= 75:
-        stance, action = "HIGH-CONVICTION CONSTRUCTIVE", "Accumulate on dips; add on confirmed breakouts above resistance."
+        stance, action = "HIGH-CONVICTION CONSTRUCTIVE", "High relative model score; independently check valuation, downside risk and source evidence."
     elif display_comp >= 62:
-        stance, action = "CONSTRUCTIVE", "Accumulate in tranches near support; avoid chasing extended moves."
+        stance, action = "CONSTRUCTIVE", "Constructive model evidence; source and market confirmation remain necessary."
     elif display_comp >= 48:
-        stance, action = "NEUTRAL / WAIT", "Hold existing exposure; wait for trend or valuation to improve before adding."
+        stance, action = "NEUTRAL / WAIT", "Mixed evidence; review trend and valuation independently before drawing conclusions."
     elif display_comp >= 35:
-        stance, action = "CAUTIOUS", "Avoid fresh longs; protect gains and respect stop-losses."
+        stance, action = "CAUTIOUS", "Weak model evidence; examine trend, financials and downside sensitivity."
     else:
-        stance, action = "NEGATIVE", "Avoid; reduce exposure into strength."
+        stance, action = "NEGATIVE", "Adverse model evidence; independent review of risks is required."
 
     veto = False
     if insufficient_evidence:
@@ -513,8 +604,9 @@ def compute_scores(t: dict, rk: dict, fv: dict) -> dict:
             True,
         )
     elif s["Trend"] is not None and s["Trend"] < 35 and display_comp >= 48:
-        stance, action, veto = "NEUTRAL / WAIT", ("Fundamentals/valuation are not the problem — price trend is. "
-                                                  "Wait for a reclaim of the 50-day EMA before committing."), True
+        stance, action, veto = "NEUTRAL / WAIT", ("Weak price trend overrides the composite score; "
+                                                  "valuation is scored separately and may also be expensive. "
+                                                  "No confirmed technical setup."), True
 
     def hz(vals, hi, lo, names):
         a = _avg([s[k] for k in vals])
@@ -614,9 +706,9 @@ def build_flags(t: dict, rk: dict, fv: dict, sh: List[dict], consensus: Optional
     if t["rsi"] > 75:
         R("Medium", "Overbought momentum", f"RSI(14) at {t['rsi']} — elevated pullback risk after a stretched run.")
     if t["accumulation"] == "ACCUMULATION":
-        pos.append(f"Volume pattern shows accumulation (up-day volume {t['updown_vol']}× down-day volume over 20 sessions).")
+        pos.append(f"Up-day volume was {t['updown_vol']}× down-day volume over 20 sessions; this does not identify institutional buyers.")
     elif t["accumulation"] == "DISTRIBUTION":
-        R("Medium", "Distribution in volume", f"Down-day volume dominates (up/down volume ratio {t['updown_vol']}) over the last 20 sessions.")
+        R("Medium", "Down-day volume dominance", f"Down-day volume dominates (up/down volume ratio {t['updown_vol']}) over the last 20 sessions; investor identity is unknown.")
     # risk
     if rk.get("ann_vol") and rk["ann_vol"] >= 45:
         R("High", "Very high volatility", f"Annualised volatility {rk['ann_vol']}%; worst single day {rk['worst_day']}%.")
@@ -748,7 +840,10 @@ def deterministic_narrative(name: str, sym: str, t: dict, rk: dict, fv: dict, sc
     if r3.get("rel") is not None:
         parts.append(f"Over three months the stock has {'outperformed' if r3['rel'] >= 0 else 'underperformed'} "
                      f"the Nifty 50 by {abs(r3['rel']):.1f} pts.")
-    parts.append(f"Volume flow is classified as <b>{t['accumulation'].lower()}</b>.")
+    parts.append(
+        f"Twenty-session up/down volume ratio is {t.get('updown_vol')}; "
+        "up/down session volume is not evidence of institutional accumulation."
+    )
     if t["supports"] and t["resistances"]:
         parts.append(f"Immediate support lies at ₹{t['supports'][0]['price']:,.2f} ({t['supports'][0]['src']}) and "
                      f"resistance at ₹{t['resistances'][0]['price']:,.2f} ({t['resistances'][0]['src']}).")

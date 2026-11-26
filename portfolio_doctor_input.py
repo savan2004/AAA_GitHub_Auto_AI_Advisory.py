@@ -7,10 +7,14 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 
 MAX_BYTES = 5 * 1024 * 1024
-MAX_STOCKS = 5
+MAX_STOCKS = 10
 MAX_EXPANDED_BYTES = 20 * 1024 * 1024
 MAX_ROWS = 10000
 MAX_COLUMNS = 64
+
+# Exact, exchange-confirmed name -> NSE trading-symbol correction.
+# Do not fuzzy match company names or modify an explicitly BSE-qualified ticker.
+_NSE_CANONICAL_ALIASES = {"SBI": "SBIN"}
 
 
 class InputRejected(ValueError):
@@ -69,9 +73,13 @@ def _csv_rows(payload):
     rows = []
     for line in text.splitlines():
         if line.strip():
-            rows.append(_cells(line))
-            if len(rows) > MAX_STOCKS + 1:
-                raise InputRejected()
+            cells = _cells(line)
+            # Empty editable CSV template slots contain two commas; ignore
+            # these, but reject incomplete nonblank customer holdings rows.
+            if any(str(cell).strip() for cell in cells):
+                rows.append(cells)
+                if len(rows) > MAX_STOCKS + 1:
+                    raise InputRejected()
     return rows
 
 
@@ -126,7 +134,7 @@ def _positive(value):
 
 
 def decode_holdings(filename, payload):
-    """Return exactly 1–5 unique canonical Indian symbols, quantities and costs."""
+    """Return 1–10 unique canonical Indian symbols, quantities and costs."""
     if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_BYTES:
         raise InputRejected()
     name = str(filename or "").lower()
@@ -159,6 +167,8 @@ def decode_holdings(filename, payload):
                 raise InputRejected()
             symbol = raw_symbol.removeprefix("NSE:").removeprefix("BSE:")
             symbol = symbol.removesuffix(".NS").removesuffix(".BO")
+            if not bse:
+                symbol = _NSE_CANONICAL_ALIASES.get(symbol, symbol)
             if not re.fullmatch(r"[A-Z0-9&-]{2,20}", symbol) or symbol in seen:
                 raise InputRejected()
             item = {"symbol": symbol, "qty": _positive(row[1]), "buy": _positive(row[2])}
@@ -174,3 +184,12 @@ def decode_holdings(filename, payload):
     except Exception:
         # Third-party XML/ZIP/CSV errors never escape with customer content.
         raise InputRejected() from None
+
+
+def blank_doctor_csv_template():
+    """Public, downloadable 10-row customer template; absolutely no holdings.
+
+    CSV is constructed in memory, not stored on Render. Blank rows are valid
+    for the editing template but not accepted as actual submitted holdings.
+    """
+    return ("Symbol,Qty,Buy Price\r\n" + ",,\r\n" * MAX_STOCKS).encode("utf-8")

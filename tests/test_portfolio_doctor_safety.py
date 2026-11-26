@@ -19,6 +19,31 @@ class InputTests(unittest.TestCase):
         self.assertEqual(out[1]["qty"], 8)
         self.assertEqual(out[2]["buy"], 340)
 
+    def test_exact_sbi_alias_normalizes_to_exchange_verified_sbin(self):
+        for symbol in ("SBI", "sbi", "NSE:SBI", "SBI.NS"):
+            with self.subTest(symbol=symbol):
+                raw = f"{symbol} 1 100".encode("ascii")
+                parsed = doctor.parse_holdings("typed_holdings.csv", raw)
+                self.assertEqual(parsed[0]["symbol"], "SBIN")
+                self.assertNotEqual(parsed[0].get("exchange"), "BSE")
+        # Already correct NSE symbols stay unchanged.
+        self.assertEqual(doctor.parse_holdings(
+            "typed_holdings.csv", b"SBIN 1 100")[0]["symbol"], "SBIN")
+        # Preserve explicit exchange identity, not a fuzzy rename.
+        bse = doctor.parse_holdings("typed_holdings.csv", b"BSE:SBI 1 100")
+        self.assertEqual(bse[0]["symbol"], "SBI")
+        self.assertEqual(bse[0]["exchange"], "BSE")
+        # Same company appearing under both labels must not be double-counted.
+        with self.assertRaises(doctor.PortfolioDoctorError) as err:
+            doctor.parse_holdings("typed_holdings.csv",
+                                  b"SBI 1 100\\nSBIN 2 200".replace(b"\\n", b"\n"))
+        self.assertEqual(err.exception.code, "BAD_INPUT")
+
+    def test_all_other_symbols_remain_exact_and_unmodified(self):
+        raw = b"EXIDEIND 1 100\\nAXISBANK 2 200".replace(b"\\n", b"\n")
+        actual = doctor.parse_holdings("typed_holdings.csv", raw)
+        self.assertEqual([h["symbol"] for h in actual], ["EXIDEIND", "AXISBANK"])
+
     def test_csv_headers_and_x_ticker(self):
         raw = b"Symbol,Qty,Buy Price\nAXISBANK,10,900\nEXIDEIND,3,200"
         out = doctor.parse_holdings("account.csv", raw)
@@ -32,7 +57,7 @@ class InputTests(unittest.TestCase):
             b"SAMPLEA -2 120",
             b"SAMPLEA 7 nan",
             b"SAMPLEA 7 0",
-            b"SAMPLEA 7 120\nSAMPLEB 8 230\nSAMPLEC 9 340\nA 1 2\nB 2 3\nC 3 4",
+            b"\n".join("SAMPLE{:02d} 1 100".format(i).encode() for i in range(11)),
             b"Symbol,Qty,Buy Price\nINVALID? 2 3",
         ]
         for raw in cases:

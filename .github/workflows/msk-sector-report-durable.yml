@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install PDF reader for genuine structural validation
-        run: pip install 'pypdf>=5,<7'
+        run: pip install 'pypdf>=5,<7' 'reportlab>=4,<5'
       - name: Compile real sector pipeline
         run: python -m py_compile sector_report.py sector_report_snapshot.py tests/test_sector_report_snapshot.py
       - name: Verify stale and corrupt reports cannot be cached

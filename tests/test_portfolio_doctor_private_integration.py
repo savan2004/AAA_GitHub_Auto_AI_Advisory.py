@@ -73,11 +73,55 @@ class SessionTests(unittest.TestCase):
             "_doctor_allowed": lambda m: True,
             "_builder_form": {},
             "portfolio_builder_form_text": lambda m, text: False,
+            "_send_doctor_csv_template": lambda uid: True,
             "safe_send": lambda uid, msg: notices.append((uid, msg)),
             "bot": bot, "executor": executor or SimpleNamespace(submit=lambda fn: fn()),
             "logger": logging.getLogger("doctor-private-test"),
         }
         return env, bot, notices
+
+    def test_doctor_switch_cancels_old_builder_and_routes_real_holdings(self):
+        env, _, notices = self._env(user_ids=())
+        env["_builder_form"][101] = {"step": "stocks", "until": time.monotonic() + 180}
+        env["_portfolio_audit_mode"][101] = time.monotonic() + 180
+        start = _function("portfolio_doctor_start", env)
+        start(_message(101, "🩺 Portfolio Doctor"))
+        self.assertEqual(env["_builder_form"], {})
+        self.assertEqual(env["_portfolio_audit_mode"], {})
+        self.assertGreater(env["_portfolio_doctor_waiting"][101], time.monotonic())
+        self.assertIn("Portfolio Doctor", notices[-1][1])
+
+        raw = "Sbin 100 609\nBhel 124 90\nVedl 68 120"
+        routed, builder_calls = [], []
+        env.update(
+            API_RATE_LIMITER=SimpleNamespace(is_allowed=lambda _uid: True),
+            portfolio_doctor_text=lambda m: routed.append(m.text),
+            portfolio_builder_form_text=lambda m, text: builder_calls.append(text) or True,
+        )
+        handler = _function("handle_text", env)
+        handler(_message(101, raw))
+        self.assertEqual(routed, [raw])
+        self.assertEqual(builder_calls, [])
+
+        # This screenshot input is a 3-column holdings format, not percentages.
+        parsed = doctor.parse_holdings("typed_holdings.csv", raw.encode("utf-8"))
+        self.assertEqual([(r["symbol"], r["qty"], r["buy"]) for r in parsed],
+                         [("SBIN", 100.0, 609.0), ("BHEL", 124.0, 90.0),
+                          ("VEDL", 68.0, 120.0)])
+
+    def test_doctor_has_priority_even_if_legacy_builder_state_survives(self):
+        env, _, notices = self._env()
+        routed, legacy = [], []
+        env["_builder_form"][101] = {"step": "stocks", "until": time.monotonic() + 180}
+        env.update(
+            API_RATE_LIMITER=SimpleNamespace(is_allowed=lambda _uid: True),
+            portfolio_doctor_text=lambda m: routed.append(m.text),
+            portfolio_builder_form_text=lambda m, text: legacy.append(text) or True,
+        )
+        _function("handle_text", env)(_message(101, "SBIN 100 609"))
+        self.assertEqual(routed, ["SBIN 100 609"])
+        self.assertEqual(legacy, [])
+        self.assertEqual(notices, [])
 
     def test_in_memory_pdf_delivery_clears_state_after_success(self):
         env, bot, notices = self._env()
@@ -169,6 +213,23 @@ class SessionTests(unittest.TestCase):
         self.assertIn("already running", notices[-1][1])
         self.assertEqual(routed, [101])
 
+
+    def test_retired_capital_settings_never_reach_stock_search(self):
+        for text in ("CAPITAL=1000000 HORIZON=36", "HORIZON=36",
+                     "RISK=low", "CASH=20000", "STOCKCAP=35", "SECTORCAP=45"):
+            with self.subTest(text=text):
+                env, bot, notices = self._env(user_ids=())
+                env["API_RATE_LIMITER"] = SimpleNamespace(is_allowed=lambda uid: True)
+                env["state"] = SimpleNamespace(get=lambda uid: "analysis")
+                env["re"] = __import__("re")
+                env["os"] = os
+                env["send_symbol_menu"] = lambda *args: self.fail("retired inputs searched")
+                env["executor"] = SimpleNamespace(
+                    submit=lambda *args: self.fail("retired inputs submitted"))
+                _function("handle_text", env)(_message(101, text))
+                self.assertTrue(notices)
+                self.assertIn("retired Builder settings", notices[-1][1])
+                self.assertFalse(bot.sent)
 
     def test_missing_owner_session_recovers_only_authorized_private_tester(self):
         """A restart-lost session must not redirect the owner's five holdings."""

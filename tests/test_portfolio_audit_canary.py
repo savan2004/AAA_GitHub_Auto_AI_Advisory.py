@@ -108,6 +108,7 @@ class PortfolioAuditCanaryTests(unittest.TestCase):
             "_portfolio_doctor_running": set(),
             "_portfolio_doctor_waiting": {},
             "_portfolio_audit_mode": {},
+            "_builder_form": {},
             "_doctor_allowed": lambda m: m.chat.type == "private",
             "safe_send": lambda uid, msg: notices.append((uid, msg)),
         }

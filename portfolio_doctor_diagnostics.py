@@ -94,3 +94,54 @@ def industry_exposure(holdings, peer_evidence):
          for name, amount in buckets.items()),
         key=lambda item: (-item["weight"], item["industry"]),
     )
+
+
+def weighted_secondary_portfolio_ratios(holdings, companies):
+    """Value-weighted arithmetic P/E and ROE, with explicit evidence coverage.
+
+    Unreconciled Screener.in figures are secondary observations only. This is
+    neither aggregate earnings-yield valuation nor verified issuer accounts.
+    Do not manufacture a number when a company's metric is absent.
+    """
+    from decimal import InvalidOperation
+
+    by_symbol = {row.get("symbol"): row for row in (companies or [])
+                 if isinstance(row, dict) and row.get("symbol")}
+    total = sum((_decimal(row["value"]) for row in holdings), Decimal("0"))
+    if not total.is_finite() or total <= 0:
+        return {"pe": None, "roe": None}
+    result = {}
+    for key, label in (("pe", "P/E"), ("roe", "ROE")):
+        observed = Decimal("0")
+        covered = Decimal("0")
+        count = 0
+        for holding in holdings:
+            value = _decimal(holding["value"])
+            company = by_symbol.get(holding["symbol"], {})
+            finance = company.get("financial") or {}
+            if (finance.get("status") != "SECONDARY"
+                    or finance.get("source") != "Screener.in (secondary)"
+                    or finance.get("issuer_verified") is not False):
+                continue
+            metrics = finance.get("metrics") or []
+            matching = [m for m in metrics if isinstance(m, dict)
+                        and m.get("label") == label]
+            if len(matching) != 1:
+                continue
+            try:
+                figure = _decimal(matching[0]["value"])
+            except (InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+                continue
+            if (not figure.is_finite() or (key == "pe" and figure <= 0)
+                    or abs(figure) > 10000):
+                continue
+            observed += value * figure
+            covered += value
+            count += 1
+        result[key] = ({"value": float(observed / covered),
+                        "coverage_pct": float(100 * covered / total),
+                        "holdings_covered": count,
+                        "holdings_total": len(holdings),
+                        "basis": "Value-weighted arithmetic; secondary, issuer-unreconciled"}
+                       if covered > 0 else None)
+    return result

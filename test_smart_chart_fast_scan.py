@@ -124,6 +124,108 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertEqual((attempted, valid, whole), (85, 1, 85))
         self.assertEqual([len(x) for x in batches], [40, 40, 5])
 
+    def test_individual_recovery_only_shortlisted_stock_then_rescores(self):
+        universe = [("SBIN.NS","SBI"),("ASIANPAINT.NS","Asian Paints"),("TCS.NS","TCS")]
+        fresh = self.history()
+        stale = fresh.copy()
+        stale.iloc[-1] = np.nan
+        calls = []
+        def download(**kw):
+            return pd.concat({s:stale for s in kw["tickers"]},axis=1)
+        # Higher preliminary rank for Asian Paints from the synthetic history.
+        stale_by_symbol = {s:stale.copy() for s,_ in universe}
+        stale_by_symbol["ASIANPAINT.NS"].iloc[-2,3] = 500.
+        def bulk(**kw):
+            return pd.concat({s:stale_by_symbol[s] for s in kw["tickers"]},axis=1)
+        def individual(sym):
+            calls.append(sym)
+            return fresh
+        def score(sym,name,*,df):
+            self.assertEqual(str(df.index[-1].date()),self.SESSION)
+            return {"sym":sym,"close":float(df.Close.iloc[-1]),"score":13,"setup_confirmed":True}
+        result = choose_auto_chart(universe,download=bulk,scorer=score,session_key=self.SESSION,
+            scan_all=True,min_score=12,require_confirmed_setup=True,individual_history=individual,
+            shortlist_rank=lambda frame,session:float(frame.Close.iloc[-2]))
+        self.assertEqual(calls,["ASIANPAINT.NS"])
+        self.assertEqual(result[0]["sym"],"ASIANPAINT.NS")
+        self.assertEqual(result[0]["_verified_count"],1)
+        # A shortlist cannot be emitted if the individual history is still stale.
+        with self.assertRaises(ChartScanUnavailable):
+            choose_auto_chart(universe,download=download,scorer=score,session_key=self.SESSION,
+                scan_all=True,min_score=12,individual_history=lambda sym:stale,
+                shortlist_rank=lambda frame,session:10.)
+
+    def test_bounded_raw_shortlist_reuses_downloaded_history_before_individual(self):
+        universe = [(f"STOCK{i}.NS",str(i)) for i in range(60)]
+        fresh = self.history()
+        stale = fresh.copy()
+        stale.iloc[-1] = np.nan
+        downloaded = []
+        recovery_calls = []
+        def bulk(**kwargs):
+            self.assertIs(kwargs["auto_adjust"],False)
+            downloaded.extend(kwargs["tickers"])
+            frames = {}
+            for sym in kwargs["tickers"]:
+                frame = stale.copy()
+                frame.iloc[-2,3] = float(sym[5:-3])
+                frames[sym] = frame
+            return pd.concat(frames,axis=1)
+        def recover(sym,frame):
+            recovery_calls.append(sym)
+            return fresh if sym == "STOCK59.NS" else None
+        def scorer(sym,name,*,df):
+            self.assertEqual(str(df.index[-1].date()),self.SESSION)
+            return {"sym":sym,"close":float(df.Close.iloc[-1]),"score":14,"setup_confirmed":True}
+        result = choose_auto_chart(universe,download=bulk,scorer=scorer,
+            session_key=self.SESSION,scan_all=True,min_score=12,require_confirmed_setup=True,
+            individual_history=lambda sym:self.fail("Already recovered"),
+            shortlist_rank=lambda frame,session:float(frame.Close.iloc[-2]),
+            shortlist_recovery=recover)
+        self.assertEqual(result[0]["sym"],"STOCK59.NS")
+        self.assertEqual(len(downloaded),60)
+        self.assertEqual(len(recovery_calls),24)
+        self.assertEqual(recovery_calls[0],"STOCK59.NS")
+        self.assertEqual(result[0]["_verified_count"],1)
+
+    def test_full_scan_missing_completed_bars_uses_bounded_dated_retry(self):
+        good = self.history()
+        stale = good.copy()
+        stale.iloc[-1] = np.nan
+        universe = [(f"STOCK{i}.NS", f"Stock {i}") for i in range(85)]
+        calls = []
+        def fetch(*, tickers, **kwargs):
+            calls.append((list(tickers), kwargs))
+            data = good if "start" in kwargs else stale
+            return pd.concat({sym: data for sym in tickers}, axis=1)
+        def score(sym, name, *, df):
+            self.assertEqual(str(df.index[-1].date()), self.SESSION)
+            return {"sym": sym, "score": 13, "close": float(df["Close"].iloc[-1]),
+                    "setup_confirmed": True}
+        winner, attempted, valid, whole = choose_auto_chart(
+            universe, download=fetch, scorer=score, session_key=self.SESSION,
+            min_score=12, require_confirmed_setup=True, scan_all=True)
+        self.assertEqual((attempted, valid, whole), (85, 3, 85))
+        self.assertEqual([len(c[0]) for c in calls], [40, 40, 5, 3])
+        self.assertEqual(calls[-1][1]["end"], "2026-11-14")
+        self.assertFalse(calls[-1][1]["threads"])
+        self.assertEqual(calls[-1][1]["timeout"], 6)
+
+    def test_full_scan_still_missing_after_retry_fails_closed(self):
+        stale = self.history("2026-11-12")
+        calls = []
+        def fetch(*, tickers, **kwargs):
+            calls.append(list(tickers))
+            return pd.concat({sym: stale for sym in tickers}, axis=1)
+        def score(*args, **kwargs):
+            self.fail("Stale history must never reach scorer")
+        with self.assertRaisesRegex(ChartScanUnavailable, "No verified current-session histories"):
+            choose_auto_chart(
+                [("SBIN.NS", "SBI"), ("TCS.NS", "TCS")],
+                download=fetch, scorer=score, session_key=self.SESSION,
+                min_score=12, require_confirmed_setup=True, scan_all=True)
+        self.assertEqual(len(calls), 2)  # initial and one bounded retry
+
     def test_no_confirmed_twelve_plus_setup_returns_unavailable(self):
         good = self.history()
         def weak(sym, name, *, df):
@@ -142,7 +244,7 @@ class FastSmartChartTests(unittest.TestCase):
                   "gen_smart_stock_chart.py").read_text(encoding="utf-8")
         self.assertIn('color=price_col, va="center", zorder=8)', source)
         self.assertIn('header.text(0.17, 0.58, f"₹{last_close:,.2f}"', source)
-        self.assertIn('sa.text(0.5, 0.968, "AUTOAI ADVISORY  v7.0"', source)
+        self.assertIn('sa.text(0.5, 0.968, "AUTOAI ADVISORY  v8.0"', source)
         self.assertIn('"WAIT — No Setup"', source)
         self.assertIn('"NO TRADE ZONE"', source)
         self.assertNotIn('"⏸  NO TRADE ZONE"', source)

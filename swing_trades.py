@@ -152,15 +152,24 @@ def _naive(idx):
 def _prep(df, nifty_close):
     """OHLCV DataFrame -> dict of numpy arrays, or (None, reason)."""
     try:
-        d = df[["Open", "High", "Low", "Close", "Volume"]].apply(pd.to_numeric, errors="coerce").dropna()
-    except Exception:
-        return None, "bad columns"
-    d.index = _naive(d.index)
-    d = d[~d.index.duplicated(keep="last")].sort_index()
-    d = d[(d.Close > 0) & (d.High >= d.Low) & (d.Volume >= 0)]
-    d = _drop_forming(d)
+        d = df[["Open", "High", "Low", "Close", "Volume"]].apply(
+            pd.to_numeric, errors="coerce")
+        d.index = _naive(d.index)
+        d = d[~d.index.duplicated(keep="last")].sort_index()
+        d = _drop_forming(d)
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return None, "bad columns or dates"
     if len(d) < 130:
         return None, "short history (<130 bars)"
+    # A bad historical candle must not silently disappear and alter rolling
+    # indicators, 20-day volume, ATR stops or the apparent breakout session.
+    finite = np.isfinite(d[["Open", "High", "Low", "Close", "Volume"]]).all(axis=1)
+    valid = (finite & (d["Open"] > 0) & (d["Low"] > 0)
+             & (d["Close"] > 0) & (d["Volume"] >= 0)
+             & (d["High"] >= d[["Open", "Close", "Low"]].max(axis=1))
+             & (d["Low"] <= d[["Open", "Close", "High"]].min(axis=1)))
+    if not bool(valid.all()):
+        return None, "invalid daily OHLCV"
     o, h, l, c, v = d.Open, d.High, d.Low, d.Close, d.Volume
 
     ema20 = c.ewm(span=20, adjust=False).mean()
@@ -512,17 +521,23 @@ def _verified_swing_row(p):
         return None
 
 
-def _swing_watch_candidates(data, thr):
-    """At most five real qualified technical setups; never pad with examples."""
-    rows = data.get("rows") or []
-    longs = _pick(rows, "LONG", thr["LONG"], MAX_LONG)
-    shorts = _pick(rows, "SHORT", thr["SHORT"], MAX_SHORT)
-    ranked = sorted(longs + shorts,
-                    key=lambda r: (-r["score"], -r["rr1"], r["sym"]))
-    picks, used_symbols, per_sector = [], set(), Counter()
-    for candidate in ranked:
+def _swing_watch_candidates(data, thr, max_stop=4.0):
+    """Only qualifying setups may enter ranking (SAFE default: 4% risk)."""
+    eligible = []
+    for candidate in data.get("rows") or []:
         row = _verified_swing_row(candidate)
-        if row is None or row["sym"] in used_symbols:
+        if row is None or row["risk_pct"] > max_stop:
+            continue
+        eligible.append(row)
+    # Reject over-limit candidates BEFORE side quotas and sector ranking,
+    # so another genuinely eligible stock can fill the released slot.
+    longs = _pick(eligible, "LONG", thr["LONG"], MAX_LONG)
+    shorts = _pick(eligible, "SHORT", thr["SHORT"], MAX_SHORT)
+    ranked = sorted(longs + shorts,
+                    key=lambda r: (-r["score"], -r["rr1_calc"], r["sym"]))
+    picks, used_symbols, per_sector = [], set(), Counter()
+    for row in ranked:
+        if row["sym"] in used_symbols:
             continue
         sector = str(row.get("sector") or "Unclassified")
         if per_sector[sector] >= MAX_PER_SECTOR:
@@ -561,7 +576,7 @@ def _format_swing_watchlist(mode, data, thr):
     icon = "🛡️" if safe else "🚀"
     max_stop = 4.0 if safe else 7.0
     account_risk = 1.0 if safe else 0.5
-    picks = _swing_watch_candidates(data, thr)
+    picks = _swing_watch_candidates(data, thr, max_stop=max_stop)
     title = "SWING WATCHLIST" if safe else "MOMENTUM WATCHLIST"
     lines = [
         f"{icon} <b>MSK SWING TRADE | {label}</b>",

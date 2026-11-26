@@ -77,12 +77,13 @@ class SwingInvestorTests(unittest.TestCase):
         }
         self.scope = scope_for(data=self.data)
 
-    def test_safe_has_real_dynamic_levels_five_cards_and_wait(self):
+    def test_safe_has_real_dynamic_levels_four_eligible_cards_and_wait(self):
         report = self.scope["get_swing_trades"]("conservative")
         self.assertIn("MSK SWING TRADE | SAFE", report)
-        self.assertIn("TOP 5 SWING WATCHLIST | 5/5 qualified", report)
-        self.assertEqual(report.count(" | Score "), 5)
-        self.assertEqual(report.count("Status: WAIT"), 5)
+        self.assertIn("TOP 5 SWING WATCHLIST | 4/5 qualified", report)
+        self.assertEqual(report.count(" | Score "), 4)
+        self.assertEqual(report.count("Status: WAIT"), 4)
+        self.assertNotIn("METAL", report)  # SHORT risk 5% exceeds SAFE 4% cap
         self.assertIn("Entry watch zone: ₹", report)
         self.assertIn("SL: ₹", report)
         self.assertIn("T1: ₹", report)
@@ -161,13 +162,42 @@ class SwingInvestorTests(unittest.TestCase):
             self.assertNotIn("Entry watch zone", report)
             self.assertNotIn("Status: BUY", report)
 
-    def test_high_stop_risk_stays_wait_and_marked_as_blocked(self):
+    def test_high_stop_risk_is_excluded_not_counted_qualified(self):
         data = dict(self.data, rows=[
             candidate("HIGHSTOP", score=10, price=1000, risk=8, atr=80)])
         report = scope_for(data=data)["get_swing_trades"]("conservative")
-        self.assertIn("stop risk 8.0% exceeds 4% limit", report)
-        self.assertIn("Status: WAIT", report)
-        self.assertNotIn("Status: BUY", report)
+        self.assertIn("0/5 qualified", report)
+        self.assertIn("NO QUALIFYING SETUP TODAY", report)
+        self.assertNotIn("HIGHSTOP", report)
+        self.assertNotIn("Entry watch zone", report)
+
+    def test_profile_caps_apply_at_boundary(self):
+        data = dict(self.data, rows=[
+            candidate("SAFEAT", score=9, risk=4, atr=60, sector="Banking"),
+            candidate("SAFEOVER", score=8, risk=4.01, atr=60, sector="Technology"),
+            candidate("AGGRAT", score=8, risk=7, atr=60, sector="Materials"),
+            candidate("AGGROVER", score=9, risk=7.01, atr=60, sector="Pharma"),
+        ])
+        safe = scope_for(data=data)["get_swing_trades"]("conservative")
+        aggressive = scope_for(data=data)["get_swing_trades"]("aggressive")
+        self.assertIn("1/5 qualified", safe)
+        self.assertIn("SAFEAT", safe)
+        for excluded in ("SAFEOVER", "AGGRAT", "AGGROVER"):
+            self.assertNotIn(excluded, safe)
+        self.assertIn("3/5 qualified", aggressive)
+        for included in ("SAFEAT", "SAFEOVER", "AGGRAT"):
+            self.assertIn(included, aggressive)
+        self.assertNotIn("AGGROVER", aggressive)
+
+    def test_lower_ranked_stock_backfills_over_limit_top_pick(self):
+        data = dict(self.data, rows=[
+            candidate("HIGH9", score=10, risk=8, sector="Banking", atr=80),
+            candidate("LOW8", score=8, risk=3, sector="Banking"),
+        ])
+        safe = scope_for(data=data)["get_swing_trades"]("conservative")
+        self.assertIn("1/5 qualified", safe)
+        self.assertNotIn("HIGH9", safe)
+        self.assertIn("LOW8", safe)
 
     def test_actual_reward_risk_not_forced_to_simulated_two_to_one(self):
         data = dict(self.data, rows=[candidate(

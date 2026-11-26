@@ -1,5 +1,6 @@
 """Four-page, evidence-bounded private Portfolio Doctor PDF. RAM only."""
 import io
+import math
 from datetime import datetime, timedelta, timezone
 
 from reportlab.lib.colors import HexColor
@@ -7,7 +8,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
-from portfolio_doctor_diagnostics import diagnose_portfolio, industry_exposure
+from portfolio_doctor_diagnostics import (diagnose_portfolio, industry_exposure,
+                                          weighted_secondary_portfolio_ratios)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 NAVY = HexColor('#132338')
@@ -21,6 +23,72 @@ RED = HexColor('#BD4040')
 WHITE = HexColor('#FFFFFF')
 
 
+
+def _trend_label(close, ema20, ema50=None, ema200=None):
+    """Describe independently verified price/EMA relationships; no trade signal."""
+    try:
+        close, ema20 = float(close), float(ema20)
+        if not all(math.isfinite(v) and v > 0 for v in (close, ema20)):
+            return "Trend levels unavailable"
+        def position(short, level):
+            if level is None:
+                return None
+            value = float(level)
+            if not math.isfinite(value) or value <= 0:
+                return None
+            return ("above " if close > value else "below " if close < value else "at ") + short
+        e50 = float(ema50) if ema50 is not None else None
+        if e50 is not None and math.isfinite(e50) and e50 > 0:
+            if close > ema20 and close > e50:
+                parts = ["Above EMA20/50"]
+            elif close < ema20 and close < e50:
+                parts = ["Below EMA20/50"]
+            else:
+                parts = [position("EMA20", ema20).capitalize(),
+                         position("EMA50", e50)]
+            parts.append("EMA20" + (">" if ema20 > e50 else "<" if ema20 < e50 else "=") + "EMA50")
+        else:
+            parts = [position("EMA20", ema20).capitalize()]
+        e200 = position("EMA200", ema200)
+        if e200 is not None:
+            parts.append("Close " + e200)
+        return " | ".join(parts)
+    except (TypeError, ValueError, OverflowError):
+        return "Trend levels unavailable"
+
+
+def _financial_metric_label(metric):
+    """A null or 'not supplied' period is not a financial reporting date."""
+    base = '{}: {:,.2f} {}'.format(metric["label"], metric["value"], metric["unit"])
+    period = metric.get("period")
+    if period is None or str(period).strip().lower() in (
+            "", "not supplied", "unknown", "none", "null", "n/a"):
+        return base
+    return base + " ({})".format(str(period).strip()[:22])
+
+
+def _flag_reason(row, details):
+    """Compact, factual explanation adjacent to each technical flag badge."""
+    weight = float(details.get("weight", row["weight"]))
+    close, ema20 = float(row["close"]), float(row["ema20"])
+    ema50 = row.get("ema50")
+    if weight > 40:
+        return "HIGH FLAG: {:.1f}% concentration".format(weight)
+    if weight > 25 and ema50 is not None and close < float(ema50):
+        return "HIGH FLAG: {:.1f}% concentration; below EMA50".format(weight)
+    if row.get("rsi14") is not None and float(row["rsi14"]) > 70:
+        return "WATCH FLAG: RSI14 > 70"
+    if weight > 25:
+        return "WATCH FLAG: {:.1f}% concentration".format(weight)
+    if ema50 is not None and close < float(ema50):
+        return "WATCH FLAG: Close < EMA50"
+    if close < ema20:
+        return "WATCH FLAG: Close < EMA20"
+    if float(row["pnl"]) < 0:
+        return "WATCH FLAG: Unrealised loss"
+    return "No threshold flag"
+
+
 def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 1024 * 1024):
     """Use already validated records; never fetch market data or persist files."""
     peers = peers or {}
@@ -30,8 +98,9 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     # Only currently submitted verified symbols may produce company pages.
     held = {row["symbol"] for row in holdings}
     companies = [row for row in (companies or []) if isinstance(row, dict)
-                 and row.get("symbol") in held][:5]
-    total_pages = (5 if has_risk else 4) + len(companies)
+                 and row.get("symbol") in held][:10]
+    holding_pages = (len(holdings) + 4) // 5
+    total_pages = (5 if has_risk else 4) + holding_pages - 1 + len(companies)
     out = io.BytesIO()
     pdf = canvas.Canvas(out, pagesize=A4, pageCompression=1)
     w, h = A4
@@ -91,6 +160,15 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             pdf.setFont(font, size)
             pdf.drawString(left, y, item)
             y -= leading
+
+
+    def risk_bullet(value, *, color=INK):
+        """Identical dot geometry, indentation and baseline for every risk row."""
+        nonlocal y
+        pdf.setFillColor(color)
+        pdf.circle(left + 4, y + 2.5, 1.7, stroke=0, fill=1)
+        text_fit(value, left + 14, y, right - left - 15, 8.5, color=color)
+        y -= 19
 
     def subhead(value):
         nonlocal y
@@ -155,46 +233,88 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                      150, 8, True, MUTED)
         y = bot_y - 35
 
-    def company_price_chart(details):
+    def company_price_chart(details, *, average_buy):
+        """Four verified series and a price-axis-aware dotted cost reference."""
         nonlocal y
         dates = details.get('chart_dates') or []
-        rows = [(details.get('chart') or [], BLUE),
-                (details.get('chart_ema20') or [], HexColor('#CB8B22')),
-                (details.get('chart_ema50') or [], HexColor('#8066AE'))]
-        valid = [(series, color) for series, color in rows
-                 if len(series) == len(dates) and len(series) >= 2]
+        rows = [
+            ('Close', details.get('chart') or [], BLUE, None),
+            ('EMA20', details.get('chart_ema20') or [], HexColor('#CB8B22'), None),
+            ('EMA50', details.get('chart_ema50') or [], HexColor('#8066AE'), None),
+            ('EMA200', details.get('chart_ema200') or [], MUTED, [4, 3]),
+        ]
+        valid = [(name, series, color, dash) for name, series, color, dash in rows
+                 if len(series) == len(dates) and len(series) >= 2
+                 and all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0
+                         for v in series)]
         if not valid:
             line('Chart unavailable: insufficient dated historical candles.', 8)
             return
-        points = [float(v) for series, _ in valid for v in series]
+        points = [float(v) for _, series, _, _ in valid for v in series]
         low, high = min(points), max(points)
-        gap = max(0.01, (high-low)*.08)
+        gap = max(0.01, (high - low) * .08)
         low -= gap
         high += gap
-        x0, x1 = left+48, right-10
-        ytop, ybottom = y-28, y-145
+        try:
+            buy = float(average_buy)
+            if not math.isfinite(buy) or buy <= 0:
+                buy = None
+        except (ValueError, TypeError, OverflowError):
+            buy = None
+        # Expand for a nearby cost line but do NOT compress a useful trend
+        # chart by 50% for a remote historic cost. Mark out-of-range lines.
+        if buy is not None:
+            span = max(.01, high - low)
+            if low - .20 * span <= buy <= high + .20 * span:
+                low, high = min(low, buy - gap), max(high, buy + gap)
+        x0, x1 = left + 48, right - 10
+        ytop, ybottom = y - 28, y - 145
         pdf.setFillColor(PANEL)
         pdf.roundRect(x0, ybottom, x1 - x0, ytop - ybottom, 4, stroke=0, fill=1)
         for gridline in range(4):
-            yy = ybottom + (ytop-ybottom)*gridline/3
+            yy = ybottom + (ytop - ybottom) * gridline / 3
             pdf.setStrokeColor(BORDER)
             pdf.setLineWidth(.55)
             pdf.line(x0, yy, x1, yy)
-            text_fit('{:,.0f}'.format(low+(high-low)*gridline/3),
-                     left, yy-3, 43, 7, color=MUTED)
-        for values, color in valid:
+            text_fit('{:,.0f}'.format(low + (high - low) * gridline / 3),
+                     left, yy - 3, 43, 7, color=MUTED)
+
+        for name, values, color, dash in valid:
             pdf.setStrokeColor(color)
-            pdf.setLineWidth(1.45)
+            pdf.setLineWidth(1.3 if name == 'EMA200' else 1.45)
+            pdf.setDash(dash or [])
             last = None
             for j, v in enumerate(values):
-                pt = (x0+(x1-x0)*j/(len(values)-1),
-                      ybottom+(ytop-ybottom)*(float(v)-low)/(high-low))
-                if last:
-                    pdf.line(last[0],last[1],pt[0],pt[1])
+                pt = (x0 + (x1 - x0) * j / (len(values) - 1),
+                      ybottom + (ytop - ybottom) * (float(v) - low) / (high - low))
+                if last is not None:
+                    pdf.line(last[0], last[1], pt[0], pt[1])
                 last = pt
-        text_fit('Close', x0, ytop+10, 50, 8, True, BLUE)
-        text_fit('EMA20', x0+72, ytop+10, 60, 8, True, HexColor('#CB8B22'))
-        text_fit('EMA50', x0+157, ytop+10, 60, 8, True, HexColor('#8066AE'))
+            pdf.setDash([])
+
+        if buy is not None:
+            offscale = ' (above range)' if buy > high else (
+                ' (below range)' if buy < low else '')
+            yy = (ytop - 2 if buy > high else ybottom + 2 if buy < low else
+                  ybottom + (ytop - ybottom) * (buy - low) / (high - low))
+            pdf.setStrokeColor(HexColor('#7A5960'))
+            pdf.setLineWidth(.9)
+            pdf.setDash([1.5, 3])
+            pdf.line(x0, yy, x1, yy)
+            pdf.setDash([])
+            buy_label = 'Avg buy Rs {:,.0f}{}'.format(buy, offscale)
+        else:
+            buy_label = 'Avg buy unavailable'
+
+        for offset, title, color in (
+                (0, 'Close', BLUE), (60, 'EMA20', HexColor('#CB8B22')),
+                (123, 'EMA50', HexColor('#8066AE')),
+                (190, 'EMA200' if any(z[0] == 'EMA200' for z in valid) else
+                 'EMA200 N/A', MUTED)):
+            text_fit(title, x0 + offset, ytop + 10, 61, 7.8, True, color)
+        text_fit(buy_label, x0 + 286, ytop + 10, x1 - x0 - 286,
+                 7.1, True, HexColor('#7A5960'))
+
         volume = details.get('chart_volume') or []
         axis_y = ybottom
         if len(volume) == len(dates) and max(volume) > 0:
@@ -207,9 +327,9 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                 pdf.rect(x0 + i * step - bar_width / 2, axis_y, bar_width,
                          26 * value / tallest, stroke=0, fill=1)
             text_fit('Volume', left, axis_y + 16, 43, 7, True, MUTED)
-        text_fit(dates[0], x0, axis_y-15, 96, 7, color=MUTED)
-        text_fit(dates[len(dates)//2], (x0+x1)/2-20, axis_y-15, 96, 7, color=MUTED)
-        text_fit(dates[-1], x1-60, axis_y-15, 60, 7, color=MUTED)
+        text_fit(dates[0], x0, axis_y - 15, 96, 7, color=MUTED)
+        text_fit(dates[len(dates)//2], (x0+x1)/2-20, axis_y - 15, 96, 7, color=MUTED)
+        text_fit(dates[-1], x1-75, axis_y-15, 75, 7, color=MUTED)
         y = axis_y-24
 
     invested = sum(row['invested'] for row in holdings)
@@ -218,6 +338,8 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     top = sorted(holdings, key=lambda r: (-r['weight'], r['symbol']))
     insights = diagnose_portfolio(holdings)
     exposures = industry_exposure(holdings, peers)
+    ratios = weighted_secondary_portfolio_ratios(holdings, companies)
+    by_company = {entry['symbol']: entry for entry in companies}
     stamp = datetime.now(IST).strftime('%d %b %Y %H:%M IST')
 
     # PAGE 1: meaningful quantitative summary; all source data is verified.
@@ -238,6 +360,17 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     line('Invested: {}   Last-close value: {}'.format(money(invested), money(value)), 9)
     line('Unrealised P/L: Rs {:+,.2f} ({:+.2f}%)'.format(pnl, 100 * pnl / invested), 10, True, 18,
          GREEN if pnl >= 0 else RED)
+    if companies:
+        subhead('VALUE-WEIGHTED PORTFOLIO FUNDAMENTALS (SECONDARY)')
+        pe_ratio, roe_ratio = ratios.get('pe'), ratios.get('roe')
+        pe = '{:.2f}x'.format(pe_ratio['value']) if pe_ratio else 'Unavailable'
+        roe = '{:.2f}%'.format(roe_ratio['value']) if roe_ratio else 'Unavailable'
+        line('Portfolio P/E: {} | Portfolio ROE: {}'.format(pe, roe), 9.2, True)
+        pe_coverage = '{:.1f}%'.format(pe_ratio['coverage_pct']) if pe_ratio else '0%'
+        roe_coverage = '{:.1f}%'.format(roe_ratio['coverage_pct']) if roe_ratio else '0%'
+        line('Value coverage: P/E {} | ROE {}. Arithmetic weighting.'.format(
+            pe_coverage, roe_coverage), 8)
+        line('Screener.in secondary; issuer financials NOT reconciled.', 8, color=MUTED)
     subhead('EXECUTIVE DIAGNOSIS (PRICE-BASED)')
     biggest = top[0]
     line('{} positions | Largest: {} at {:.1f}% of value.'.format(
@@ -245,9 +378,8 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     if biggest['weight'] > 40:
         line('Concentration warning: a single holding exceeds the illustrative 40% threshold.', 9,
              color=RED)
-    line('No numerical health score or personalised target allocation without verified suitability data.', 8,
-         color=MUTED)
     subhead('CURRENT HOLDING ALLOCATION')
+    bar_step = 22 if len(top) > 5 else 37
     for row in top:
         pct = float(row['weight'])
         text_fit(row['symbol'], left, y - 1, 86, 9, True, INK)
@@ -258,10 +390,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         pdf.roundRect(bar_x, y - 3, max(0.1, bar_w * min(100, pct) / 100), 10, 3, stroke=0, fill=1)
         text_fit('{:.1f}%'.format(pct), bar_x + bar_w + 12, y - 1, 64, 9, True,
                  RED if pct > 40 else NAVY)
-        y -= 37
-    subhead('DATA BOUNDARIES')
-    line('Values use your current quantity and average buy cost, plus a verified dated close.', 8)
-    line('Price-based allocation is not a recommendation to sell or add any security.', 8)
+        y -= bar_step
     subhead('WHAT IS DRIVING RESULTS')
     line('Top 2 holdings: {:.1f}% of value | Effective stock count: {:.2f} (from {} holdings).'.format(
         insights['top_two_pct'], insights['effective_positions'], len(holdings)), 8.5)
@@ -272,47 +401,52 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             '{} (+{})'.format(gain[0], money(gain[1])) if gain else 'None',
             '{} ({})'.format(loss[0], money(loss[1])) if loss else 'None'), 8.2)
 
-    # PAGE 2: all 1-5 holdings, with full precision and technical observations.
-    new_page('02 / HOLDING-WISE VERIFIED RESULTS', 'Every holding contributes to the portfolio summary; technicals use completed daily prices.')
-    for row in holdings:
-        card_top = y
-        pdf.setFillColor(PANEL)
-        pdf.roundRect(left - 2, card_top - 103, right - left + 4, 110, 7, stroke=0, fill=1)
-        label = '{} | Qty {:g} | Average purchase {}'.format(
-            row['symbol'], row['qty'], money(row['buy']))
-        line(label, 10, True, 17, NAVY)
-        line('Last close Rs {:,.2f} ({}) | Value {}'.format(
-            row['close'], row['date'], money(row['value'])), 9, leading=16)
-        line('P/L Rs {:+,.2f} ({:+.2f}%) | Portfolio weight {:.1f}%'.format(
-            row['pnl'], row['pnl_pct'], row['weight']), 9, leading=15,
-            color=GREEN if row['pnl'] >= 0 else RED)
-        ema50 = row.get('ema50')
-        trend = ('Above EMA20 and EMA50' if ema50 and row['close'] > row['ema20'] > ema50
-                 else 'Below EMA20 and EMA50' if ema50 and row['close'] < row['ema20'] < ema50
-                 else 'Mixed / insufficient trend confirmation')
-        rsi = 'N/A' if row['rsi14'] is None else '{:.1f}'.format(row['rsi14'])
-        line('EMA20 Rs {:.2f} | EMA50 {} | RSI14 {} | {}'.format(
-            row['ema20'], 'Rs {:.2f}'.format(ema50) if ema50 else 'N/A',
-            rsi, trend), 8, leading=13)
-        movement = row.get('return20')
-        twenty = ' | 20-session change {:+.1f}%'.format(movement) if movement is not None else ''
-        line('20-close high Rs {:.2f} | low Rs {:.2f}{}'.format(
-            row['high20'], row['low20'], twenty), 8, leading=14)
-        if str(row.get('price_source') or '').startswith('BSE:'):
-            line('Source: BSE exact ticker; INR completed daily OHLCV.', 7.5, leading=12)
-        elif str(row.get('price_source') or '').startswith('NSE EOD'):
-            line('Source: NSE official daily file; historical OHLC cross-checked.', 7.5, leading=12)
-        # Colored review flag communicates *which rule fired*, not a trade.
-        priority = insights['by_symbol'][row['symbol']]['priority']
-        label_color = RED if priority == 'HIGH FLAGS' else (BLUE if priority == 'WATCH FLAGS' else GREEN)
-        pdf.setFillColor(label_color)
-        pdf.roundRect(right - 120, card_top - 100, 111, 16, 4, stroke=0, fill=1)
-        text_fit(priority, right - 115, card_top - 96, 100, 7, True, WHITE)
-        y = min(card_top - 118, y - 7)
-    line('Price status is evidence, not a HOLD / ADD / EXIT instruction.', 8, color=MUTED)
+    # Five holding cards per page, no omitted stocks.
+    for part in range(holding_pages):
+        new_page('{:02d} / HOLDING-WISE VERIFIED RESULTS{}'.format(
+            2 + part, ' (CONTINUED)' if part else ''),
+            'Every holding contributes to the portfolio summary; technicals use completed daily prices.')
+        for row in holdings[part * 5:(part + 1) * 5]:
+            card_top = y
+            pdf.setFillColor(PANEL)
+            pdf.roundRect(left - 2, card_top - 103, right - left + 4, 110, 7, stroke=0, fill=1)
+            label = '{} | Qty {:g} | Average purchase {}'.format(
+                row['symbol'], row['qty'], money(row['buy']))
+            line(label, 10, True, 17, NAVY)
+            line('Last close Rs {:,.2f} ({}) | Value {}'.format(
+                row['close'], row['date'], money(row['value'])), 9, leading=16)
+            line('P/L Rs {:+,.2f} ({:+.2f}%) | Portfolio weight {:.1f}%'.format(
+                row['pnl'], row['pnl_pct'], row['weight']), 9, leading=15,
+                color=GREEN if row['pnl'] >= 0 else RED)
+            ema50 = row.get('ema50')
+            ema200 = (by_company.get(row['symbol']) or {}).get('ema200')
+            trend = _trend_label(row['close'], row['ema20'], ema50, ema200)
+            rsi = 'N/A' if row['rsi14'] is None else '{:.1f}'.format(row['rsi14'])
+            line('EMA20 Rs {:.2f} | EMA50 {} | RSI14 {}'.format(
+                row['ema20'], 'Rs {:.2f}'.format(ema50) if ema50 is not None else 'N/A',
+                rsi), 8, leading=13)
+            line('Trend: ' + trend, 7.8, leading=12)
+            movement = row.get('return20')
+            twenty = ' | 20-session change {:+.1f}%'.format(movement) if movement is not None else ''
+            line('20-close high Rs {:.2f} | low Rs {:.2f}{}'.format(
+                row['high20'], row['low20'], twenty), 8, leading=14)
+            if str(row.get('price_source') or '').startswith('BSE:'):
+                line('Source: BSE exact ticker; INR completed daily OHLCV.', 7.5, leading=12)
+            elif str(row.get('price_source') or '').startswith('NSE EOD'):
+                line('Source: NSE official daily file; historical OHLC cross-checked.', 7.5, leading=12)
+            # Colored review flag communicates *which rule fired*, not a trade.
+            diagnostic = insights['by_symbol'][row['symbol']]
+            priority = diagnostic['priority']
+            label_color = RED if priority == 'HIGH FLAGS' else (BLUE if priority == 'WATCH FLAGS' else GREEN)
+            text_fit(_flag_reason(row, diagnostic), left + 3, card_top - 96,
+                     right - left - 139, 7.8, True, label_color)
+            pdf.setFillColor(label_color)
+            pdf.roundRect(right - 120, card_top - 100, 111, 16, 4, stroke=0, fill=1)
+            text_fit(priority, right - 115, card_top - 96, 100, 7, True, WHITE)
+            y = min(card_top - 118, y - 7)
 
     # PAGE 3: sample coverage, vetted signals and non-vetted comparisons separately.
-    new_page('03 / NIFTY 500 INDUSTRY-PEER WATCHLIST',
+    new_page('{:02d} / NIFTY 500 INDUSTRY-PEER WATCHLIST'.format(2 + holding_pages),
              'Same-industry comparisons require official index membership and verified dated histories.')
     subhead('WHAT WAS ACTUALLY SCREENED')
     if peers.get('status') == 'SCREENED':
@@ -322,26 +456,50 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             peers['qualified']), 9)
         if exposures:
             subhead('OFFICIAL INDUSTRY EXPOSURE (NOT TARGET ALLOCATION)')
-            for group in exposures:
+            for group in exposures[:5]:
                 line('{} | {:.1f}% of current value'.format(
                     group['industry'], group['weight']), 8, leading=14)
+        if len(exposures) > 5:
+            line('{} additional industries omitted from page summary.'.format(
+                len(exposures) - 5), 8, color=MUTED)
+        coverage = peers.get('industry_coverage') or []
+        if coverage:
+            subhead('SCREEN COVERAGE BY CURRENT PORTFOLIO EXPOSURE')
+            for group in coverage[:5]:
+                line('{} | attempted {}/{} | fresh {} | qualified {}'.format(
+                    group['industry'], group['attempted'], group['pool'],
+                    group['fresh'], group['qualified']), 8, leading=13)
         subhead('QUALIFIED TECHNICAL WATCHLIST')
         candidates = peers.get('candidates') or []
         if candidates:
-            for row in candidates[:12]:
+            for row in candidates[:6]:
                 line('{} | {} | Technical score {:.0f}/100 | Close {} ({})'.format(
                     row['symbol'], row['industry'], float(row['score']),
                     money(row['close']), row['date']), 8.3, leading=13)
         else:
-            line('No candidate passed all fresh-price, trend, liquidity and risk gates.', 9)
+            line('No candidate passed the full moderate technical screen.', 9)
+            counts = peers.get('failure_counts') or {}
+            if counts:
+                line('Gate failures: {} moderate rules, {} missing/stale OHLCV, {} short histories.'.format(
+                    counts.get('MODERATE_TREND_MOMENTUM_LIQUIDITY_RISK', 0),
+                    counts.get('MISSING_OR_STALE_COMPLETED_OHLCV', 0),
+                    counts.get('INSUFFICIENT_51_SESSION_HISTORY', 0)), 8, color=RED)
+                if any(k not in ('MODERATE_TREND_MOMENTUM_LIQUIDITY_RISK',
+                                 'MISSING_OR_STALE_COMPLETED_OHLCV',
+                                 'INSUFFICIENT_51_SESSION_HISTORY') for k in counts):
+                    line('Other failures: unverified scores, dates or technical inputs.',
+                         7.8, color=RED)
         subhead('OTHER VERIFIED INDUSTRY COMPARISONS (NOT QUALIFIED)')
         comparisons = peers.get('comparisons') or []
         names = {c['symbol'] for c in candidates}
         shown = 0
+        # Preserve page 3 at one page even when 12+ stocks qualify; the
+        # matched peer evidence remains available to the appendix pages.
+        visible_limit = max(0, (5 if len(holdings) > 5 else 11) - min(len(candidates), 6))
         for row in comparisons:
             if row.get('symbol') in names:
                 continue
-            if shown >= 8:
+            if shown >= visible_limit:
                 break
             line('{} | {} | Close {} | 20D {:+.1f}% | RSI14 {:.1f} ({})'.format(
                 row['symbol'], row['industry'], money(row['close']),
@@ -355,12 +513,13 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     else:
         line('Unavailable: official membership, same-industry peers or fresh data not verified.', 9)
     subhead('INTERPRETING THE SHORTLIST')
-    line('Sample screen only; NOT a ranking of all 500 companies.', 8)
+    line('NOT a ranking of all 500 companies; {} of {} same-industry peers attempted.'.format(
+        peers.get('screened', 0), peers.get('pool', 0)), 8)
     line('Technical strength is not fundamental quality, suitability or expected returns.', 8)
     line('Candidates are for further research; no automatic replacement or order.', 8)
 
     # PAGE 4: explicit evidence gaps, risk and scope.
-    new_page('04 / RISK, SOURCES AND LIMITS',
+    new_page('{:02d} / RISK, SOURCES AND LIMITS'.format(3 + holding_pages),
              'Risk flags are deterministic historical-price observations, never trade instructions.')
     subhead('CONCENTRATION SENSITIVITY (HYPOTHETICAL ONLY)')
     line('Top 2 holdings = {:.1f}% of value; effective stock count {:.2f}.'.format(
@@ -379,8 +538,12 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             flags.append('{} RSI above 70; extended/overbought conditions'.format(row['symbol']))
         if row.get('ema50') and row['close'] < row['ema50']:
             flags.append('{} close below its 50-session exponential moving average'.format(row['symbol']))
-    for message in flags or ['No threshold flags from this limited price-only check.']:
-        line('- ' + message, 8.8, leading=19, color=RED if 'concentration' in message else INK)
+    shown_flags = flags[:8] if len(holdings) > 5 else flags
+    for message in shown_flags or ['No threshold flags from this limited price-only check.']:
+        risk_bullet(message, color=RED if 'concentration' in message else INK)
+    if len(flags) > len(shown_flags):
+        line('{} additional threshold observations; review all holding cards.'.format(
+            len(flags) - len(shown_flags)), 8, color=MUTED)
     subhead('LIMITS & DISCLAIMER')
     for message in (
         'Last close is not a tradeable live price. Prices can change after the last session.',
@@ -399,12 +562,19 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
     subhead('DATA QUALITY CHECKLIST')
     line('Market prices: dated completed OHLCV, checked for missing/stale/nonfinite values.', 8)
     line('Constituents: official Nifty 500 membership verified before peer comparison.', 8)
-    line('Company fundamentals, valuation, governance: NOT VERIFIED in the basic report.', 8)
+    secondary = sum(1 for item in companies
+                    if (item.get('financial') or {}).get('status') == 'SECONDARY')
+    if secondary:
+        line('Fundamentals: Screener.in secondary data for {}/{} holdings; filings NOT reconciled.'.format(
+            secondary, len(holdings)), 8)
+    else:
+        line('Fundamentals: issuer and secondary financial facts unavailable.', 8)
+    line('Company governance: NOT independently verified.', 8)
     line('Sector target weights, tax impact, health score and replacements: NOT CALCULATED.', 8)
     line('Privacy: PDF created in memory for one request; MSK does not store holdings.', 8)
 
     if has_risk:
-        new_page('05 / HISTORICAL RISK & NIFTY 50',
+        new_page('{:02d} / HISTORICAL RISK & NIFTY 50'.format(4 + holding_pages),
                  "Reconstructed value of today's holdings; not your actual trade history.")
         subhead('VERIFIED HISTORY COVERAGE')
         line('All {} holdings | {} common observed sessions | {} to {}.'.format(
@@ -451,8 +621,8 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         symbol = company['symbol']
         held_row = by_symbol[symbol]
         new_page('{:02d} / COMPANY RESEARCH: {}'.format(
-            (5 if has_risk else 4)+index+1, symbol),
-            'Dated technical facts and limited secondary financial evidence; not a trade opinion.')
+            (5 if has_risk else 4)+holding_pages-1+index+1, symbol),
+            'Completed-session technical facts and dated secondary research coverage.')
         line('Exchange close {}: {} | Current portfolio weight {:.2f}%'.format(
             company['date'], money(held_row['close']), held_row['weight']), 9, True)
         line('Industry: {}'.format(company.get('industry') or 'Not verified'), 8)
@@ -485,7 +655,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
                 '{:.2f}% of price'.format(atr) if atr is not None else 'Unavailable',
                 '{:.2f}x'.format(volume) if volume is not None else 'Unavailable'), 8.5)
             subhead('DAILY PRICE, MOVING AVERAGES AND VOLUME')
-            company_price_chart(company)
+            company_price_chart(company, average_buy=held_row['buy'])
         subhead('FUNDAMENTAL AND VALUATION FACTS')
         finance = company.get('financial') or {}
         if finance.get('status') == 'SECONDARY':
@@ -498,38 +668,53 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             # overflowing the hard 10-page private-report envelope.
             for j in range(0, len(metrics), 2):
                 first = metrics[j]
-                text_fit('{}: {:,.2f} {} ({})'.format(
-                    first['label'], first['value'], first['unit'], first['period']),
-                    left, y, 245, 7.8)
+                text_fit(_financial_metric_label(first), left, y, 245, 7.8)
                 if j + 1 < len(metrics):
                     second = metrics[j+1]
-                    text_fit('{}: {:,.2f} {} ({})'.format(
-                        second['label'], second['value'], second['unit'], second['period']),
-                        left+260, y, 245, 7.8)
+                    text_fit(_financial_metric_label(second), left+260, y, 245, 7.8)
                 y -= 13
         else:
             line('Not verified: no usable dated comparable financial statement facts.', 8)
             line('P/E, sales, profit, margins, cash flow and debt are not guessed.', 8)
         window = company.get('return_window')
-        matched_peers = [
-            peer for peer in (peers.get('candidates') or [])
-            if held_row.get('exchange') != 'BSE' and window
-            and peer.get('return_window') == window
-            and peer.get('industry') == company.get('industry')
-            and peer.get('return20') is not None
-        ][:2]
+        # Page 3 gives two different buckets: qualified candidates AND
+        # verified-but-not-qualified comparisons. Carry both into each dossier.
+        peer_records = (list(peers.get('candidates') or []) +
+                        list(peers.get('comparisons') or []))
+        matched_peers, used_symbols = [], set()
+        for peer in peer_records:
+            if (held_row.get('exchange') == 'BSE' or company.get('status') != 'VERIFIED'
+                    or not isinstance(window, (tuple, list)) or len(window) != 21
+                    or not isinstance(peer, dict) or peer.get('symbol') in used_symbols
+                    or peer.get('symbol') == symbol
+                    or peer.get('return_window') != window
+                    or peer.get('date') != company.get('date')
+                    or peer.get('industry') != company.get('industry')
+                    or not isinstance(peer.get('return20'), (int, float))
+                    or not math.isfinite(peer['return20'])):
+                continue
+            matched_peers.append(peer)
+            used_symbols.add(peer['symbol'])
+            if len(matched_peers) >= 2:
+                break
         subhead('SAME-INDUSTRY MOMENTUM COMPARISON')
         if matched_peers:
-            line('20-session return on matching trading dates | {}: {:+.1f}%'.format(
+            line('20-session return on identical 21 trading dates | {}: {:+.1f}%'.format(
                 symbol, company['return20']), 8, bold=True, leading=12)
             for peer in matched_peers:
-                line('{}: {:+.1f}% | Difference: {:+.1f} pp | Screen score {:.0f}/100'.format(
-                    peer['symbol'], peer['return20'], peer['return20'] - company['return20'],
-                    peer['score']), 8, leading=12)
-            line('Technical comparison only. Peer valuation and financial quality are unverified.',
+                score = peer.get('score')
+                if isinstance(score, (int, float)) and math.isfinite(score):
+                    provenance = 'Qualified moderate screen ({:.0f}/100)'.format(score)
+                else:
+                    provenance = 'Verified comparison; NOT qualified'
+                line('{}: {:+.1f}% | Difference {:+.1f} pp | {}'.format(
+                    peer['symbol'], peer['return20'],
+                    peer['return20'] - company['return20'], provenance),
+                    7.7, leading=12)
+            line('Peer valuation and financial quality are unverified.',
                  8, color=MUTED, leading=12)
         else:
-            line('No screened peer with matching industry and all 21 closing dates.', 8)
+            line('No verified same-industry peer shares all 21 closing dates.', 8)
             line('Peer valuation and financial quality are unverified.', 8, color=MUTED)
     footer()
     pdf.save()
