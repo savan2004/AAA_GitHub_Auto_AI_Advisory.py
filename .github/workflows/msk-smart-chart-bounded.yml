@@ -104,3 +104,12 @@ jobs:
           _validate(image, metas[0], str(expected_completed_session()))
           print("MSK_CHART_V8_REAL_PNG_VALIDATED bytes=%d" % len(image))
           PY
+      - name: Retain verified PNG for private visual QA
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-smart-chart-real-png
+          path: |
+            output/chart_*.png
+            /tmp/msk-chart-real.txt
+          if-no-files-found: error
+          retention-days: 1

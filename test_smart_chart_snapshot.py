@@ -43,6 +43,20 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
         self.assertIn("52/60", caption)
         self.assertIn("SL: ₹", caption)
 
+    def test_nifty100_real_scan_metadata_contract(self):
+        source = (Path(__file__).resolve().parent /
+                  "gen_smart_stock_chart.py").read_text(encoding="utf-8")
+        self.assertIn('f"Sample: {valid}/{sampled} qualifying NSE setups from {universe_size}; "', source)
+        meta = ("AXISBANK.NS|AXISBANK|BUY|+14/20|1418.10|0.00|0.00|0.00|"
+                "Sample: 6/100 qualifying NSE setups from 100; partial-universe scan; "
+                "Setup: Trend confirmation: higher highs/lows + weekly trend; "
+                "EOD 2026-11-25; Chart V8")
+        match = store._validate(self.image, meta, "2026-11-25")
+        self.assertEqual(match.group(11), "100")
+        self.assertIn("OBSERVATION ONLY", store.format_chart_meta(meta, "2026-11-25"))
+        with self.assertRaises(ValueError):
+            store._validate(self.image, meta, "2026-11-26")
+
     def test_reject_stale_metadata_and_corrupt_png(self):
         with self.assertRaisesRegex(ValueError, "session"):
             store._validate(self.image, META, "2026-11-12")

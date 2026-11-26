@@ -684,7 +684,7 @@ else:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
         sys.exit(1)
     winner["scope_note"] = (
-        f"Nifty 100: {valid}/{sampled} qualifying setups from {universe_size}; "
+        f"Sample: {valid}/{sampled} qualifying NSE setups from {universe_size}; "
         f"{'full-universe scan' if winner['_verified_count'] == universe_size else 'partial-universe scan'}; "
         f"Setup: {winner['reason']}; EOD {session_key}")
     print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key} score={winner['score']}/20")
