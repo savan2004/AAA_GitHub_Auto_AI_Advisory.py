@@ -272,12 +272,37 @@ class SessionSafety(unittest.TestCase):
             "logger": Mock(), "_state": {}, "_state_lock": threading.Lock(),
         })
         secondary = types.SimpleNamespace(
-            fetch_tej_history=lambda sym, *_args: frame.iloc[:-1] if sym in ("TEST0", "TEST1") else frame)
+            fetch_tej_history=lambda sym, *_args: frame.iloc[:-1] if sym in ("TEST0", "TEST1", "TEST2") else frame)
         with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
                 patch.dict(sys.modules, {"overnight_index_sources": secondary}):
             with self.assertRaisesRegex(ValueError, "valid stock histories"):
                 ns["run_scan"](save_snapshot=False)
         analyzed.assert_not_called()
+
+    def test_exact_80_percent_secondary_coverage_excludes_stale_symbols(self):
+        symbols = [f"TEST{i}" for i in range(10)]
+        frame = series()
+        analyzed = Mock(return_value=None)
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols},
+            "bulk_history": lambda *_args, **_kwargs: {},
+            "index_history": lambda *_args: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": analyzed,
+            "market_regime": lambda *_args: {},
+            "logger": Mock(), "_state": {}, "_state_lock": threading.Lock(),
+        })
+        stale = {"TEST0", "TEST1"}
+        secondary = types.SimpleNamespace(
+            fetch_tej_history=lambda sym, *_args: frame.iloc[:-1] if sym in stale else frame)
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
+                patch.dict(sys.modules, {"overnight_index_sources": secondary}):
+            result = ns["run_scan"](save_snapshot=False)
+        self.assertEqual(result["coverage"], .8)
+        self.assertEqual(result["downloaded"], 8)
+        self.assertEqual(result["secondary_count"], 8)
+        self.assertEqual([call.args[0] for call in analyzed.call_args_list],
+                         symbols[2:])
 
     def test_secondary_provider_submits_at_most_eight_histories_per_batch(self):
         from concurrent.futures import ThreadPoolExecutor
