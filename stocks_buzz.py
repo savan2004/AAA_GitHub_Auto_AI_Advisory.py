@@ -396,6 +396,17 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None, *,
     valid_count = 0
     primary_downloaded = 0
     secondary_count = 0
+    archive_count = 0
+    allow_secondary = os.getenv("MSK_BUZZ_ALLOW_SECONDARY_EOD", "").lower() == "true"
+    archive = None
+    if allow_secondary:
+        from smart_chart_eod_recovery import ArchiveRecovery
+        from portfolio_doctor_live import doctor_trading_session, PortfolioDoctorError
+        try:
+            if doctor_trading_session(completed):
+                archive = ArchiveRecovery((sym + ".NS" for sym in symbols), completed)
+        except PortfolioDoctorError:
+            logger.info("Stocks Buzz exchange calendar unavailable for %s", completed)
     missing: List[str] = []
     breakouts, watch, liquid, extended = [], [], 0, 0
     extended_setups = []
@@ -413,7 +424,12 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None, *,
                                  progress_cb=batch_progress)
             primary_downloaded += len(batch)
             for sym in part:
-                clean = _completed_session_frame(batch.get(sym), completed)
+                frame = batch.get(sym)
+                clean = _completed_session_frame(frame, completed)
+                if clean is None and archive is not None and frame is not None and len(frame) >= MIN_BARS - 1:
+                    clean = _completed_session_frame(archive(sym + ".NS", frame), completed)
+                    if clean is not None:
+                        archive_count += 1
                 if clean is None:
                     missing.append(sym)
                     continue
@@ -426,8 +442,7 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None, *,
         coverage = valid_count / len(symbols) if symbols else 0.0
         # This existing optional fallback is restricted to the scheduled
         # after-close worker. A Telegram button cannot enable it by default.
-        if (coverage < MIN_SCAN_COVERAGE and
-                os.getenv("MSK_BUZZ_ALLOW_SECONDARY_EOD", "").lower() == "true"):
+        if coverage < MIN_SCAN_COVERAGE and allow_secondary:
             from concurrent.futures import ThreadPoolExecutor
             from overnight_index_sources import fetch_tej_history
 
@@ -487,8 +502,9 @@ def run_scan(progress_cb: Optional[Callable[[int, int], None]] = None, *,
         "source": uni.get("source", "?"), "note": uni.get("note"),
         "degraded": uni.get("degraded", False),
         "secondary_count": secondary_count,
-        "price_sources": ("Yahoo EOD + TejHQ verified raw NSE EOD" if secondary_count
-                          else "Yahoo EOD"),
+        "archive_recovered": archive_count,
+        "price_sources": "Yahoo EOD" + (" + NSE final Bhavcopy" if archive_count else "")
+                         + (" + TejHQ verified raw NSE EOD" if secondary_count else ""),
         "breakouts": breakouts, "watch": watch, "extended": extended,
         "extended_setups": extended_setups,
         "regime": market_regime(nifty),

@@ -258,6 +258,31 @@ class SessionSafety(unittest.TestCase):
 
 
 
+    def test_scheduled_scan_reuses_prior_history_and_enforces_minimum_after_stitch(self):
+        frame = series()
+        symbols = ["A", "B", "C", "D", "E"]
+        primary = {sym: frame for sym in symbols[:3]}
+        primary.update(D=frame.iloc[:-1], E=frame.iloc[:-1])
+        archive = Mock(side_effect=[frame, frame.tail(20)])
+        ns = load_functions("_completed_session_frame", "run_scan", globals_={
+            "get_universe": lambda: {"symbols": symbols},
+            "bulk_history": lambda *_a, **_k: primary,
+            "index_history": lambda *_a: frame,
+            "_last_completed_session": lambda: date(2026, 11, 13),
+            "analyze_stock": lambda *_a: None,
+            "market_regime": lambda *_a: {}, "logger": Mock(),
+            "_state": {}, "_state_lock": threading.Lock(),
+        })
+        with patch.dict(os.environ, {"MSK_BUZZ_ALLOW_SECONDARY_EOD": "true"}), \
+                patch("smart_chart_eod_recovery.ArchiveRecovery", return_value=archive) as build:
+            result = ns["run_scan"](save_snapshot=False)
+        build.assert_called_once()
+        self.assertEqual([call.args[0] for call in archive.call_args_list], ["D.NS", "E.NS"])
+        self.assertEqual(result["downloaded"], 4)
+        self.assertEqual(result["archive_recovered"], 1)
+        self.assertEqual(result["secondary_count"], 0)
+        self.assertIn("NSE final Bhavcopy", result["price_sources"])
+
     def test_stale_secondary_history_does_not_count_or_rank(self):
         symbols = [f"TEST{i}" for i in range(10)]
         frame = series()
