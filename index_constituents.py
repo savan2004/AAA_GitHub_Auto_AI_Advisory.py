@@ -31,6 +31,7 @@ INDEXES = {
 }
 _HOSTS = ("https://nsearchives.nseindia.com/content/indices/",
           "https://archives.nseindia.com/content/indices/")
+_NIFTY100_OFFICIAL_MIRROR = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
 _TTL = 4 * 60 * 60
 _MAX_STALE = 7 * 24 * 60 * 60
 _LOCK = threading.Lock()
@@ -80,15 +81,22 @@ def get_index_universe(profile):
         if entry and now - entry["ts"] < _TTL:
             return dict(entry["value"], cached=True)
     meta = INDEXES[profile]
-    for host in _HOSTS:
+    urls = [host + meta["filename"] for host in _HOSTS]
+    # Same official Nifty 100 mirror already used by Smart Chart.
+    if profile == "conservative":
+        urls.append(_NIFTY100_OFFICIAL_MIRROR)
+    for url in urls:
         try:
             res = requests.get(
-                host + meta["filename"], timeout=(5, 12),
-                headers={"User-Agent": "Mozilla/5.0 (compatible; MSKIndexReader/1.0)",
+                url, timeout=(5, 12),
+                headers={"User-Agent": ("Mozilla/5.0" if url == _NIFTY100_OFFICIAL_MIRROR
+                                        else "Mozilla/5.0 (compatible; MSKIndexReader/1.0)"),
                          "Accept": "text/csv,text/plain,*/*"},
             )
             res.raise_for_status()
             symbols, industries = parse_constituents(res.content, profile)
+            if url == _NIFTY100_OFFICIAL_MIRROR and len(symbols) != meta["count"]:
+                raise ValueError("Official mirror constituent count mismatch")
             value = {
                 "name": meta["name"], "cap": meta["cap"], "symbols": symbols,
                 "industries": industries,
