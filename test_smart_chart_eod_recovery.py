@@ -119,7 +119,7 @@ class RecoveryTests(unittest.TestCase):
             calls.append(a)
             return {}
         partial = history()
-        partial.loc[pd.Timestamp(DAY),"Open"] = 103.
+        partial.loc[pd.Timestamp(DAY),"Open"] = -1.
         recover = ArchiveRecovery([SYMBOL],DAY,fetch=forbidden)
         self.assertIsNone(recover(SYMBOL,partial))
         self.assertIsNone(recover(SYMBOL,history().drop(pd.DatetimeIndex(["2026-11-23", "2026-11-20", "2026-11-19"]))))
@@ -141,7 +141,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual([t.date() for t in result.index[-3:]], [older, PREVIOUS, DAY])
             self.assertEqual(result.Close.iloc[-1], 102.)
         self.assertEqual(calls, [DAY, PREVIOUS, older])
-        frame.loc[pd.Timestamp(PREVIOUS), "Close"] = 101.
+        frame.loc[pd.Timestamp(PREVIOUS), "Close"] = 100.
         self.assertIsNone(recover(SYMBOL, frame))
 
     def test_three_missing_sessions_keep_date_and_full_overlap_contract(self):
@@ -156,6 +156,17 @@ class RecoveryTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual([stamp.date() for stamp in result.index[-4:]], days)
         self.assertEqual(calls, list(reversed(days)))
+
+    def test_partial_observed_prices_must_match_official_candle(self):
+        def fetch(day, wanted):
+            return {SYMBOL: (official(102.) if day == DAY else dict(official(), High=102.))}
+        recover = ArchiveRecovery([SYMBOL], DAY, fetch=fetch)
+        frame = history()
+        frame.loc[pd.Timestamp(DAY), ["Open", "High", "Low", "Close"]] = [100., 103., 99., 102.]
+        self.assertIsNotNone(recover(SYMBOL, frame))
+        frame.loc[pd.Timestamp(DAY), "Open"] = 101.
+        self.assertIsNone(recover(SYMBOL, frame))
+        self.assertIn("latest_price_mismatch_Open", recover.rejection_reasons)
 
     def test_adjusted_price_mismatch_and_volume_mismatch_have_exact_reasons(self):
         from smart_chart_eod_recovery import stitch_final_day, prior_history

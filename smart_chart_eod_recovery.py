@@ -126,20 +126,23 @@ def prior_history(frame, expected, previous, *, diagnostics=None):
         if not data.index.is_unique:
             return None
         target = data.loc[data.index == pd.Timestamp(expected)]
-        # A fully or partially observed price candle is never overwritten.
-        # Yahoo bulk downloads may fill volume with zero even though all
-        # four prices are missing. A positive observed volume must match
-        # the final exchange volume exactly before the day is recovered.
-        reported_volume = None
+        # Partial provider candles may be completed only when each observed
+        # field agrees with the exact-session official row. Zero volume on
+        # an otherwise empty provider placeholder is not an observation.
+        observed = {}
         if len(target):
             row = target.iloc[0]
-            if not row[["Open","High","Low","Close"]].isna().all():
-                return None
-            if not pd.isna(row["Volume"]):
-                volume = _number(row["Volume"])
-                if volume < 0:
+            for field in REQUIRED:
+                if pd.isna(row[field]):
+                    continue
+                value = _number(row[field])
+                if value < 0 or (field != "Volume" and value == 0):
                     return None
-                reported_volume = volume if volume > 0 else None
+                observed[field] = value
+            if len(observed) == len(REQUIRED):
+                return None
+            if observed == {"Volume": 0}:
+                observed.clear()
         data = data.loc[data.index <= pd.Timestamp(previous)]
         # Valid older bars do not need a calendar lookup. The existing
         # reviewed calendar covers 2026 only; never discard an unknown-year gap.
@@ -155,7 +158,7 @@ def prior_history(frame, expected, previous, *, diagnostics=None):
         data = data.drop(index=drop)
         verified = validated_daily_history(data, previous.isoformat(), diagnostics=diagnostics)
         if verified is not None:
-            verified.attrs["target_placeholder_volume"] = reported_volume
+            verified.attrs["target_observed_fields"] = observed
         return verified
     except (ValueError, TypeError, KeyError, AttributeError, RuntimeError):
         return None
@@ -178,9 +181,12 @@ def stitch_final_day(primary, previous, expected, prior, latest, *, diagnostics=
             return reject("prior_price_mismatch_" + "_".join(differences))
         if float(last["Volume"]) != float(prior["Volume"]):
             return reject("prior_volume_mismatch")
-        reported_volume = primary.attrs.get("target_placeholder_volume")
-        if reported_volume is not None and reported_volume != float(latest["Volume"]):
-            return reject("latest_volume_mismatch")
+        for field, value in primary.attrs.get("target_observed_fields", {}).items():
+            if field == "Volume":
+                if value != float(latest[field]):
+                    return reject("latest_volume_mismatch")
+            elif not _matches(value, latest[field]):
+                return reject("latest_price_mismatch_" + field)
         if not _matches(prior["Close"], latest["PreviousClose"]):
             return reject("previous_close_continuity")
         if abs(latest["Open"]/latest["PreviousClose"] - 1) > .40:
@@ -193,7 +199,7 @@ def stitch_final_day(primary, previous, expected, prior, latest, *, diagnostics=
 
 
 def recovery_seed(frame, expected, previous, *, diagnostics=None):
-    """Return a verified anchor and up to three price-empty trailing sessions."""
+    """Return a verified anchor and up to three incomplete trailing sessions."""
     from portfolio_doctor_live import previous_doctor_session
 
     sessions = [expected, previous]
@@ -204,7 +210,7 @@ def recovery_seed(frame, expected, previous, *, diagnostics=None):
             history = prior_history(frame, day, anchor, diagnostics=diagnostics)
             if history is None:
                 break
-            targets.append((day, history.attrs.get("target_placeholder_volume")))
+            targets.append((day, history.attrs.get("target_observed_fields", {})))
         else:
             return history, anchor, targets
         sessions.append(previous_doctor_session(anchor))
@@ -244,8 +250,8 @@ class ArchiveRecovery:
                 return None
 
         reasons = {}
-        for day, placeholder_volume in targets:
-            history.attrs["target_placeholder_volume"] = placeholder_volume
+        for day, observed in targets:
+            history.attrs["target_observed_fields"] = observed
             history = stitch_final_day(history, anchor, day, self.archives[anchor][symbol],
                                        self.archives[day][symbol], diagnostics=reasons)
             if history is None:
