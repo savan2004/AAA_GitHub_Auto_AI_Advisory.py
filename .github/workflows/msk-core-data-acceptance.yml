@@ -5,6 +5,9 @@ on:
     paths:
       - 'data_engine.py'
       - 'market_data.py'
+      - 'msk_history_incremental_pilot.py'
+      - 'central_incremental_probe.py'
+      - 'tests/test_market_data_recovery.py'
       - 'msk_history_quality.py'
       - 'msk_ai_data_recovery.py'
       - 'tests/test_msk_ai_data_recovery.py'
@@ -50,6 +53,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_msk_fundamental_guard_v3.py -v
       - run: python -m unittest discover -s tests -p test_msk_financial_provenance.py -v
       - run: python -m unittest discover -s tests -p test_msk_history_quality.py -v
+      - run: python -m unittest discover -s tests -p test_market_data_recovery.py -v
       - run: python -m unittest discover -s tests -p test_menu_end_to_end.py -v
       - run: python -m unittest discover -s tests -p test_msk_model_eval.py -v
       - run: python -m unittest discover -s tests -p test_msk_ai_data_recovery.py -v
