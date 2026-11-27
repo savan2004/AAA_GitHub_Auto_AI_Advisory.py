@@ -13,6 +13,8 @@ on:
       - 'smart_chart_nse_history.py'
       - 'test_smart_chart_nse_history.py'
       - 'gen_smart_stock_chart.py'
+      - 'smart_chart_render_handoff.py'
+      - 'test_smart_chart_render_handoff.py'
       - 'msk_chart_context.py'
       - 'msk_chart_release.py'
       - 'msk_indicator_math.py'
@@ -33,6 +35,8 @@ on:
       - 'test_smart_chart_universe.py'
       - 'smart_chart_snapshot.py'
       - 'gen_smart_stock_chart.py'
+      - 'smart_chart_render_handoff.py'
+      - 'test_smart_chart_render_handoff.py'
       - 'msk_chart_context.py'
       - 'msk_chart_release.py'
       - 'msk_indicator_math.py'
@@ -61,7 +65,7 @@ jobs:
       - name: Compile production chart files
         run: python -m py_compile smart_chart_fast_scan.py gen_smart_stock_chart.py msk_chart_context.py test_msk_chart_context.py msk_chart_release.py msk_target_levels.py msk_indicator_math.py test_msk_chart_release.py chart_integration.py test_smart_chart_fast_scan.py test_smart_chart_nse_history.py smart_chart_nse_history.py smart_chart_universe.py test_smart_chart_universe.py smart_chart_snapshot.py test_chart_real_error_diagnostics.py smart_chart_eod_recovery.py test_smart_chart_eod_recovery.py
       - name: Verify one-batch scan, genuine quotes and no stale-data ranking
-        run: python -m unittest -v test_smart_chart_fast_scan test_smart_chart_nse_history test_smart_chart_universe test_chart_real_error_diagnostics test_msk_chart_context test_msk_chart_release test_smart_chart_eod_recovery
+        run: python -m unittest -v test_smart_chart_fast_scan test_smart_chart_nse_history test_smart_chart_universe test_chart_real_error_diagnostics test_msk_chart_context test_msk_chart_release test_smart_chart_eod_recovery test_smart_chart_render_handoff
 
   real-provider-smoke:
     # Runs against genuine Yahoo market data; never sends Telegram or records trades.
@@ -109,6 +113,8 @@ jobs:
           metas = [s.removeprefix("META:").strip() for s in lines if s.startswith("META:")]
           if len(outputs) != 1 or len(metas) != 1:
               raise RuntimeError("Expected one chart and one metadata record")
+          if "CHART_RENDER_PHASE fresh_process=true" not in lines:
+              raise RuntimeError("Fresh render process was not used")
           image = Path(outputs[0]).read_bytes()
           _validate(image, metas[0], str(expected_completed_session()))
           from PIL import Image

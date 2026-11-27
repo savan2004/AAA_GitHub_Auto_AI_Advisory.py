@@ -10,6 +10,8 @@ on:
       - 'data_engine.py'
       - 'msk_history_quality.py'
       - 'portfolio_doctor_bhavcopy.py'
+      - 'research_pdf_price_guard.py'
+      - 'smart_chart_eod_recovery.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,7 +34,8 @@ jobs:
           python - <<'PY'
           from datetime import datetime
           from market_data import bulk_history, recover_verified_eod_frames, recover_missing_public_histories
-          from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows, official_daily_bar_matches
+          from portfolio_doctor_bhavcopy import official_daily_bar_matches
+          from research_pdf_price_guard import public_pdf_reference
           from portfolio_doctor_live import IST, expected_doctor_session, verified_completed_daily_frame, PortfolioDoctorError
           from msk_core_data_guard import wilder_rsi_values
           from msk_history_quality import clean_daily_history
@@ -40,7 +43,7 @@ jobs:
           symbols = ["DMART", "TCS", "INFY"]
           now = datetime.now(IST)
           expected = expected_doctor_session(now)
-          official = fetch_nse_bhavcopy_rows(expected, symbols)
+          official = public_pdf_reference(expected, symbols)
           print(f"OFFICIAL_EOD session={expected} coverage={len(official)}/{len(symbols)}")
           frames = bulk_history(symbols, "1y", chunk_size=3, retries=0,
                                 max_fallbacks=0, download_timeout=12)
@@ -103,7 +106,8 @@ jobs:
           import pandas as pd
           from central_incremental_probe import run_probe
           from market_data import bulk_history, recover_verified_eod_frames
-          from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows, official_daily_bar_matches
+          from portfolio_doctor_bhavcopy import official_daily_bar_matches
+          from research_pdf_price_guard import public_pdf_reference
           from msk_history_incremental_pilot import merge_verified_history
           from portfolio_doctor_live import IST, expected_doctor_session, previous_doctor_session
           from msk_chart_release import validated_daily_history
@@ -115,7 +119,7 @@ jobs:
           prior = previous_doctor_session(session)
           official = {}
           for day in (prior, session):
-              rows = fetch_nse_bhavcopy_rows(day, symbols)
+              rows = public_pdf_reference(day, symbols)
               official[day] = rows
               print(f"INCREMENTAL_NSE session={day} coverage={len(rows)}/10", flush=True)
           if any(len(rows) != len(symbols) for rows in official.values()):

@@ -592,19 +592,22 @@ def draw_pattern(ax, pattern, data):
         bbox=dict(boxstyle="round,pad=0.25", fc=BG_DARK, ec=col, alpha=0.92, lw=0.9))
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
+from smart_chart_render_handoff import FLAG
+_render_only = len(sys.argv) == 3 and sys.argv[1] == FLAG
 try:
-    import yfinance as yf
-    # Fix 9: Use curl_cffi session to bypass Render's yfinance 403 restriction
-    # curl_cffi impersonates a browser — works on restricted networks
-    try:
-        from curl_cffi import requests as curl_requests
-        _curl_session = curl_requests.Session(impersonate="chrome110")
-        yf.utils.requests = _curl_session
-        # Also patch the yfinance download session
-        import yfinance.utils
-        yfinance.utils.requests = _curl_session
-    except Exception as _ce:
-        pass  # curl_cffi unavailable — will use standard requests (may 403 on Render)
+    if not _render_only:
+        import yfinance as yf
+        # Fix 9: Use curl_cffi session to bypass Render's yfinance 403 restriction
+        # curl_cffi impersonates a browser — works on restricted networks
+        try:
+            from curl_cffi import requests as curl_requests
+            _curl_session = curl_requests.Session(impersonate="chrome110")
+            yf.utils.requests = _curl_session
+            # Also patch the yfinance download session
+            import yfinance.utils
+            yfinance.utils.requests = _curl_session
+        except Exception as _ce:
+            pass  # curl_cffi unavailable — will use standard requests (may 403 on Render)
 except ImportError as e:
     print(f"[ERROR] Missing dependency: {e}", file=sys.stderr); sys.exit(1)
 
@@ -647,7 +650,17 @@ VALID_PERIODS = {"1mo","3mo","6mo","1y","2y"}
 CHART_PERIOD  = "6mo"
 winner        = None
 
-if len(sys.argv) >= 3:
+if _render_only:
+    from market_breadth import expected_completed_session
+    from smart_chart_render_handoff import read_inherited_handoff
+    try:
+        winner = read_inherited_handoff(int(sys.argv[2]),str(expected_completed_session()))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        print(f"[ERROR] Internal chart render handoff rejected: {type(exc).__name__}",file=sys.stderr)
+        sys.exit(1)
+    forced_sym = winner["sym"]; forced_name = winner["name"]
+    print("CHART_RENDER_PHASE fresh_process=true",flush=True)
+elif len(sys.argv) >= 3:
     forced_sym  = sys.argv[1]
     forced_name = sys.argv[2]
     if len(sys.argv) >= 4 and sys.argv[3] in VALID_PERIODS:
@@ -690,6 +703,15 @@ else:
     print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key} score={winner['score']}/20")
     print(f"WINNER: {winner['sym']}|{winner['name']}|{winner['reason']}|{winner['score']:+d}")
     print(f"CHART_DATA_SOURCE: {winner.get('_history_source','Yahoo')}")
+    if os.name == "posix":
+        from smart_chart_render_handoff import replace_with_renderer
+        try:
+            import resource
+            print(f"CHART_SCAN_PEAK_KIB={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}",flush=True)
+            replace_with_renderer(os.path.abspath(__file__),winner,session_key)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            print(f"[ERROR] Internal chart render handoff failed: {type(exc).__name__}",file=sys.stderr)
+            sys.exit(1)
     forced_sym = winner["sym"]; forced_name = winner["name"]
 
 symbol       = forced_sym
@@ -873,6 +895,9 @@ def _chart_memory_stage(stage):
 
 _chart_memory_stage("before_provider_cleanup")
 try:
+    if _render_only:
+        # The fresh renderer never imports yfinance.
+        raise ImportError("render-only phase")
     from yfinance import shared as _yf_shared
     for _cache_name in ("_DFS", "_ERRORS", "_TRACEBACKS", "_ISINS"):
         _provider_cache = getattr(_yf_shared, _cache_name, None)
