@@ -110,7 +110,7 @@ class RecoveryTests(unittest.TestCase):
                 self.assertIsNotNone(result)
                 self.assertEqual(result.Volume.iloc[-1],1000.)
 
-    def test_mismatch_partial_latest_and_multiple_missing_sessions_fail(self):
+    def test_mismatch_partial_latest_and_three_missing_sessions_fail(self):
         def fetch(day,wanted):
             return {SYMBOL:dict(official(), High=102., Volume=2000.)}
         self.assertIsNone(ArchiveRecovery([SYMBOL],DAY,fetch=fetch)(SYMBOL,history()))
@@ -122,8 +122,27 @@ class RecoveryTests(unittest.TestCase):
         partial.loc[pd.Timestamp(DAY),"Open"] = 103.
         recover = ArchiveRecovery([SYMBOL],DAY,fetch=forbidden)
         self.assertIsNone(recover(SYMBOL,partial))
-        self.assertIsNone(recover(SYMBOL,history().drop(pd.Timestamp(PREVIOUS))))
+        self.assertIsNone(recover(SYMBOL,history().drop(pd.DatetimeIndex(["2026-11-23", "2026-11-20"]))))
         self.assertEqual(calls,[])
+
+    def test_two_missing_sessions_recover_from_one_shared_older_archive(self):
+        older = date(2026, 11, 20)
+        calls = []
+        def fetch(day, wanted):
+            calls.append(day)
+            return {symbol: (official(102.) if day == DAY else dict(official(), High=102.))
+                    for symbol in wanted}
+        recover = ArchiveRecovery([SYMBOL, "TCS.NS"], DAY, fetch=fetch)
+        frame = history()
+        frame.loc[pd.Timestamp(PREVIOUS), ["Open", "High", "Low", "Close"]] = np.nan
+        for symbol in (SYMBOL, "TCS.NS"):
+            result = recover(symbol, frame)
+            self.assertIsNotNone(result)
+            self.assertEqual([t.date() for t in result.index[-3:]], [older, PREVIOUS, DAY])
+            self.assertEqual(result.Close.iloc[-1], 102.)
+        self.assertEqual(calls, [DAY, PREVIOUS, older])
+        frame.loc[pd.Timestamp(PREVIOUS), "Close"] = 101.
+        self.assertIsNone(recover(SYMBOL, frame))
 
     def test_adjusted_price_mismatch_and_volume_mismatch_have_exact_reasons(self):
         from smart_chart_eod_recovery import stitch_final_day, prior_history

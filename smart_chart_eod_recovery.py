@@ -192,14 +192,32 @@ def stitch_final_day(primary, previous, expected, prior, latest, *, diagnostics=
         return reject("invalid_overlap")
 
 
+def recovery_seed(frame, expected, previous):
+    """Use the previous session or bridge one wholly missing session."""
+    from portfolio_doctor_live import previous_doctor_session
+
+    recent = prior_history(frame, expected, previous)
+    if recent is not None:
+        return recent, previous, None
+    older = previous_doctor_session(previous)
+    # Both sessions must be absent or have a price-empty placeholder. Use
+    # both checks so no price observed on either session can be overwritten.
+    before_previous = prior_history(frame, previous, older)
+    before_expected = prior_history(frame, expected, older)
+    if before_previous is None or before_expected is None:
+        return None, older, None
+    return before_previous, older, before_expected
+
+
 class ArchiveRecovery:
-    """Lazy two-file fetch for the entire selected universe; no per-stock downloads."""
+    """Share up to three dated official files across the entire shortlist."""
     def __init__(self, symbols, session, *, fetch=final_archive_rows):
         self.symbols = frozenset(symbols)
         self.expected = date.fromisoformat(str(session))
         self.fetch = fetch
         self.loaded = False
         self.current = self.previous = {}
+        self.older = None
         self.recovered = 0
         self.rejection_reasons = {}
 
@@ -208,8 +226,9 @@ class ArchiveRecovery:
         if symbol not in self.symbols or not doctor_trading_session(self.expected):
             return None
         previous = previous_doctor_session(self.expected)
-        history = prior_history(frame, self.expected, previous)
+        history, anchor, target = recovery_seed(frame, self.expected, previous)
         if history is None:
+            print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reason=no_verified_trailing_anchor", flush=True)
             return None
         if not self.loaded:
             self.loaded = True
@@ -218,7 +237,20 @@ class ArchiveRecovery:
                 self.previous = self.fetch(previous, self.symbols)
             print(f"NSE_FINAL_ARCHIVE_COVERAGE latest={len(self.current)} prior={len(self.previous)}", flush=True)
         reasons = {}
-        result = stitch_final_day(history, previous, self.expected, self.previous.get(symbol), self.current.get(symbol), diagnostics=reasons)
+        if target is not None:
+            # Only fetch a third file if both newer official files are
+            # present for this symbol and the older provider overlap exists.
+            if self.previous.get(symbol) and self.current.get(symbol):
+                if self.older is None:
+                    self.older = self.fetch(anchor, self.symbols)
+                history = stitch_final_day(history, anchor, previous, self.older.get(symbol),
+                                           self.previous.get(symbol), diagnostics=reasons)
+                if history is not None:
+                    history.attrs["target_placeholder_volume"] = target.attrs.get("target_placeholder_volume")
+            else:
+                history = None
+        result = stitch_final_day(history, previous, self.expected, self.previous.get(symbol),
+                                  self.current.get(symbol), diagnostics=reasons)
         if result is not None:
             self.recovered += 1
             print(f"NSE_FINAL_RECOVERY_OK symbol={symbol} session={self.expected} rows={len(result)} close={result.Close.iloc[-1]:.2f}", flush=True)
@@ -281,7 +313,7 @@ def preliminary_rank(frame, session):
     from portfolio_doctor_live import previous_doctor_session
     try:
         day = date.fromisoformat(str(session))
-        history = prior_history(frame, day, previous_doctor_session(day))
+        history, _, _ = recovery_seed(frame, day, previous_doctor_session(day))
         if history is None:
             return None
         close = history.Close
