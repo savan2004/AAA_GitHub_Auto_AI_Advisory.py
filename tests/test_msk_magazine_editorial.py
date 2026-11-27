@@ -85,7 +85,8 @@ class CompleteEditorialDraftTests(unittest.TestCase):
         pages = load_editorial_pack(PACK, "2026-11", as_of=date(2026, 11, 23))
         page14_urls = {source["url"] for source in pages[14]["sources"]}
         self.assertIn(calendar_url, page14_urls)
-        self.assertIn("2026-11-28", " ".join(pages[14]["analysis"]))
+        self.assertIn("28 November", pages[14]["lead"])
+        self.assertIn("30 November", pages[14]["lead"])
 
 
     def test_future_evidence_date_blocks_artifact_creation(self):
