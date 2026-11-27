@@ -2909,6 +2909,10 @@ if __name__ == "__main__":
             from msk_sbin_pdf_probe import run_once as run_sbin_pdf_acceptance
             threading.Thread(target=run_sbin_pdf_acceptance, args=(globals(),),
                              name="msk-sbin-pdf-release", daemon=True).start()
+        if os.getenv("MSK_DRIVE_READONLY_PROBE", "").strip() == "1":
+            from research_pdf_drive import probe_drive_access
+            threading.Thread(target=probe_drive_access,
+                             name="msk-drive-readonly-probe", daemon=True).start()
         if os.getenv("MSK_RESEARCH_DAILY_ENABLED") == "1":
             from research_cloud_daily import loop as research_cloud_loop
             threading.Thread(target=research_cloud_loop,
