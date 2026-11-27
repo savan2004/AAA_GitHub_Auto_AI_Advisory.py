@@ -1,5 +1,5 @@
-"""Independent latest-quarter comparison; never approves an entire company."""
-from datetime import datetime, timezone
+"""Independent discrete-quarter comparison; never approves an entire company."""
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from msk_ai_builder_evidence import EvidenceError, SecondarySnapshot
 from msk_ai_builder_primary import IndexMember
@@ -10,6 +10,21 @@ from msk_ai_builder_filings import download_filing, extract_quarter
 def check_latest_quarter(member, evidence, *, listing=fetch_listing,
                          download=download_filing, clock=lambda: datetime.now(timezone.utc),
                          audit=None):
+    return _check_quarter(member, evidence, period_end=None, listing=listing,
+                          download=download, clock=clock, audit=audit)
+
+
+def check_historical_quarter(member, evidence, *, period_end, listing=fetch_listing,
+                             download=download_filing, clock=lambda: datetime.now(timezone.utc),
+                             audit=None):
+    """Check one missing historical period, preserving existing latest evidence."""
+    if type(period_end) is not date:
+        raise EvidenceError("QUARTER_CHECK_PERIOD_NOT_IN_HISTORY")
+    return _check_quarter(member, evidence, period_end=period_end, listing=listing,
+                          download=download, clock=clock, audit=audit)
+
+
+def _check_quarter(member, evidence, *, period_end, listing, download, clock, audit):
     if (not isinstance(member, IndexMember) or not isinstance(evidence, SecondarySnapshot)
             or member.symbol != evidence.symbol or evidence.eligible_for_selection
             or len(evidence.quarterly) != 8):
@@ -19,7 +34,14 @@ def check_latest_quarter(member, evidence, *, listing=fetch_listing,
     now = clock()
     if not 0 <= (now - evidence.retrieved_at).total_seconds() <= 86400:
         raise EvidenceError("QUARTER_CHECK_SECONDARY_STALE")
-    period = evidence.quarterly[-1]
+    latest = period_end is None
+    if latest:
+        period = evidence.quarterly[-1]
+    else:
+        matches = [row for row in evidence.quarterly[:-1] if row.end == period_end]
+        if len(matches) != 1:
+            raise EvidenceError("QUARTER_CHECK_PERIOD_NOT_IN_HISTORY")
+        period = matches[0]
     payload = listing(member.symbol, period.end)
     ref = parse_listing(payload, symbol=member.symbol, period_end=period.end,
                         scope=evidence.scope, now=clock())
@@ -71,5 +93,7 @@ def check_latest_quarter(member, evidence, *, listing=fetch_listing,
             "broadcast_at": ref.broadcast_at.isoformat(),
             "revised_at": ref.revised_at.isoformat() if ref.revised_at else None,
             **observation,
-            "limitation": "Latest-quarter numeric reconciliation only; full financial history, source authenticity and profit-definition comparability not certified",
-            "status": "LATEST_QUARTER_MATCHED_ONLY", "publication_status": "WITHHELD"}
+            "limitation": ("Numeric reconciliation for this discrete quarter only; full financial history, "
+                           "source authenticity and profit-definition comparability not certified"),
+            "status": ("LATEST_QUARTER_MATCHED_ONLY" if latest else "HISTORICAL_QUARTER_MATCHED_ONLY"),
+            "publication_status": "WITHHELD"}

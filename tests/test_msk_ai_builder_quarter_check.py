@@ -1,10 +1,10 @@
 from dataclasses import replace
-from datetime import timezone
+from datetime import date, timezone
 from unittest import TestCase
 from unittest.mock import Mock
 from msk_ai_builder_evidence import normalize_secondary, EvidenceError
 from msk_ai_builder_filings import DownloadedFiling
-from msk_ai_builder_quarter_check import check_latest_quarter
+from msk_ai_builder_quarter_check import check_historical_quarter, check_latest_quarter
 from test_msk_ai_builder_filings import fixture as filing, MEMBER, URL, NOW
 from test_msk_ai_builder_evidence import fixture as secondary
 
@@ -80,3 +80,26 @@ class QuarterCheckTests(TestCase):
         self.assertEqual(seen[0]["issuer_revenue_cr"], "1234.5678")
         self.assertEqual(seen[0]["secondary_revenue_cr"], "999")
         self.assertEqual(seen[0]["publication_status"], "WITHHELD")
+
+    def test_explicit_historical_quarter_uses_that_period_only(self):
+        snap, listing, download = self.setup_inputs()
+        historical = replace(snap.quarterly[-2], revenue_cr=1235, profit_cr=-23)
+        snap = replace(snap, quarterly=snap.quarterly[:-2] + (historical, snap.quarterly[-1]))
+        listing.return_value["data"][0]["qe_Date"] = "30-JUN-2026"
+        body = filing().replace(b"01-07-2026", b"01-04-2026").replace(b"30-09-2026", b"30-06-2026")
+        download.return_value = DownloadedFiling(URL, body, NOW)
+        result = check_historical_quarter(MEMBER, snap, period_end=date(2026, 6, 30),
+                                          listing=listing, download=download, clock=lambda: NOW)
+        listing.assert_called_once_with("FIXTURE", date(2026, 6, 30))
+        self.assertEqual(result["period"], "2026-06-30")
+        self.assertEqual(result["status"], "HISTORICAL_QUARTER_MATCHED_ONLY")
+        self.assertEqual(result["publication_status"], "WITHHELD")
+
+    def test_missing_or_latest_period_fails_before_network(self):
+        snap, listing, download = self.setup_inputs()
+        for period_end in (date(2020, 12, 31), snap.quarterly[-1].end):
+            with self.assertRaisesRegex(EvidenceError, "QUARTER_CHECK_PERIOD_NOT_IN_HISTORY"):
+                check_historical_quarter(MEMBER, snap, period_end=period_end,
+                                         listing=listing, download=download, clock=lambda: NOW)
+        listing.assert_not_called()
+        download.assert_not_called()
