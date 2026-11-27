@@ -347,6 +347,78 @@ class BhavcopySafeguards(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "prior_overlap_or_continuity"):
                 verify_final_archive(None, now=NOW, expected=TUESDAY, alternate_fetch=broken)
 
+    def test_doctor_live_fresh_conflict_recovers_exact_official_without_mutating_input(self):
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        bad = complete.copy()
+        bad.loc[bad.index[-1], "Volume"] = 9999
+        with patch("market_data.bulk_history", return_value={"SAMPLEA": bad}), \
+             patch.object(nse, "fetch_nse_bhavcopy_rows",
+                 side_effect=lambda day, wanted: {"SAMPLEA": records(day)}) as fetch, \
+             patch.object(doctor, "recover_fresh_daily_for_doctor") as alt, \
+             patch.object(doctor, "datetime", Clock):
+            rows, frames = doctor.price_holdings(
+                [{"symbol":"SAMPLEA", "qty":2, "buy":90}], include_frames=True)
+        self.assertEqual(fetch.call_count, 2)
+        alt.assert_not_called()
+        self.assertEqual(rows[0]["close"], 103)
+        self.assertEqual(frames["SAMPLEA"].iloc[-1]["Volume"], 10000)
+        self.assertEqual(bad.iloc[-1]["Volume"], 9999)
+        self.assertTrue(rows[0]["price_source"].startswith("NSE EOD"))
+
+    def test_doctor_live_bad_prior_uses_only_officially_reconciled_alternate(self):
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        bad = complete.copy()
+        bad.loc[bad.index[-2:], "Volume"] = 9999
+        actual_recover = doctor.recover_fresh_daily_for_doctor
+        for alternate, succeeds in ((price_frame(), True), (bad, False)):
+            with self.subTest(succeeds=succeeds), \
+                 patch("market_data.bulk_history", return_value={"SAMPLEA": bad}), \
+                 patch.object(nse, "fetch_nse_bhavcopy_rows",
+                     side_effect=lambda day, wanted: {"SAMPLEA": records(day)}) as fetch, \
+                 patch.object(doctor, "recover_fresh_daily_for_doctor",
+                     side_effect=lambda sym, **kw: actual_recover(
+                         sym, fetchers=(lambda: alternate,), **kw)) as alt, \
+                 patch.object(doctor, "datetime", Clock):
+                holdings = [{"symbol":"SAMPLEA", "qty":2, "buy":90, "exchange":"NSE"}]
+                if succeeds:
+                    rows = doctor.price_holdings(holdings)
+                    self.assertEqual(rows[0]["close"], 103)
+                    self.assertIn("alternate prior-session", rows[0]["price_source"])
+                else:
+                    with self.assertRaisesRegex(doctor.PortfolioDoctorError, "NO_PRICES"):
+                        doctor.price_holdings(holdings)
+                self.assertEqual(fetch.call_count, 2)
+                alt.assert_called_once()
+
+    def test_doctor_live_matching_current_is_one_batch_and_conflict_without_prior_fails(self):
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        bad = complete.copy()
+        bad.loc[bad.index[-1], "Volume"] = 9999
+        with patch.object(nse, "fetch_nse_bhavcopy_rows",
+                          return_value={"SAMPLEA": records(TUESDAY)}) as fetch:
+            confirmed, repaired, conflicts = nse.crosscheck_completed_doctor_frames(
+                {"SAMPLEA": complete}, ["SAMPLEA"], now=NOW)
+            self.assertEqual(confirmed, {"SAMPLEA"})
+            self.assertEqual((repaired, conflicts), ({}, {}))
+            fetch.assert_called_once()
+        with patch.object(nse, "fetch_nse_bhavcopy_rows",
+                          side_effect=[{"SAMPLEA": records(TUESDAY)}, {}]):
+            confirmed, repaired, conflicts = nse.crosscheck_completed_doctor_frames(
+                {"SAMPLEA": bad}, ["SAMPLEA"], now=NOW)
+            self.assertEqual((confirmed, repaired), (set(), {}))
+            self.assertEqual(conflicts["SAMPLEA"], (None, records(TUESDAY)))
+
     def test_request_data_kept_in_memory_and_no_sensitive_logging(self):
         path = Path(nse.__file__).read_text(encoding="utf-8")
         for banned in ("logging.", "logger.", "psycopg", "sqlite3", "shelve",

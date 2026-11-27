@@ -270,6 +270,12 @@ def recover_verified_eod_frames(primary_frames, symbols, *, now):
     return recover_from_public_bhavcopy(primary_frames, wanted, now=now)
 
 
+def crosscheck_doctor_current_frames(frames, symbols, *, now):
+    """Request-local official comparison of completed NSE Doctor candles."""
+    from portfolio_doctor_bhavcopy import crosscheck_completed_doctor_frames
+    return crosscheck_completed_doctor_frames(frames, symbols, now=now)
+
+
 def recover_missing_public_histories(symbols, frames, *, session):
     """Bounded public QA/research retry for wholly missing daily histories.
 
