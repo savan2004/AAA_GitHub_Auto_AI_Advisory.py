@@ -27,7 +27,11 @@ def encode_handoff(winner, session):
     frame = validated_daily_history(winner.get("_daily_history"), session)
     if frame is None or not 55 <= len(frame) <= 400:
         raise ValueError("Invalid selected history")
-    payload = dict(session=str(session), sym=winner["sym"], name=winner["name"],
+    index_name = frame.index.name
+    if index_name is not None and (not isinstance(index_name, str) or len(index_name) > 64):
+        raise ValueError("Invalid history index label")
+    payload = dict(session=str(session), index_name=index_name,
+                   sym=winner["sym"], name=winner["name"],
                    score=int(winner["score"]), close=float(winner["close"]),
                    reason=winner["reason"], scope_note=winner["scope_note"],
                    setup_confirmed=winner.get("setup_confirmed") is True,
@@ -72,7 +76,12 @@ def decode_handoff(raw, session):
     if not isinstance(bars,list) or not 55 <= len(bars) <= 400:
         raise ValueError("Invalid candle count")
     frame = pd.DataFrame(bars,columns=["Date",*REQUIRED])
-    frame.index = pd.DatetimeIndex(pd.to_datetime(frame.pop("Date"),errors="raise"))
+    if "index_name" not in payload:
+        raise ValueError("Missing history index label")
+    index_name = payload["index_name"]
+    if index_name is not None and (not isinstance(index_name, str) or len(index_name) > 64):
+        raise ValueError("Invalid history index label")
+    frame.index = pd.DatetimeIndex(pd.to_datetime(frame.pop("Date"),errors="raise")).rename(index_name)
     if (not frame.index.is_unique or not frame.index.is_monotonic_increasing
             or frame.index[-1] != pd.Timestamp(session)):
         raise ValueError("Unordered or misdated render history")

@@ -24,6 +24,20 @@ class RenderHandoffTests(unittest.TestCase):
         self.assertEqual(recovered["score"],15)
         self.assertFalse(recovered["verified_trade_plan"])
 
+    def test_named_provider_index_preserved_exactly(self):
+        original=candidate()
+        original["_daily_history"].index.name="Date"
+        recovered=decode_handoff(encode_handoff(original,SESSION),SESSION)
+        pd.testing.assert_frame_equal(original["_daily_history"],recovered["_daily_history"],
+                                      check_freq=False,check_exact=True)
+
+    def test_invalid_index_label_rejected(self):
+        raw=json.loads(encode_handoff(candidate(),SESSION))
+        for invalid in (["Date"],123,"X"*65):
+            raw["index_name"]=invalid
+            with self.subTest(label=invalid),self.assertRaises(ValueError):
+                decode_handoff(json.dumps(raw).encode(),SESSION)
+
     def test_wrong_session_and_changed_close_rejected(self):
         raw=encode_handoff(candidate(),SESSION)
         with self.assertRaises(ValueError):
