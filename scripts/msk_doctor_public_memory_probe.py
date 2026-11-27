@@ -66,8 +66,8 @@ def _run(case, folder):
         exchange_close = Decimal(str(official[symbol]["Close"]))
         assert abs(money(close) / exchange_close - 1) <= Decimal("0.0075"), "NSE/Yahoo close disagreement"
         value_total += calc
-    summary = re.search(r"LAST-CLOSE VALUE\\s+Rs ([0-9,.]+)", text)
-    pnl = re.search(r"Change in value\\s+Rs ([+0-9,.-]+) \\(([+0-9.-]+)%\\)", text)
+    summary = re.search(r"LAST-CLOSE VALUE\s+Rs ([0-9,.]+)", text)
+    pnl = re.search(r"Change in value\s+Rs ([+0-9,.-]+) \(([+0-9.-]+)%\)", text)
     assert summary and pnl, "missing portfolio financial totals"
     assert abs(money(summary[1]) - value_total) <= Decimal("0.05"), "wrong current total"
     calculated_pnl = value_total - money(invested)
