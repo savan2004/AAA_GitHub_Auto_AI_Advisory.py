@@ -52,6 +52,8 @@ Run `write` and `read` in **separate Python invocations** with the SAME
 probe ID. Do not generate a fresh probe ID between them. This establishes
 persistence across new Python processes; **not** a real Render restart.
 
+The staging writer and reader both use the pinned direct endpoint with libpq `sslmode=require` and `gssencmode=disable`, so a non-TLS client connection cannot succeed. The probe checks `current_database()` separately. Neon proxy termination means backend `pg_stat_ssl` is not reliable evidence of the client TLS connection. No TLS fallback or production access is allowed.
+
 ## Required evidence
 
 - `PYTHON_TO_NEON_STAGING_WRITE_PASS`

@@ -186,6 +186,28 @@ class StagingProbeTests(unittest.TestCase):
             with self.assertRaises(ProbeError):
                 load_config(config)
 
+    def test_staging_connect_requires_client_tls_and_database_identity(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from scripts.verify_msk_journal_neon import _connect
+        conn = Mock()
+        conn.execute.return_value.fetchone.return_value = (STAGING_DATABASE,)
+        driver = SimpleNamespace(connect=Mock(return_value=conn))
+        with patch.dict("sys.modules", {"psycopg": driver}):
+            self.assertIs(_connect(SAMPLE_DSN), conn)
+            driver.connect.assert_called_once_with(
+                SAMPLE_DSN, connect_timeout=5, sslmode="require",
+                gssencmode="disable", host=STAGING_HOST, hostaddr="",
+                port=5432, dbname=STAGING_DATABASE)
+            conn.execute.assert_called_once_with("SELECT current_database()")
+            conn.execute.return_value.fetchone.return_value = ("other_db",)
+            with self.assertRaisesRegex(ProbeError, "database identity"):
+                _connect(SAMPLE_DSN)
+            conn.close.assert_called_once()
+            driver.connect.side_effect = RuntimeError("TLS handshake failed")
+            with self.assertRaises(RuntimeError):
+                _connect(SAMPLE_DSN)
+
     def test_payloads_are_synthetic_and_stable(self):
         observed, opened, closed = synthetic_events(RUN_ID)
         self.assertEqual(observed["kind"], "OBSERVED")

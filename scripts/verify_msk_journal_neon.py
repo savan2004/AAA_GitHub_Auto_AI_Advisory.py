@@ -215,14 +215,16 @@ def synthetic_events(run_id):
 def _connect(dsn):
     import psycopg
 
-    conn = psycopg.connect(dsn, connect_timeout=5)
+    # Neon terminates client TLS at its proxy. pg_stat_ssl describes the
+    # backend hop, not the client TLS connection. libpq sslmode=require
+    # plus gssencmode=disable refuses any non-TLS client connection.
+    conn = psycopg.connect(dsn, connect_timeout=5, sslmode="require",
+                           gssencmode="disable", host=STAGING_HOST,
+                           hostaddr="", port=5432, dbname=STAGING_DATABASE)
     try:
-        info = conn.execute(
-            "SELECT current_database(), "
-            "(SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid())"
-        ).fetchone()
-        if info != (STAGING_DATABASE, True):
-            raise ProbeError("Neon database/TLS check failed")
+        info = conn.execute("SELECT current_database()").fetchone()
+        if info != (STAGING_DATABASE,):
+            raise ProbeError("Neon database identity check failed")
         return conn
     except BaseException:
         conn.close()
@@ -231,7 +233,7 @@ def _connect(dsn):
 
 def write(dsn, run_id):
     plan, opened, closed = synthetic_events(run_id)
-    store = PostgresSignalJournal(dsn)
+    store = PostgresSignalJournal(dsn, connector=_connect)
     # Separate connection verifies we are writing only to the approved DB.
     with _connect(dsn):
         pass
@@ -295,7 +297,7 @@ def read(dsn, run_id):
         computed = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         if str(digest).strip() != computed:
             raise ProbeError("Stored record checksum does not match")
-    store = PostgresSignalJournal(dsn)
+    store = PostgresSignalJournal(dsn, connector=_connect)
     for event in expected:
         if store.append(event) is not False:
             raise ProbeError("Duplicate was not blocked across processes")
