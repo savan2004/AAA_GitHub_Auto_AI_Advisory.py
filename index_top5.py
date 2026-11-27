@@ -5,6 +5,7 @@ join the same work. Official NSE index membership is mandatory; weak or partial
 data never becomes a fabricated investment recommendation.
 """
 import html
+import math
 import logging
 import os
 import threading
@@ -79,6 +80,21 @@ def _fmt(value, decimals=1, suffix=""):
         return "N/A"
 
 
+def _risk_reward(target, entry, stop):
+    """Return a positive reward/risk ratio only for valid long-side levels."""
+    try:
+        target, entry, stop = map(float, (target, entry, stop))
+        risk = entry - stop
+        reward = target - entry
+        if not all(math.isfinite(v) for v in (target, entry, stop, risk, reward)):
+            return None
+        if risk <= 0 or reward <= 0:
+            return None
+        return reward / risk
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _format_index_result(profile, universe, rows, received, fund_checked=0, fund_failed=0,
                          total_rated=0):
     total = len(universe["symbols"])
@@ -126,7 +142,7 @@ def _format_index_result(profile, universe, rows, received, fund_checked=0, fund
             f"⚠️ Fundamental caveat: {html.escape(str(r.get('fund_reason') or 'not supplied'))}" if status != "VALIDATED" else "✅ Financial evidence passed defined quality gates.",
             f"📈 Profit 3Y {_fmt(r.get('profit_growth'),1,'%')} | Sales 3Y {_fmt(r.get('sales_growth'),1,'%')}",
             f"🎯 Trigger ₹{r['entry']:,.2f} | SL ₹{r['sl']:,.2f}",
-            f"T1 ₹{r['t1']:,.2f} (R:R 1:2) | T2 ₹{r['t2']:,.2f} (1:3)",
+            f"T1 ₹{r['t1']:,.2f} (R:R 1:{_fmt(_risk_reward(r['t1'], r['entry'], r['sl']),1)}) | T2 ₹{r['t2']:,.2f} (1:{_fmt(_risk_reward(r['t2'], r['entry'], r['sl']),1)})",
             f"📆 Price {r['asof']} | Results {html.escape(str(r.get('quarter') or 'unverified'))}",
             "···"
         ]
