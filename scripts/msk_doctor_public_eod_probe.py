@@ -41,11 +41,21 @@ def verify_final_archive(frame, *, now, expected):
         return response
 
     rows = {}
+    streamed = []
     for day in (previous, expected):
         result = fetch_nse_bhavcopy_rows(day, [PUBLIC_DEMO_SYMBOL], get=archive_only)
         if PUBLIC_DEMO_SYMBOL not in result:
-            raise SystemExit("MSK_DOCTOR_FINAL_UDIFF_FAIL session={} archive_unverified".format(day))
-        rows[day] = result[PUBLIC_DEMO_SYMBOL]
+            # Same public dated UDiFF file, independent bounded streaming parser.
+            # No legacy substitution, no other session, and no price estimate.
+            from smart_chart_eod_recovery import final_archive_rows
+            secondary = final_archive_rows(day, [PUBLIC_DEMO_SYMBOL + ".NS"])
+            row = secondary.get(PUBLIC_DEMO_SYMBOL + ".NS")
+            if row is None:
+                raise SystemExit("MSK_DOCTOR_FINAL_UDIFF_FAIL session={} archive_unverified".format(day))
+            streamed.append(day.isoformat())
+        else:
+            row = result[PUBLIC_DEMO_SYMBOL]
+        rows[day] = row
     history = frame.loc[frame.index.date <= previous]
     recovered = stitch_one_verified_day(
         history, prior=rows[previous], latest=rows[expected],
@@ -56,9 +66,13 @@ def verify_final_archive(frame, *, now, expected):
             or {url.rsplit('/', 1)[-1] for url in requested} != expected_files
             or recovered is None or recovered.index[-1].date() != expected):
         raise SystemExit("MSK_DOCTOR_FINAL_UDIFF_FAIL prior_overlap_or_continuity")
+    from portfolio_doctor_bhavcopy import official_daily_bar_matches
+    if not official_daily_bar_matches(frame.iloc[-1], rows[expected]):
+        raise SystemExit("MSK_DOCTOR_FINAL_UDIFF_FAIL primary_official_ohlcv_mismatch")
     for field in ("Open", "High", "Low", "Close", "Volume"):
         if float(recovered.iloc[-1][field]) != rows[expected][field]:
             raise SystemExit("MSK_DOCTOR_FINAL_UDIFF_FAIL recovered_" + field)
+    print("MSK_DOCTOR_FINAL_UDIFF_TRANSPORT streaming_fallback_sessions={}".format(",".join(streamed) or "none"))
     print("MSK_DOCTOR_FINAL_UDIFF_PASS symbol={} prior={} session={} close={} volume={} rows={}".format(
         PUBLIC_DEMO_SYMBOL, previous, expected, rows[expected]["Close"],
         rows[expected]["Volume"], len(recovered)))

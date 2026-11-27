@@ -275,6 +275,24 @@ class BhavcopySafeguards(unittest.TestCase):
                 self.assertAlmostEqual(sum(row["weight"] for row in rows), 100.)
                 self.assertTrue(all(row["pnl"] == 26 for row in rows))
 
+    def test_public_probe_accepts_same_date_streamed_archive_only(self):
+        from scripts.msk_doctor_public_eod_probe import verify_final_archive
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        def transport(url, **kwargs):
+            return SimpleNamespace(status_code=403, ok=False)
+        def streamed(day, wanted):
+            self.assertEqual(wanted, ["INFY.NS"])
+            return {"INFY.NS": records(day)}
+        with patch("requests.get", side_effect=transport), \
+             patch("smart_chart_eod_recovery.final_archive_rows", side_effect=streamed) as fetch:
+            verify_final_archive(complete, now=NOW, expected=TUESDAY)
+            self.assertEqual(fetch.call_count, 2)
+        with patch("requests.get", side_effect=transport), \
+             patch("smart_chart_eod_recovery.final_archive_rows", return_value={}):
+            with self.assertRaisesRegex(SystemExit, "archive_unverified"):
+                verify_final_archive(complete, now=NOW, expected=TUESDAY)
+
     def test_request_data_kept_in_memory_and_no_sensitive_logging(self):
         path = Path(nse.__file__).read_text(encoding="utf-8")
         for banned in ("logging.", "logger.", "psycopg", "sqlite3", "shelve",
