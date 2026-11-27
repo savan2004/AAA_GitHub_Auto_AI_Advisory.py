@@ -164,5 +164,44 @@ class QuarterlyFilingRepair(unittest.TestCase):
         self.assertIn('fv["implied_peer_value"] = None', REPORT)
         self.assertIn('render_quarterly_chart((inp.get("stm")', REPORT)
 
+class PublicPDFActualEvidence(unittest.TestCase):
+    def test_reference_fallback_only_missing_exact_symbols(self):
+        from datetime import date
+        from unittest.mock import Mock
+        from research_pdf_price_guard import public_pdf_reference
+        day = date(2026, 11, 26)
+        primary = {"SBIN": {"Close": 100}}
+        fetch = Mock(return_value=primary)
+        archive = Mock(return_value={"DMART.NS": {"Close": 200},
+                                     "SBIN.NS": {"Close": 999}})
+        result = public_pdf_reference(day, ["SBIN", "DMART"], fetch=fetch, archive=archive)
+        self.assertEqual(result, {"SBIN": {"Close": 100}, "DMART": {"Close": 200}})
+        fetch.assert_called_once_with(day, ("SBIN", "DMART"))
+        archive.assert_called_once_with(day, ["DMART.NS"])
+
+    def test_real_report_price_requires_exact_session_and_ohlcv(self):
+        from datetime import date
+        from research_pdf_price_guard import verify_public_pdf_price, PublicPDFEvidenceError
+        day = date(2026, 11, 26)
+        row = dict(Open=98., High=102., Low=97., Close=100., Volume=1000.)
+        ref = {"SBIN": row.copy()}
+        evidence = dict(symbol="SBIN", price_session="26-Nov-2026",
+                        historical_close=100., price_bar=row.copy())
+        self.assertEqual(verify_public_pdf_price("SBIN", day, evidence, ref), (day, 100.))
+        for changes, reason in [
+            ({"symbol": "TCS"}, "REPORT_SYMBOL_MISMATCH"),
+            ({"price_session": "25-Nov-2026"}, "REPORT_SESSION_MISMATCH"),
+            ({"historical_close": float("nan")}, "REPORT_PRICE_INVALID"),
+            ({"historical_close": 100.20}, "REPORT_RENDER_PRICE_MISMATCH"),
+            ({"price_bar": dict(row, Volume=1001.)}, "OFFICIAL_OHLCV_MISMATCH"),
+            ({"price_bar": dict(row, Close=100.20), "historical_close": 100.20},
+             "OFFICIAL_CLOSE_MISMATCH"),
+        ]:
+            with self.subTest(reason=reason), self.assertRaisesRegex(PublicPDFEvidenceError, reason):
+                verify_public_pdf_price("SBIN", day, dict(evidence, **changes), ref)
+        with self.assertRaisesRegex(PublicPDFEvidenceError, "OFFICIAL_REFERENCE_MISSING"):
+            verify_public_pdf_price("SBIN", day, evidence, {})
+
+
 if __name__=="__main__":
     unittest.main()

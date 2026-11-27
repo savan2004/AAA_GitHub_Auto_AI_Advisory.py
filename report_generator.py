@@ -1303,6 +1303,8 @@ def generate_stock_report_pdf(symbol: str, *, evidence_out=None) -> Tuple[bool, 
             evidence_out.update(
                 symbol=R["sym"], price_session=R["price_session"],
                 historical_close=R["t"]["ltp"],
+                price_bar={field: float(inputs["df"][field].iloc[-1])
+                           for field in ("Open", "High", "Low", "Close", "Volume")},
                 filing_evidence=R.get("filing_evidence") or {},
                 latest_quarter_eps=((R.get("stm") or {}).get("quarters") or [{}])[-1].get("eps"))
         stage = "render"
