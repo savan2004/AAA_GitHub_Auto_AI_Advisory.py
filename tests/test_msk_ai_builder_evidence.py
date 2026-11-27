@@ -79,7 +79,22 @@ class SecondaryTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             self.validate(data)
 
-    def test_bad_numeric_fields(self):
+    def test_historical_scope_marker_respects_required_window_and_page_scope(self):
+        data = fixture()
+        data["years"].insert(0, {"label": "Mar 2017 (S)", "revenue": 10, "net_profit": 1})
+        self.assertEqual(len(self.validate(data).annual), 5)
+        data["years"][-1]["label"] += " (S)"
+        with self.assertRaisesRegex(EvidenceError, "MIXED_STATEMENT_SCOPE"):
+            self.validate(data)
+        data["_statement_scope"] = "standalone"
+        data["_source_url"] = "https://www.screener.in/company/FIXTURE/"
+        self.assertEqual(len(self.validate(data).annual), 5)
+        data = fixture()
+        data["years"].insert(0, {"label": "unknown", "revenue": 10, "net_profit": 1})
+        with self.assertRaisesRegex(EvidenceError, "INVALID_PERIOD_LABEL"):
+            self.validate(data)
+
+    def test_numeric_field_validation(self):
         for value in (None, True, "100", float("nan"), float("inf"), -1, 0):
             d = fixture()
             d["years"][-1]["revenue"] = value

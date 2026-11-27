@@ -70,18 +70,23 @@ def _symbol(symbol):
 def _months(a, b):
     return (b.year - a.year) * 12 + b.month - a.month
 
-def _periods(rows, *, as_of, count, cadence):
+def _periods(rows, *, as_of, count, cadence, scope="consolidated"):
     if not isinstance(rows, (list, tuple)):
         raise EvidenceError("MISSING_PERIODS")
     dated = {}
+    standalone = set()
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("label"), str):
             raise EvidenceError("INVALID_PERIOD")
-        end = period_end(row["label"])
+        label = row["label"].strip()
+        marked = label.endswith(" (S)")
+        end = period_end(label[:-4] if marked else label)
         if end is None:
             raise EvidenceError("INVALID_PERIOD_LABEL")
         if end > as_of:
             raise EvidenceError("FUTURE_REPORTING_PERIOD")
+        if marked:
+            standalone.add(end)
         if end in dated:
             # Only collapse identical rows from the same issuer page and
             # reporting basis. Never combine conflicting revisions or count
@@ -95,6 +100,8 @@ def _periods(rows, *, as_of, count, cadence):
     ends = sorted(dated)[-count:]
     if len(ends) != count:
         raise EvidenceError("INSUFFICIENT_HISTORY")
+    if scope == "consolidated" and standalone.intersection(ends):
+        raise EvidenceError("MIXED_STATEMENT_SCOPE")
     if any(_months(a, b) != cadence for a, b in zip(ends, ends[1:])):
         raise EvidenceError("NONCONTIGUOUS_HISTORY")
     result = []
@@ -132,8 +139,8 @@ def normalize_secondary(symbol, extras, *, now):
     if not 0 <= age <= 86400:
         raise EvidenceError("STALE_OR_FUTURE_RETRIEVAL")
     as_of = now.date()
-    annual = _periods(extras.get("years"), as_of=as_of, count=5, cadence=12)
-    quarterly = _periods(extras.get("quarters"), as_of=as_of, count=8, cadence=3)
+    annual = _periods(extras.get("years"), as_of=as_of, count=5, cadence=12, scope=scope)
+    quarterly = _periods(extras.get("quarters"), as_of=as_of, count=8, cadence=3, scope=scope)
     # Initial methodology supports standard Indian March FY issuers only.
     if any(p.end.month != 3 for p in annual) or any(p.end.month not in (3,6,9,12) for p in quarterly):
         raise EvidenceError("UNSUPPORTED_FISCAL_CALENDAR")
