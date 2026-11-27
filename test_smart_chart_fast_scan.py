@@ -188,6 +188,85 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertEqual(recovery_calls[0],"STOCK59.NS")
         self.assertEqual(result[0]["_verified_count"],1)
 
+    def test_trade_plan_preferred_over_higher_score_observation(self):
+        fresh = self.history()
+        def scorer(sym, name, *, df):
+            plan = sym == "TCS.NS"
+            return {"sym": sym, "score": 13 if plan else 19,
+                    "close": float(df.Close.iloc[-1]), "setup_confirmed": True,
+                    "verified_trade_plan": plan}
+        got = choose_auto_chart(
+            [("DMART.NS", "DMART"), ("TCS.NS", "TCS")],
+            download=lambda **kw: pd.concat({s: fresh for s in kw["tickers"]}, axis=1),
+            scorer=scorer, session_key=self.SESSION, scan_all=True,
+            min_score=12, require_confirmed_setup=True)
+        self.assertEqual(got[0]["sym"], "TCS.NS")
+
+    def test_low_memory_batches_and_actionable_missing_candidate(self):
+        fresh = self.history()
+        stale = fresh.iloc[:-1].copy()
+        batches, individual = [], []
+        symbols = ["TCS.NS", "DMART.NS", "INFY.NS"]
+        def fetch(**kw):
+            batches.append((len(kw["tickers"]), kw["threads"]))
+            return pd.concat({s: stale if s == "DMART.NS" else fresh
+                              for s in kw["tickers"]}, axis=1)
+        def recover(sym):
+            individual.append(sym)
+            return fresh.copy()
+        def scorer(sym, name, *, df):
+            return {"sym": sym, "score": 13, "close": float(df.Close.iloc[-1]),
+                    "setup_confirmed": True, "verified_trade_plan": sym == "DMART.NS"}
+        got = choose_auto_chart([(s, s) for s in symbols], download=fetch,
+            scorer=scorer, session_key=self.SESSION, scan_all=True,
+            min_score=12, require_confirmed_setup=True, batch_size=2,
+            parallel_downloads=4, seek_trade_plan=True, individual_history=recover)
+        self.assertEqual(batches, [(2, 4), (1, 4)])
+        self.assertEqual(individual, ["DMART.NS"])
+        self.assertEqual(got[0]["sym"], "DMART.NS")
+
+    def test_partial_coverage_recovers_better_candidate_without_individual_calls(self):
+        fresh = self.history()
+        stale = fresh.copy()
+        stale.iloc[-1] = np.nan
+        calls = []
+        def recover(sym, frame):
+            calls.append(sym)
+            return fresh.copy()
+        def scorer(sym, name, *, df):
+            self.assertEqual(str(df.index[-1].date()), self.SESSION)
+            return {"sym": sym, "score": 15 if sym == "DMART.NS" else 12,
+                    "close": float(df.Close.iloc[-1]), "setup_confirmed": True}
+        winner, attempted, valid, total = choose_auto_chart(
+            [("TCS.NS", "TCS"), ("DMART.NS", "DMART"), ("BAD/ID.NS", "Invalid")],
+            download=lambda **kw: pd.concat({"TCS.NS": fresh, "DMART.NS": stale}, axis=1),
+            scorer=scorer, session_key=self.SESSION, scan_all=True,
+            min_score=12, require_confirmed_setup=True, recover_partial=True,
+            individual_history=lambda sym: self.fail("No individual fetch needed"),
+            shortlist_rank=lambda frame, session: 1., shortlist_recovery=recover)
+        self.assertEqual(calls, ["DMART.NS"])
+        self.assertEqual(winner["sym"], "DMART.NS")
+        self.assertEqual((attempted, valid, total), (2, 2, 2))
+        self.assertEqual(winner["_verified_count"], 2)
+
+    def test_partial_recovery_rejects_still_stale_candidate(self):
+        fresh = self.history()
+        stale = fresh.iloc[:-1].copy()
+        def scorer(sym, name, *, df):
+            self.assertEqual(sym, "TCS.NS")
+            return {"sym": sym, "score": 12, "close": float(df.Close.iloc[-1]),
+                    "setup_confirmed": True}
+        winner, attempted, valid, total = choose_auto_chart(
+            [("TCS.NS", "TCS"), ("DMART.NS", "DMART")],
+            download=lambda **kw: pd.concat({"TCS.NS": fresh, "DMART.NS": stale}, axis=1),
+            scorer=scorer, session_key=self.SESSION, scan_all=True,
+            min_score=12, require_confirmed_setup=True, recover_partial=True,
+            individual_history=lambda sym: self.fail("No individual fetch needed"),
+            shortlist_rank=lambda frame, session: 1.,
+            shortlist_recovery=lambda sym, frame: stale.copy())
+        self.assertEqual(winner["sym"], "TCS.NS")
+        self.assertEqual((attempted, valid, total), (2, 1, 2))
+
     def test_full_scan_missing_completed_bars_uses_bounded_dated_retry(self):
         good = self.history()
         stale = good.copy()

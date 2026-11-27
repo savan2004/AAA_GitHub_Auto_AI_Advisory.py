@@ -83,6 +83,77 @@ class ArchiveTests(unittest.TestCase):
         self.assertFalse(a._fresh(i,"SBIN","2026-01-24",NOW))
         i["parents"]=["sector-folder"]
         self.assertFalse(a._managed(i))
+    def test_activation_diagnostics_do_not_expose_secrets(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(a._archive_config_status(), "DISABLED")
+            os.environ["MSK_RESEARCH_DRIVE_ENABLED"] = "1"
+            self.assertEqual(a._archive_config_status(), "FOLDER_NOT_CONFIGURED")
+            os.environ["MSK_RESEARCH_DRIVE_FOLDER_ID"] = a.FOLDER
+            self.assertEqual(a._archive_config_status(), "OAUTH_CONFIGURATION_MISSING")
+            with self.assertLogs(a.LOG, level="WARNING") as logs:
+                with self.assertRaises(ValueError):
+                    a.Drive()
+            self.assertIn("OAUTH_CONFIGURATION_MISSING", " ".join(logs.output))
+            for key in ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN"):
+                os.environ["MSK_DRIVE_" + key] = "private-test-value"
+            self.assertEqual(a._archive_config_status(), "CONFIGURED")
+
+    def test_disabled_archive_logs_reason(self):
+        with patch.dict(os.environ, {"MSK_RESEARCH_DRIVE_ENABLED":"0"}):
+            with self.assertLogs(a.LOG, level="WARNING") as logs:
+                self.assertFalse(a.store_cloud_report("SBIN", "missing", "23-Jan-2026"))
+            self.assertIn("reason=DISABLED", " ".join(logs.output))
+
+    def test_upload_failure_logs_exact_stage(self):
+        with self.assertLogs(a.LOG, level="WARNING") as logs:
+            self.assertFalse(self.store(FakeDrive([], fail=True)))
+        self.assertIn("stage=upload", " ".join(logs.output))
+
+    def test_readonly_probe_is_opt_in(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(a, "Drive") as drive:
+            self.assertFalse(a.probe_drive_access())
+            drive.assert_not_called()
+
+    def test_readonly_probe_with_archive_disabled(self):
+        env = {"MSK_DRIVE_READONLY_PROBE": "1", "MSK_RESEARCH_DRIVE_ENABLED": "0",
+               "MSK_RESEARCH_DRIVE_FOLDER_ID": a.FOLDER,
+               **{"MSK_DRIVE_" + k: "test-only" for k in
+                  ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN")}}
+        with patch.dict(os.environ, env, clear=True), patch.object(a, "Drive") as drive:
+            drive.return_value.list.return_value = []
+            with self.assertLogs(a.LOG, level="INFO") as logs:
+                self.assertTrue(a.probe_drive_access())
+            self.assertIn("MSK_DRIVE_PROBE_PASS", " ".join(logs.output))
+            drive.return_value.list.assert_called_once()
+            drive.return_value.upload.assert_not_called()
+            drive.return_value.delete.assert_not_called()
+            drive.return_value.close.assert_called_once()
+
+    def test_readonly_probe_missing_credentials(self):
+        with patch.dict(os.environ, {"MSK_DRIVE_READONLY_PROBE": "1",
+                        "MSK_RESEARCH_DRIVE_FOLDER_ID": a.FOLDER}, clear=True), \
+                patch.object(a, "Drive") as drive:
+            with self.assertLogs(a.LOG, level="WARNING") as logs:
+                self.assertFalse(a.probe_drive_access())
+            drive.assert_not_called()
+            self.assertIn("OAUTH_CONFIGURATION_MISSING", " ".join(logs.output))
+
+    def test_readonly_probe_sanitizes_oauth_failure(self):
+        env = {"MSK_DRIVE_READONLY_PROBE": "1", "MSK_RESEARCH_DRIVE_FOLDER_ID": a.FOLDER,
+               **{"MSK_DRIVE_" + k: "test-only" for k in
+                  ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN")}}
+        response = a.requests.Response()
+        response.status_code = 400
+        response.url = "https://oauth2.googleapis.com/token"
+        exc = a.requests.HTTPError("secret-value-must-not-log", response=response)
+        with patch.dict(os.environ, env, clear=True), patch.object(a, "Drive", side_effect=exc):
+            with self.assertLogs(a.LOG, level="WARNING") as logs:
+                self.assertFalse(a.probe_drive_access())
+            output = " ".join(logs.output)
+            self.assertIn("stage=token_exchange", output)
+            self.assertIn("http=400", output)
+            self.assertNotIn("secret-value-must-not-log", output)
+
     def test_disabled(self):
         with patch.dict(os.environ,{"MSK_RESEARCH_DRIVE_ENABLED":"0"}), patch.object(a,"Drive") as d:
             self.assertIsNone(a.load_cloud_report("SBIN"))

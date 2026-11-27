@@ -30,9 +30,9 @@ def function(name):
     )
 
 
-def actual_menu_labels():
+def actual_menu_labels(name="main_keyboard"):
     """Read only labels on the keyboard; do not duplicate the expected menu."""
-    node = function("main_keyboard")
+    node = function(name)
     labels = []
     for statement in node.body:
         if (not isinstance(statement, ast.Expr)
@@ -124,6 +124,8 @@ def isolated_environment():
         "state": state,
         "_allow_heavy": lambda m: True,
         "main_keyboard": lambda: object(),
+        "stock_research_keyboard": lambda: object(),
+        "top_five_keyboard": lambda: object(),
         "get_chart_generator": lambda: FakeGenerator(),
         "build_scan": lambda profile: "Mock research basket: " + profile,
         "request_index_top5": lambda profile, chat, send: "Mock full-index prepared research: " + profile,
@@ -157,6 +159,7 @@ def isolated_environment():
         "scan_btn", "breadth_btn", "swing_btn", "intraday_btn", "analysis_btn", "report_btn",
         "deliver_daily_reports", "plain_daily_report",
         "buzz_btn", "sector_btn", "portfolio_doctor_start", "portfolio_builder_button",
+        "stock_research_menu", "top_five_menu", "mutual_fund_doctor_status", "back_menu",
     }
     for node in TREE.body:
         if isinstance(node, ast.FunctionDef) and node.name in names:
@@ -170,8 +173,9 @@ def isolated_environment():
 class MainMenuAcceptanceTests(unittest.TestCase):
     def test_every_main_menu_button_reaches_one_direct_handler(self):
         labels = actual_menu_labels()
-        self.assertGreaterEqual(len(labels), 12)
-        self.assertIn("⚡ Intraday Trade", labels)
+        self.assertEqual(labels, ["🏗️ Portfolio Builder", "🩺 Portfolio Doctor",
+                                  "🔍 Stock Research", "🔥 Stocks Buzz",
+                                  "🏆 Top 5 Stocks", "💰 Mutual Fund Doctor"])
         self.assertNotIn("💼 Portfolio", labels)
         self.assertIn("🩺 Portfolio Doctor", labels)
         self.assertIn("🏗️ Portfolio Builder", labels)
@@ -184,7 +188,7 @@ class MainMenuAcceptanceTests(unittest.TestCase):
                 self.assertIn(matches[0], isolated_environment()[0])
 
     def test_every_menu_button_produces_a_reply_or_useful_prompt(self):
-        for label in actual_menu_labels():
+        for label in dict.fromkeys(actual_menu_labels() + actual_menu_labels("stock_research_keyboard") + actual_menu_labels("top_five_keyboard")):
             with self.subTest(button=label):
                 namespace, output, state = isolated_environment()
                 message = SimpleNamespace(
@@ -196,6 +200,26 @@ class MainMenuAcceptanceTests(unittest.TestCase):
                 self.assertTrue(all(chat_id == CHAT for chat_id, _ in output))
                 self.assertTrue(any(len(msg.strip()) > 5 for _, msg in output))
                 self.assertFalse(any("Traceback" in msg for _, msg in output))
+
+    def test_submenus_preserve_every_existing_tool_and_version_button(self):
+        research = actual_menu_labels("stock_research_keyboard")
+        top = actual_menu_labels("top_five_keyboard")
+        self.assertEqual(set(research), {
+            "🔍 Analysis", "📄 Report", "📈 Chart", "🩺 Market Health",
+            "🏭 Sector Report", "⚡ Intraday Trade", "🎯 Swing (Safe)",
+            "🚀 Swing (Agr)", "🆕 New Version", "🔙 Menu"})
+        self.assertEqual(set(top), {
+            "🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5", "🔙 Menu"})
+        for label in set(research + top):
+            matches = matching_handlers(label)
+            self.assertEqual(len(matches), 1)
+            self.assertIn(matches[0], isolated_environment()[0])
+
+    def test_fund_placeholder_never_runs_research(self):
+        env, output, _ = isolated_environment()
+        env["mutual_fund_doctor_status"](SimpleNamespace(chat=SimpleNamespace(id=CHAT)))
+        self.assertEqual(len(output), 1)
+        self.assertIn("not available yet", output[0][1])
 
     def test_legacy_portfolio_button_is_retired_without_touching_storage(self):
         self.assertNotIn("💼 Portfolio", actual_menu_labels())
@@ -217,7 +241,7 @@ class MainMenuAcceptanceTests(unittest.TestCase):
         self.assertIn("Nifty 200", output[0][1])
         self.assertIn("NSE CLOSED", output[1][1])
         self.assertIn("NO TRADE", output[1][1])
-        self.assertEqual(len([x for x in actual_menu_labels()
+        self.assertEqual(len([x for x in actual_menu_labels("stock_research_keyboard")
                               if x == "⚡ Intraday Trade"]), 1)
 
     def test_model_portfolio_buttons_keep_separate_risk_profiles(self):

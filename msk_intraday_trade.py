@@ -211,24 +211,12 @@ def _indicators(closes):
     close = closes["Close"].astype(float)
     if not _MIN_HISTORY_BARS <= len(close) <= _LOOKBACK_BARS:
         return None
-    ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean()
-    ema50 = close.ewm(span=50, adjust=False, min_periods=50).mean()
-    diff = close.diff()
-    gain = diff.clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-    loss = (-diff).clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-    rsi = 100 - 100 / (1 + gain / loss.replace(0, 1e-12))
-    prev = close.shift()
-    tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
-    atr = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-    up = high.diff()
-    down = -low.diff()
-    plus_dm = up.where((up > down) & (up > 0), 0)
-    minus_dm = down.where((down > up) & (down > 0), 0)
-    smoothed_tr = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean().replace(0, float("nan"))
-    plus_di = 100 * plus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean() / smoothed_tr
-    minus_di = 100 * minus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean() / smoothed_tr
-    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, float("nan"))
-    adx = dx.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    from msk_indicator_math import ema, directional_series
+    ema20 = ema(close,20,min_periods=20)
+    ema50 = ema(close,50,min_periods=50)
+    from msk_core_data_guard import wilder_rsi_series
+    rsi = wilder_rsi_series(close)
+    atr, adx, plus_di, minus_di = directional_series(high,low,close)
     result = dict(ema20=_finite(ema20.iloc[-1]),
                   ema50=_finite(ema50.iloc[-1]),
                   rsi=_finite(rsi.iloc[-1]),

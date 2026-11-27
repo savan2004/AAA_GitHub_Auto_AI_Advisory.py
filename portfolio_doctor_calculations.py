@@ -13,22 +13,10 @@ def _ema(values, period):
 
 
 def _rsi(values):
-    """Wilder RSI14: seed from 14 changes, then smooth every later change."""
-    period = 14
-    if len(values) < period + 1:
-        return None
-    moves = [float(b) - float(a) for a, b in zip(values, values[1:])]
-    gains = sum(max(v, 0.0) for v in moves[:period]) / period
-    losses = sum(max(-v, 0.0) for v in moves[:period]) / period
-    for move in moves[period:]:
-        gains = (gains * (period - 1) + max(move, 0.0)) / period
-        losses = (losses * (period - 1) + max(-move, 0.0)) / period
-    if gains == losses == 0:
-        return 50.0
-    if losses == 0:
-        return 100.0
-    return 100.0 - 100.0 / (1.0 + gains / losses)
-
+    """Use the same central Wilder RSI as swing and intraday."""
+    from msk_core_data_guard import wilder_rsi_values
+    result = wilder_rsi_values(values)
+    return result[-1] if result else None
 
 
 def position_values(holding, close):
@@ -50,7 +38,15 @@ def position_values(holding, close):
 
 
 def portfolio_weights(records):
-    values = [Decimal(str(row["qty"])) * Decimal(str(row["close"])) for row in records]
+    try:
+        values = []
+        for row in records:
+            qty, close = Decimal(str(row["qty"])), Decimal(str(row["close"]))
+            if any(not v.is_finite() or v <= 0 for v in (qty, close)):
+                raise ValueError("incomplete_portfolio")
+            values.append(qty*close)
+    except (InvalidOperation, KeyError, TypeError, OverflowError):
+        raise ValueError("incomplete_portfolio") from None
     total = sum(values, Decimal(0))
     if not values or not total.is_finite() or total <= 0:
         raise ValueError("incomplete_portfolio")

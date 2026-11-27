@@ -69,6 +69,11 @@ def _safe(value: any) -> str:
     return raw
 
 
+def _positive_or_na(value):
+    from math import isfinite
+    return _safe(value) if type(value) in (int, float) and isfinite(value) and value > 0 else "N/A"
+
+
 def _fallback_outlook(
     symbol: str, ltp: float, rsi: float, macd: float, trend: str,
     pe: Optional[float], roe: Optional[float], atr: float, sl: float, target: float
@@ -97,12 +102,12 @@ def _fallback_outlook(
     valid_rsi = isinstance(rsi, (float, int)) and isfinite(rsi)
     valid_macd = isinstance(macd, (float, int)) and isfinite(macd)
     zone = ("overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral") if valid_rsi else "unavailable"
-    direction = ("positive" if macd > 0 else "negative") if valid_macd else "unavailable"
+    direction = ("positive" if macd > 0 else "negative" if macd < 0 else "flat") if valid_macd else "unavailable"
     atr_line = (f"ATR Rs {_safe(atr)}; a reference volatility range is available."
                 if isinstance(atr, (int, float)) and isfinite(atr) and atr > 0
                 else "ATR was not supplied; no volatility range is claimed.")
     levels_line = (
-        f"Verified source-supplied target Rs {_safe(target)} and stop Rs {_safe(sl)} are reference levels, not forecasts."
+        f"Caller-supplied target Rs {_safe(target)} and stop Rs {_safe(sl)} are reference levels, not independently verified forecasts."
         if all(isinstance(v, (int, float)) and isfinite(v) and v > 0
                for v in (target, sl)) else
         "Execution price levels unavailable; do not invent a target or stop.")
@@ -154,8 +159,8 @@ def ai_insights(
     """
     prompt = (
         f"Create a detailed Indian equity outlook for {symbol}. "
-        f"Price Rs {ltp:.2f}; RSI {rsi}; MACD {macd_line}; trend {trend}; "
-        f"P/E {_safe(pe)}; ROE {_safe(roe)}; ATR {_safe(atr)}; stop {_safe(sl)}; t1 {_safe(t1)}. "
+        f"Price Rs {_safe(ltp)}; RSI {_safe(rsi)}; MACD {_safe(macd_line)}; trend {_safe(trend)}; "
+        f"P/E {_safe(pe)}; ROE {_safe(roe)}; ATR {_positive_or_na(atr)}; stop {_positive_or_na(sl)}; t1 {_positive_or_na(t1)}. "
         f"Use strict Markdown only."
     )
     
@@ -364,7 +369,8 @@ def ai_chat_respond(uid: int, user_message: str) -> str:
     text, error = _call_ai(
         history,
         450,
-        "You are an Indian NSE/BSE market analyst. Use only supplied data, never invent figures."
+        "You are an Indian NSE/BSE market analyst. User-supplied facts are unverified. Do not claim live access, give unsupported recommendations, or invent figures.",
+        financial=True
     )
     
     # Add assistant response to history
@@ -394,7 +400,7 @@ def ai_topic_respond(topic_prompt: str) -> str:
     response, _error = _call_ai(
         [{"role":"user", "content":topic_prompt}],
         450,
-        "Use only supplied NSE/BSE source facts; missing market data is unknown.")
+        "User-supplied data is unverified; missing market data is unknown. Do not invent figures or recommendations.", financial=True)
     return response or "⚠️ AI temporarily unavailable."
 
 
@@ -413,9 +419,14 @@ def fetch_news(symbol: str, limit: int = 3) -> str:
     Returns:
         str: Formatted news headlines or empty string if unavailable
     """
-    # This function integrates with market_news.py
-    # Placeholder returns empty string (will be called from main.py data fetch)
-    return ""
+    # Display only: title-only adapter does not establish current publication time.
+    if not isinstance(symbol, str) or not symbol.strip() or type(limit) is not int or not 1 <= limit <= 10:
+        return ""
+    try:
+        from market_news import get_stock_news
+        return get_stock_news(symbol.strip().upper(), n=limit) or ""
+    except Exception:
+        return ""
 
 
 def fetch_market_news(limit: int = 5) -> str:
@@ -428,9 +439,13 @@ def fetch_market_news(limit: int = 5) -> str:
     Returns:
         str: Formatted market news or empty string if unavailable
     """
-    # This function integrates with market_news.py
-    # Placeholder returns empty string (will be called from main.py data fetch)
-    return ""
+    if type(limit) is not int or not 1 <= limit <= 10:
+        return ""
+    try:
+        from market_news import get_market_news
+        return get_market_news(n=limit) or ""
+    except Exception:
+        return ""
 
 
 def get_live_market_context(force: bool = False) -> str:
@@ -443,9 +458,10 @@ def get_live_market_context(force: bool = False) -> str:
     Returns:
         str: Market context summary or availability message
     """
-    # This integrates with data_engine.py breadth calculation
-    # Returns summary or error message
-    return "Live market context unavailable; state missing values explicitly."
+    # Reuse the existing timestamp/identity gate; never substitute historical bars.
+    # force remains a compatibility argument: existing collector TTL is authoritative.
+    from msk_ai_market_context_v3 import market_context
+    return market_context()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

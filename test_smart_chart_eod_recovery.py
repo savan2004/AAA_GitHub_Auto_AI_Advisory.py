@@ -82,6 +82,21 @@ class RecoveryTests(unittest.TestCase):
         self.assertIsNone(individual_chart_history("ASIANPAINT.NS",DAY,fetch=fetch,
                                                     recovery=lambda *_:None))
 
+    def test_individual_repair_preserves_official_provenance_and_validates_result(self):
+        from smart_chart_eod_recovery import individual_chart_history
+        stale = history()
+        stale.attrs["history_source"] = "Yahoo"
+        def fetch(day, wanted):
+            return {SYMBOL: (dict(official(), High=102.) if day == PREVIOUS else official(102.))}
+        archive = ArchiveRecovery([SYMBOL], DAY, fetch=fetch)
+        result = individual_chart_history(SYMBOL, DAY, fetch=lambda sym: stale,
+                                          recovery=archive)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.attrs["history_source"], "Yahoo individual + NSE final archive")
+        self.assertEqual(result.Close.iloc[-1], 102.)
+        self.assertIsNone(individual_chart_history(SYMBOL, DAY, fetch=lambda sym: stale,
+                                                    recovery=lambda sym, frame: stale))
+
     def test_price_missing_with_zero_volume_or_verified_positive_volume(self):
         def fetch(day,wanted):
             return {SYMBOL:(dict(official(),High=102.) if day == PREVIOUS else official(102.))}

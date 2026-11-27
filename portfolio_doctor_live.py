@@ -242,8 +242,8 @@ def price_holdings(holdings, *, include_frames=False):
         # daily history lags). Append only after official prior-session OHLC
         # agrees with the original full historical series.
         try:
-            from portfolio_doctor_bhavcopy import recover_from_public_bhavcopy
-            official = recover_from_public_bhavcopy(
+            from market_data import recover_verified_eod_frames
+            official = recover_verified_eod_frames(
                 frames, [sym for sym in stale_symbols if sym in nse_symbols], now=now)
             for sym, fresh in official.items():
                 frames[sym] = fresh

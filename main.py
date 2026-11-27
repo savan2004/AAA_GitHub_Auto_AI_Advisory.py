@@ -487,8 +487,7 @@ def build_adv(sym):
         try:
             ai_text = engine_ai_insights(
                 sym, market["target_price"], rsi, macd, trend,
-                str(pe if pe is not None else "N/A"),
-                str(roe if roe is not None else "N/A")
+                pe, roe, atr=atr
             ) or ""
         except Exception:
             ai_text = "AI insights unavailable."
@@ -861,13 +860,10 @@ def build_portfolio_card(uid):
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
 def main_keyboard():
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    kb.add("🔍 Analysis", "🩺 Market Health", "🔥 Stocks Buzz")
-    kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
-    kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)", "⚡ Intraday Trade")
-    kb.add("📈 Chart", "📄 Report")
-    kb.add("🏭 Sector Report", "🩺 Portfolio Doctor", "🏗️ Portfolio Builder")
-    kb.add("🆕 New Version")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add("🏗️ Portfolio Builder", "🩺 Portfolio Doctor")
+    kb.add("🔍 Stock Research", "🔥 Stocks Buzz")
+    kb.add("🏆 Top 5 Stocks", "💰 Mutual Fund Doctor")
     return kb
 
 
@@ -993,6 +989,7 @@ def cmd_help(m):
 
 def run_report(chat_id, query):
     """Shared worker for /report SYMBOL and the 📄 Report button flow."""
+    evidence = {}
     try:
         ticker, cname = resolve_symbol(query)
         sym = ticker.replace(".NS", "").replace(".BO", "") if ticker else query.upper().replace(" ", "")
@@ -1031,7 +1028,8 @@ def run_report(chat_id, query):
 
             threading.Thread(target=_ping, daemon=True).start()
             try:
-                ok, result, name = generate_stock_report_pdf(sym)
+                ok, result, name = generate_stock_report_pdf(
+                    sym, evidence_out=evidence, archive_cloud=False)
             finally:
                 done_event.set()
         if ok:
@@ -1067,6 +1065,7 @@ def run_report(chat_id, query):
                     quote = None
                 quote_text = report_quote_line(quote)
                 from html import escape
+                logger.info("MSK_RESEARCH_PDF_SEND_START symbol=%s", sym)
                 with open(result, "rb") as f:
                     sent = bot.send_document(
                         chat_id, f,
@@ -1077,8 +1076,28 @@ def run_report(chat_id, query):
                                  f"{escape(quote_text)}\n\n"
                                  f"⚠️ Educational only. Not SEBI-registered advice."),
                         parse_mode="HTML",
+                        timeout=90,
                     )
-                    _record_telegram_api_ack(chat_id, sent, "document")
+                message_id = getattr(sent, "message_id", None)
+                file_id = getattr(getattr(sent, "document", None), "file_id", None)
+                if type(message_id) is not int or message_id <= 0 or not isinstance(file_id, str) or not file_id.strip():
+                    logger.error("MSK_RESEARCH_PDF_SEND_UNVERIFIED symbol=%s", sym)
+                    safe_send(chat_id, "⚠️ Research PDF delivery not confirmed. Check your chat before requesting it again.")
+                    return
+                _record_telegram_api_ack(chat_id, sent, "document")
+                logger.info("MSK_RESEARCH_PDF_SEND_CONFIRMED symbol=%s message_id=%d", sym, message_id)
+                # The report has reached Telegram. Optional archive work must
+                # never delay the document or trigger another send.
+                if evidence.get("price_session"):
+                    try:
+                        from research_pdf_drive import store_cloud_report
+                        store_cloud_report(sym, result, evidence["price_session"])
+                    except Exception as exc:
+                        logger.warning("MSK_RESEARCH_PDF_DRIVE_FAILED type=%s", type(exc).__name__)
+            except Exception as exc:
+                logger.warning("MSK_RESEARCH_PDF_SEND_UNVERIFIED symbol=%s type=%s",
+                               sym, type(exc).__name__)
+                safe_send(chat_id, "⚠️ Research PDF delivery not confirmed. Check your chat before requesting it again.")
             finally:
                 try:
                     os.remove(result)
@@ -1130,6 +1149,7 @@ def cmd_daily_report(m):
     # Existing emoji buttons keep their direct scan handler; both paths
     # still invoke deliver_daily_reports() with exactly the same formatter.
     func=lambda m: not str(getattr(m, "text", "")).startswith(("🏦", "⚖️", "🚀")) and
+                   (getattr(m, "text", "") or "").strip() != "🏆 Top 5 Stocks" and
                    bool(parse_daily_report_request(getattr(m, "text", None))),
     content_types=["text"],
 )
@@ -2172,6 +2192,45 @@ def portfolio_doctor_builder_command(m, payload_override=None, *, form_entry=Non
 
 
 # ── Button Handlers ──────────────────────────────────────────────────────────
+def stock_research_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add("🔍 Analysis", "📄 Report")
+    kb.add("📈 Chart", "🩺 Market Health")
+    kb.add("🏭 Sector Report", "⚡ Intraday Trade")
+    kb.add("🎯 Swing (Safe)", "🚀 Swing (Agr)")
+    kb.add("🆕 New Version", "🔙 Menu")
+    return kb
+
+
+def top_five_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    kb.add("🏦 Large Cap Top 5", "⚖️ Mid Cap Top 5", "🚀 Small Cap Top 5")
+    kb.add("🔙 Menu")
+    return kb
+
+
+@bot.message_handler(func=lambda m: (m.text or "") == "🔍 Stock Research")
+def stock_research_menu(m):
+    state.clear(m.chat.id)
+    safe_send(m.chat.id, "🔍 <b>Stock Research</b> — choose a research tool.",
+              reply_markup=stock_research_keyboard())
+
+
+@bot.message_handler(func=lambda m: (m.text or "") == "🏆 Top 5 Stocks")
+def top_five_menu(m):
+    state.clear(m.chat.id)
+    safe_send(m.chat.id, "🏆 <b>Top 5 Stocks</b> — choose an NSE index category.",
+              reply_markup=top_five_keyboard())
+
+
+@bot.message_handler(func=lambda m: (m.text or "") == "💰 Mutual Fund Doctor")
+def mutual_fund_doctor_status(m):
+    state.clear(m.chat.id)
+    safe_send(m.chat.id, "💰 Mutual Fund Doctor is under development. "
+              "Verified fund reviews and SIP planning are not available yet.",
+              reply_markup=main_keyboard())
+
+
 @bot.message_handler(func=lambda m: m.text == "🔙 Menu")
 def back_menu(m):
     state.clear(m.chat.id)
@@ -2886,6 +2945,10 @@ if __name__ == "__main__":
             from msk_sbin_pdf_probe import run_once as run_sbin_pdf_acceptance
             threading.Thread(target=run_sbin_pdf_acceptance, args=(globals(),),
                              name="msk-sbin-pdf-release", daemon=True).start()
+        if os.getenv("MSK_DRIVE_READONLY_PROBE", "").strip() == "1":
+            from research_pdf_drive import probe_drive_access
+            threading.Thread(target=probe_drive_access,
+                             name="msk-drive-readonly-probe", daemon=True).start()
         if os.getenv("MSK_RESEARCH_DAILY_ENABLED") == "1":
             from research_cloud_daily import loop as research_cloud_loop
             threading.Thread(target=research_cloud_loop,

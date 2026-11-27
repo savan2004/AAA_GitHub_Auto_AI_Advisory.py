@@ -38,6 +38,12 @@ def main(symbol="SBIN"):
         from research_pdf_price_guard import verified_generated_report_session
         last_date, audited_close = verified_generated_report_session(
             symbol, session, actual_report_evidence)
+        # The production publisher must reconcile the exact report bar even
+        # when incremental history fell back to the existing full source.
+        from research_pdf_price_guard import public_pdf_reference, verify_public_pdf_price
+        expected_day = datetime.strptime(session, "%Y-%m-%d").date()
+        verify_public_pdf_price(symbol, expected_day, actual_report_evidence,
+                                public_pdf_reference(expected_day, [symbol]))
         session_label = datetime.strptime(session, "%Y-%m-%d").strftime("%d-%b-%Y")
         # Only a textual label check is optional; source freshness is mandatory.
         cover_normalized = "".join(page_texts[0].split()).upper()
