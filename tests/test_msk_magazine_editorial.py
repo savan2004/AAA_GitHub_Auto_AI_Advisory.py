@@ -73,6 +73,20 @@ class CompleteEditorialDraftTests(unittest.TestCase):
         self.assertEqual(
             metrics["market_source"]["report_date"], "2026-10-31"
         )
+    def test_november_iip_and_gdp_release_dates_are_separate_and_cited(self):
+        metrics = load_metrics(METRICS, "2026-11")
+        iip = next(item for item in metrics["calendar"] if "IIP" in item["event"])
+        gdp = next(item for item in metrics["calendar"] if "GDP" in item["event"])
+        calendar_url = "https://www.mospi.gov.in/uploads/documents/releaseCalender/1793948871564-ARC%202026-27%20updated%20till%20October%202026.pdf"
+        self.assertEqual(iip["date"], "2026-11-28")
+        self.assertEqual(gdp["date"], "2026-11-30")
+        self.assertEqual(iip["source"], calendar_url)
+        self.assertEqual(gdp["source"], calendar_url)
+        pages = load_editorial_pack(PACK, "2026-11", as_of=date(2026, 11, 23))
+        page14_urls = {source["url"] for source in pages[14]["sources"]}
+        self.assertIn(calendar_url, page14_urls)
+        self.assertIn("2026-11-28", " ".join(pages[14]["analysis"]))
+
 
     def test_future_evidence_date_blocks_artifact_creation(self):
         with TemporaryDirectory() as temp:
