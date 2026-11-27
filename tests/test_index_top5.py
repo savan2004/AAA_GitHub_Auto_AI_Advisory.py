@@ -198,5 +198,27 @@ class ResultDeliveryTests(unittest.TestCase):
             self.assertIn("Cached recent index scan", cached)
 
 
+
+
+
+class DynamicRiskRewardTests(unittest.TestCase):
+    def test_risk_reward_uses_actual_entry_stop_and_targets(self):
+        universe = {"symbols": tuple(f"S{i}" for i in range(100)), "cap": "Large Cap",
+                    "name": "Nifty 100", "source": "Official NSE constituent CSV",
+                    "asof": "27 Nov 2026", "industries": {}}
+        rows = [dict(sym=f"SYM{i}", sector=f"Industry{i%4}", score=100-i,
+                     tech_score=90-i, overall_score=89-i, fund_score=80-i,
+                     fund_status="VALIDATED", signal="WAIT", risk_pct=6.67,
+                     risk_label="MEDIUM", roe=16.5, pe=21.0,
+                     de=.25, pb=None, fin=False, profit_growth=17.0,
+                     sales_growth=12.0, quarter="2026-06-30",
+                     ltp=150, chg=1.2, rsi=60, adx=23.5, entry=150, sl=140,
+                     t1=165, t2=175, rr1=1.5, asof="2026-11-26") for i in range(12)]
+        out = top5._format_index_result("conservative", universe, rows, 100)
+        self.assertIn("R:R 1:1.5", out)
+        self.assertIn("(1:2.5)", out)
+        self.assertNotIn("(R:R 1:2) | T2", out)
+
+
 if __name__ == "__main__":
     unittest.main()
