@@ -164,6 +164,11 @@ class RecoveryTests(unittest.TestCase):
         frame = history()
         frame.loc[pd.Timestamp(DAY), ["Open", "High", "Low", "Close"]] = [100., 103., 99., 102.]
         self.assertIsNotNone(recover(SYMBOL, frame))
+        frame.loc[pd.Timestamp(DAY), ["Close", "Volume"]] = [np.nan, 1200.]
+        result = recover(SYMBOL, frame)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.Volume.iloc[-1], 1000.)
+        self.assertEqual(result.Close.iloc[-1], 102.)
         frame.loc[pd.Timestamp(DAY), "Open"] = 101.
         self.assertIsNone(recover(SYMBOL, frame))
         self.assertIn("latest_price_mismatch_Open", recover.rejection_reasons)

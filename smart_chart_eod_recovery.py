@@ -181,12 +181,17 @@ def stitch_final_day(primary, previous, expected, prior, latest, *, diagnostics=
             return reject("prior_price_mismatch_" + "_".join(differences))
         if float(last["Volume"]) != float(prior["Volume"]):
             return reject("prior_volume_mismatch")
-        for field, value in primary.attrs.get("target_observed_fields", {}).items():
-            if field == "Volume":
-                if value != float(latest[field]):
-                    return reject("latest_volume_mismatch")
-            elif not _matches(value, latest[field]):
+        observed = primary.attrs.get("target_observed_fields", {})
+        observed_prices = {key: value for key, value in observed.items() if key != "Volume"}
+        for field, value in observed_prices.items():
+            if not _matches(value, latest[field]):
                 return reject("latest_price_mismatch_" + field)
+        # An incomplete candle's provider volume can be provisional. Use
+        # the entire official final candle when its available prices agree.
+        # With only volume observed, require its exact match as before.
+        if (not observed_prices and "Volume" in observed
+                and observed["Volume"] != float(latest["Volume"])):
+            return reject("latest_volume_mismatch")
         if not _matches(prior["Close"], latest["PreviousClose"]):
             return reject("previous_close_continuity")
         if abs(latest["Open"]/latest["PreviousClose"] - 1) > .40:
