@@ -20,6 +20,12 @@ from msk_chart_release import REQUIRED, validated_daily_history
 
 UA = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
 ARCHIVE = "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{day}_F_0000.csv.zip"
+ARCHIVE_MIRROR = ARCHIVE.replace("nsearchives.nseindia.com", "nsearchives.nseindia.in")
+FULL_CASH_REPORT = "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{day}.csv"
+_UDIFF_FIELDS = ("TCKRSYMB", "SCTYSRS", "TRADDT", "OPNPRIC", "HGHPRIC",
+                 "LWPRIC", "CLSPRIC", "TTLTRADGVOL", "PRVSCLSGPRIC")
+_CASH_FIELDS = ("SYMBOL", "SERIES", "DATE1", "OPEN_PRICE", "HIGH_PRICE",
+                "LOW_PRICE", "CLOSE_PRICE", "TTL_TRD_QNTY", "PREV_CLOSE")
 YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
 MAX_ZIP = 4_000_000
 MAX_CSV = 20_000_000
@@ -47,66 +53,78 @@ def _matches(a, b):
     return math.isclose(float(a), float(b), rel_tol=1e-6, abs_tol=.01)
 
 
+def _read_official_rows(source, day, wanted, columns, date_format):
+    reader = csv.DictReader(source)
+    names = {str(name).strip().upper() for name in (reader.fieldnames or [])}
+    if not set(columns).issubset(names) or len(names) != len(reader.fieldnames or []):
+        return {}
+    ticker, series, trade_date, *prices = columns
+    rows, bad, seen = {}, set(), set()
+    eq_total = 0
+    for raw_row in reader:
+        row = {str(k).strip().upper(): str(v or "").strip() for k, v in raw_row.items()}
+        if row.get(series) != "EQ":
+            continue
+        eq_total += 1
+        if row.get(trade_date, "").upper() != day.strftime(date_format).upper():
+            return {}
+        symbol = row.get(ticker, "").upper() + ".NS"
+        if symbol not in wanted:
+            continue
+        if symbol in seen:
+            bad.add(symbol)
+            continue
+        seen.add(symbol)
+        try:
+            fields = {key: _number(row[col]) for key, col in zip((*REQUIRED, "PreviousClose"), prices)}
+            if (any(fields[k] <= 0 for k in ("Open", "High", "Low", "Close", "PreviousClose"))
+                    or fields["Volume"] < 0
+                    or fields["High"] < max(fields["Open"], fields["Close"], fields["Low"])
+                    or fields["Low"] > min(fields["Open"], fields["Close"], fields["High"])):
+                bad.add(symbol)
+                continue
+            rows[symbol] = fields
+        except (ValueError, KeyError, TypeError, OverflowError):
+            bad.add(symbol)
+    return {sym: row for sym, row in rows.items() if sym not in bad} if eq_total >= 400 else {}
+
+
 def final_archive_rows(day, wanted, *, get=None):
-    """Fetch one final official ZIP; keep only exact requested EQ symbols."""
+    """Fetch an exact-date final exchange report through bounded official sources."""
     wanted = set(wanted)
     if not wanted or len(wanted) > 1000:
         return {}
     get = get or requests.get
-    try:
-        with get(ARCHIVE.format(day=day.strftime("%Y%m%d")), headers=UA,
-                 stream=True, timeout=(4, 8), allow_redirects=False) as response:
-            print(f"NSE_FINAL_ARCHIVE session={day} status={response.status_code}", flush=True)
-            payload = _response_bytes(response, MAX_ZIP)
-        if not payload:
-            return {}
-        with zipfile.ZipFile(io.BytesIO(payload)) as z:
-            files = [x for x in z.infolist() if not x.is_dir() and x.filename.lower().endswith(".csv")]
-            if len(files) != 1 or not 50_000 <= files[0].file_size <= MAX_CSV:
-                return {}
-            with z.open(files[0]) as raw, io.TextIOWrapper(raw, encoding="utf-8-sig") as source:
-                reader = csv.DictReader(source)
-                names = {str(x).strip().upper() for x in (reader.fieldnames or [])}
-                required = {"TCKRSYMB", "SCTYSRS", "TRADDT", "OPNPRIC", "HGHPRIC",
-                            "LWPRIC", "CLSPRIC", "PRVSCLSGPRIC", "TTLTRADGVOL"}
-                if not required.issubset(names) or len(names) != len(reader.fieldnames or []):
-                    return {}
-                rows, bad, seen = {}, set(), set()
-                eq_total = 0
-                for raw_row in reader:
-                    row = {str(k).strip().upper(): str(v or "").strip() for k, v in raw_row.items()}
-                    if row.get("SCTYSRS") != "EQ":
+    sources = (
+        (ARCHIVE.format(day=day.strftime("%Y%m%d")), "udiff", MAX_ZIP),
+        (ARCHIVE_MIRROR.format(day=day.strftime("%Y%m%d")), "udiff-mirror", MAX_ZIP),
+        (FULL_CASH_REPORT.format(day=day.strftime("%d%m%Y")), "full-cash", MAX_CSV),
+    )
+    for url, label, limit in sources:
+        try:
+            with get(url, headers=UA, stream=True, timeout=(4, 8),
+                     allow_redirects=False) as response:
+                print(f"NSE_FINAL_ARCHIVE session={day} source={label} status={response.status_code}", flush=True)
+                payload = _response_bytes(response, limit)
+            if not payload:
+                continue
+            if label == "full-cash":
+                data = _read_official_rows(io.StringIO(payload.decode("utf-8-sig")), day,
+                                           wanted, _CASH_FIELDS, "%d-%b-%Y")
+            else:
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    files = [x for x in archive.infolist()
+                             if not x.is_dir() and x.filename.lower().endswith(".csv")]
+                    if len(files) != 1 or not 50_000 <= files[0].file_size <= MAX_CSV:
                         continue
-                    eq_total += 1
-                    # The date is checked on every equity record, not just the chosen stock.
-                    if row.get("TRADDT") != day.isoformat():
-                        return {}
-                    sym = row.get("TCKRSYMB", "").upper() + ".NS"
-                    if sym not in wanted:
-                        continue
-                    if sym in seen:
-                        bad.add(sym)
-                        continue
-                    seen.add(sym)
-                    try:
-                        fields = {key: _number(row[col]) for key, col in
-                                  zip((*REQUIRED, "PreviousClose"), ("OPNPRIC", "HGHPRIC", "LWPRIC",
-                                      "CLSPRIC", "TTLTRADGVOL", "PRVSCLSGPRIC"))}
-                        if (any(fields[k] <= 0 for k in ("Open","High","Low","Close","PreviousClose"))
-                                or fields["Volume"] < 0 or fields["High"] < max(fields["Open"],fields["Close"],fields["Low"])
-                                or fields["Low"] > min(fields["Open"],fields["Close"],fields["High"])):
-                            bad.add(sym)
-                            continue
-                        rows[sym] = fields
-                    except (ValueError, KeyError, TypeError, OverflowError):
-                        bad.add(sym)
-                if eq_total < 400:
-                    return {}
-                return {sym: row for sym, row in rows.items() if sym not in bad}
-    except (requests.RequestException, OSError, ValueError, TypeError, KeyError,
-            zipfile.BadZipFile, RuntimeError, csv.Error, UnicodeError) as exc:
-        print(f"NSE_FINAL_ARCHIVE session={day} unavailable={type(exc).__name__}", flush=True)
-        return {}
+                    with archive.open(files[0]) as raw, io.TextIOWrapper(raw, encoding="utf-8-sig") as text:
+                        data = _read_official_rows(text, day, wanted, _UDIFF_FIELDS, "%Y-%m-%d")
+            if data:
+                return data
+        except (requests.RequestException, OSError, ValueError, TypeError, KeyError,
+                zipfile.BadZipFile, RuntimeError, csv.Error, UnicodeError) as exc:
+            print(f"NSE_FINAL_ARCHIVE session={day} source={label} unavailable={type(exc).__name__}", flush=True)
+    return {}
 
 
 def prior_history(frame, expected, previous, *, diagnostics=None):

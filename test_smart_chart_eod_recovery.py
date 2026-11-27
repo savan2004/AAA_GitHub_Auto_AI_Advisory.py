@@ -205,6 +205,23 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(final_archive_rows(DAY,[SYMBOL],get=lambda *a,**k:Response(make(PREVIOUS))),{})
         self.assertEqual(final_archive_rows(DAY,[SYMBOL],get=lambda *a,**k:Response(make(DAY,True))),{})
 
+    def test_official_full_cash_fallback_uses_exact_session_and_eq_identity(self):
+        header = "SYMBOL,SERIES,DATE1,PREV_CLOSE,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,TTL_TRD_QNTY\n"
+        lines = ["SBIN,EQ,25-Nov-2026,101,100,103,99,102,1000\n"]
+        lines += [f"OTHER{i},EQ,25-Nov-2026,101,100,103,99,102,1000\n" for i in range(400)]
+        calls = []
+        def fetch(url, **kwargs):
+            calls.append(url)
+            if "BhavCopy" in url:
+                return Response(b"", 403)
+            return Response((header + "".join(lines)).encode())
+        result = final_archive_rows(DAY, [SYMBOL], get=fetch)
+        self.assertEqual(result[SYMBOL]["Close"], 102.)
+        self.assertEqual(result[SYMBOL]["PreviousClose"], 101.)
+        self.assertEqual(len(calls), 3)
+        self.assertIn("nsearchives.nseindia.in", calls[1])
+        self.assertIsNone(final_archive_rows(PREVIOUS, [SYMBOL], get=fetch).get(SYMBOL))
+
     def test_yahoo_second_host_requires_current_correct_symbol(self):
         dates = pd.bdate_range(end=DAY,periods=80,tz="Asia/Kolkata")
         item={"meta":{"symbol":SYMBOL,"currency":"INR","exchangeTimezoneName":"Asia/Kolkata","dataGranularity":"1d"},
