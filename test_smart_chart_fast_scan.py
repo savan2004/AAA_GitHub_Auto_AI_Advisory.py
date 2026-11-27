@@ -202,6 +202,29 @@ class FastSmartChartTests(unittest.TestCase):
             min_score=12, require_confirmed_setup=True)
         self.assertEqual(got[0]["sym"], "TCS.NS")
 
+    def test_low_memory_batches_and_actionable_missing_candidate(self):
+        fresh = self.history()
+        stale = fresh.iloc[:-1].copy()
+        batches, individual = [], []
+        symbols = ["TCS.NS", "DMART.NS", "INFY.NS"]
+        def fetch(**kw):
+            batches.append((len(kw["tickers"]), kw["threads"]))
+            return pd.concat({s: stale if s == "DMART.NS" else fresh
+                              for s in kw["tickers"]}, axis=1)
+        def recover(sym):
+            individual.append(sym)
+            return fresh.copy()
+        def scorer(sym, name, *, df):
+            return {"sym": sym, "score": 13, "close": float(df.Close.iloc[-1]),
+                    "setup_confirmed": True, "verified_trade_plan": sym == "DMART.NS"}
+        got = choose_auto_chart([(s, s) for s in symbols], download=fetch,
+            scorer=scorer, session_key=self.SESSION, scan_all=True,
+            min_score=12, require_confirmed_setup=True, batch_size=2,
+            parallel_downloads=4, seek_trade_plan=True, individual_history=recover)
+        self.assertEqual(batches, [(2, 4), (1, 4)])
+        self.assertEqual(individual, ["DMART.NS"])
+        self.assertEqual(got[0]["sym"], "DMART.NS")
+
     def test_partial_coverage_recovers_better_candidate_without_individual_calls(self):
         fresh = self.history()
         stale = fresh.copy()

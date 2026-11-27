@@ -56,6 +56,21 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
             self.assertEqual(destination.read_bytes(), self.image)
             self.assertEqual(list(Path(folder).iterdir()), [destination])
 
+    def test_bounded_renderer_caps_canvas_before_save(self):
+        fig = MagicMock()
+        fig.get_size_inches.return_value = (16, 10)
+        def render(path, **kw):
+            self.assertLessEqual(kw["dpi"], 120)
+            self.assertIsNone(kw["bbox_inches"])
+            Path(path).write_bytes(self.image)
+        fig.savefig.side_effect = render
+        with tempfile.TemporaryDirectory() as folder:
+            dest = Path(folder) / "chart.png"
+            size, dpi = store.save_bounded_chart_png(fig, dest, "#ffffff",
+                                                       max_dimensions=(1920, 1200))
+            self.assertEqual(dpi, 120)
+            self.assertEqual(dest.read_bytes(), self.image)
+
     def test_renderer_rejects_oversize_without_exposing_file(self):
         fig = MagicMock()
         fig.savefig.side_effect = lambda path, **kwargs: Path(path).write_bytes(

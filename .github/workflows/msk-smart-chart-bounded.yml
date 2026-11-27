@@ -111,6 +111,11 @@ jobs:
               raise RuntimeError("Expected one chart and one metadata record")
           image = Path(outputs[0]).read_bytes()
           _validate(image, metas[0], str(expected_completed_session()))
+          from PIL import Image
+          with Image.open(outputs[0]) as checked:
+              if checked.width > 1920 or checked.height > 1200:
+                  raise RuntimeError("Chart exceeds memory-bounded canvas")
+              print(f"MSK_CHART_CANVAS width={checked.width} height={checked.height}")
           print("MSK_CHART_V8_REAL_PNG_VALIDATED bytes=%d" % len(image))
           PY
       - name: Save public index snapshot when available

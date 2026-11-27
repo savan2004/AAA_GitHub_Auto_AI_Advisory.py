@@ -684,7 +684,8 @@ else:
             session_key=session_key, sample_limit=60,
             individual_history=lambda sym: _individual_history(sym, session_key, recovery=shortlist_recovery),
             shortlist_rank=preliminary_rank, shortlist_recovery=shortlist_recovery,
-            recover_partial=True, min_score=12, require_confirmed_setup=True, scan_all=True)
+            recover_partial=True, min_score=12, require_confirmed_setup=True, scan_all=True,
+            batch_size=20, parallel_downloads=4, seek_trade_plan=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -840,6 +841,11 @@ is_wait   = signal_text == "WAIT"
 from msk_chart_release import chart_plan
 level_plan = chart_plan(structure_data, signal_text, atr_val)
 has_levels = level_plan is not None
+if auto_history is not None and bool(winner.get("verified_trade_plan")) != has_levels:
+    print("[ERROR] Pre-render and final trade-plan validation disagree", file=sys.stderr)
+    sys.exit(1)
+print(f"CHART_TRADE_PLAN status={'verified' if has_levels else 'observation_only'} "
+      f"symbol={symbol} reason={'structure_and_rr_valid' if has_levels else 'no_structure_backed_plan_at_minimum_1_5_rr'}", flush=True)
 sl_val = t1_val = t2_val = 0.0  # wire-only absence; never printed as a target
 sl_pct = t1_pct = t2_pct = _rr1 = _rr2 = 0.0
 if has_levels:
@@ -1181,7 +1187,7 @@ try:
     # ── SAVE ──────────────────────────────────────────────────────────────────
     from smart_chart_snapshot import save_bounded_chart_png
     try:
-        size, dpi = save_bounded_chart_png(fig, OUT_FILE, BG_DARK)
+        size, dpi = save_bounded_chart_png(fig, OUT_FILE, BG_DARK, max_dimensions=(1920, 1200))
         print(f"CHART_PNG_SIZE bytes={size} dpi={dpi}")
     finally:
         plt.close(fig)

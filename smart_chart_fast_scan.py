@@ -44,7 +44,8 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                       require_confirmed_setup=False, scan_all=False,
                       recover_history=None, alternate_history=None,
                       individual_history=None, shortlist_rank=None,
-                      shortlist_recovery=None, recover_partial=False):
+                      shortlist_recovery=None, recover_partial=False,
+                      batch_size=40, parallel_downloads=True, seek_trade_plan=False):
     """Return (winning real candidate, sampled, verified, total universe).
 
     The batch is attempted once per bounded group. When no candidate exists,
@@ -66,6 +67,8 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     if not isinstance(sample_limit, int) or not 1 <= sample_limit <= 120:
         raise ValueError("Sample size must be between 1 and 120")
 
+    if not isinstance(batch_size, int) or not 1 <= batch_size <= 40:
+        raise ValueError("Batch size must be between 1 and 40")
     selected = (list(distinct.items()) if scan_all else
                 random.Random(str(session_key)).sample(
                     list(distinct.items()), min(whole, sample_limit)))
@@ -169,12 +172,12 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     attempted = 0
     started = time.monotonic()
     if scan_all:
-        for start in range(0, len(symbols), 40):
+        for start in range(0, len(symbols), batch_size):
             if time.monotonic() - started > 120:
                 break
-            batch = symbols[start:start + 40]
+            batch = symbols[start:start + batch_size]
             attempted += len(batch)
-            bulk(batch, threads=True, timeout=9)
+            bulk(batch, threads=parallel_downloads, timeout=9)
     else:
         attempted = len(symbols)
         bulk(symbols, threads=True, timeout=12)
@@ -197,7 +200,10 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
             except Exception:
                 diagnostics["download_failures"] += 1
         shortlist_frames.clear()
-    if not candidates and individual_history is not None:
+    def has_trade_plan():
+        return any(c.get("verified_trade_plan") is True for c in candidates.values())
+
+    if (not candidates or (seek_trade_plan and not has_trade_plan())) and individual_history is not None:
         # Rank only the already-attempted, missing-history symbols. The
         # prior-session rank is not eligible for publication, ever.
         attempted_set = set(symbols[:attempted])
@@ -212,7 +218,7 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                 consider(sym, individual_history(sym))
             except Exception:
                 diagnostics["download_failures"] += 1
-            if sym in candidates:
+            if sym in candidates and (not seek_trade_plan or has_trade_plan()):
                 break
     elif not candidates and (not scan_all or attempted < 10):
         # Yahoo can rate-limit a 60-name request while serving a 10-name
@@ -249,7 +255,8 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                 diagnostics["download_failures"] += 1
 
     print(f"CHART_HISTORY_COVERAGE verified={len(verified_symbols)} recovered={len(recovered_symbols)} "
-          f"attempted={attempted} eligible={len(candidates)}", flush=True)
+          f"attempted={attempted} eligible={len(candidates)} "
+          f"actionable={sum(c.get('verified_trade_plan') is True for c in candidates.values())}", flush=True)
     if not candidates:
         raise ChartScanUnavailable(
             ("No verified current-session histories " if not verified_symbols else
