@@ -39,21 +39,21 @@ class ProbeError(RuntimeError):
 
 
 def _validate_staging_host(host, port):
-    """Fixed categories only: never print the received hostname or credentials."""
-    if host != STAGING_HOST:
-        pooled = STAGING_HOST.replace(".", "-pooler.", 1)
-        if host == pooled:
-            category = "staging_pooler"
-        elif not host:
-            category = "host_missing"
-        else:
-            category = "other_host"
+    """Allow only the verified staging endpoint and its exact pooler alias.
+
+    The alias is rewritten to the pinned direct endpoint before any SQL call;
+    it is never used as a network destination. All other hosts remain rejected.
+    """
+    pooled = STAGING_HOST.replace(".", "-pooler.", 1)
+    if host not in (STAGING_HOST, pooled):
+        category = "host_missing" if not host else "other_host"
         raise ProbeError("Connection is NOT the approved staging direct host; "
                          "select branch br-delicate-base-b3zz6z20, non-pooled; "
                          "category=" + category)
     if port not in (None, "", 5432, "5432"):
         raise ProbeError("Connection is NOT the approved staging direct host/port; "
                          "category=wrong_port")
+    return host == pooled
 
 
 def _conninfo_to_url(raw):
@@ -142,7 +142,7 @@ def load_config(env=None):
         # Even an invalid scheme might contain secret material; never echo it.
         raise ProbeError("Staging DSN scheme unsupported: missing" if not parsed.scheme
                          else "Staging DSN scheme unsupported: unrecognized")
-    _validate_staging_host(host, port)
+    pooled_alias = _validate_staging_host(host, port)
     if parsed.path != "/" + STAGING_DATABASE:
         raise ProbeError("Wrong staging database; select msk_index_research")
     if not user or not password:
@@ -165,8 +165,15 @@ def load_config(env=None):
     # SQLAlchemy adds a driver suffix that psycopg.connect does not accept.
     # Normalize only the scheme after the pinned host/database/TLS checks.
     if parsed.scheme in ("postgresql+psycopg", "postgresql+psycopg2", "postgresql+psycopg3"):
-        dsn = parsed._replace(scheme="postgresql").geturl()
-    return dsn, run_id
+        parsed = parsed._replace(scheme="postgresql")
+    if pooled_alias:
+        # Preserve the encoded userinfo exactly. Never replace arbitrary host
+        # substrings, and never let query options override the pinned endpoint.
+        authority = parsed.netloc.rsplit("@", 1)[0] + "@" + STAGING_HOST
+        if port is not None:
+            authority += ":5432"
+        parsed = parsed._replace(netloc=authority)
+    return parsed.geturl(), run_id
 
 
 def synthetic_events(run_id):

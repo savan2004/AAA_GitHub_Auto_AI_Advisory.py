@@ -46,8 +46,8 @@ class StagingProbeTests(unittest.TestCase):
 
     def test_host_rejection_categories_without_echoing_host_or_secret(self):
         pooled = STAGING_HOST.replace(".", "-pooler.", 1)
-        for host, category in ((pooled, "staging_pooler"),
-                               ("private-other.example", "other_host"),
+        for host, category in (("private-other.example", "other_host"),
+                               (pooled + ".evil.example", "other_host"),
                                (STAGING_HOST + ":5433", "wrong_port")):
             bad = SAMPLE_DSN.replace(STAGING_HOST, host)
             with self.subTest(category=category):
@@ -55,6 +55,29 @@ class StagingProbeTests(unittest.TestCase):
                     load_config(env(**{DSN_ENV: bad}))
                 self.assertNotIn(host, str(caught.exception))
                 self.assertNotIn("FAKE-NOT-A-SECRET", str(caught.exception))
+
+    def test_exact_staging_pooler_alias_is_rewritten_to_direct_only(self):
+        from urllib.parse import urlsplit
+        pooled = STAGING_HOST.replace(".", "-pooler.", 1)
+        for uri in (SAMPLE_DSN, SAMPLE_DSN.replace("FAKE-NOT-A-SECRET", "fake%40encoded%3Asecret")):
+            for scheme in ("postgresql", "postgresql+psycopg"):
+                alias = uri.replace(STAGING_HOST, pooled).replace("postgresql://", scheme + "://")
+                for raw in (alias, "psql '" + alias + "'"):
+                    direct, key = load_config(env(**{DSN_ENV: raw}))
+                    self.assertEqual(direct, uri)
+                    self.assertEqual(urlsplit(direct).hostname, STAGING_HOST)
+                    self.assertEqual(key, RUN_ID)
+        conninfo = (
+            "host=" + pooled + " port=5432 dbname=" + STAGING_DATABASE +
+            " user=probe password=FAKE-NOT-A-SECRET sslmode=require channel_binding=require"
+        )
+        self.assertEqual(load_config(env(**{DSN_ENV: conninfo})), (SAMPLE_DSN, RUN_ID))
+        for raw in (SAMPLE_DSN.replace(STAGING_HOST, pooled + ":5433"),
+                    SAMPLE_DSN.replace(STAGING_HOST, pooled) + "&host=other.example",
+                    SAMPLE_DSN.replace(STAGING_HOST, pooled).replace("sslmode=require", "sslmode=disable"),
+                    SAMPLE_DSN.replace(STAGING_HOST, "ep-production-main-pooler.c-4.ap-southeast-1.aws.neon.tech")):
+            with self.assertRaises(ProbeError):
+                load_config(env(**{DSN_ENV: raw}))
 
     def test_accepts_postgres_scheme_alias(self):
         alias = SAMPLE_DSN.replace("postgresql://", "postgres://")
