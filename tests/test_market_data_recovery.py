@@ -119,6 +119,25 @@ class MarketDataRecoveryTests(unittest.TestCase):
                 self.assertEqual(md.recover_verified_eod_frames({}, invalid, now=None), {})
             self.assertEqual(official.call_count, 1)
 
+    def test_missing_public_history_bounded_and_does_not_replace_existing(self):
+        from unittest.mock import Mock
+        with patch.object(md, "_download_chunk", return_value={"TCS.NS": self.frame}) as dl, \
+             patch("smart_chart_eod_recovery.yahoo_host_history") as alt:
+            got = md.recover_missing_public_histories(["INFY","TCS"],
+                         {"INFY":self.frame}, session="2026-11-20")
+            self.assertEqual(set(got), {"TCS"})
+            dl.assert_called_once_with(["TCS.NS"], "1y", retries=0,
+                                       adjusted=False, timeout=6)
+            alt.assert_not_called()
+        with patch.object(md, "_download_chunk", return_value={}) as dl, \
+             patch("smart_chart_eod_recovery.yahoo_host_history", return_value=self.frame.iloc[:-1]) as alt:
+            self.assertEqual(md.recover_missing_public_histories(
+                ["TCS","INFY","DMART","SBIN"], {}, session="2026-11-20"), {})
+            self.assertEqual(dl.call_count, 3)
+            self.assertEqual(alt.call_count, 3)
+        self.assertEqual(md.recover_missing_public_histories(["TCS.BO"], {},
+                         session="2026-11-20"), {})
+
     def test_probe_rejects_alias_duplicates_and_bad_sessions(self):
         from unittest.mock import Mock
         fetch = Mock()

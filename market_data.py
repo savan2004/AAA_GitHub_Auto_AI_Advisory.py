@@ -268,3 +268,32 @@ def recover_verified_eod_frames(primary_frames, symbols, *, now):
     ):
         return {}
     return recover_from_public_bhavcopy(primary_frames, wanted, now=now)
+
+
+def recover_missing_public_histories(symbols, frames, *, session):
+    """Bounded public QA/research retry for wholly missing daily histories.
+
+    At most three explicitly requested NSE equities. Never replace a supplied
+    history, cache customer data, or accept an incomplete/other-symbol result.
+    """
+    import re
+    from msk_chart_release import validated_daily_history
+    from smart_chart_eod_recovery import yahoo_host_history
+    wanted = list(dict.fromkeys(symbols))
+    if not 1 <= len(wanted) <= 10 or not all(
+        isinstance(s, str) and re.fullmatch(r"[A-Z0-9&-]{2,25}", s) for s in wanted
+    ):
+        return {}
+    absent = [s for s in wanted if frames.get(s) is None or frames[s].empty][:3]
+    result = {}
+    for symbol in absent:
+        ticker = to_yahoo(symbol)
+        frame = _download_chunk([ticker], "1y", retries=0, adjusted=False,
+                                timeout=6).get(ticker)
+        verified = validated_daily_history(frame, str(session))
+        if verified is None:
+            verified = validated_daily_history(yahoo_host_history(ticker, str(session)),
+                                               str(session))
+        if verified is not None:
+            result[symbol] = verified
+    return result

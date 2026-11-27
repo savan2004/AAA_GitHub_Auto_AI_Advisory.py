@@ -31,7 +31,7 @@ jobs:
         run: |
           python - <<'PY'
           from datetime import datetime
-          from market_data import bulk_history, recover_verified_eod_frames
+          from market_data import bulk_history, recover_verified_eod_frames, recover_missing_public_histories
           from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows, official_daily_bar_matches
           from portfolio_doctor_live import IST, expected_doctor_session, verified_completed_daily_frame, PortfolioDoctorError
           from msk_core_data_guard import wilder_rsi_values
@@ -44,6 +44,9 @@ jobs:
           print(f"OFFICIAL_EOD session={expected} coverage={len(official)}/{len(symbols)}")
           frames = bulk_history(symbols, "1y", chunk_size=3, retries=0,
                                 max_fallbacks=0, download_timeout=12)
+          individual = recover_missing_public_histories(symbols, frames, session=expected)
+          frames.update(individual)
+          print(f"PUBLIC_EOD_INDIVIDUAL_RECOVERED={len(individual)}")
           matched = 0
           raw_matched = 0
           stale = []
