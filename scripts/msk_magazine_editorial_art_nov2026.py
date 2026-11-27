@@ -123,7 +123,7 @@ def art_direct_november(html_text: str, logo_src: str) -> str:
     visual('''<div class="visual-mini-header">A SCENARIO IS NOT A PRICE TARGET</div>
     <div class="dual-path"><div class="path-red"><b>HIGHER INFLATION</b><span>Watch borrowing costs and debt.</span></div><div class="path-green"><b>EASING INFLATION</b><span>Still check earnings and valuations.</span></div></div>''',13,189,44,'cream')
     visual('''<div class="visual-mini-header">WATCH THE RELEASE / VERIFY THE ORIGINAL FIGURES</div>
-    <div class="date-pills"><span><b>30 NOV</b>GDP + IIP</span><span><b>2–4 DEC</b>RBI MPC</span><span><b>14 DEC</b>CPI</span></div>''',14,188,45)
+    <div class="date-pills"><span><b>28 NOV</b>IIP</span><span><b>30 NOV</b>GDP</span><span><b>2–4 DEC</b>RBI MPC</span><span><b>14 DEC</b>CPI</span></div>''',14,188,45)
     visual('''<div class="visual-mini-header">INVESTOR RULE / SOURCE FIRST, DECISION LATER</div>
     <div class="playbook-rail"><span>COMPANY RESULTS</span><em>→</em><span>VALUATION</span><em>→</em><span>RISKS</span><em>→</em><span>YOUR DECISION</span></div>''',15,214,26)
     # Don't clutter page 16: the sources and original disclaimer are the final visual.
