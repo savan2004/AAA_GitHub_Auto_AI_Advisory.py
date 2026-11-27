@@ -54,8 +54,10 @@ def _conninfo_to_url(raw):
             raise ProbeError("Staging connection info contains unsupported or duplicate options")
         values[key] = value
     required = {"host", "dbname", "user", "password", "sslmode"}
-    if not required.issubset(values) or any(not values[k] for k in required):
-        raise ProbeError("Staging connection info is incomplete")
+    missing = sorted(k for k in required if k not in values or not values[k])
+    if missing:
+        # Field names are safe to report; never print the corresponding values.
+        raise ProbeError("Staging connection info missing fields: " + ",".join(missing))
     if values["host"] != STAGING_HOST or values.get("port", "5432") not in ("", "5432"):
         raise ProbeError("Connection is NOT the approved staging direct host; select branch br-delicate-base-b3zz6z20, non-pooled")
     if values["dbname"] != STAGING_DATABASE:
