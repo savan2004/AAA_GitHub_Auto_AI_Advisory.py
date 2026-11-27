@@ -120,23 +120,50 @@ def rounded_levels(signal, close, sl, t1, t2):
             abs(t2-close)/risk if t2 else None)
 
 
-def chart_plan(data, signal, atr):
-    """Use shared chart structure, not a fixed rupee/ATR/reward target."""
+def chart_plan(data, signal, atr, *, diagnostics=None):
+    """Use shared chart structure and conservatively rounded displayed prices."""
     from msk_target_levels import calculate_targets, target_quality
+    from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING
+
+    def reject(reason):
+        if diagnostics is not None:
+            diagnostics["reason"] = reason
+        return None
+
     if signal == "WAIT":
-        return None
+        return reject("no_directional_signal")
+    if signal not in ("BUY", "STRONG BUY", "SELL", "STRONG SELL"):
+        return reject("invalid_signal")
     side = "LONG" if signal in ("BUY", "STRONG BUY") else "SHORT"
-    close = float(data.Close.iloc[-1])
-    plan = calculate_targets(data.High.to_numpy(), data.Low.to_numpy(), len(data)-1,
-                             entry=close, atr=atr, side=side)
-    if not plan or not target_quality(dict(plan, entry=close, atr=atr, side=side), min_rr=MIN_RR):
-        return None
-    # The rounded prices are what Telegram readers actually see. Do not let
-    # rounding create a zero risk, skip a resistance, or inflate a ratio.
     try:
-        values = [round(close, 2), round(plan["sl"], 2), round(plan["t1"], 2),
-                  round(plan["t2"], 2) if plan["t2"] is not None else 0.0]
+        atr = float(atr)
+        close = float(data.Close.iloc[-1])
+        if not math.isfinite(atr) or atr <= 0 or not math.isfinite(close) or close <= 0:
+            return reject("invalid_atr_or_reference")
+        plan = calculate_targets(data.High.to_numpy(), data.Low.to_numpy(), len(data)-1,
+                                 entry=close, atr=atr, side=side)
+        if not plan:
+            return reject("missing_structure_or_stop_too_tight")
+        if not target_quality(dict(plan, entry=close, atr=atr, side=side), min_rr=MIN_RR):
+            return reject("nearest_structure_below_minimum_rr")
+        # Never round a stop inward or a target beyond its original buffered
+        # barrier. Rounding can reduce reward/risk; revalidate displayed values.
+        direction = ROUND_FLOOR if side == "LONG" else ROUND_CEILING
+        def conservative(value):
+            return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=direction))
+        values = [round(close, 2), conservative(plan["sl"]), conservative(plan["t1"]),
+                  conservative(plan["t2"]) if plan["t2"] is not None else 0.0]
+        # A second structure level that collapses at display precision is absent,
+        # not a reason to discard an otherwise valid first target.
+        if values[3] and (values[3]-values[2])*(1 if side == "LONG" else -1) <= 0:
+            values[3] = 0.0
         levels = rounded_levels(signal, *values)
+        if levels is None:
+            return reject("rounded_levels_unavailable")
+        if abs(values[0]-values[1]) < 0.25*atr-1e-9:
+            return reject("rounded_stop_too_tight")
+        if diagnostics is not None:
+            diagnostics["reason"] = "structure_and_rr_valid"
         return levels
-    except ValueError:
-        return None
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError, ArithmeticError):
+        return reject("rounded_or_invalid_levels")
