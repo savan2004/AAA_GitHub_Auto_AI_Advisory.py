@@ -85,6 +85,7 @@ class FastSmartChartTests(unittest.TestCase):
         """Real provider returned all-NaN rows, previously crashing at index[-1]."""
         good = self.history()
         empty = good.copy()
+        empty = empty.astype(float)
         empty.loc[:, :] = np.nan
         data = pd.concat({"SBIN.NS": good, "FAKE.NS": empty}, axis=1)
         universe = [("SBIN.NS", "SBI"), ("FAKE.NS", "Fake")]
@@ -248,6 +249,38 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertEqual(winner["sym"], "DMART.NS")
         self.assertEqual((attempted, valid, total), (2, 2, 2))
         self.assertEqual(winner["_verified_count"], 2)
+
+    def test_full_scan_recovers_every_batch_and_retains_only_winning_history(self):
+        fresh = self.history()
+        stale = fresh.copy()
+        stale.iloc[-1] = np.nan
+        universe = [(f"STOCK{i}.NS", f"Stock {i}") for i in range(100)]
+        operations = []
+        scored = {}
+
+        def download(*, tickers, **kwargs):
+            operations.append(("batch", len(tickers)))
+            return pd.concat({symbol: stale for symbol in tickers}, axis=1)
+
+        def recover(symbol, frame):
+            operations.append(("recover", symbol))
+            return fresh
+
+        def scorer(symbol, name, *, df):
+            candidate = {"sym": symbol, "score": 12 + int(symbol[5:-3]) / 10,
+                         "close": float(df.Close.iloc[-1]), "setup_confirmed": True}
+            scored[symbol] = candidate
+            return candidate
+
+        winner, attempted, valid, whole = choose_auto_chart(
+            universe, download=download, scorer=scorer, session_key=self.SESSION,
+            scan_all=True, recover_partial=True, shortlist_recovery=recover,
+            batch_size=20, individual_history=lambda _: self.fail("No individual retry needed"))
+        self.assertEqual((attempted, valid, whole, winner["_verified_count"]), (100, 100, 100, 100))
+        self.assertEqual(winner["sym"], "STOCK99.NS")
+        self.assertEqual(operations[21], ("batch", 20))
+        self.assertEqual(sum(op == "recover" for op, _ in operations), 100)
+        self.assertEqual([s for s, row in scored.items() if "_daily_history" in row], ["STOCK99.NS"])
 
     def test_partial_recovery_rejects_still_stale_candidate(self):
         fresh = self.history()
