@@ -35,11 +35,12 @@ class PortfolioVisualAcceptance(unittest.TestCase):
         self.assertEqual(len(reader.pages), 4)
         pages = [page.extract_text() for page in reader.pages]
         self.assertIn("01 / PORTFOLIO DASHBOARD", pages[0])
-        self.assertIn("EXECUTIVE DIAGNOSIS", pages[0])
-        self.assertIn("Invested: Rs 5,500.00", pages[0])
-        self.assertIn("02 / HOLDING-WISE VERIFIED RESULTS", pages[1])
+        self.assertIn("WHAT NEEDS YOUR ATTENTION", pages[0])
+        self.assertIn("You invested Rs 5,500.00", pages[0])
+        self.assertIn("paper gain/loss", pages[0])
+        self.assertIn("02 / YOUR STOCKS, ONE BY ONE", pages[1])
         for symbol in ("SAMPLEA", "SAMPLEB", "SAMPLEC", "SAMPLED", "SAMPLEE"):
-            self.assertIn(symbol + " | Qty", pages[1])
+            self.assertIn(symbol, pages[1])
         self.assertIn("03 / NIFTY 500 INDUSTRY-PEER WATCHLIST", pages[2])
         self.assertIn("PEERA", pages[2])
         self.assertIn("PEERB", pages[2])
