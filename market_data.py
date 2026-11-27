@@ -46,30 +46,7 @@ def from_yahoo(ticker: str) -> str:
     return t
 
 
-def _clean_frame(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Reject incomplete OHLCV; never synthesize candles from close prices."""
-    if df is None or df.empty or not all(col in df.columns for col in _OHLCV):
-        return None
-    out = df[_OHLCV].copy()
-    for col in _OHLCV:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-    out = out.replace([float("inf"), float("-inf")], float("nan"))
-    out = out.dropna(subset=_OHLCV)
-    if out.empty:
-        return None
-    valid = (out["Open"] > 0) & (out["High"] > 0) & (out["Low"] > 0) & (out["Close"] > 0)
-    valid &= (out["Volume"] >= 0)
-    valid &= (out["High"] >= out[["Open", "Close", "Low"]].max(axis=1))
-    valid &= (out["Low"] <= out[["Open", "Close", "High"]].min(axis=1))
-    out = out.loc[valid]
-    if out.empty:
-        return None
-    try:
-        if getattr(out.index, "tz", None) is not None:
-            out.index = out.index.tz_localize(None)
-    except (AttributeError, TypeError):
-        pass
-    return out
+from msk_history_quality import clean_daily_history as _clean_frame
 
 
 def _split_multi(raw: pd.DataFrame, tickers: List[str]) -> Dict[str, pd.DataFrame]:
@@ -216,7 +193,7 @@ def bulk_history(
             with _cache_lock:
                 e = _cache.get(f"{s}|{period}|{adjusted}")
             if e and now - e["ts"] < cache_ttl:
-                result[s] = e["df"]
+                result[s] = e["df"].copy()
                 continue
         todo.append(s)
 
@@ -227,20 +204,22 @@ def bulk_history(
     for i in range(0, len(todo), chunk_size):
         chunk_budget = min(12, remaining_fallbacks)
         part = todo[i:i + chunk_size]
-        y_map = {to_yahoo(s): s for s in part}
+        y_map = {}
+        for s in part:
+            y_map.setdefault(to_yahoo(s), []).append(s)
         got = _download_chunk(list(y_map.keys()), period, retries=max(0, min(retries, 2)), adjusted=adjusted, timeout=download_timeout)
         for yt, df in got.items():
-            plain = y_map.get(yt) or from_yahoo(yt)
-            result[plain] = df
-            if cache_ttl:
-                with _cache_lock:
-                    _cache[f"{plain}|{period}|{adjusted}"] = {"df": df, "ts": time.time()}
+            for plain in y_map.get(yt, [from_yahoo(yt)]):
+                result[plain] = df.copy()
+                if cache_ttl:
+                    with _cache_lock:
+                        _cache[f"{plain}|{period}|{adjusted}"] = {"df": df.copy(), "ts": time.time()}
         # When Yahoo bulk returns HTTP 401/missing symbols, try a small number
         # via independent NSE equity history or direct chart API. Never synthesize
         # missing candles, never retry the entire failed universe indefinitely.
         for missing in part:
-            if chunk_budget <= 0:
-                break
+            if adjusted or chunk_budget <= 0:
+                break  # Alternate sources cannot establish adjusted OHLC parity.
             if missing in result:
                 continue
             chunk_budget -= 1
@@ -252,7 +231,7 @@ def bulk_history(
             if cache_ttl:
                 with _cache_lock:
                     _cache[f"{missing}|{period}|{adjusted}"] = {
-                        "df": recovered, "ts": time.time()
+                        "df": recovered.copy(), "ts": time.time()
                     }
         # Progress represents validated/returned coverage, not symbols attempted.
         done = len(result)
@@ -273,3 +252,48 @@ def index_history(ticker: str = "^NSEI", period: str = "1y", *, retries: int = 1
         logger.warning(f"[market_data] index {ticker} failed: {e}")
         return None
 
+
+
+def recover_verified_eod_frames(primary_frames, symbols, *, now):
+    """Shared, request-local NSE one-session repair for raw daily equity bars.
+
+    Never logs holdings, writes cache, returns stale bars or changes existing
+    complete candles. The official parser checks exact symbol and session.
+    """
+    import re
+    from portfolio_doctor_bhavcopy import recover_from_public_bhavcopy
+    wanted = list(dict.fromkeys(symbols))
+    if not 1 <= len(wanted) <= 10 or not all(
+        isinstance(s, str) and re.fullmatch(r"[A-Z0-9&-]{2,25}", s) for s in wanted
+    ):
+        return {}
+    return recover_from_public_bhavcopy(primary_frames, wanted, now=now)
+
+
+def recover_missing_public_histories(symbols, frames, *, session):
+    """Bounded public QA/research retry for wholly missing daily histories.
+
+    At most three explicitly requested NSE equities. Never replace a supplied
+    history, cache customer data, or accept an incomplete/other-symbol result.
+    """
+    import re
+    from msk_chart_release import validated_daily_history
+    from smart_chart_eod_recovery import yahoo_host_history
+    wanted = list(dict.fromkeys(symbols))
+    if not 1 <= len(wanted) <= 10 or not all(
+        isinstance(s, str) and re.fullmatch(r"[A-Z0-9&-]{2,25}", s) for s in wanted
+    ):
+        return {}
+    absent = [s for s in wanted if frames.get(s) is None or frames[s].empty][:3]
+    result = {}
+    for symbol in absent:
+        ticker = to_yahoo(symbol)
+        frame = _download_chunk([ticker], "1y", retries=0, adjusted=False,
+                                timeout=6).get(ticker)
+        verified = validated_daily_history(frame, str(session))
+        if verified is None:
+            verified = validated_daily_history(yahoo_host_history(ticker, str(session)),
+                                               str(session))
+        if verified is not None:
+            result[symbol] = verified
+    return result

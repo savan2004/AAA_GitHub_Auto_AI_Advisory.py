@@ -136,8 +136,13 @@ def annual_exchange_comparison(symbol, statements):
     if len(same) != 1:
         return {**base, "status": "period_not_comparable"}
     row = same[0]
+    scope = row.get("scope", (statements or {}).get("scope"))
+    if scope is not None and scope != official["scope"]:
+        return {**base, "status": "scope_not_comparable"}
     for field in ("revenue", "net_profit"):
         try:
+            if isinstance(row[field], bool):
+                raise ValueError("boolean is not a financial value")
             observed = float(row[field])
         except (KeyError, ValueError, TypeError):
             return {**base, "status": "missing_core", "missing": field}
@@ -214,6 +219,9 @@ def reconcile_official_quarter(symbol, statements):
         return {**base, "status": "period_not_comparable", "matched": [], "mismatched": [],
                 "secondary_period_end": latest_day}
 
+    scope = latest.get("scope", (statements or {}).get("scope"))
+    if scope is not None and scope != official["scope"]:
+        return {**base, "status": "scope_not_comparable", "matched": [], "mismatched": []}
     matches, mismatches, unknown = [], [], []
     fields = {
         "revenue": (official["metrics_in_crore"]["revenue"], 0.55, "₹ Cr"),
@@ -223,6 +231,8 @@ def reconcile_official_quarter(symbol, statements):
     for name, (reference, tolerance, unit) in fields.items():
         raw = latest.get(name)
         try:
+            if isinstance(raw, bool):
+                raise ValueError("boolean is not a financial value")
             observed = float(raw)
         except (ValueError, TypeError):
             unknown.append(name)

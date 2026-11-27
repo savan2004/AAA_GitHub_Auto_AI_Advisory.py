@@ -311,12 +311,14 @@ def individual_chart_history(symbol, session, *, fetch, alternate=None, official
             if frame is None:
                 continue
             complete = validated_daily_history(frame, session)
+            source = getattr(frame, "attrs", {}).get("history_source", label)
             if complete is None and label == "Yahoo individual":
-                complete = recovery(symbol, frame)
+                repaired = recovery(symbol, frame)
+                complete = validated_daily_history(repaired, session)
                 if complete is not None:
-                    label += " + NSE final archive"
+                    source = label + " + NSE final archive"
             if complete is not None:
-                complete.attrs["history_source"] = getattr(frame, "attrs", {}).get("history_source", label)
+                complete.attrs["history_source"] = source
                 return complete
         except Exception as exc:
             print(f"CHART_INDIVIDUAL_SOURCE symbol={symbol} source={label} error={type(exc).__name__}", flush=True)

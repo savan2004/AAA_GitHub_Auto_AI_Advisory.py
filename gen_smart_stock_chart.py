@@ -3,20 +3,15 @@
 # 11-check weighted scoring | S/R proximity | Weekly trend | Candle confirm
 # BB squeeze | No-Trade Zone | EMA freshness decay | MACD slope-aware
 import sys, os, warnings
+# This is a dedicated chart worker, not the Telegram process. Small daily
+# indicator arrays do not benefit from native BLAS thread pools.
+for _thread_env in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+                    "NUMEXPR_NUM_THREADS"):
+    os.environ[_thread_env] = "1"
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
 from typing import Optional
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import matplotlib.lines as mlines
-import matplotlib.gridspec as gridspec
-from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
-from matplotlib.collections import LineCollection
-import matplotlib.patheffects as pe
-import matplotlib.ticker as mticker
 warnings.filterwarnings("ignore")
 
 # ── PRO DARK THEME PALETTE ────────────────────────────────────────────────────
@@ -308,7 +303,12 @@ def score_symbol_weighted(sym, name, df=None):
             setup = "Trend confirmation: higher highs/lows + weekly trend"
         else:
             setup = ""
+        from msk_chart_release import chart_plan
+        from msk_indicator_math import atr_series
+        atr = float(atr_series(df["High"], df["Low"], df["Close"]).iloc[-1])
+        plan = chart_plan(df, signal, atr) if np.isfinite(atr) and atr > 0 else None
         return {"sym": sym, "name": name, "score": int(score),
+                "verified_trade_plan": plan is not None,
                 "cross_dir": 1 if bullish_cross else 0,
                 "reason": setup or "No independently confirmed bullish setup",
                 "setup_confirmed": bool(setup), "signal": signal,
@@ -592,20 +592,22 @@ def draw_pattern(ax, pattern, data):
         bbox=dict(boxstyle="round,pad=0.25", fc=BG_DARK, ec=col, alpha=0.92, lw=0.9))
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
+from smart_chart_render_handoff import FLAG
+_render_only = len(sys.argv) == 3 and sys.argv[1] == FLAG
 try:
-    import yfinance as yf
-    import mplfinance as mpf
-    # Fix 9: Use curl_cffi session to bypass Render's yfinance 403 restriction
-    # curl_cffi impersonates a browser — works on restricted networks
-    try:
-        from curl_cffi import requests as curl_requests
-        _curl_session = curl_requests.Session(impersonate="chrome110")
-        yf.utils.requests = _curl_session
-        # Also patch the yfinance download session
-        import yfinance.utils
-        yfinance.utils.requests = _curl_session
-    except Exception as _ce:
-        pass  # curl_cffi unavailable — will use standard requests (may 403 on Render)
+    if not _render_only:
+        import yfinance as yf
+        # Fix 9: Use curl_cffi session to bypass Render's yfinance 403 restriction
+        # curl_cffi impersonates a browser — works on restricted networks
+        try:
+            from curl_cffi import requests as curl_requests
+            _curl_session = curl_requests.Session(impersonate="chrome110")
+            yf.utils.requests = _curl_session
+            # Also patch the yfinance download session
+            import yfinance.utils
+            yfinance.utils.requests = _curl_session
+        except Exception as _ce:
+            pass  # curl_cffi unavailable — will use standard requests (may 403 on Render)
 except ImportError as e:
     print(f"[ERROR] Missing dependency: {e}", file=sys.stderr); sys.exit(1)
 
@@ -648,7 +650,17 @@ VALID_PERIODS = {"1mo","3mo","6mo","1y","2y"}
 CHART_PERIOD  = "6mo"
 winner        = None
 
-if len(sys.argv) >= 3:
+if _render_only:
+    from market_breadth import expected_completed_session
+    from smart_chart_render_handoff import read_inherited_handoff
+    try:
+        winner = read_inherited_handoff(int(sys.argv[2]),str(expected_completed_session()))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        print(f"[ERROR] Internal chart render handoff rejected: {type(exc).__name__}",file=sys.stderr)
+        sys.exit(1)
+    forced_sym = winner["sym"]; forced_name = winner["name"]
+    print("CHART_RENDER_PHASE fresh_process=true",flush=True)
+elif len(sys.argv) >= 3:
     forced_sym  = sys.argv[1]
     forced_name = sys.argv[2]
     if len(sys.argv) >= 4 and sys.argv[3] in VALID_PERIODS:
@@ -679,7 +691,8 @@ else:
             session_key=session_key, sample_limit=60,
             individual_history=lambda sym: _individual_history(sym, session_key, recovery=shortlist_recovery),
             shortlist_rank=preliminary_rank, shortlist_recovery=shortlist_recovery,
-            min_score=12, require_confirmed_setup=True, scan_all=True)
+            recover_partial=True, min_score=12, require_confirmed_setup=True, scan_all=True,
+            batch_size=20, parallel_downloads=4, seek_trade_plan=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -690,6 +703,15 @@ else:
     print(f"SCAN: sample {sampled}/{universe_size} valid={valid} session={session_key} score={winner['score']}/20")
     print(f"WINNER: {winner['sym']}|{winner['name']}|{winner['reason']}|{winner['score']:+d}")
     print(f"CHART_DATA_SOURCE: {winner.get('_history_source','Yahoo')}")
+    if os.name == "posix":
+        from smart_chart_render_handoff import replace_with_renderer
+        try:
+            import resource
+            print(f"CHART_SCAN_PEAK_KIB={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}",flush=True)
+            replace_with_renderer(os.path.abspath(__file__),winner,session_key)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            print(f"[ERROR] Internal chart render handoff failed: {type(exc).__name__}",file=sys.stderr)
+            sys.exit(1)
     forced_sym = winner["sym"]; forced_name = winner["name"]
 
 symbol       = forced_sym
@@ -835,6 +857,11 @@ is_wait   = signal_text == "WAIT"
 from msk_chart_release import chart_plan
 level_plan = chart_plan(structure_data, signal_text, atr_val)
 has_levels = level_plan is not None
+if auto_history is not None and bool(winner.get("verified_trade_plan")) != has_levels:
+    print("[ERROR] Pre-render and final trade-plan validation disagree", file=sys.stderr)
+    sys.exit(1)
+print(f"CHART_TRADE_PLAN status={'verified' if has_levels else 'observation_only'} "
+      f"symbol={symbol} reason={'structure_and_rr_valid' if has_levels else 'no_structure_backed_plan_at_minimum_1_5_rr'}", flush=True)
 sl_val = t1_val = t2_val = 0.0  # wire-only absence; never printed as a target
 sl_pct = t1_pct = t2_pct = _rr1 = _rr2 = 0.0
 if has_levels:
@@ -843,6 +870,62 @@ if has_levels:
     sl_pct = abs(last_close - sl_val) / last_close * 100
     t1_pct = abs(t1_val - last_close) / last_close * 100
     t2_pct = abs(t2_val - last_close) / last_close * 100 if second is not None else 0.0
+
+# All network/score/price/level work is complete. Release transient provider
+# bulk response caches before importing the renderer or allocating its canvas.
+# This process is isolated; never clear shared caches in the Telegram parent.
+def _chart_memory_stage(stage):
+    try:
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            peak /= 1024
+        rss = None
+        try:
+            with open("/proc/self/status", encoding="ascii") as status:
+                for line in status:
+                    if line.startswith("VmRSS:"):
+                        rss = int(line.split()[1])
+                        break
+        except OSError:
+            pass
+        print(f"CHART_MEMORY stage={stage} rss_kib={rss} peak_kib={int(peak)}", flush=True)
+    except (ImportError, OSError, ValueError):
+        pass
+
+_chart_memory_stage("before_provider_cleanup")
+try:
+    if _render_only:
+        # The fresh renderer never imports yfinance.
+        raise ImportError("render-only phase")
+    from yfinance import shared as _yf_shared
+    for _cache_name in ("_DFS", "_ERRORS", "_TRACEBACKS", "_ISINS"):
+        _provider_cache = getattr(_yf_shared, _cache_name, None)
+        if isinstance(_provider_cache, dict):
+            _provider_cache.clear()
+except (ImportError, AttributeError):
+    pass
+if "_curl_session" in globals():
+    try:
+        _curl_session.close()
+    except Exception:
+        pass
+import gc
+gc.collect()
+_chart_memory_stage("after_provider_cleanup")
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.lines as mlines
+import matplotlib.gridspec as gridspec
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+from matplotlib.collections import LineCollection
+import matplotlib.patheffects as pe
+import matplotlib.ticker as mticker
+import mplfinance as mpf
+_chart_memory_stage("renderer_loaded")
 
 # ── MPLFINANCE STYLE ──────────────────────────────────────────────────────────
 mc = mpf.make_marketcolors(
@@ -1176,8 +1259,9 @@ try:
     # ── SAVE ──────────────────────────────────────────────────────────────────
     from smart_chart_snapshot import save_bounded_chart_png
     try:
-        size, dpi = save_bounded_chart_png(fig, OUT_FILE, BG_DARK)
+        size, dpi = save_bounded_chart_png(fig, OUT_FILE, BG_DARK, max_dimensions=(1920, 1200))
         print(f"CHART_PNG_SIZE bytes={size} dpi={dpi}")
+        _chart_memory_stage("png_written")
     finally:
         plt.close(fig)
 

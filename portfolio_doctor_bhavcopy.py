@@ -2,7 +2,7 @@
 
 Both prior and latest *official* daily files must be available. The historical
 series must end on the prior session and match its official OHLC prices within
-0.75%. The latest official file must prove previous close continuity. Never
+5 paise and identical volume. The latest official file must prove previous close continuity. Never
 guess a candle, merge unverified histories or write client holdings to disk.
 All data is request-local memory and this file never creates logs.
 """
@@ -14,9 +14,12 @@ from datetime import datetime, date
 from typing import Mapping
 
 import pandas as pd
+from portfolio_doctor_input import MAX_STOCKS
 
 MAX_CSV_BYTES = 20 * 1024 * 1024
 MIN_EQ_ROWS = 400
+FINAL_ARCHIVE_HOSTS = ("https://nsearchives.nseindia.com",
+                       "https://archives.nseindia.com")
 
 
 def _number(value):
@@ -56,7 +59,7 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
     except Exception:
         return {}
     symbols = {str(sym).strip().upper() for sym in (wanted or [])}
-    if not symbols or len(symbols) > 5:
+    if not symbols or len(symbols) > MAX_STOCKS:
         return {}
     url = _BHAV_URL.format(d=day.strftime("%d%m%Y"))
     get = get or requests.get
@@ -70,10 +73,19 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
         # trading date or exchange, or mask a malformed legacy response.
         aliases = {}
         if not getattr(resp, "ok", False):
-            final_url = ("https://nsearchives.nseindia.com/content/cm/"
-                         f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv.zip")
-            resp = get(final_url, headers=_UA, timeout=12)
-            if not getattr(resp, "ok", False):
+            # Try each official archive host at most once for this exact day.
+            # A transport failure may use the mirror; a malformed successful
+            # response must still fail closed, never be hidden by another source.
+            for host in FINAL_ARCHIVE_HOSTS:
+                final_url = (host + "/content/cm/"
+                             f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv.zip")
+                try:
+                    resp = get(final_url, headers=_UA, timeout=12)
+                except requests.RequestException:
+                    continue
+                if getattr(resp, "ok", False):
+                    break
+            else:
                 return {}
             payload = resp.content
             if not 0 < len(payload) <= 4_000_000:
@@ -139,6 +151,25 @@ def fetch_nse_bhavcopy_rows(day, wanted, *, get=None):
         return {}
 
 
+def official_daily_bar_matches(observed, official):
+    """Strict raw exchange OHLCV match; no synthetic prices or adjustment."""
+    try:
+        if not isinstance(official, Mapping):
+            return False
+        for field in ("Open", "High", "Low", "Close", "Volume"):
+            a, b = _number(observed[field]), _number(official[field])
+            if a is None or b is None:
+                return False
+            if field == "Volume":
+                if a < 0 or b < 0 or a != b:
+                    return False
+            elif min(a, b) <= 0 or abs(a - b) > .05 + 1e-9:
+                return False
+        return True
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        return False
+
+
 def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_day, now):
     """Append only if prior-session NSE OHLC agrees with existing series.
 
@@ -150,6 +181,14 @@ def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_da
     if not isinstance(prior, Mapping) or not isinstance(latest, Mapping):
         return None
     try:
+        # Inspect the raw sequence before a shared normalizer can sort or
+        # collapse exact duplicates. Official one-day recovery must be strict.
+        if (not isinstance(primary, pd.DataFrame) or
+                not isinstance(primary.index, pd.DatetimeIndex) or
+                primary.index.has_duplicates or primary.index.hasnans or
+                not primary.index.is_monotonic_increasing or
+                len(set(primary.index.date)) != len(primary)):
+            return None
         original = _clean_frame(primary)
         if original is None:
             return None
@@ -170,17 +209,13 @@ def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_da
         if original.empty or original.index[-1].date() != previous_day or len(original) < 20:
             return None
         hist = original.iloc[-1]
-        for field in ("Open", "High", "Low", "Close"):
-            ref, observed = _number(prior.get(field)), _number(hist[field])
-            if ref is None or observed is None or ref <= 0:
-                return None
-            if abs(observed / ref - 1) > 0.0075:
-                return None
+        if not official_daily_bar_matches(hist, prior):
+            return None
         prior_close = _number(prior.get("Close"))
         last_prev = _number(latest.get("PreviousClose"))
         latest_open = _number(latest.get("Open"))
         if (not prior_close or not last_prev or not latest_open or
-                abs(last_prev / prior_close - 1) > 0.005 or
+                abs(last_prev - prior_close) > .05 + 1e-9 or
                 abs(latest_open / last_prev - 1) > 0.40):
             return None
         target_fields = ("Open", "High", "Low", "Close", "Volume")
@@ -191,14 +226,18 @@ def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_da
         if merged is None or merged.index.has_duplicates:
             return None
         complete = verified_completed_daily_frame(merged, now=now)
-        return complete if len(complete) >= 20 else None
+        return (complete if len(complete) >= 20 and
+                official_daily_bar_matches(complete.iloc[-1], latest) else None)
     except (IndexError, TypeError, KeyError, ValueError, AttributeError,
             OverflowError):
         return None
 
 
 def recover_from_public_bhavcopy(primary_frames, symbols, *, now):
-    """Fetch 2 exchange files ONCE for 1–5 symbols; do not cache or persist."""
+    """Fetch 2 exchange sessions for 1–10 symbols; do not cache or persist."""
+    symbols = list(dict.fromkeys(symbols))
+    if not 1 <= len(symbols) <= MAX_STOCKS:
+        return {}
     from portfolio_doctor_live import expected_doctor_session, previous_doctor_session
     expected = expected_doctor_session(now)
     previous = previous_doctor_session(expected)

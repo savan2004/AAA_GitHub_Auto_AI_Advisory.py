@@ -103,6 +103,41 @@ class BuzzSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ordering"):
             snap._encode(value)
 
+    def test_explicit_watch_and_breakout_observations_round_trip(self):
+        value = scan()
+        for category, kind in (("watch", "WATCH"), ("breakouts", "BREAKOUT")):
+            value[category] = [{"sym": "TEST", "kind": kind, "ltp": 100.,
+                                "entry": 100., "score": 80.,
+                                "level_status": "OBSERVATION_ONLY"}]
+        cleaned, _ = snap._encode(value)
+        self.assertEqual(cleaned["watch"][0]["level_status"], "OBSERVATION_ONLY")
+        value["breakouts"][0]["sl"] = 95.
+        with self.assertRaisesRegex(ValueError, "Observation contains"):
+            snap._encode(value)
+
+    def test_structure_can_withhold_only_second_target(self):
+        value = scan()
+        value["breakouts"] = [{"sym": "TEST", "kind": "BREAKOUT", "ltp": 100.,
+                              "entry": 100., "sl": 95., "t1": 110., "t2": None,
+                              "score": 80., "target_model": "structure-v2",
+                              "level_status": "STRUCTURE"}]
+        cleaned, _ = snap._encode(value)
+        self.assertIsNone(cleaned["breakouts"][0]["t2"])
+        value["breakouts"][0]["t1"] = 90.
+        with self.assertRaisesRegex(ValueError, "ordering"):
+            snap._encode(value)
+        value["breakouts"][0]["t1"] = 110.
+        value["breakouts"][0]["t2"] = 105.
+        with self.assertRaisesRegex(ValueError, "ordering"):
+            snap._encode(value)
+
+    def test_legacy_missing_levels_still_rejected(self):
+        value = scan()
+        value["watch"] = [{"sym": "TEST", "kind": "WATCH", "ltp": 100.,
+                           "entry": 100., "score": 80.}]
+        with self.assertRaisesRegex(ValueError, "market number"):
+            snap._encode(value)
+
     def test_durable_read_rejects_tampering(self):
         value = scan()
         value["data_session"] = self.day.isoformat()

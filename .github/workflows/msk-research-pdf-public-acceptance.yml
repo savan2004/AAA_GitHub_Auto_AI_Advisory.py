@@ -5,6 +5,9 @@ on:
     paths:
       - 'report_generator.py'
       - 'research_pdf_fresh_history.py'
+      - 'research_pdf_price_guard.py'
+      - 'portfolio_doctor_bhavcopy.py'
+      - 'smart_chart_eod_recovery.py'
       - 'research_filing_evidence.py'
       - 'tests/test_equity_report_client_quality.py'
       - '.github/workflows/msk-research-pdf-public-acceptance.yml'
@@ -38,34 +41,39 @@ jobs:
           from datetime import datetime
           from pathlib import Path
           from market_breadth import expected_completed_session
-          from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows
+          from research_pdf_price_guard import public_pdf_reference, verify_public_pdf_price, PublicPDFEvidenceError
           from report_generator import generate_stock_report_pdf
           from pdf_release_gate import validate_research_pdf
 
           symbols = ["DCXINDIA", "APLAPOLLO", "SBIN", "DMART"]
           expected = expected_completed_session()
-          reference = fetch_nse_bhavcopy_rows(expected, symbols)
+          reference = public_pdf_reference(expected, symbols)
+          print(f"PUBLIC_PDF_REFERENCE session={expected} coverage={len(reference)}/{len(symbols)}", flush=True)
           passed = 0
           output = Path("public-pdf-evidence")
           output.mkdir(exist_ok=True)
           for sym in symbols:
               evidence = {}
               path = None
+              stage = "official_reference"
               try:
+                  if sym not in reference:
+                      raise PublicPDFEvidenceError("OFFICIAL_REFERENCE_MISSING")
+                  stage = "generate"
                   ok, result, _ = generate_stock_report_pdf(sym, evidence_out=evidence)
                   if not ok:
-                      raise ValueError("generator withheld")
+                      raise PublicPDFEvidenceError("GENERATOR_WITHHELD")
                   path = Path(result)
+                  stage = "structure"
                   q = validate_research_pdf(path, expected_symbol=sym, min_pages=8)
+                  stage = "trade_disclosure"
                   from pypdf import PdfReader
                   rendered_text = " ".join(page.extract_text() or "" for page in PdfReader(path).pages)
                   if "Use staggered entries" in rendered_text or "Active setup." in rendered_text:
-                      raise ValueError("unverified active instruction")
-                  actual = datetime.strptime(evidence["price_session"], "%d-%b-%Y").date()
-                  close = float(evidence["historical_close"])
-                  if (evidence["symbol"] != sym or actual != expected or sym not in reference
-                          or abs(close-reference[sym]["Close"]) > .05):
-                      raise ValueError("official closing price or date mismatch")
+                      raise PublicPDFEvidenceError("UNVERIFIED_ACTIVE_INSTRUCTION")
+                  stage = "price_reconciliation"
+                  actual, close = verify_public_pdf_price(sym, expected, evidence, reference)
+                  stage = "issuer_filing"
                   if sym == "APLAPOLLO" and expected.isoformat() >= "2026-09-30":
                       filing = evidence.get("filing_evidence") or {}
                       if filing.get("period_end") == "2026-09-30":
@@ -73,12 +81,14 @@ jobs:
                                   or len(filing.get("matched", [])) != 3
                                   or abs(float(evidence["latest_quarter_eps"]) - 13.62) > .001
                                   or "13.62" not in rendered_text):
-                              raise ValueError("APLAPOLLO official quarter EPS missing")
+                              raise PublicPDFEvidenceError("APLAPOLLO_QUARTER_EPS_MISMATCH")
                   path.replace(output / (sym + ".pdf"))
                   print(f"PUBLIC_PDF_PASS symbol={sym} session={actual} close={close} pages={q['pages']} bytes={q['bytes']}")
                   passed += 1
+              except PublicPDFEvidenceError as exc:
+                  print(f"PUBLIC_PDF_WITHHELD symbol={sym} stage={stage} reason={exc}", flush=True)
               except Exception as exc:
-                  print(f"PUBLIC_PDF_WITHHELD symbol={sym} type={type(exc).__name__}")
+                  print(f"PUBLIC_PDF_WITHHELD symbol={sym} stage={stage} type={type(exc).__name__}", flush=True)
               finally:
                   if path is not None:
                       path.unlink(missing_ok=True)
