@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/msk-central-public-data-evidence.yml'
       - 'market_data.py'
+      - 'central_incremental_probe.py'
+      - 'msk_history_incremental_pilot.py'
       - 'data_engine.py'
       - 'msk_history_quality.py'
       - 'portfolio_doctor_bhavcopy.py'
@@ -64,4 +66,87 @@ jobs:
           print(f"PUBLIC_EOD_MATCHED={matched}/{len(symbols)}")
           if matched != len(symbols):
               raise SystemExit("Public sample incomplete or mismatched; no release approval")
+          PY
+
+  incremental-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    env:
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing market data dependencies
+        run: python -m pip install numpy==1.26.4 pandas==2.2.2 requests==2.32.3 yfinance==0.2.61 curl_cffi==0.7.4
+      - name: Ten-equity incremental parity and official NSE evidence (read only)
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import datetime
+          import pandas as pd
+          from central_incremental_probe import run_probe
+          from market_data import bulk_history
+          from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows, stitch_one_verified_day
+          from portfolio_doctor_live import IST, expected_doctor_session, previous_doctor_session
+          from msk_chart_release import validated_daily_history
+
+          symbols = ["DMART", "TCS", "INFY", "RELIANCE", "SBIN", "HDFCBANK",
+                     "ICICIBANK", "ITC", "LT", "ASIANPAINT"]
+          now = datetime.now(IST)
+          session = expected_doctor_session(now)
+          prior = previous_doctor_session(session)
+          official = {}
+          for day in (prior, session):
+              rows = {}
+              for offset in (0, 5):
+                  rows.update(fetch_nse_bhavcopy_rows(day, symbols[offset:offset+5]))
+              official[day] = rows
+              print(f"INCREMENTAL_NSE session={day} coverage={len(rows)}/10", flush=True)
+          if any(len(rows) != len(symbols) for rows in official.values()):
+              raise SystemExit("Incomplete official NSE coverage; no certification")
+
+          captured = {}
+          def observe(tickers, period, **kwargs):
+              frames = bulk_history(tickers, period, **kwargs)
+              captured[period] = frames
+              return frames
+
+          report = run_probe(symbols, prior.isoformat(), [session.isoformat()], fetch=observe)
+          def agrees(row, ref):
+              return (all(abs(float(row[k])-ref[k]) <= .05 for k in ("Open","High","Low","Close"))
+                      and float(row["Volume"]) == ref["Volume"])
+
+          certified = recovered = 0
+          for symbol, record in report["symbols"].items():
+              full = captured["1y"].get(symbol)
+              daily = validated_daily_history(full, session.isoformat())
+              prior_ref = official[prior][symbol]
+              latest_ref = official[session][symbol]
+              verified = (daily is not None and pd.Timestamp(prior) in daily.index
+                          and agrees(daily.loc[pd.Timestamp(prior)], prior_ref)
+                          and agrees(daily.iloc[-1], latest_ref))
+              record["official_two_session_match"] = bool(verified)
+              if verified and record["status"] == "matched":
+                  certified += 1
+              # Exercise the existing official one-day lag recovery only on
+              # actually incomplete histories; never count it as Yahoo parity.
+              if daily is None and full is not None:
+                  repaired = stitch_one_verified_day(full, prior=prior_ref, latest=latest_ref,
+                      previous_day=prior, expected_day=session, now=now)
+                  strict = (repaired is not None and len(repaired) >= 60
+                            and pd.Timestamp(prior) in repaired.index
+                            and agrees(repaired.loc[pd.Timestamp(prior)], prior_ref)
+                            and agrees(repaired.iloc[-1], latest_ref))
+                  record["official_one_day_recovery"] = bool(strict)
+                  recovered += int(strict)
+          report["official_and_incremental_certified"] = certified
+          report["official_one_day_recovered_separate"] = recovered
+          report["full_validated_rows"] = sum(x["full_rows"] for x in report["symbols"].values())
+          report["delta_returned_rows"] = sum(x["delta_rows"] for x in report["symbols"].values())
+          print("INCREMENTAL_EVIDENCE " + json.dumps(report, sort_keys=True), flush=True)
+          if certified != len(symbols):
+              raise SystemExit("Ten-stock parity or independent NSE evidence incomplete; no release approval")
           PY
