@@ -293,6 +293,60 @@ class BhavcopySafeguards(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "archive_unverified"):
                 verify_final_archive(complete, now=NOW, expected=TUESDAY)
 
+    def test_public_probe_switches_from_conflicting_fresh_to_exact_official(self):
+        from scripts.msk_doctor_public_eod_probe import verify_final_archive
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        primary = complete.copy()
+        primary.loc[primary.index[-1], "Volume"] = 9999
+        with patch("requests.get", return_value=SimpleNamespace(status_code=403, ok=False)), \
+             patch("smart_chart_eod_recovery.final_archive_rows",
+                   side_effect=lambda day, wanted: {"INFY.NS": records(day)}), \
+             patch("builtins.print") as output:
+            recovered = verify_final_archive(primary, now=NOW, expected=TUESDAY,
+                alternate_fetch=lambda: self.fail("prior verified; no second provider needed"))
+        self.assertEqual(recovered.iloc[-1]["Volume"], 10000)
+        self.assertEqual(primary.iloc[-1]["Volume"], 9999)
+        self.assertEqual(recovered.attrs["doctor_eod_path"], "primary:official-recovery-conflict")
+        self.assertTrue(any("official_ohlcv_mismatch" in str(call) for call in output.call_args_list))
+
+    def test_public_probe_switches_history_only_when_primary_overlap_fails(self):
+        from scripts.msk_doctor_public_eod_probe import verify_final_archive
+        primary = price_frame()
+        primary.loc[primary.index[-1], "Volume"] = 9999
+        attempts = []
+        def alternate():
+            attempts.append(True)
+            return price_frame()
+        with patch("requests.get", return_value=SimpleNamespace(status_code=403, ok=False)), \
+             patch("smart_chart_eod_recovery.final_archive_rows",
+                   side_effect=lambda day, wanted: {"INFY.NS": records(day)}):
+            recovered = verify_final_archive(primary, now=NOW, expected=TUESDAY,
+                                             alternate_fetch=alternate)
+            self.assertEqual(attempts, [True])
+            self.assertEqual(recovered.attrs["doctor_eod_path"], "alternate:official-recovery-stale")
+            self.assertEqual(recovered.iloc[-1]["Close"], 103)
+            with self.assertRaisesRegex(SystemExit, "prior_overlap_or_continuity"):
+                verify_final_archive(primary, now=NOW, expected=TUESDAY,
+                                     alternate_fetch=lambda: primary)
+            duplicate = pd.concat([price_frame(), price_frame().iloc[-1:]])
+            with self.assertRaisesRegex(SystemExit, "prior_overlap_or_continuity"):
+                verify_final_archive(duplicate, now=NOW, expected=TUESDAY,
+                                     alternate_fetch=lambda: None)
+
+    def test_public_probe_missing_primary_and_failed_alternative_never_invent(self):
+        from scripts.msk_doctor_public_eod_probe import verify_final_archive
+        with patch("requests.get", return_value=SimpleNamespace(status_code=403, ok=False)), \
+             patch("smart_chart_eod_recovery.final_archive_rows",
+                   side_effect=lambda day, wanted: {"INFY.NS": records(day)}):
+            recovered = verify_final_archive(None, now=NOW, expected=TUESDAY,
+                                             alternate_fetch=price_frame)
+            self.assertEqual(recovered.iloc[-1]["Close"], 103)
+            def broken():
+                raise TimeoutError("offline")
+            with self.assertRaisesRegex(SystemExit, "prior_overlap_or_continuity"):
+                verify_final_archive(None, now=NOW, expected=TUESDAY, alternate_fetch=broken)
+
     def test_request_data_kept_in_memory_and_no_sensitive_logging(self):
         path = Path(nse.__file__).read_text(encoding="utf-8")
         for banned in ("logging.", "logger.", "psycopg", "sqlite3", "shelve",
