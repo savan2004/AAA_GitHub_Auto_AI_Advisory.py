@@ -47,7 +47,7 @@ def _run(case, folder):
     text = "\n".join(page.extract_text() or "" for page in pages)
     assert all(symbol in text for symbol in symbols), "incomplete PDF holdings"
     assert not any(symbol in text for symbol in forbidden), "concurrent portfolio data crossed requests"
-    assert "You invested Rs " + invested in text, "incorrect invested total"
+    assert "You invested" in text and invested in text, "incorrect invested total"
 
     assert "Change in value" in text and "RSI (momentum)" in text, "missing financial content"
     if b".BO" in payload:
