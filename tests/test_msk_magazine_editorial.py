@@ -63,6 +63,17 @@ class CompleteEditorialDraftTests(unittest.TestCase):
             self.assertIn("TCS", reader.pages[11].extract_text())
             self.assertIn("+18.06%", reader.pages[7].extract_text())
             self.assertIn("UNAPPROVED EDITORIAL DRAFT", reader.pages[15].extract_text())
+            calendar_positions = {}
+            def collect_calendar_positions(text, cm, tm, font, size):
+                if "2026-12-14" in text:
+                    calendar_positions["last_event"] = tm[5]
+                if "WHAT HAPPENED" in text:
+                    calendar_positions["section_header"] = tm[5]
+            reader.pages[13].extract_text(visitor_text=collect_calendar_positions)
+            self.assertGreaterEqual(calendar_positions["last_event"], 519,
+                                  "Fourth calendar event must stay inside the chart panel")
+            self.assertGreater(calendar_positions["last_event"], calendar_positions["section_header"],
+                              "Calendar event must not overlap the following section")
 
     def test_research_metrics_are_dated_and_numbered(self):
         metrics = load_metrics(METRICS, "2026-11")
