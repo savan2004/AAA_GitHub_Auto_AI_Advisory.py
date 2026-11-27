@@ -68,6 +68,20 @@ class StagingProbeTests(unittest.TestCase):
             with self.subTest(wrapper=raw.startswith("psql ")):
                 self.assertEqual(load_config(env(**{DSN_ENV: raw})), (SAMPLE_DSN, RUN_ID))
 
+
+    def test_conninfo_reports_missing_field_names_only(self):
+        conninfo = (
+            "host=" + STAGING_HOST + " port=5432 dbname=" + STAGING_DATABASE +
+            " user=probe password=FAKE-NOT-A-SECRET sslmode=require"
+        )
+        for field in ("user", "password", "sslmode", "host", "dbname"):
+            raw = " ".join(token for token in conninfo.split() if not token.startswith(field + "="))
+            with self.subTest(missing=field):
+                with self.assertRaisesRegex(ProbeError, "missing fields") as caught:
+                    load_config(env(**{DSN_ENV: raw}))
+                self.assertIn(field, str(caught.exception))
+                self.assertNotIn("FAKE-NOT-A-SECRET", str(caught.exception))
+
     def test_libpq_conninfo_still_rejects_wrong_host_database_and_tls(self):
         conninfo = (
             "host=" + STAGING_HOST + " port=5432 dbname=" + STAGING_DATABASE +
