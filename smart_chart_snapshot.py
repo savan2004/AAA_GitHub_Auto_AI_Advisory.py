@@ -29,7 +29,7 @@ META = re.compile(
 )
 
 
-def save_bounded_chart_png(fig, destination, facecolor):
+def save_bounded_chart_png(fig, destination, facecolor, *, max_dimensions=None):
     """Preserve chart content and use the highest tested DPI under 2 MB.
 
     PNG compression is lossless; only if necessary, re-render at a lower
@@ -40,12 +40,27 @@ def save_bounded_chart_png(fig, destination, facecolor):
                                      dir=destination.parent)
     os.close(fd)
     try:
-        for dpi in (160, 144, 132, 120):
-            fig.savefig(temporary, dpi=dpi, bbox_inches="tight",
+        dpis = (160, 144, 132, 120)
+        if max_dimensions is not None:
+            # Bound the Agg RGBA canvas BEFORE allocation. Preserve the
+            # existing physical layout and aspect ratio; no resampling.
+            width, height = map(float, fig.get_size_inches())
+            limit = min(int(max_dimensions[0] / width), int(max_dimensions[1] / height), 144)
+            if limit < 72:
+                raise ValueError("Chart layout exceeds bounded pixel budget")
+            dpis = tuple(dict.fromkeys(max(72, int(limit * ratio)) for ratio in (1, .92, .84, .76)))
+        for dpi in dpis:
+            fig.savefig(temporary, dpi=dpi, bbox_inches=None if max_dimensions else "tight",
                         facecolor=facecolor, format="png",
                         pil_kwargs={"compress_level": 9})
             size = os.path.getsize(temporary)
             if MIN_PNG_BYTES <= size <= MAX_PNG_BYTES:
+                if max_dimensions is not None:
+                    from PIL import Image
+                    with Image.open(temporary) as image:
+                        if (not 800 <= image.width <= max_dimensions[0]
+                                or not 500 <= image.height <= max_dimensions[1]):
+                            continue
                 os.replace(temporary, destination)
                 return size, dpi
         raise ValueError("Chart PNG cannot meet the 2 MB limit at readable DPI")

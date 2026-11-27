@@ -1,9 +1,15 @@
-name: MSK AI connector v2 — accuracy and safety contracts
+name: MSK AI connector v3 — unified accuracy and safety contracts
 on:
   pull_request:
     branches: [main]
     paths:
       - 'ai_engine.py'
+      - 'msk_ai_output_guard_v3.py'
+      - 'msk_ai_market_context_v3.py'
+      - 'llm_wrapper.py'
+      - 'health_monitor.py'
+      - 'main.py'
+      - 'tests/test_msk_ai_connector_v3.py'
       - 'msk_ai_connector_v2.py'
       - 'tests/test_msk_ai_connector_v2.py'
       - '.github/workflows/msk-ai-connector-v2.yml'
@@ -12,6 +18,12 @@ on:
     branches: [main]
     paths:
       - 'ai_engine.py'
+      - 'msk_ai_output_guard_v3.py'
+      - 'msk_ai_market_context_v3.py'
+      - 'llm_wrapper.py'
+      - 'health_monitor.py'
+      - 'main.py'
+      - 'tests/test_msk_ai_connector_v3.py'
       - 'msk_ai_connector_v2.py'
       - 'tests/test_msk_ai_connector_v2.py'
   workflow_dispatch:
@@ -29,9 +41,9 @@ jobs:
       - name: Install only existing HTTP dependency
         run: python -m pip install requests==2.32.3
       - name: Compile new connector and legacy API facade
-        run: python -m py_compile msk_ai_connector_v2.py ai_engine.py tests/test_msk_ai_connector_v2.py
+        run: python -m py_compile msk_ai_connector_v2.py msk_ai_output_guard_v3.py msk_ai_market_context_v3.py ai_engine.py llm_wrapper.py health_monitor.py main.py tests/test_msk_ai_connector_v2.py tests/test_msk_ai_connector_v3.py
       - name: Test model updates, pricing gate, provider fallback and numeric grounding
-        run: python -m unittest discover -s tests -p 'test_msk_ai_connector_v2.py' -v
+        run: python -m unittest discover -s tests -p 'test_msk_ai_connector_v*.py' -v
       - name: No automatic investment publication
         run: |
           python - <<'PY'
@@ -40,4 +52,80 @@ jobs:
           row=json.loads(Path('msk_builder_research_release_registry.json').read_text())
           assert row['publication_status']=='WITHHELD'
           assert row['approved']==[]
+          PY
+
+  provider-metadata:
+    # Read-only metadata, not a completion or paid-model test. Same-repo
+    # reviewed branch only; no secret exposure to forks or push-to-main jobs.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 270 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/msk-ai-engine-v3-unified-20261124'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check configured Groq and Gemini model metadata only
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from urllib.request import Request, build_opener, HTTPRedirectHandler
+          from urllib.error import HTTPError
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+          opener = build_opener(NoRedirect())
+          providers = (
+              ("groq", os.getenv("GROQ_API_KEY", "").strip(),
+               "https://api.groq.com/openai/v1/models",
+               "openai/gpt-oss-120b"),
+              ("gemini", (os.getenv("GEMINI_API_KEY", "").strip() or
+                          os.getenv("GOOGLE_API_KEY", "").strip()),
+               "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite",
+               "gemini-3.5-flash-lite"),
+          )
+          passed = failures = 0
+          for provider, key, url, model in providers:
+              if not key:
+                  print(provider + ": NOT_CONFIGURED_IN_GITHUB")
+                  continue
+              headers = ({"Authorization": "Bearer " + key} if provider == "groq"
+                         else {"x-goog-api-key": key})
+              try:
+                  with opener.open(Request(url, headers=headers, method="GET"), timeout=12) as response:
+                      data = response.read(1_000_001)
+                  if len(data) > 1_000_000:
+                      raise ValueError("oversized metadata")
+                  payload = json.loads(data)
+                  if provider == "groq":
+                      rows = payload.get("data")
+                      found = isinstance(rows, list) and any(
+                          isinstance(row, dict) and row.get("id") == model for row in rows)
+                  else:
+                      found = (payload.get("name") == "models/" + model and
+                               "generateContent" in payload.get("supportedGenerationMethods", []))
+                  if found:
+                      passed += 1
+                      print(provider + ": MODEL_METADATA_PASS")
+                  else:
+                      failures += 1
+                      print(provider + ": MODEL_METADATA_UNVERIFIED")
+              except HTTPError as exc:
+                  failures += 1
+                  print(provider + ": HTTP_" + str(exc.code))
+              except Exception:
+                  failures += 1
+                  print(provider + ": METADATA_UNAVAILABLE")
+          print("Inference, quota, production credentials and Telegram delivery: NOT_TESTED")
+          if not passed or failures:
+              raise SystemExit("Provider metadata acceptance incomplete")
           PY

@@ -242,8 +242,8 @@ def price_holdings(holdings, *, include_frames=False):
         # daily history lags). Append only after official prior-session OHLC
         # agrees with the original full historical series.
         try:
-            from portfolio_doctor_bhavcopy import recover_from_public_bhavcopy
-            official = recover_from_public_bhavcopy(
+            from market_data import recover_verified_eod_frames
+            official = recover_verified_eod_frames(
                 frames, [sym for sym in stale_symbols if sym in nse_symbols], now=now)
             for sym, fresh in official.items():
                 frames[sym] = fresh
@@ -401,12 +401,45 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
                     or not all(len(b) > 100 for b in bodies)):
                 raise PortfolioDoctorError("PDF_FAILED")
             return raw
-        # Different verified output contracts:
-        # - Basic Doctor: <=5 pages as before.
-        # - Full company appendix: 4/5 basic pages + 1..5 *trailing*
-        #   COMPANY RESEARCH pages, <=10 total.
-        # - Explicitly enabled advanced mode: its separate <=10-page gate.
+        # Six to ten positions use the standard renderer with two results
+        # pages, optional historical risk, and up to one dossier per holding.
+        # Validate the expanded contract rather than relaxing the old limit.
         count = len(pdf.pages)
+        submitted = parse_holdings(filename, payload)
+        if len(submitted) > 5:
+            holding_count = len(submitted)
+            if not 5 <= count <= 6 + holding_count:
+                raise PortfolioDoctorError("PDF_FAILED")
+            titles = [page.extract_text() or "" for page in pdf.pages]
+            required = (
+                "01 / PORTFOLIO DASHBOARD",
+                "02 / HOLDING-WISE VERIFIED RESULTS",
+                "03 / HOLDING-WISE VERIFIED RESULTS",
+                "04 / NIFTY 500 INDUSTRY-PEER WATCHLIST",
+                "05 / RISK, SOURCES AND LIMITS",
+            )
+            if (any("MSK | PORTFOLIO DOCTOR" not in t for t in titles)
+                    or any(title not in titles[i] for i, title in enumerate(required))
+                    or any("Page {} of {}".format(i + 1, count) not in t
+                           for i, t in enumerate(titles))):
+                raise PortfolioDoctorError("PDF_FAILED")
+            symbols = [row["symbol"] for row in submitted]
+            if any(symbol + " | Qty" not in titles[1 + i // 5]
+                   for i, symbol in enumerate(symbols)):
+                raise PortfolioDoctorError("PDF_FAILED")
+            first_dossier = 5
+            if count > 5 and "06 / HISTORICAL RISK" in titles[5]:
+                first_dossier = 6
+            seen = set()
+            for body in titles[first_dossier:]:
+                matches = [symbol for symbol in symbols
+                           if any(line.strip().endswith("/ COMPANY RESEARCH: " + symbol)
+                                  for line in body.splitlines())]
+                if len(matches) != 1 or matches[0] in seen:
+                    raise PortfolioDoctorError("PDF_FAILED")
+                seen.add(matches[0])
+            return raw
+        # Preserve the original basic/advanced gate for up to five holdings.
         if not 1 <= count <= 10:
             raise PortfolioDoctorError("PDF_FAILED")
         if env.get("MSK_PORTFOLIO_DOCTOR_ADVANCED_ENABLED") != "1" and count > 5:
@@ -588,7 +621,8 @@ def worker_main(filename):
             remaining = max(1, min(58, 118 - (time.monotonic() - worker_started)))
             result = build_verified_audit(holdings, recs, frames,
                                           budget_seconds=remaining)
-        elif advanced and not any(h.get("exchange") == "BSE" for h in holdings):
+        elif (advanced and len(holdings) <= 5
+              and not any(h.get("exchange") == "BSE" for h in holdings)):
             recs, frames = price_holdings(holdings, include_frames=True)
             peers = _safe_peer_watchlist(recs)
             try:

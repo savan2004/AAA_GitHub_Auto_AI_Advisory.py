@@ -54,3 +54,25 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_top5_risk_cards.py' -v
       - name: Verify Conservative fail-closed rules stay intact
         run: python -m unittest discover -s tests -p 'test_conservative_shortlist.py' -v
+
+      - name: Verify real official Nifty 100 mirror (read-only)
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.number == 289 &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.head.ref == 'fix/msk-nifty100-official-mirror-20261127'
+        timeout-minutes: 2
+        run: |
+          python - <<'PY'
+          import index_constituents as ic
+          response = ic.requests.get(
+              ic._NIFTY100_OFFICIAL_MIRROR,
+              timeout=(5, 12),
+              headers={"User-Agent": "Mozilla/5.0", "Accept": "text/csv,text/plain,*/*"},
+          )
+          response.raise_for_status()
+          symbols, industries = ic.parse_constituents(response.content, "conservative")
+          assert len(symbols) == len(set(symbols)) == 100, "Official mirror must have 100 distinct symbols"
+          print("OFFICIAL_NIFTY100_MIRROR_VERIFIED=100/100")
+          print("OFFICIAL_NIFTY100_CLASSIFIED=" + str(sum(industries[s] != "Unclassified" for s in symbols)))
+          PY

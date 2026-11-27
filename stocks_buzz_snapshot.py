@@ -64,7 +64,25 @@ def _verified(payload, expected=None):
                 raise ValueError("Invalid Buzz symbol")
             if entry.get("kind") != ("BREAKOUT" if category == "breakouts" else "WATCH"):
                 raise ValueError("Wrong Buzz setup classification")
-            for key in ("ltp", "entry", "sl", "t1", "t2", "score"):
+            # Legacy snapshots still require all three ordered trade levels.
+            # New structure-v2 observations may explicitly withhold all levels;
+            # an actual structure may omit only its unsupported second target.
+            level_status = entry.get("level_status")
+            if level_status not in (None, "OBSERVATION_ONLY", "STRUCTURE"):
+                raise ValueError("Invalid Buzz level status")
+            keys = ["ltp", "entry", "score"]
+            if level_status == "OBSERVATION_ONLY":
+                if any(entry.get(key) is not None for key in ("sl", "t1", "t2", "risk_pct", "target_model")):
+                    raise ValueError("Observation contains Buzz trade levels")
+            elif level_status == "STRUCTURE":
+                if category != "breakouts" or entry.get("target_model") != "structure-v2":
+                    raise ValueError("Invalid Buzz structure model")
+                keys.extend(("sl", "t1"))
+                if entry.get("t2") is not None:
+                    keys.append("t2")
+            else:
+                keys.extend(("sl", "t1", "t2"))
+            for key in keys:
                 value = entry.get(key)
                 if type(value) not in (float, int) or not math.isfinite(value):
                     raise ValueError("Invalid Buzz market number")
@@ -73,8 +91,11 @@ def _verified(payload, expected=None):
                         raise ValueError("Invalid Buzz rating")
                 elif value <= 0:
                     raise ValueError("Invalid Buzz market price")
-            if not entry["sl"] < entry["entry"] < entry["t1"] < entry["t2"]:
-                raise ValueError("Buzz trade level ordering invalid")
+            if level_status != "OBSERVATION_ONLY":
+                if not entry["sl"] < entry["entry"] < entry["t1"]:
+                    raise ValueError("Buzz trade level ordering invalid")
+                if "t2" in keys and not entry["t1"] < entry["t2"]:
+                    raise ValueError("Buzz trade level ordering invalid")
     return payload
 
 

@@ -51,6 +51,31 @@ class OfficialIndexMembershipTests(unittest.TestCase):
             self.assertTrue(again["cached"])
             self.assertEqual(get.call_count, 1)
 
+    def test_nifty100_official_mirror_after_archive_http_errors(self):
+        response = Mock()
+        response.content = nse_csv(100)
+        response.raise_for_status.return_value = None
+        with patch.object(ic, "_CACHE", {}), patch.object(
+                ic.requests, "get", side_effect=[
+                    ic.requests.HTTPError("403"), ic.requests.HTTPError("403"), response]) as get:
+            universe = ic.get_index_universe("conservative")
+            self.assertEqual(len(universe["symbols"]), 100)
+            self.assertEqual(universe["industries"]["TEST001"], "Sector1")
+            self.assertEqual(get.call_count, 3)
+            self.assertEqual(get.call_args.args[0], ic._NIFTY100_OFFICIAL_MIRROR)
+            self.assertTrue(ic.get_index_universe("conservative")["cached"])
+            self.assertEqual(get.call_count, 3)
+
+    def test_nifty100_mirror_wrong_count_fails_closed(self):
+        response = Mock()
+        response.content = nse_csv(99)
+        response.raise_for_status.return_value = None
+        with patch.object(ic, "_CACHE", {}), patch.object(
+                ic.requests, "get", side_effect=[
+                    ic.requests.HTTPError("403"), ic.requests.HTTPError("403"), response]):
+            with self.assertRaises(RuntimeError):
+                ic.get_index_universe("conservative")
+
     def test_old_midcap150_constituents_cannot_be_accepted_as_midcap100(self):
         self.assertEqual(ic.INDEXES["moderate"]["count"], 100)
         self.assertEqual(ic.INDEXES["moderate"]["filename"],

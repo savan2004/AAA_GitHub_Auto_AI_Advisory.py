@@ -152,6 +152,49 @@ class PDFReleaseGateTests(unittest.TestCase):
             self.assertIn("size outside delivery bounds", message)
             self.assertFalse(list(Path(td).glob("*.pdf")))
 
+    def test_unique_files_for_same_symbol_and_partial_render_cleanup(self):
+        def write_ok(R, path, **kwargs):
+            Path(path).write_bytes(b"%PDF-" + b"x" * 30000)
+
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(rg, "OUTPUT_DIR", td), \
+             patch.object(rg, "collect_inputs", return_value={}), \
+             patch.object(rg, "assemble", return_value={"name": "SBIN"}), \
+             patch.object(rg, "build_pdf", side_effect=write_ok), \
+             patch("pdf_release_gate.validate_research_pdf",
+                   return_value={"pages": 8, "bytes": 30005}):
+            first = rg.generate_stock_report_pdf("SBIN")
+            second = rg.generate_stock_report_pdf("SBIN")
+            self.assertTrue(first[0] and second[0])
+            self.assertNotEqual(first[1], second[1])
+            self.assertTrue(Path(first[1]).exists() and Path(second[1]).exists())
+            Path(first[1]).unlink()
+            Path(second[1]).unlink()
+
+            def partial_then_fail(R, path, **kwargs):
+                write_ok(R, path)
+                raise RuntimeError("synthetic render failure")
+            with patch.object(rg, "build_pdf", side_effect=partial_then_fail):
+                self.assertFalse(rg.generate_stock_report_pdf("SBIN")[0])
+            self.assertFalse(list(Path(td).glob("*.pdf")))
+            self.assertTrue(rg.generate_stock_report_pdf("SBIN")[0])
+
+    def test_overlapping_generation_does_not_start_second_pipeline(self):
+        self.assertTrue(rg._REPORT_GENERATION_LOCK.acquire(blocking=False))
+        try:
+            with patch.object(rg, "collect_inputs") as collect:
+                ok, error, _ = rg.generate_stock_report_pdf("SBIN")
+                self.assertFalse(ok)
+                self.assertIn("busy", error)
+                collect.assert_not_called()
+        finally:
+            rg._REPORT_GENERATION_LOCK.release()
+
+    def test_invalid_ticker_never_opens_a_file(self):
+        with patch.object(rg, "collect_inputs") as collect:
+            self.assertFalse(rg.generate_stock_report_pdf("../bad/path")[0])
+            collect.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

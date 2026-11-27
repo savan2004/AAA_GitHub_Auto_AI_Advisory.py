@@ -120,10 +120,10 @@ def check_ai_providers() -> Dict[str, Tuple[str, str]]:
         
         for provider in ["groq", "gemini", "openai", "askfuzz"]:
             if status[provider]["configured"]:
-                # Provider is configured, assume OK (actual test would be expensive)
+                # Credential presence does not prove model access or provider health.
                 result[provider] = (
-                    HealthStatus.OK,
-                    f"{provider.upper()} configured and ready"
+                    HealthStatus.UNKNOWN,
+                    f"{provider.upper()} configured; live health unverified"
                 )
             else:
                 result[provider] = (
@@ -135,7 +135,7 @@ def check_ai_providers() -> Dict[str, Tuple[str, str]]:
     
     except Exception as exc:
         return {
-            "error": (HealthStatus.ERROR, f"AI check failed: {str(exc)[:80]}")
+            "error": (HealthStatus.ERROR, "AI check failed; provider health unverified")
         }
 
 

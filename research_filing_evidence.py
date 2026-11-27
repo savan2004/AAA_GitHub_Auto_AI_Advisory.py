@@ -19,6 +19,27 @@ import re
 # below in ₹ crore (divide exchange values by 100).
 # DMART FY27 Q2: INR lakh rev 19,64,401; PAT 74,298; basic EPS 11.40.
 OFFICIAL_QUARTERS = {
+    "APLAPOLLO": {
+        "issuer": "APL Apollo Tubes Limited",
+        "isin": "INE702C01027",
+        "period_end": "2026-09-30",
+        "filed": "2026-10-26",
+        "scope": "consolidated",
+        "assurance": "unaudited / limited review",
+        "reviewed_date": "2026-11-26",
+        "source_url": (
+            "https://nsearchives.nseindia.com/corporate/ixbrl/"
+            "INTEGRATED_FILING_INDAS_204323_26102026175541_iXBRL_WEB.html"
+        ),
+        "metrics_in_crore": {"revenue": 7001.70, "net_profit": 382.42},
+        "eps_rupees": 13.62,
+        # Do not reuse DMART-specific debt/equity, cash-flow or retail KPI
+        # presentation until their scope and definitions are validated here.
+        "exchange_debt_equity": None,
+        "h1_operating_cash_flow_crore": None,
+        "h1_profit_crore": None,
+        "operating_kpis": {},
+    },
     "DMART": {
         "issuer": "Avenue Supermarts Limited",
         "isin": "INE192R01011",
@@ -115,8 +136,13 @@ def annual_exchange_comparison(symbol, statements):
     if len(same) != 1:
         return {**base, "status": "period_not_comparable"}
     row = same[0]
+    scope = row.get("scope", (statements or {}).get("scope"))
+    if scope is not None and scope != official["scope"]:
+        return {**base, "status": "scope_not_comparable"}
     for field in ("revenue", "net_profit"):
         try:
+            if isinstance(row[field], bool):
+                raise ValueError("boolean is not a financial value")
             observed = float(row[field])
         except (KeyError, ValueError, TypeError):
             return {**base, "status": "missing_core", "missing": field}
@@ -193,6 +219,9 @@ def reconcile_official_quarter(symbol, statements):
         return {**base, "status": "period_not_comparable", "matched": [], "mismatched": [],
                 "secondary_period_end": latest_day}
 
+    scope = latest.get("scope", (statements or {}).get("scope"))
+    if scope is not None and scope != official["scope"]:
+        return {**base, "status": "scope_not_comparable", "matched": [], "mismatched": []}
     matches, mismatches, unknown = [], [], []
     fields = {
         "revenue": (official["metrics_in_crore"]["revenue"], 0.55, "₹ Cr"),
@@ -202,6 +231,8 @@ def reconcile_official_quarter(symbol, statements):
     for name, (reference, tolerance, unit) in fields.items():
         raw = latest.get(name)
         try:
+            if isinstance(raw, bool):
+                raise ValueError("boolean is not a financial value")
             observed = float(raw)
         except (ValueError, TypeError):
             unknown.append(name)
@@ -222,3 +253,31 @@ def reconcile_official_quarter(symbol, statements):
     return {**base, "status": status, "matched": matches,
             "mismatched": mismatches, "missing": unknown,
             "secondary_period_end": latest_day}
+
+def repair_verified_quarter_eps(symbol, statements):
+    """Use dated official basic EPS only for the reviewed isolated APL mismatch.
+
+    Two comparable core financial fields and the exact period must match first.
+    Leave other contradictions fail-closed. Do not mutate cached provider data.
+    Older quarterly EPS and provider P/E are not independently verified here.
+    """
+    proof = reconcile_official_quarter(symbol, statements)
+    key = str(symbol or "").upper().replace(".NS", "")
+    if key != "APLAPOLLO" or proof.get("status") != "mismatch":
+        return statements, proof
+    if ({row["field"] for row in proof.get("matched", [])} != {"revenue", "net_profit"}
+            or [row["field"] for row in proof.get("mismatched", [])] != ["eps"]
+            or proof.get("missing")):
+        return statements, proof
+    original = proof["mismatched"][0]
+    # The official filing specifies basic EPS for the exact consolidated quarter.
+    # Revenue and profit agree within source rounding; do not substitute values
+    # from a different period or override any other unresolved discrepancy.
+    quarters = [dict(row) for row in statements["quarters"]]
+    quarters[-1]["eps"] = original["official"]
+    corrected = {**statements, "quarters": quarters}
+    checked = reconcile_official_quarter(symbol, corrected)
+    if checked.get("status") != "partial_match" or len(checked["matched"]) != 3:
+        return statements, proof
+    return corrected, {**checked, "eps_correction": dict(original)}
+

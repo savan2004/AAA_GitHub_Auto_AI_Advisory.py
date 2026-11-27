@@ -56,6 +56,32 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
             self.assertEqual(destination.read_bytes(), self.image)
             self.assertEqual(list(Path(folder).iterdir()), [destination])
 
+    def test_bounded_renderer_caps_canvas_before_save(self):
+        fig = MagicMock()
+        fig.get_size_inches.return_value = (16, 10)
+        def render(path, **kw):
+            self.assertLessEqual(kw["dpi"], 120)
+            self.assertIsNone(kw["bbox_inches"])
+            Path(path).write_bytes(self.image)
+        fig.savefig.side_effect = render
+        with tempfile.TemporaryDirectory() as folder:
+            dest = Path(folder) / "chart.png"
+            size, dpi = store.save_bounded_chart_png(fig, dest, "#ffffff",
+                                                       max_dimensions=(1920, 1200))
+            self.assertEqual(dpi, 120)
+            self.assertEqual(dest.read_bytes(), self.image)
+
+    def test_chart_worker_defers_plot_imports_and_releases_provider_caches(self):
+        source = (Path(__file__).resolve().parent /
+                  "gen_smart_stock_chart.py").read_text(encoding="utf-8")
+        self.assertLess(source.index('os.environ[_thread_env] = "1"'),
+                        source.index("import numpy as np"))
+        self.assertLess(source.index("winner, sampled, valid, universe_size = choose_auto_chart("),
+                        source.index("import matplotlib\n"))
+        self.assertLess(source.index("_provider_cache.clear()"),
+                        source.index("import mplfinance as mpf"))
+        self.assertIn('_chart_memory_stage("png_written")', source)
+
     def test_renderer_rejects_oversize_without_exposing_file(self):
         fig = MagicMock()
         fig.savefig.side_effect = lambda path, **kwargs: Path(path).write_bytes(

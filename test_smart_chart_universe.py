@@ -66,6 +66,39 @@ class Nifty100UniverseTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         load_nifty100_universe()
 
+    def test_official_component_union_only_when_disjoint(self):
+        import requests
+        from smart_chart_universe import NSE_COMPONENT_URLS
+        first = [f"STOCK{i}" for i in range(50)]
+        second = [f"STOCK{i}" for i in range(50, 100)]
+        failures = [requests.Timeout()] * len(NSE_NIFTY100_URLS)
+        with patch("smart_chart_universe.requests.get", side_effect=failures +
+                   [self.response(first), self.response(second)]) as fetch:
+            members, source = load_nifty100_universe()
+        self.assertEqual(len(members), 100)
+        self.assertEqual(source, "NSE_NIFTY50_PLUS_NEXT50")
+        self.assertEqual(fetch.call_args.args[0], NSE_COMPONENT_URLS[1])
+        with patch("smart_chart_universe.requests.get", side_effect=failures +
+                   [self.response(first), self.response(first)]):
+            with self.assertRaises(RuntimeError):
+                load_nifty100_universe()
+
+    def test_snapshot_accepts_only_same_day_and_official_source(self):
+        import tempfile
+        from pathlib import Path
+        from datetime import datetime, timedelta
+        from smart_chart_universe import IST, _save_members, _read_members
+        symbols = [f"STOCK{i}" for i in range(100)]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "public.json"
+            now = datetime(2026, 11, 27, 12, tzinfo=IST)
+            _save_members(path, symbols, [NSE_NIFTY100_URLS[0]], now)
+            self.assertEqual(_read_members(path, now + timedelta(hours=1))[0], symbols)
+            self.assertIsNone(_read_members(path, now - timedelta(seconds=1)))
+            self.assertIsNone(_read_members(path, now + timedelta(hours=13)))
+            _save_members(path, symbols, ["https://example.com"], now)
+            self.assertIsNone(_read_members(path, now))
+
     def test_manual_path_does_not_load_universe(self):
         from pathlib import Path
         source = (Path(__file__).resolve().parent /

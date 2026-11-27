@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import logging
 import os
+import sys
 import threading
 import unittest
 from unittest.mock import Mock, patch
@@ -39,8 +40,9 @@ def _world(result_path):
     ns = {
         "resolve_symbol": lambda value: ("SBIN.NS", "State Bank of India"),
         "safe_send": send, "threading": thread,
-        "generate_stock_report_pdf": lambda sym: (True, str(result_path), "State Bank of India"),
+        "generate_stock_report_pdf": lambda sym, **kwargs: (True, str(result_path), "State Bank of India"),
         "logger": logging.getLogger("test_pdf_button"),
+        "get_verified_quote": lambda sym: None,
         "bot": bot, "_record_telegram_api_ack": ack,
         "datetime": datetime, "os": os,
     }
@@ -48,6 +50,21 @@ def _world(result_path):
 
 
 class ResearchPdfButtonGateTests(unittest.TestCase):
+    def setUp(self):
+        # Exercise the production formatter, including a missing quote.
+        from research_pdf_snapshot import report_quote_line as quote_line
+        snapshot = SimpleNamespace(
+            load_recent_local_report=Mock(return_value=None),
+            load_verified_report=Mock(return_value=None),
+            report_quote_line=quote_line)
+        drive = SimpleNamespace(load_cloud_report=Mock(return_value=None),
+                                store_cloud_report=Mock(return_value=True))
+        modules = patch.dict(sys.modules, {
+            "research_pdf_snapshot": snapshot,
+            "research_pdf_drive": drive,
+        })
+        modules.start()
+        self.addCleanup(modules.stop)
     def test_rejects_short_report_and_does_not_send(self):
         from pdf_release_gate import ResearchPDFRefused
         with TemporaryDirectory() as folder:
@@ -69,7 +86,7 @@ class ResearchPdfButtonGateTests(unittest.TestCase):
         with TemporaryDirectory() as folder:
             run, send, bot, ack = _world(Path(folder) / "unused.pdf")
             secret = "postgresql://private-user:private-password@hidden-host/db"
-            run.__globals__["generate_stock_report_pdf"] = lambda sym: (
+            run.__globals__["generate_stock_report_pdf"] = lambda sym, **kwargs: (
                 False, "HTTP failure: " + secret, "Issuer")
             run(12, "SBIN")
             customer_text = " ".join(str(call.args[1])
@@ -83,7 +100,7 @@ class ResearchPdfButtonGateTests(unittest.TestCase):
         with TemporaryDirectory() as folder:
             run, send, bot, ack = _world(Path(folder) / "unused.pdf")
             secret = "PRIVATE_PROVIDER_TOKEN_NOT_FOR_TELEGRAM"
-            def fail(_sym):
+            def fail(_sym, **kwargs):
                 raise RuntimeError(secret)
             run.__globals__["generate_stock_report_pdf"] = fail
             run(12, "SBIN")
@@ -108,7 +125,50 @@ class ResearchPdfButtonGateTests(unittest.TestCase):
             bot.send_document.assert_called_once()
             ack.assert_called_once()
             self.assertEqual(ack.call_args.args[2], "document")
+            self.assertIn("Latest verified price unavailable", bot.send_document.call_args.kwargs["caption"])
             self.assertFalse(file.exists())
+
+    def test_delivery_precedes_cloud_archive(self):
+        with TemporaryDirectory() as folder:
+            file = Path(folder) / "SBIN_report.pdf"
+            file.write_bytes(b"%PDF-1.4\nfixture")
+            run, send, bot, ack = _world(file)
+            events = []
+            def generate(sym, *, evidence_out, archive_cloud):
+                self.assertFalse(archive_cloud)
+                evidence_out["price_session"] = "25-Nov-2026"
+                return True, str(file), "Issuer"
+            run.__globals__["generate_stock_report_pdf"] = generate
+            bot.send_document.side_effect = lambda *a, **k: (
+                events.append("send") or SimpleNamespace(
+                    message_id=123, document=SimpleNamespace(file_id="fixture")))
+            ack.side_effect = lambda *a: events.append("ack")
+            with patch("pdf_release_gate.validate_research_pdf",
+                       return_value={"pages": 8, "bytes": 685897}), \
+                 patch("research_pdf_drive.store_cloud_report",
+                       side_effect=lambda *a: events.append("archive")):
+                run(12, "SBIN")
+            self.assertEqual(events, ["send", "ack", "archive"])
+            self.assertFalse(file.exists())
+
+    def test_uncertain_document_is_never_retried_or_marked_delivered(self):
+        for response in (TimeoutError("uncertain"), SimpleNamespace(message_id=123)):
+            with self.subTest(response=response), TemporaryDirectory() as folder:
+                file = Path(folder) / "SBIN_report.pdf"
+                file.write_bytes(b"%PDF-1.4\nfixture")
+                run, send, bot, ack = _world(file)
+                if isinstance(response, Exception):
+                    bot.send_document.side_effect = response
+                else:
+                    bot.send_document.return_value = response
+                with patch("pdf_release_gate.validate_research_pdf",
+                           return_value={"pages": 8, "bytes": 685897}):
+                    run(12, "SBIN")
+                bot.send_document.assert_called_once()
+                ack.assert_not_called()
+                self.assertFalse(file.exists())
+                self.assertTrue(any("delivery not confirmed" in str(x.args[1]).lower()
+                                    for x in send.call_args_list))
 
     def test_verified_daily_cache_skips_all_slow_downloads(self):
         with TemporaryDirectory() as folder:
@@ -140,6 +200,38 @@ class ResearchPdfButtonGateTests(unittest.TestCase):
                 run(12, "SBIN")
             bot.send_document.assert_not_called()
             self.assertFalse(file.exists())
+
+    def test_local_report_reuses_file_and_updates_only_caption(self):
+        with TemporaryDirectory() as folder:
+            file = Path(folder) / "SBIN_cached.pdf"
+            raw = b"%PDF-1.4\nlocal fixture"
+            file.write_bytes(raw)
+            run, send, bot, ack = _world(file)
+            run.__globals__["generate_stock_report_pdf"] = Mock(
+                side_effect=AssertionError("No full regeneration"))
+            run.__globals__["get_verified_quote"] = lambda sym: {
+                "price": 123.45, "quote_source": "NSE India",
+                "quote_asof_ist": "2026-11-13T14:10:00+05:30",
+                "quote_status": "recent_observation"}
+            captured = []
+            def capture(chat, stream, **kwargs):
+                captured.append((stream.read(), kwargs["caption"]))
+                return SimpleNamespace(message_id=123, document=SimpleNamespace(file_id="fixture"))
+            bot.send_document.side_effect = capture
+            with (
+                patch("research_pdf_snapshot.load_recent_local_report",
+                      return_value=(str(file), "2026-11-13")),
+                patch("research_pdf_snapshot.load_verified_report",
+                      side_effect=AssertionError("No DB read on local hit")),
+                patch("pdf_release_gate.validate_research_pdf",
+                      return_value={"pages": 8, "bytes": 685897}),
+            ):
+                run(12, "SBIN")
+            self.assertEqual(captured[0][0], raw)
+            self.assertIn("123.45", captured[0][1])
+            self.assertIn("14:10 IST", captured[0][1])
+            bot.send_document.assert_called_once()
+            ack.assert_called_once()
 
 
 if __name__ == "__main__":
