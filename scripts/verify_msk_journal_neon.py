@@ -17,7 +17,7 @@ import shlex
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from msk_signal_journal import JournalError, PostgresSignalJournal, make_event
@@ -38,6 +38,39 @@ class ProbeError(RuntimeError):
     """A staging safeguard or expected test result was not satisfied."""
 
 
+def _conninfo_to_url(raw):
+    """Normalize a standard libpq key/value string after strict staging checks."""
+    try:
+        tokens = shlex.split(raw)
+    except ValueError:
+        raise ProbeError("Staging connection info is malformed") from None
+    allowed = {"host", "port", "dbname", "user", "password", "sslmode", "channel_binding"}
+    values = {}
+    for token in tokens:
+        if "=" not in token:
+            raise ProbeError("Staging connection info contains an unsupported option")
+        key, value = token.split("=", 1)
+        if key not in allowed or key in values:
+            raise ProbeError("Staging connection info contains unsupported or duplicate options")
+        values[key] = value
+    required = {"host", "dbname", "user", "password", "sslmode"}
+    if not required.issubset(values) or any(not values[k] for k in required):
+        raise ProbeError("Staging connection info is incomplete")
+    if values["host"] != STAGING_HOST or values.get("port", "5432") not in ("", "5432"):
+        raise ProbeError("Connection is NOT the approved staging direct host; select branch br-delicate-base-b3zz6z20, non-pooled")
+    if values["dbname"] != STAGING_DATABASE:
+        raise ProbeError("Wrong staging database; select msk_index_research")
+    if values["sslmode"] != "require":
+        raise ProbeError("Staging connection must use sslmode=require")
+    if values.get("channel_binding", "") not in ("", "require", "prefer"):
+        raise ProbeError("Staging connection channel binding option unsupported")
+    query = {"sslmode": "require"}
+    if values.get("channel_binding"):
+        query["channel_binding"] = values["channel_binding"]
+    authority = quote(values["user"], safe="") + ":" + quote(values["password"], safe="") + "@" + STAGING_HOST
+    return urlunsplit(("postgresql", authority, "/" + quote(STAGING_DATABASE, safe=""), urlencode(query), ""))
+
+
 def load_config(env=None):
     """Reject default/production Neon connections before making ANY SQL call."""
     env = os.environ if env is None else env
@@ -49,20 +82,30 @@ def load_config(env=None):
         raise ProbeError("Provide a unique 14-digit staging probe ID")
     if not isinstance(dsn, str) or not dsn:
         raise ProbeError("Private staging DSN is missing")
-    # Neon Connect can copy either the URL or a complete psql command.
-    # Parse the wrapper as data; never execute a command or infer a password.
+    # Neon Connect can copy a URL, psql URL wrapper, or libpq key/value
+    # connection info. Parse as data only; never execute a command or print secrets.
     dsn = dsn.strip()
     if dsn.startswith("psql ") or dsn[:1] in ("'", '"'):
         try:
             tokens = shlex.split(dsn)
         except ValueError:
             raise ProbeError("Staging DSN wrapper is malformed") from None
-        if len(tokens) == 2 and tokens[0] == "psql":
-            dsn = tokens[1]
+        if tokens and tokens[0] == "psql":
+            args = tokens[1:]
+            if len(args) == 1 and args[0].startswith(("postgres://", "postgresql://", "postgresql+psycopg://", "postgresql+psycopg2://", "postgresql+psycopg3://")):
+                dsn = args[0]
+            elif args and all("=" in token for token in args):
+                dsn = " ".join(args)
+            else:
+                raise ProbeError("Staging DSN wrapper is unsupported")
         elif len(tokens) == 1 and dsn[:1] in ("'", '"'):
             dsn = tokens[0]
         else:
             raise ProbeError("Staging DSN wrapper is unsupported")
+    # Common Neon "Copy as psql command" key/value format has no URL scheme.
+    # Convert only after pinning host, database and TLS options.
+    if "=" in dsn and "://" not in dsn:
+        dsn = _conninfo_to_url(dsn)
     try:
         if not dsn or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in dsn):
             raise ValueError("invalid URL")
