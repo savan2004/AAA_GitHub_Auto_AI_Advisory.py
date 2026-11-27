@@ -474,8 +474,11 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
                            for i, t in enumerate(titles))):
                 raise PortfolioDoctorError("PDF_FAILED")
             symbols = [row["symbol"] for row in submitted]
-            if any(symbol + " | Qty" not in titles[1 + i // 5]
+            if any(symbol not in titles[1 + i // 5]
                    for i, symbol in enumerate(symbols)):
+                raise PortfolioDoctorError("PDF_FAILED")
+            if any("Shares" not in titles[1 + i // 5]
+                   for i in range(len(symbols))):
                 raise PortfolioDoctorError("PDF_FAILED")
             first_dossier = 5
             if count > 5 and "06 / HISTORICAL RISK" in titles[5]:
