@@ -44,6 +44,39 @@ def _archive_config_status():
     return "CONFIGURED"
 
 
+def probe_drive_access():
+    """Opt-in, read-only OAuth/folder check; works while archiving is disabled."""
+    if os.getenv("MSK_DRIVE_READONLY_PROBE", "").strip() != "1":
+        return False
+    if os.getenv("MSK_RESEARCH_DRIVE_FOLDER_ID") != FOLDER:
+        LOG.warning("MSK_DRIVE_PROBE_FAILED stage=config reason=FOLDER_NOT_CONFIGURED")
+        return False
+    if any(not os.getenv("MSK_DRIVE_" + k, "").strip()
+           for k in ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN")):
+        LOG.warning("MSK_DRIVE_PROBE_FAILED stage=config reason=OAUTH_CONFIGURATION_MISSING")
+        return False
+    client = None
+    stage = "oauth_folder"
+    try:
+        client = Drive()
+        stage = "list"
+        rows = client.list()
+        LOG.info("MSK_DRIVE_PROBE_PASS folder_verified=true managed_count=%d", len(rows))
+        return True
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        status = status if type(status) is int and 100 <= status <= 599 else "-"
+        if getattr(response, "url", "") == "https://oauth2.googleapis.com/token":
+            stage = "token_exchange"
+        LOG.warning("MSK_DRIVE_PROBE_FAILED stage=%s type=%s http=%s",
+                    stage, type(exc).__name__, status)
+        return False
+    finally:
+        if client is not None:
+            client.close()
+
+
 def _now():
     return datetime.now(timezone.utc)
 
