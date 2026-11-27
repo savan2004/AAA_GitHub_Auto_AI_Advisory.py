@@ -126,7 +126,9 @@ class RewritePDFTests(unittest.TestCase):
         pages = PdfReader(io.BytesIO(raw), strict=True).pages
         text = "\n".join(page.extract_text() or "" for page in pages)
         self.assertIn("999,999,999,130,000,000.00", text)
-        self.assertIn("Trend: Below EMA20/50 | EMA20>EMA50", " ".join(text.split()))
+        self.assertIn("Recent price trend: Below both short- and medium-term averages.", " ".join(text.split()))
+        self.assertIn("You invested", text)
+        self.assertIn("paper gain/loss", text)
         self.assertNotIn("Mixed / insufficient trend confirmation", text)
         overflow = []
         for page in pages:
@@ -140,6 +142,35 @@ class RewritePDFTests(unittest.TestCase):
         self.assertEqual(overflow, [])
         self.assertLessEqual(len(pages), 5)
 
+
+    def test_ten_holding_cards_fit_five_per_page_without_overflow(self):
+        rows = []
+        for index in range(10):
+            rows.append({
+                "symbol": "STOCK{:02d}".format(index), "qty": 10., "buy": 100.,
+                "close": 105., "date": "2026-11-27", "invested": 1000.,
+                "value": 1050., "pnl": 50., "pnl_pct": 5., "weight": 10.,
+                "ema20": 103., "ema50": 102., "rsi14": 55.,
+                "high20": 110., "low20": 90., "return20": 2.,
+                "price_source": "Yahoo verified daily",
+            })
+        raw = doctor.build_pdf_bytes(rows)
+        pages = PdfReader(io.BytesIO(raw), strict=True).pages
+        self.assertEqual(len(pages), 5)
+        page_text = [page.extract_text() or "" for page in pages]
+        self.assertTrue(all("STOCK{:02d}".format(i) in page_text[1] for i in range(5)))
+        self.assertTrue(all("STOCK{:02d}".format(i) in page_text[2] for i in range(5, 10)))
+        self.assertIn("YOUR STOCKS, ONE BY ONE", page_text[1])
+        overflow = []
+        for page in pages:
+            def visit(text, cm, tm, font, size):
+                label = text.rstrip("\\n")
+                if label and font:
+                    face = str(font.get("/BaseFont", "/Helvetica")).lstrip("/")
+                    if float(tm[4]) + stringWidth(label, face, size) > float(page.mediabox.width) - 41:
+                        overflow.append(label)
+            page.extract_text(visitor_text=visit)
+        self.assertEqual(overflow, [])
 
 class NumberedIndianSymbolTests(unittest.TestCase):
     def test_both_requested_formats_have_identical_positions(self):
