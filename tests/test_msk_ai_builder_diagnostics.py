@@ -18,6 +18,20 @@ from test_msk_ai_builder_filings import MEMBER, NOW, URL, fixture
 
 
 class ResearchFailureDiagnostics(unittest.TestCase):
+    def test_matched_quarter_still_lists_release_evidence_for_every_issuer(self):
+        rows = [{"symbol": "FIXTURE", "status": "LATEST_QUARTER_MATCHED_ONLY",
+                 "period": "2026-09-30", "scope": "consolidated"},
+                {"symbol": "MISSING", "status": "FILING_METADATA_COVERAGE"}]
+        summary = diagnostic_summary(rows, requested=2)
+        self.assertEqual(len(summary["release_coverage"]), 2)
+        for row in summary["release_coverage"]:
+            self.assertEqual(row["publication_status"], "WITHHELD")
+            self.assertIn("completed-session price reconciliation", row["remaining_evidence"])
+        rendered = diagnostic_markdown(summary)
+        self.assertIn("FIXTURE | 2026-09-30 | consolidated", rendered)
+        self.assertIn("MISSING", rendered)
+        self.assertFalse(summary["rehearsal_passed"])
+
     def inputs(self):
         return QuarterCheckTests().setup_inputs()
 

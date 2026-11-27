@@ -266,7 +266,23 @@ def diagnostic_summary(rows, *, requested=None):
                   {k: r.get(k) for k in (
                       "symbol", "status", "stage", "next_action", "listing_total", "listing_rows", "issuer_source_hints", "ai_source_hints")}
                   for r in errors
-              ]}
+              ],
+              # These observations certify only a latest-quarter comparison.
+              # Absence here means unverified by this rehearsal, not absent
+              # from every other source or previously reviewed document.
+              "release_coverage": [
+                  {"symbol": r.get("symbol"), "isin": r.get("isin"),
+                   "period": r.get("period"), "scope": r.get("scope"),
+                   "document_sha256": r.get("document_sha256"),
+                   "latest_quarter": r.get("status"),
+                   "remaining_evidence": [
+                       "five annual and eight quarterly primary periods",
+                       "valuation and risk",
+                       "corporate actions",
+                       "completed-session price reconciliation",
+                       "independent source review and release approval"],
+                   "publication_status": "WITHHELD"}
+                  for r in checked]}
     output["rehearsal_passed"] = (
         type(output["requested"]) is int and output["requested"] > 0
         and len(checked) == output["requested"] and not errors)
@@ -295,6 +311,16 @@ def diagnostic_markdown(summary):
             safe(r["symbol"]), safe(r["stage"]), safe(r["status"]), safe(r["next_action"])))
     if not summary["failures"]:
         lines.append("| — | Latest-quarter matching only | — | Complete remaining primary-source and approval gates |")
+    lines.extend(["", "## Per-company release coverage", "",
+                  "Remaining evidence is unverified by this rehearsal. Check existing audited documents before collecting it again.",
+                  "", "| Company | Period | Scope | Latest quarter | Remaining evidence | Publication |",
+                  "|---|---|---|---|---|---|"])
+    for row in summary.get("release_coverage", []):
+        cells = [row["symbol"], row["period"], row["scope"], row["latest_quarter"],
+                 ", ".join(row["remaining_evidence"]), row["publication_status"]]
+        lines.append("| " + " | ".join(
+            re.sub(r"[^A-Za-z0-9_ .,/()\-]", "", str(cell or ""))[:350]
+            for cell in cells) + " |")
     return "\n".join(lines) + "\n"
 
 
