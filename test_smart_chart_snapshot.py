@@ -71,6 +71,17 @@ class ChartSnapshotSafetyTests(unittest.TestCase):
             self.assertEqual(dpi, 120)
             self.assertEqual(dest.read_bytes(), self.image)
 
+    def test_chart_worker_defers_plot_imports_and_releases_provider_caches(self):
+        source = (Path(__file__).resolve().parent /
+                  "gen_smart_stock_chart.py").read_text(encoding="utf-8")
+        self.assertLess(source.index('os.environ[_thread_env] = "1"'),
+                        source.index("import numpy as np"))
+        self.assertLess(source.index("winner, sampled, valid, universe_size = choose_auto_chart("),
+                        source.index("import matplotlib\n"))
+        self.assertLess(source.index("_provider_cache.clear()"),
+                        source.index("import mplfinance as mpf"))
+        self.assertIn('_chart_memory_stage("png_written")', source)
+
     def test_renderer_rejects_oversize_without_exposing_file(self):
         fig = MagicMock()
         fig.savefig.side_effect = lambda path, **kwargs: Path(path).write_bytes(

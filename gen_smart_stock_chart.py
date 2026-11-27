@@ -3,20 +3,15 @@
 # 11-check weighted scoring | S/R proximity | Weekly trend | Candle confirm
 # BB squeeze | No-Trade Zone | EMA freshness decay | MACD slope-aware
 import sys, os, warnings
+# This is a dedicated chart worker, not the Telegram process. Small daily
+# indicator arrays do not benefit from native BLAS thread pools.
+for _thread_env in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+                    "NUMEXPR_NUM_THREADS"):
+    os.environ[_thread_env] = "1"
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
 from typing import Optional
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import matplotlib.lines as mlines
-import matplotlib.gridspec as gridspec
-from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
-from matplotlib.collections import LineCollection
-import matplotlib.patheffects as pe
-import matplotlib.ticker as mticker
 warnings.filterwarnings("ignore")
 
 # ── PRO DARK THEME PALETTE ────────────────────────────────────────────────────
@@ -599,7 +594,6 @@ def draw_pattern(ax, pattern, data):
 # ── MAIN ─────────────────────────────────────────────────────────────────────
 try:
     import yfinance as yf
-    import mplfinance as mpf
     # Fix 9: Use curl_cffi session to bypass Render's yfinance 403 restriction
     # curl_cffi impersonates a browser — works on restricted networks
     try:
@@ -854,6 +848,59 @@ if has_levels:
     sl_pct = abs(last_close - sl_val) / last_close * 100
     t1_pct = abs(t1_val - last_close) / last_close * 100
     t2_pct = abs(t2_val - last_close) / last_close * 100 if second is not None else 0.0
+
+# All network/score/price/level work is complete. Release transient provider
+# bulk response caches before importing the renderer or allocating its canvas.
+# This process is isolated; never clear shared caches in the Telegram parent.
+def _chart_memory_stage(stage):
+    try:
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            peak /= 1024
+        rss = None
+        try:
+            with open("/proc/self/status", encoding="ascii") as status:
+                for line in status:
+                    if line.startswith("VmRSS:"):
+                        rss = int(line.split()[1])
+                        break
+        except OSError:
+            pass
+        print(f"CHART_MEMORY stage={stage} rss_kib={rss} peak_kib={int(peak)}", flush=True)
+    except (ImportError, OSError, ValueError):
+        pass
+
+_chart_memory_stage("before_provider_cleanup")
+try:
+    from yfinance import shared as _yf_shared
+    for _cache_name in ("_DFS", "_ERRORS", "_TRACEBACKS", "_ISINS"):
+        _provider_cache = getattr(_yf_shared, _cache_name, None)
+        if isinstance(_provider_cache, dict):
+            _provider_cache.clear()
+except (ImportError, AttributeError):
+    pass
+if "_curl_session" in globals():
+    try:
+        _curl_session.close()
+    except Exception:
+        pass
+import gc
+gc.collect()
+_chart_memory_stage("after_provider_cleanup")
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.lines as mlines
+import matplotlib.gridspec as gridspec
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+from matplotlib.collections import LineCollection
+import matplotlib.patheffects as pe
+import matplotlib.ticker as mticker
+import mplfinance as mpf
+_chart_memory_stage("renderer_loaded")
 
 # ── MPLFINANCE STYLE ──────────────────────────────────────────────────────────
 mc = mpf.make_marketcolors(
@@ -1189,6 +1236,7 @@ try:
     try:
         size, dpi = save_bounded_chart_png(fig, OUT_FILE, BG_DARK, max_dimensions=(1920, 1200))
         print(f"CHART_PNG_SIZE bytes={size} dpi={dpi}")
+        _chart_memory_stage("png_written")
     finally:
         plt.close(fig)
 
