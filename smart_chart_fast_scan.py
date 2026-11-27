@@ -6,6 +6,7 @@ to rank unscanned Nifty constituents.
 """
 import math
 import random
+import re
 import time
 from datetime import date, timedelta
 
@@ -43,19 +44,21 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
                       require_confirmed_setup=False, scan_all=False,
                       recover_history=None, alternate_history=None,
                       individual_history=None, shortlist_rank=None,
-                      shortlist_recovery=None):
+                      shortlist_recovery=None, recover_partial=False):
     """Return (winning real candidate, sampled, verified, total universe).
 
-    The full-sample batch is attempted once. Only when it yields zero verified
-    candidates is a single small non-threaded retry allowed, followed by at
-    most two official NSE history requests if provided by the caller.
+    The batch is attempted once per bounded group. When no candidate exists,
+    bounded individual or serial retries are allowed. With recover_partial,
+    the existing shortlist may also recover stale histories when fresh
+    candidates exist, using the same shared archive and no extra individual calls.
 
     There is no stale EOD fallback, no cross-symbol substitutions, and no
     full-universe claim. All paths use the same timestamp/price/score gates.
     """
     distinct = {}
     for symbol, name in universe:
-        if isinstance(symbol, str) and symbol.endswith(".NS") and symbol not in distinct:
+        if (isinstance(symbol, str) and re.fullmatch(r"[A-Z0-9&._-]{1,25}\.NS", symbol)
+                and symbol not in distinct):
             distinct[symbol] = name
     whole = len(distinct)
     if whole == 0:
@@ -175,10 +178,12 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     else:
         attempted = len(symbols)
         bulk(symbols, threads=True, timeout=12)
-    if not candidates and shortlist_recovery is not None and shortlist_frames:
+    if (not candidates or recover_partial) and shortlist_recovery is not None and shortlist_frames:
         # The two dated NSE files are shared by the bounded shortlist. No
         # extra Yahoo calls are needed for histories already in memory.
         ranked = sorted(shortlist_frames, key=lambda sym: (-preliminary[sym], sym))
+        # Do not refetch an already validated history or extend the sample.
+        ranked = [sym for sym in ranked if sym not in verified_symbols]
         for sym in ranked:
             if time.monotonic() - started >= 125:
                 break

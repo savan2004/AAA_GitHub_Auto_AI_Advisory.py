@@ -679,7 +679,7 @@ else:
             session_key=session_key, sample_limit=60,
             individual_history=lambda sym: _individual_history(sym, session_key, recovery=shortlist_recovery),
             shortlist_rank=preliminary_rank, shortlist_recovery=shortlist_recovery,
-            min_score=12, require_confirmed_setup=True, scan_all=True)
+            recover_partial=True, min_score=12, require_confirmed_setup=True, scan_all=True)
     except ChartScanUnavailable as exc:
         print(f"[ERROR] No verified chart candidate: {exc}", file=sys.stderr)
         sys.exit(1)
