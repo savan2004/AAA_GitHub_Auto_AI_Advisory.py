@@ -89,7 +89,7 @@ jobs:
           import pandas as pd
           from central_incremental_probe import run_probe
           from market_data import bulk_history
-          from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows, stitch_one_verified_day
+          from portfolio_doctor_bhavcopy import fetch_nse_bhavcopy_rows, stitch_one_verified_day, official_daily_bar_matches
           from portfolio_doctor_live import IST, expected_doctor_session, previous_doctor_session
           from msk_chart_release import validated_daily_history
 
@@ -100,9 +100,7 @@ jobs:
           prior = previous_doctor_session(session)
           official = {}
           for day in (prior, session):
-              rows = {}
-              for offset in (0, 5):
-                  rows.update(fetch_nse_bhavcopy_rows(day, symbols[offset:offset+5]))
+              rows = fetch_nse_bhavcopy_rows(day, symbols)
               official[day] = rows
               print(f"INCREMENTAL_NSE session={day} coverage={len(rows)}/10", flush=True)
           if any(len(rows) != len(symbols) for rows in official.values()):
@@ -115,9 +113,7 @@ jobs:
               return frames
 
           report = run_probe(symbols, prior.isoformat(), [session.isoformat()], fetch=observe)
-          def agrees(row, ref):
-              return (all(abs(float(row[k])-ref[k]) <= .05 for k in ("Open","High","Low","Close"))
-                      and float(row["Volume"]) == ref["Volume"])
+          agrees = official_daily_bar_matches
 
           certified = recovered = 0
           for symbol, record in report["symbols"].items():

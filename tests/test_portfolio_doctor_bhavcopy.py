@@ -224,6 +224,57 @@ class BhavcopySafeguards(unittest.TestCase):
             price_frame(), prior=records(MONDAY), latest=latest,
             previous_day=MONDAY, expected_day=TUESDAY, now=NOW))
 
+    def test_ten_symbol_archive_is_one_request_and_eleven_is_rejected(self):
+        wanted = ["DUMMY%05d" % i for i in range(10)]
+        calls = []
+        def get(url, **kw):
+            calls.append(url)
+            return SimpleNamespace(ok=True, content=csv_bytes())
+        self.assertEqual(set(nse.fetch_nse_bhavcopy_rows(TUESDAY, wanted, get=get)), set(wanted))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(nse.fetch_nse_bhavcopy_rows(TUESDAY, wanted + ["SAMPLEA"], get=get), {})
+        self.assertEqual(len(calls), 1)
+
+    def test_strict_overlap_rejects_price_volume_and_prev_close_mismatch(self):
+        for field, value in (("Close", 100.2), ("Volume", 10001)):
+            prior = dict(records(MONDAY), **{field: value})
+            self.assertIsNone(nse.stitch_one_verified_day(
+                price_frame(), prior=prior, latest=records(TUESDAY),
+                previous_day=MONDAY, expected_day=TUESDAY, now=NOW))
+        latest = dict(records(TUESDAY), PreviousClose=100.2)
+        self.assertIsNone(nse.stitch_one_verified_day(
+            price_frame(), prior=records(MONDAY), latest=latest,
+            previous_day=MONDAY, expected_day=TUESDAY, now=NOW))
+
+    def test_doctor_five_and_ten_stale_holdings_recovered_in_two_session_fetches(self):
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        for count in (5, 10):
+            with self.subTest(count=count):
+                holdings = [{"symbol": "SAMPLE%02d" % i, "qty": 2, "buy": 90}
+                            for i in range(count)]
+                symbols = [h["symbol"] for h in holdings]
+                frames = {s: price_frame() for s in symbols}
+                def fetch(day, wanted):
+                    self.assertEqual(set(wanted), set(symbols))
+                    return {s: records(day) for s in wanted}
+                with patch("market_data.bulk_history", return_value=frames), \
+                     patch.object(nse, "fetch_nse_bhavcopy_rows", side_effect=fetch) as official, \
+                     patch.object(doctor, "recover_fresh_daily_for_doctor") as alternate, \
+                     patch.object(doctor, "datetime", Clock):
+                    rows, verified = doctor.price_holdings(holdings, include_frames=True)
+                self.assertEqual(len(rows), count)
+                self.assertEqual(len(verified), count)
+                self.assertEqual(official.call_count, 2)
+                alternate.assert_not_called()
+                self.assertTrue(all(row["close"] == 103 and row["date"] == TUESDAY.isoformat()
+                                    and row["rsi14"] is not None and row["ema50"] is not None
+                                    and "NSE EOD bhavcopy" in row["price_source"] for row in rows))
+                self.assertAlmostEqual(sum(row["weight"] for row in rows), 100.)
+                self.assertTrue(all(row["pnl"] == 26 for row in rows))
+
     def test_request_data_kept_in_memory_and_no_sensitive_logging(self):
         path = Path(nse.__file__).read_text(encoding="utf-8")
         for banned in ("logging.", "logger.", "psycopg", "sqlite3", "shelve",
