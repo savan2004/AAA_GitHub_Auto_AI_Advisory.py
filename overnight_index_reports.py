@@ -227,6 +227,12 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
     if not isinstance(prices,dict):
         prices={}
 
+    # Shared official archives: recover missing final candles once per date,
+    # not one archive download per constituent. Use raw OHLCV and the same
+    # exact-date/overlap/continuity gates as the verified Smart Chart.
+    from smart_chart_eod_recovery import ArchiveRecovery
+    import pandas as pd
+    recovery=ArchiveRecovery([sym+".NS" for sym in pending_price],session)
     examined=0
     for sym in symbols:
         old=saved.get(sym,{})
@@ -270,6 +276,19 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
                 except (TypeError,ValueError,KeyError,AttributeError):
                     tech=None
             source="Yahoo bulk NSE daily OHLCV"
+            # A stale or partially populated bulk history is not a valid
+            # completed-session record. Try the shared official final archive
+            # first; do not change an already accepted current candle.
+            if not _fresh(tech,session) and isinstance(frame,pd.DataFrame):
+                try:
+                    repaired=recovery(sym+".NS",frame)
+                    if repaired is not None:
+                        recovered=technical_candidate(sym,repaired,profile,candidate_now)
+                        if _fresh(recovered,session):
+                            tech=recovered
+                            source="Yahoo raw OHLCV + NSE final archive"
+                except (TypeError,ValueError,KeyError,AttributeError,RuntimeError,OSError):
+                    LOG.warning("MSK_INDEX_NSE_RECOVERY_UNAVAILABLE symbol=%s",sym)
             # Retry keyless bhavcopy after the nightly publication window.
             # No routine retries for already-fresh Yahoo prices.
             if (not _fresh(tech,session) and
@@ -610,6 +629,12 @@ def main(argv=None):
                 result=collect_profile(profile,store,opts.session,
                     delay_s=max(0,opts.pause),
                     max_seconds=max(1,opts.budget_hours)*3600)
+                # Keep the durable summary in sync with every completed
+                # collection/retry; never wait for tomorrow's finalize slot.
+                # Use the exact same session even if the clock crosses midnight.
+                refreshed=finalize_profile(profile,store,result["session"])
+                result["report_state"]=refreshed["state"]
+                result["report_stats"]=refreshed["stats"]
             elif opts.action=="finalize":
                 result=finalize_profile(profile,store,opts.session)
             else:

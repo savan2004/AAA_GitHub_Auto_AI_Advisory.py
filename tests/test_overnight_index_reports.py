@@ -536,10 +536,41 @@ class OvernightLedgerTests(unittest.TestCase):
             ready=n.finalize_profile("conservative",self.store,self.day)
         self.assertEqual(ready["state"],"PARTIAL")
         self.assertEqual(ready["stats"]["price_fresh"],0)
-        self.assertIn("SCREENING COMPLETE — NO QUALIFYING SETUP TODAY",ready["text"])
+        self.assertIn("SCREENING INCOMPLETE — VERIFIED DATA PENDING",ready["text"])
+        self.assertIn("current-session price records: 0/100",ready["text"])
         self.assertIn("Data as of",ready["text"])
         self.assertIn("not ready",n.load_prepared_report("conservative",store=self.store,
               now=datetime(2026,11,12,10,tzinfo=n.IST)).lower())
+
+    def test_shared_nse_recovery_preserves_validated_financials(self):
+        import pandas as pd
+        universe=make_universe("conservative",2)
+        digest=n._member_hash(universe)
+        raw=pd.DataFrame({"Close":[99.]})
+        repaired=pd.DataFrame({"Close":[100.]})
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"conservative",sym,{
+                "membership_hash":digest,"fund_attempted":True,
+                "fund_status":"VALIDATED","fundamental":evidence(),
+                "technical":None})
+        def evaluate(sym,frame,*args):
+            return technical(sym,"2026-10-29" if frame is repaired else "2026-10-28")
+        with patch.object(n,"get_index_universe",return_value=universe), \
+             patch("market_data.bulk_history",return_value={
+                 sym:raw for sym in universe["symbols"]}), \
+             patch("smart_chart_eod_recovery.ArchiveRecovery") as archive, \
+             patch("top5_technical_ratings.technical_candidate",side_effect=evaluate), \
+             patch("top5_company_ratings.fetch_company_evidence") as financial:
+            archive.return_value.return_value=repaired
+            n.collect_profile("conservative",self.store,self.day,delay_s=0)
+            financial.assert_not_called()
+            archive.assert_called_once_with(["TEST000.NS","TEST001.NS"],self.day)
+            self.assertEqual(archive.return_value.call_count,2)
+        for row in self.store.rows(self.day,"conservative").values():
+            self.assertEqual(row["price_reason"],"ok")
+            self.assertEqual(row["price_source"],"Yahoo raw OHLCV + NSE final archive")
+            self.assertEqual(row["fund_status"],"VALIDATED")
+            self.assertEqual(row["fundamental"],evidence())
 
     def test_cleaning_nan_and_store_documented_no_connection(self):
         self.assertIsNone(n._clean(float("nan")))
