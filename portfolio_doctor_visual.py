@@ -471,7 +471,7 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             rsi = 'N/A' if row['rsi14'] is None else '{:.1f}'.format(row['rsi14'])
             movement = row.get('return20')
             twenty = 'N/A' if movement is None else '{:+.1f}%'.format(movement)
-            line('RSI (momentum): {} | 20-session change: {}'.format(rsi, twenty), 8.2, leading=13)
+            line('RSI (momentum): {} | 20-session change {}'.format(rsi, twenty), 8.2, leading=13)
             line('20-session range: {} to {}'.format(
                 money(row['low20']), money(row['high20'])), 8.2, leading=13)
             source = str(row.get('price_source') or '').strip()
