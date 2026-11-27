@@ -130,14 +130,19 @@ class TenStocksAcceptance(unittest.TestCase):
                 doctor.run_isolated_memory("holdings.csv", five)
             self.assertEqual(exc.exception.code, "PDF_FAILED")
         self.assertEqual(len(pages), 16)
+        self.assertIn("YOUR MONEY AT A GLANCE", pages[0])
+        self.assertIn("WHAT NEEDS YOUR ATTENTION", pages[0])
+        self.assertIn("CURRENT HOLDING ALLOCATION", pages[0])
         self.assertIn("Page 16 of 16", pages[-1])
-        self.assertIn("02 / HOLDING-WISE VERIFIED RESULTS", pages[1])
-        self.assertIn("03 / HOLDING-WISE VERIFIED RESULTS", pages[2])
+        self.assertIn("02 / YOUR STOCKS, ONE BY ONE", pages[1])
+        self.assertIn("03 / YOUR STOCKS, ONE BY ONE", pages[2])
         self.assertIn("04 / NIFTY 500 INDUSTRY-PEER WATCHLIST", pages[3])
         self.assertIn("05 / RISK, SOURCES AND LIMITS", pages[4])
         self.assertIn("06 / HISTORICAL RISK", pages[5])
         for i, sym in enumerate(names):
-            self.assertIn(sym + " | Qty", pages[1 if i < 5 else 2])
+            card_page = pages[1 if i < 5 else 2]
+            self.assertIn(sym, card_page)
+            self.assertIn("Shares 1 | Average purchase Rs 95.00", card_page)
             self.assertIn("COMPANY RESEARCH: " + sym, pages[6 + i])
         self.assertNotIn("CONTINUED", "\n".join(pages[3:]))
         self.assertIn("Not SEBI-registered investment advice", pages[4])
@@ -152,7 +157,7 @@ class TenStocksAcceptance(unittest.TestCase):
             records, frames, now=NOW), risk=calculate_historical_risk(
             records, frames, now=NOW)))
         self.assertEqual(len(pages), 10)
-        self.assertEqual(sum("HOLDING-WISE VERIFIED RESULTS" in p for p in pages), 1)
+        self.assertEqual(sum("YOUR STOCKS, ONE BY ONE" in p for p in pages), 1)
         self.assertIn("Page 10 of 10", pages[-1])
 
     def test_private_bot_sends_downloadable_template_without_holdings(self):

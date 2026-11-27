@@ -463,8 +463,8 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
             titles = [page.extract_text() or "" for page in pdf.pages]
             required = (
                 "01 / PORTFOLIO DASHBOARD",
-                "02 / HOLDING-WISE VERIFIED RESULTS",
-                "03 / HOLDING-WISE VERIFIED RESULTS",
+                "02 / YOUR STOCKS, ONE BY ONE",
+                "03 / YOUR STOCKS, ONE BY ONE",
                 "04 / NIFTY 500 INDUSTRY-PEER WATCHLIST",
                 "05 / RISK, SOURCES AND LIMITS",
             )
@@ -474,8 +474,11 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
                            for i, t in enumerate(titles))):
                 raise PortfolioDoctorError("PDF_FAILED")
             symbols = [row["symbol"] for row in submitted]
-            if any(symbol + " | Qty" not in titles[1 + i // 5]
+            if any(symbol not in titles[1 + i // 5]
                    for i, symbol in enumerate(symbols)):
+                raise PortfolioDoctorError("PDF_FAILED")
+            if any("Shares" not in titles[1 + i // 5]
+                   for i in range(len(symbols))):
                 raise PortfolioDoctorError("PDF_FAILED")
             first_dossier = 5
             if count > 5 and "06 / HISTORICAL RISK" in titles[5]:

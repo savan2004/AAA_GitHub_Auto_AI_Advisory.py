@@ -162,6 +162,18 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             y -= leading
 
 
+    def fact(label, value, *, note=None, accent=INK):
+        """Readable label/value row, with optional client-facing meaning."""
+        nonlocal y
+        pdf.setFillColor(MUTED)
+        pdf.setFont('Helvetica-Bold', 8)
+        pdf.drawString(left, y, label)
+        text_fit(value, left + 150, y, right - left - 155, 9, True, accent)
+        y -= 17
+        if note:
+            line(note, 8.3, leading=14, color=MUTED)
+            y -= 4
+
     def risk_bullet(value, *, color=INK):
         """Identical dot geometry, indentation and baseline for every risk row."""
         nonlocal y
@@ -356,10 +368,16 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         text_fit(label, x + 10, y - 16, width - 20, 7.6, True, MUTED)
         text_fit(metric, x + 10, y - 44, width - 20, 13, True, color)
     y -= 91
-    line('PORTFOLIO SUMMARY', 11, True, 20, NAVY)
-    line('Invested: {}   Last-close value: {}'.format(money(invested), money(value)), 9)
-    line('Unrealised P/L: Rs {:+,.2f} ({:+.2f}%)'.format(pnl, 100 * pnl / invested), 10, True, 18,
-         GREEN if pnl >= 0 else RED)
+    if len(top) > 5:
+        line('YOUR MONEY AT A GLANCE', 8, True, 12, NAVY)
+    else:
+        subhead('YOUR MONEY AT A GLANCE')
+    fact('You invested', money(invested))
+    fact('Value at last close', money(value))
+    pnl_pct = 100 * pnl / invested if invested > 0 else 0.0
+    fact('Change in value', 'Rs {:+,.2f} ({:+.2f}%)'.format(pnl, pnl_pct),
+         note='This is a paper gain/loss, not money received from selling.',
+         accent=GREEN if pnl >= 0 else RED)
     if companies:
         subhead('VALUE-WEIGHTED PORTFOLIO FUNDAMENTALS (SECONDARY)')
         pe_ratio, roe_ratio = ratios.get('pe'), ratios.get('roe')
@@ -371,15 +389,23 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         line('Value coverage: P/E {} | ROE {}. Arithmetic weighting.'.format(
             pe_coverage, roe_coverage), 8)
         line('Screener.in secondary; issuer financials NOT reconciled.', 8, color=MUTED)
-    subhead('EXECUTIVE DIAGNOSIS (PRICE-BASED)')
+    if len(top) > 5:
+        line('WHAT NEEDS YOUR ATTENTION', 8, True, 12, NAVY)
+    else:
+        subhead('WHAT NEEDS YOUR ATTENTION')
     biggest = top[0]
     line('{} positions | Largest: {} at {:.1f}% of value.'.format(
         len(holdings), biggest['symbol'], biggest['weight']), 9)
     if biggest['weight'] > 40:
         line('Concentration warning: a single holding exceeds the illustrative 40% threshold.', 9,
              color=RED)
-    subhead('CURRENT HOLDING ALLOCATION')
-    bar_step = 22 if len(top) > 5 else 37
+    line('This report describes what the data shows. It does not choose investments for you.', 8,
+         color=MUTED)
+    if len(top) > 5:
+        line('CURRENT HOLDING ALLOCATION', 8, True, 12, NAVY)
+    else:
+        subhead('CURRENT HOLDING ALLOCATION')
+    bar_step = 20 if len(top) > 5 else 37
     for row in top:
         pct = float(row['weight'])
         text_fit(row['symbol'], left, y - 1, 86, 9, True, INK)
@@ -391,7 +417,10 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         text_fit('{:.1f}%'.format(pct), bar_x + bar_w + 12, y - 1, 64, 9, True,
                  RED if pct > 40 else NAVY)
         y -= bar_step
-    subhead('WHAT IS DRIVING RESULTS')
+    if len(top) > 5:
+        line('WHAT IS DRIVING RESULTS', 8, True, 12, NAVY)
+    else:
+        subhead('WHAT IS DRIVING RESULTS')
     line('Top 2 holdings: {:.1f}% of value | Effective stock count: {:.2f} (from {} holdings).'.format(
         insights['top_two_pct'], insights['effective_positions'], len(holdings)), 8.5)
     if insights['top_gain'] or insights['top_loss']:
@@ -401,48 +430,61 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
             '{} (+{})'.format(gain[0], money(gain[1])) if gain else 'None',
             '{} ({})'.format(loss[0], money(loss[1])) if loss else 'None'), 8.2)
 
-    # Five holding cards per page, no omitted stocks.
+    # Five readable holding cards per page; the 10-stock cap remains unchanged.
     for part in range(holding_pages):
-        new_page('{:02d} / HOLDING-WISE VERIFIED RESULTS{}'.format(
+        new_page('{:02d} / YOUR STOCKS, ONE BY ONE{}'.format(
             2 + part, ' (CONTINUED)' if part else ''),
-            'Every holding contributes to the portfolio summary; technicals use completed daily prices.')
+            'Each stock is shown using its last verified daily closing price.')
         for row in holdings[part * 5:(part + 1) * 5]:
             card_top = y
             pdf.setFillColor(PANEL)
-            pdf.roundRect(left - 2, card_top - 103, right - left + 4, 110, 7, stroke=0, fill=1)
-            label = '{} | Qty {:g} | Average purchase {}'.format(
-                row['symbol'], row['qty'], money(row['buy']))
-            line(label, 10, True, 17, NAVY)
-            line('Last close Rs {:,.2f} ({}) | Value {}'.format(
-                row['close'], row['date'], money(row['value'])), 9, leading=16)
-            line('P/L Rs {:+,.2f} ({:+.2f}%) | Portfolio weight {:.1f}%'.format(
-                row['pnl'], row['pnl_pct'], row['weight']), 9, leading=15,
+            pdf.roundRect(left - 2, card_top - 110, right - left + 4, 114, 7, stroke=0, fill=1)
+            text_fit(row['symbol'], left + 3, card_top - 18,
+                     right - left - 135, 12, True, NAVY)
+            diagnostic = insights['by_symbol'][row['symbol']]
+            priority = diagnostic['priority']
+            label_color = RED if priority == 'HIGH FLAGS' else (BLUE if priority == 'WATCH FLAGS' else GREEN)
+            pdf.setFillColor(label_color)
+            pdf.roundRect(right - 120, card_top - 24, 111, 16, 4, stroke=0, fill=1)
+            text_fit(priority, right - 115, card_top - 20, 100, 7, True, WHITE)
+            line('Shares {:g} | Average purchase {}'.format(
+                row['qty'], money(row['buy'])), 8.8, leading=14)
+            line('Last close {} ({}) | Value {}'.format(
+                money(row['close']), row['date'], money(row['value'])), 8.8, leading=14)
+            line('Gain/loss Rs {:+,.2f} ({:+.2f}%) | Weight {:.1f}%'.format(
+                row['pnl'], row['pnl_pct'], row['weight']), 8.8, leading=14,
                 color=GREEN if row['pnl'] >= 0 else RED)
             ema50 = row.get('ema50')
             ema200 = (by_company.get(row['symbol']) or {}).get('ema200')
             trend = _trend_label(row['close'], row['ema20'], ema50, ema200)
+            if trend.startswith('Above EMA20/50'):
+                trend_text = 'Above both short- and medium-term averages'
+            elif trend.startswith('Below EMA20/50'):
+                trend_text = 'Below both short- and medium-term averages'
+            elif trend.startswith('Above EMA20'):
+                trend_text = 'Above EMA20'
+            elif trend.startswith('Below EMA20'):
+                trend_text = 'Below EMA20'
+            else:
+                trend_text = 'Mixed trend; averages do not agree'
+            line('Recent price trend: {}.'.format(trend_text), 8.2, leading=13)
             rsi = 'N/A' if row['rsi14'] is None else '{:.1f}'.format(row['rsi14'])
-            line('EMA20 Rs {:.2f} | EMA50 {} | RSI14 {}'.format(
-                row['ema20'], 'Rs {:.2f}'.format(ema50) if ema50 is not None else 'N/A',
-                rsi), 8, leading=13)
-            line('Trend: ' + trend, 7.8, leading=12)
             movement = row.get('return20')
-            twenty = ' | 20-session change {:+.1f}%'.format(movement) if movement is not None else ''
-            line('20-close high Rs {:.2f} | low Rs {:.2f}{}'.format(
-                row['high20'], row['low20'], twenty), 8, leading=14)
-            if str(row.get('price_source') or '').startswith('BSE:'):
-                line('Source: BSE exact ticker; INR completed daily OHLCV.', 7.5, leading=12)
-            elif str(row.get('price_source') or '').startswith('NSE EOD'):
-                line('Source: NSE official daily file; historical OHLC cross-checked.', 7.5, leading=12)
-            # Colored review flag communicates *which rule fired*, not a trade.
-            diagnostic = insights['by_symbol'][row['symbol']]
-            priority = diagnostic['priority']
-            label_color = RED if priority == 'HIGH FLAGS' else (BLUE if priority == 'WATCH FLAGS' else GREEN)
-            text_fit(_flag_reason(row, diagnostic), left + 3, card_top - 96,
-                     right - left - 139, 7.8, True, label_color)
-            pdf.setFillColor(label_color)
-            pdf.roundRect(right - 120, card_top - 100, 111, 16, 4, stroke=0, fill=1)
-            text_fit(priority, right - 115, card_top - 96, 100, 7, True, WHITE)
+            twenty = 'N/A' if movement is None else '{:+.1f}%'.format(movement)
+            line('RSI (momentum): {} | 20-session change {}'.format(rsi, twenty), 8.2, leading=13)
+            line('20-session range: {} to {}'.format(
+                money(row['low20']), money(row['high20'])), 8.2, leading=13)
+            source = str(row.get('price_source') or '').strip()
+            if source.startswith('BSE:'):
+                source_text = 'Source: BSE exact ticker'
+            elif source.startswith('NSE EOD'):
+                source_text = 'Source: NSE official daily file'
+            elif source:
+                source_text = 'Source: {}'.format(source[:32])
+            else:
+                source_text = 'Source: verified completed daily prices'
+            text_fit('Flag: {} | {}'.format(_flag_reason(row, diagnostic), source_text),
+                     left + 3, card_top - 104, right - left - 6, 7.2, True, label_color)
             y = min(card_top - 118, y - 7)
 
     # PAGE 3: sample coverage, vetted signals and non-vetted comparisons separately.
