@@ -306,7 +306,12 @@ def score_symbol_weighted(sym, name, df=None):
         from msk_chart_release import chart_plan
         from msk_indicator_math import atr_series
         atr = float(atr_series(df["High"], df["Low"], df["Close"]).iloc[-1])
-        plan = chart_plan(df, signal, atr) if np.isfinite(atr) and atr > 0 else None
+        level_evidence = {}
+        plan = chart_plan(df, signal, atr, diagnostics=level_evidence)
+        if setup and score >= 12:
+            print(f"CHART_CANDIDATE_LEVELS symbol={sym} score={score} "
+                  f"status={'verified' if plan is not None else 'observation_only'} "
+                  f"reason={level_evidence.get('reason', 'unknown')}", flush=True)
         return {"sym": sym, "name": name, "score": int(score),
                 "verified_trade_plan": plan is not None,
                 "cross_dir": 1 if bullish_cross else 0,
@@ -855,13 +860,14 @@ is_wait   = signal_text == "WAIT"
 
 # ── CHART-FIRST LEVELS ────────────────────────────────────────────────────────
 from msk_chart_release import chart_plan
-level_plan = chart_plan(structure_data, signal_text, atr_val)
+level_evidence = {}
+level_plan = chart_plan(structure_data, signal_text, atr_val, diagnostics=level_evidence)
 has_levels = level_plan is not None
 if auto_history is not None and bool(winner.get("verified_trade_plan")) != has_levels:
     print("[ERROR] Pre-render and final trade-plan validation disagree", file=sys.stderr)
     sys.exit(1)
 print(f"CHART_TRADE_PLAN status={'verified' if has_levels else 'observation_only'} "
-      f"symbol={symbol} reason={'structure_and_rr_valid' if has_levels else 'no_structure_backed_plan_at_minimum_1_5_rr'}", flush=True)
+      f"symbol={symbol} reason={level_evidence.get('reason', 'unknown')}", flush=True)
 sl_val = t1_val = t2_val = 0.0  # wire-only absence; never printed as a target
 sl_pct = t1_pct = t2_pct = _rr1 = _rr2 = 0.0
 if has_levels:

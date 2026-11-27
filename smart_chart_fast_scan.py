@@ -50,8 +50,8 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
 
     The batch is attempted once per bounded group. When no candidate exists,
     bounded individual or serial retries are allowed. With recover_partial,
-    the existing shortlist may also recover stale histories when fresh
-    candidates exist, using the same shared archive and no extra individual calls.
+    a full scan repairs incomplete histories within each bulk batch using one
+    shared archive cache. Other modes retain the bounded shortlist.
 
     There is no stale EOD fallback, no cross-symbol substitutions, and no
     full-universe claim. All paths use the same timestamp/price/score gates.
@@ -88,18 +88,34 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
     shortlist_limit = 24
 
     recovered_symbols = set()
+    recover_in_batches = scan_all and recover_partial and shortlist_recovery is not None
+    best_history_symbol = None
+
+    def rank_key(candidate):
+        return candidate.get("verified_trade_plan") is True, float(candidate["score"])
 
     def consider(symbol, frame):
+        nonlocal best_history_symbol
         if symbol in candidates:
             return
         source = getattr(frame, "attrs", {}).get("history_source", "Yahoo")
         complete = _completed_frame(frame, session_key, diagnostics=rejection_reasons)
+        if (complete is None and frame is not None and recover_in_batches
+                and time.monotonic() - started < 125):
+            try:
+                repaired = shortlist_recovery(symbol, frame)
+                complete = _completed_frame(repaired, session_key) if repaired is not None else None
+                if complete is not None:
+                    recovered_symbols.add(symbol)
+                    source = "Yahoo raw OHLC + NSE final EOD"
+            except Exception:
+                diagnostics["download_failures"] += 1
         if complete is None and individual_history is not None and shortlist_rank is not None:
             try:
                 rank = shortlist_rank(frame, session_key)
                 if rank is not None and math.isfinite(float(rank)):
                     preliminary[symbol] = float(rank)
-                    if shortlist_recovery is not None and frame is not None:
+                    if not recover_in_batches and shortlist_recovery is not None and frame is not None:
                         shortlist_frames[symbol] = frame.copy()
                         if len(shortlist_frames) > shortlist_limit:
                             weakest = min(shortlist_frames, key=lambda sym: (preliminary[sym], sym))
@@ -138,7 +154,13 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
             if require_confirmed_setup and not candidate.get("setup_confirmed"):
                 diagnostics["scorer"] += 1
                 return
-            candidate["_daily_history"] = complete
+            # Only the highest-ranked candidate needs its DataFrame for the
+            # render handoff. Retain summaries for counts and retry decisions.
+            if best_history_symbol is None or rank_key(candidate) > rank_key(candidates[best_history_symbol]):
+                if best_history_symbol is not None:
+                    del candidates[best_history_symbol]["_daily_history"]
+                candidate["_daily_history"] = complete
+                best_history_symbol = symbol
             candidate["_history_source"] = source
             candidates[symbol] = candidate
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
@@ -271,7 +293,6 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
 
     # Prefer a structure-backed plan over observation-only candidates, then
     # rank by FINAL score. Never fabricate targets if no plan qualifies.
-    winner = max(candidates.values(), key=lambda c: (
-        c.get("verified_trade_plan") is True, float(c["score"])))
+    winner = candidates[best_history_symbol]
     winner["_verified_count"] = len(verified_symbols)
     return winner, attempted, len(candidates), whole
