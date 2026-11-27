@@ -70,7 +70,7 @@ class MonetaryReconciliation(unittest.TestCase):
         self.assertIn("WHAT IS DRIVING RESULTS", page_text[0])
         self.assertIn("Effective stock count:", page_text[0])
         self.assertIn("HIGH FLAGS", page_text[1])
-        self.assertIn("20-session change +2.5%", page_text[1])
+        self.assertIn("20-session change: +2.5%", page_text[1])
         self.assertIn("OFFICIAL INDUSTRY EXPOSURE", page_text[2])
         self.assertIn("Capital Goods", page_text[2])
         self.assertIn("CONCENTRATION SENSITIVITY", page_text[3])
