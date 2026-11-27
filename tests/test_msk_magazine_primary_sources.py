@@ -86,6 +86,23 @@ class PrimarySourceEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(PrimarySourceError, "bytes changed"):
                 recheck_primary_sources(root)
 
+    def test_november_rbi_resolution_citations_match_primary_source(self):
+        root = Path(__file__).resolve().parents[1]
+        draft_path = root / "docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json"
+        draft = json.loads(draft_path.read_text(encoding="utf-8"))
+        expected_url = SOURCES["rbi_repo"]["url"]
+        citations = [
+            source
+            for page in draft["pages"]
+            for source in page.get("sources", [])
+            if source.get("title") == "RBI monetary policy resolution 7 October 2026"
+        ]
+        self.assertEqual(len(citations), 6)
+        for source in citations:
+            self.assertEqual(source["url"], expected_url)
+            self.assertEqual(source["published_on"], "2026-10-07")
+
+
 
 if __name__ == "__main__":
     unittest.main()
