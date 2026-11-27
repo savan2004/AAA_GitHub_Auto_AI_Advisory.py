@@ -110,7 +110,7 @@ class RecoveryTests(unittest.TestCase):
                 self.assertIsNotNone(result)
                 self.assertEqual(result.Volume.iloc[-1],1000.)
 
-    def test_mismatch_partial_latest_and_three_missing_sessions_fail(self):
+    def test_mismatch_partial_latest_and_four_missing_sessions_fail(self):
         def fetch(day,wanted):
             return {SYMBOL:dict(official(), High=102., Volume=2000.)}
         self.assertIsNone(ArchiveRecovery([SYMBOL],DAY,fetch=fetch)(SYMBOL,history()))
@@ -122,7 +122,7 @@ class RecoveryTests(unittest.TestCase):
         partial.loc[pd.Timestamp(DAY),"Open"] = 103.
         recover = ArchiveRecovery([SYMBOL],DAY,fetch=forbidden)
         self.assertIsNone(recover(SYMBOL,partial))
-        self.assertIsNone(recover(SYMBOL,history().drop(pd.DatetimeIndex(["2026-11-23", "2026-11-20"]))))
+        self.assertIsNone(recover(SYMBOL,history().drop(pd.DatetimeIndex(["2026-11-23", "2026-11-20", "2026-11-19"]))))
         self.assertEqual(calls,[])
 
     def test_two_missing_sessions_recover_from_one_shared_older_archive(self):
@@ -143,6 +143,19 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(calls, [DAY, PREVIOUS, older])
         frame.loc[pd.Timestamp(PREVIOUS), "Close"] = 101.
         self.assertIsNone(recover(SYMBOL, frame))
+
+    def test_three_missing_sessions_keep_date_and_full_overlap_contract(self):
+        days = [date(2026, 11, number) for number in (19, 20, 23, 25)]
+        frame = history().drop(pd.DatetimeIndex(days[1:3]))
+        calls = []
+        def fetch(day, wanted):
+            calls.append(day)
+            return {SYMBOL: dict(official(), High=102.)}
+        recover = ArchiveRecovery([SYMBOL], DAY, fetch=fetch)
+        result = recover(SYMBOL, frame)
+        self.assertIsNotNone(result)
+        self.assertEqual([stamp.date() for stamp in result.index[-4:]], days)
+        self.assertEqual(calls, list(reversed(days)))
 
     def test_adjusted_price_mismatch_and_volume_mismatch_have_exact_reasons(self):
         from smart_chart_eod_recovery import stitch_final_day, prior_history

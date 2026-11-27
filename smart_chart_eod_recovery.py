@@ -109,7 +109,7 @@ def final_archive_rows(day, wanted, *, get=None):
         return {}
 
 
-def prior_history(frame, expected, previous):
+def prior_history(frame, expected, previous, *, diagnostics=None):
     """Remove only the unfilled target-date placeholder and verified holiday slots."""
     from portfolio_doctor_live import doctor_trading_session
     try:
@@ -153,7 +153,7 @@ def prior_history(frame, expected, previous):
             except RuntimeError:
                 pass
         data = data.drop(index=drop)
-        verified = validated_daily_history(data, previous.isoformat())
+        verified = validated_daily_history(data, previous.isoformat(), diagnostics=diagnostics)
         if verified is not None:
             verified.attrs["target_placeholder_volume"] = reported_volume
         return verified
@@ -192,32 +192,32 @@ def stitch_final_day(primary, previous, expected, prior, latest, *, diagnostics=
         return reject("invalid_overlap")
 
 
-def recovery_seed(frame, expected, previous):
-    """Use the previous session or bridge one wholly missing session."""
+def recovery_seed(frame, expected, previous, *, diagnostics=None):
+    """Return a verified anchor and up to three price-empty trailing sessions."""
     from portfolio_doctor_live import previous_doctor_session
 
-    recent = prior_history(frame, expected, previous)
-    if recent is not None:
-        return recent, previous, None
-    older = previous_doctor_session(previous)
-    # Both sessions must be absent or have a price-empty placeholder. Use
-    # both checks so no price observed on either session can be overwritten.
-    before_previous = prior_history(frame, previous, older)
-    before_expected = prior_history(frame, expected, older)
-    if before_previous is None or before_expected is None:
-        return None, older, None
-    return before_previous, older, before_expected
+    sessions = [expected, previous]
+    for _ in range(3):
+        anchor = sessions[-1]
+        targets = []
+        for day in reversed(sessions[:-1]):
+            history = prior_history(frame, day, anchor, diagnostics=diagnostics)
+            if history is None:
+                break
+            targets.append((day, history.attrs.get("target_placeholder_volume")))
+        else:
+            return history, anchor, targets
+        sessions.append(previous_doctor_session(anchor))
+    return None, None, ()
 
 
 class ArchiveRecovery:
-    """Share up to three dated official files across the entire shortlist."""
+    """Share up to four dated official files across the entire shortlist."""
     def __init__(self, symbols, session, *, fetch=final_archive_rows):
         self.symbols = frozenset(symbols)
         self.expected = date.fromisoformat(str(session))
         self.fetch = fetch
-        self.loaded = False
-        self.current = self.previous = {}
-        self.older = None
+        self.archives = {}
         self.recovered = 0
         self.rejection_reasons = {}
 
@@ -226,39 +226,39 @@ class ArchiveRecovery:
         if symbol not in self.symbols or not doctor_trading_session(self.expected):
             return None
         previous = previous_doctor_session(self.expected)
-        history, anchor, target = recovery_seed(frame, self.expected, previous)
-        if history is None:
-            print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reason=no_verified_trailing_anchor", flush=True)
-            return None
-        if not self.loaded:
-            self.loaded = True
-            self.current = self.fetch(self.expected, self.symbols)
-            if self.current:
-                self.previous = self.fetch(previous, self.symbols)
-            print(f"NSE_FINAL_ARCHIVE_COVERAGE latest={len(self.current)} prior={len(self.previous)}", flush=True)
         reasons = {}
-        if target is not None:
-            # Only fetch a third file if both newer official files are
-            # present for this symbol and the older provider overlap exists.
-            if self.previous.get(symbol) and self.current.get(symbol):
-                if self.older is None:
-                    self.older = self.fetch(anchor, self.symbols)
-                history = stitch_final_day(history, anchor, previous, self.older.get(symbol),
-                                           self.previous.get(symbol), diagnostics=reasons)
-                if history is not None:
-                    history.attrs["target_placeholder_volume"] = target.attrs.get("target_placeholder_volume")
-            else:
-                history = None
-        result = stitch_final_day(history, previous, self.expected, self.previous.get(symbol),
-                                  self.current.get(symbol), diagnostics=reasons)
-        if result is not None:
+        history, anchor, targets = recovery_seed(frame, self.expected, previous, diagnostics=reasons)
+        if history is None:
+            print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reason=no_verified_trailing_anchor "
+                  f"checks={reasons}", flush=True)
+            return None
+
+        # Reject missing newest evidence before reaching for older files.
+        # The calendar bounds the shared cache to at most four session dates.
+        for day in [self.expected, *[day for day, _ in reversed(targets[:-1])], anchor]:
+            if day not in self.archives:
+                self.archives[day] = self.fetch(day, self.symbols)
+                print(f"NSE_FINAL_ARCHIVE_COVERAGE session={day} rows={len(self.archives[day])}", flush=True)
+            if symbol not in self.archives[day]:
+                print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reason=missing_official_row session={day}", flush=True)
+                return None
+
+        reasons = {}
+        for day, placeholder_volume in targets:
+            history.attrs["target_placeholder_volume"] = placeholder_volume
+            history = stitch_final_day(history, anchor, day, self.archives[anchor][symbol],
+                                       self.archives[day][symbol], diagnostics=reasons)
+            if history is None:
+                break
+            anchor = day
+        if history is not None:
             self.recovered += 1
-            print(f"NSE_FINAL_RECOVERY_OK symbol={symbol} session={self.expected} rows={len(result)} close={result.Close.iloc[-1]:.2f}", flush=True)
+            print(f"NSE_FINAL_RECOVERY_OK symbol={symbol} session={self.expected} rows={len(history)} close={history.Close.iloc[-1]:.2f}", flush=True)
         else:
             for reason, count in reasons.items():
                 self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + count
             print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reasons={reasons}", flush=True)
-        return result
+        return history
 
 
 def yahoo_host_history(symbol, session, *, get=None, recover=None):
