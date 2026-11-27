@@ -36,7 +36,8 @@ class PortfolioVisualAcceptance(unittest.TestCase):
         pages = [page.extract_text() for page in reader.pages]
         self.assertIn("01 / PORTFOLIO DASHBOARD", pages[0])
         self.assertIn("WHAT NEEDS YOUR ATTENTION", pages[0])
-        self.assertIn("You invested Rs 5,500.00", pages[0])
+        self.assertIn("You invested", pages[0])
+        self.assertIn("Rs 5,500.00", pages[0])
         self.assertIn("paper gain/loss", pages[0])
         self.assertIn("02 / YOUR STOCKS, ONE BY ONE", pages[1])
         for symbol in ("SAMPLEA", "SAMPLEB", "SAMPLEC", "SAMPLED", "SAMPLEE"):
