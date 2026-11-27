@@ -28,6 +28,7 @@ class PublicButtonSafetyTests(unittest.TestCase):
         body = self.function_source("breadth_btn")
         self.assertIn("Market breadth is temporarily unavailable", body)
         self.assertNotIn('safe_send(chat_id, f"❌ Error: {e}")', body)
+        self.assertNotIn("exc_info=True", body)
 
 
 if __name__ == "__main__":
