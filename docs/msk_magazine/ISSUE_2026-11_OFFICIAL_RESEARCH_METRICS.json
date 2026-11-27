@@ -166,14 +166,19 @@
   ],
   "calendar": [
     {
+      "date": "2026-11-28",
+      "event": "October IIP release (scheduled)",
+      "source": "https://www.mospi.gov.in/uploads/documents/releaseCalender/1793948871564-ARC%202026-27%20updated%20till%20October%202026.pdf"
+    },
+    {
       "date": "2026-11-30",
-      "event": "FY27 Q2 GDP and October IIP releases",
-      "source": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2304949&lang=1&reg=3"
+      "event": "FY27 Q2 GDP release (scheduled)",
+      "source": "https://www.mospi.gov.in/uploads/documents/releaseCalender/1793948871564-ARC%202026-27%20updated%20till%20October%202026.pdf"
     },
     {
       "date": "2026-12-02",
       "event": "RBI MPC meeting begins (scheduled)",
-      "source": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63742"
+      "source": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63742"
     },
     {
       "date": "2026-12-14",
