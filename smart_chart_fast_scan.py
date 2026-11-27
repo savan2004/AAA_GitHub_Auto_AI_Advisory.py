@@ -262,7 +262,9 @@ def choose_auto_chart(universe, *, download, scorer, session_key,
             f"history_reasons={dict(sorted(rejection_reasons.items()))})."
         )
 
-    # Sort by the FINAL 11-check score, not by preliminary EMA crossover.
-    winner = max(candidates.values(), key=lambda c: float(c["score"]))
+    # Prefer a structure-backed plan over observation-only candidates, then
+    # rank by FINAL score. Never fabricate targets if no plan qualifies.
+    winner = max(candidates.values(), key=lambda c: (
+        c.get("verified_trade_plan") is True, float(c["score"])))
     winner["_verified_count"] = len(verified_symbols)
     return winner, attempted, len(candidates), whole

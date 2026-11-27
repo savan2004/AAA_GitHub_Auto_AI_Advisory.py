@@ -188,6 +188,20 @@ class FastSmartChartTests(unittest.TestCase):
         self.assertEqual(recovery_calls[0],"STOCK59.NS")
         self.assertEqual(result[0]["_verified_count"],1)
 
+    def test_trade_plan_preferred_over_higher_score_observation(self):
+        fresh = self.history()
+        def scorer(sym, name, *, df):
+            plan = sym == "TCS.NS"
+            return {"sym": sym, "score": 13 if plan else 19,
+                    "close": float(df.Close.iloc[-1]), "setup_confirmed": True,
+                    "verified_trade_plan": plan}
+        got = choose_auto_chart(
+            [("DMART.NS", "DMART"), ("TCS.NS", "TCS")],
+            download=lambda **kw: pd.concat({s: fresh for s in kw["tickers"]}, axis=1),
+            scorer=scorer, session_key=self.SESSION, scan_all=True,
+            min_score=12, require_confirmed_setup=True)
+        self.assertEqual(got[0]["sym"], "TCS.NS")
+
     def test_partial_coverage_recovers_better_candidate_without_individual_calls(self):
         fresh = self.history()
         stale = fresh.copy()

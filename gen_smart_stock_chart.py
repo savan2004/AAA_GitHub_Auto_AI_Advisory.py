@@ -308,7 +308,12 @@ def score_symbol_weighted(sym, name, df=None):
             setup = "Trend confirmation: higher highs/lows + weekly trend"
         else:
             setup = ""
+        from msk_chart_release import chart_plan
+        from msk_indicator_math import atr_series
+        atr = float(atr_series(df["High"], df["Low"], df["Close"]).iloc[-1])
+        plan = chart_plan(df, signal, atr) if np.isfinite(atr) and atr > 0 else None
         return {"sym": sym, "name": name, "score": int(score),
+                "verified_trade_plan": plan is not None,
                 "cross_dir": 1 if bullish_cross else 0,
                 "reason": setup or "No independently confirmed bullish setup",
                 "setup_confirmed": bool(setup), "signal": signal,
