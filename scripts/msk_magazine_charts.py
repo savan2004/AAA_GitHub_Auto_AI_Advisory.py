@@ -150,7 +150,7 @@ def _tiles(c, tiles, *, title, x=57, y=515, width=470, height=134):
 def _events(c, events, *, x=59, y=519):
     _t(c,x,y+132,"UPCOMING POLICY AND DATA EVENTS",9.2,TEAL,True)
     for i,item in enumerate(events):
-        yy=y+101-i*43
+        yy=y+101-i*32
         _rect(c,x+4,yy-6,8,8,TEAL)
         _t(c,x+23,yy,item["date"],10,NAVY,True)
         _t(c,x+107,yy,item["event"][:63],8.1,MUTED)
