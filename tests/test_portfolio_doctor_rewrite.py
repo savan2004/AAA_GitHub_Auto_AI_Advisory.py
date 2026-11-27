@@ -164,7 +164,7 @@ class RewritePDFTests(unittest.TestCase):
         overflow = []
         for page in pages:
             def visit(text, cm, tm, font, size):
-                label = text.rstrip("\\n")
+                label = text.rstrip("\n")
                 if label and font:
                     face = str(font.get("/BaseFont", "/Helvetica")).lstrip("/")
                     if float(tm[4]) + stringWidth(label, face, size) > float(page.mediabox.width) - 41:
