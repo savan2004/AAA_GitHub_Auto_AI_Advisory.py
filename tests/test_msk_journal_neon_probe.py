@@ -44,6 +44,18 @@ class StagingProbeTests(unittest.TestCase):
                 STAGING_HOST, "ep-production-main.c-4.ap-southeast-1.aws.neon.tech"
             )}))
 
+    def test_host_rejection_categories_without_echoing_host_or_secret(self):
+        pooled = STAGING_HOST.replace(".", "-pooler.", 1)
+        for host, category in ((pooled, "staging_pooler"),
+                               ("private-other.example", "other_host"),
+                               (STAGING_HOST + ":5433", "wrong_port")):
+            bad = SAMPLE_DSN.replace(STAGING_HOST, host)
+            with self.subTest(category=category):
+                with self.assertRaisesRegex(ProbeError, "category=" + category) as caught:
+                    load_config(env(**{DSN_ENV: bad}))
+                self.assertNotIn(host, str(caught.exception))
+                self.assertNotIn("FAKE-NOT-A-SECRET", str(caught.exception))
+
     def test_accepts_postgres_scheme_alias(self):
         alias = SAMPLE_DSN.replace("postgresql://", "postgres://")
         dsn, key = load_config(env(**{DSN_ENV: alias}))

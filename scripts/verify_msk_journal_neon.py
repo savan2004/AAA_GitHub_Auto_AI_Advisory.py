@@ -38,6 +38,24 @@ class ProbeError(RuntimeError):
     """A staging safeguard or expected test result was not satisfied."""
 
 
+def _validate_staging_host(host, port):
+    """Fixed categories only: never print the received hostname or credentials."""
+    if host != STAGING_HOST:
+        pooled = STAGING_HOST.replace(".", "-pooler.", 1)
+        if host == pooled:
+            category = "staging_pooler"
+        elif not host:
+            category = "host_missing"
+        else:
+            category = "other_host"
+        raise ProbeError("Connection is NOT the approved staging direct host; "
+                         "select branch br-delicate-base-b3zz6z20, non-pooled; "
+                         "category=" + category)
+    if port not in (None, "", 5432, "5432"):
+        raise ProbeError("Connection is NOT the approved staging direct host/port; "
+                         "category=wrong_port")
+
+
 def _conninfo_to_url(raw):
     """Normalize a standard libpq key/value string after strict staging checks."""
     try:
@@ -58,8 +76,7 @@ def _conninfo_to_url(raw):
     if missing:
         # Field names are safe to report; never print the corresponding values.
         raise ProbeError("Staging connection info missing fields: " + ",".join(missing))
-    if values["host"] != STAGING_HOST or values.get("port", "5432") not in ("", "5432"):
-        raise ProbeError("Connection is NOT the approved staging direct host; select branch br-delicate-base-b3zz6z20, non-pooled")
+    _validate_staging_host(values["host"], values.get("port", "5432"))
     if values["dbname"] != STAGING_DATABASE:
         raise ProbeError("Wrong staging database; select msk_index_research")
     if values["sslmode"] != "require":
@@ -125,8 +142,7 @@ def load_config(env=None):
         # Even an invalid scheme might contain secret material; never echo it.
         raise ProbeError("Staging DSN scheme unsupported: missing" if not parsed.scheme
                          else "Staging DSN scheme unsupported: unrecognized")
-    if host != STAGING_HOST or port not in (None, 5432):
-        raise ProbeError("Connection is NOT the approved staging direct host; select branch br-delicate-base-b3zz6z20, non-pooled")
+    _validate_staging_host(host, port)
     if parsed.path != "/" + STAGING_DATABASE:
         raise ProbeError("Wrong staging database; select msk_index_research")
     if not user or not password:
