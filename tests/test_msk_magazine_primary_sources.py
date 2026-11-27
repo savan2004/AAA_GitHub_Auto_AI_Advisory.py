@@ -103,6 +103,16 @@ class PrimarySourceEvidenceTests(unittest.TestCase):
             self.assertEqual(source["published_on"], "2026-10-07")
 
 
+    def test_november_calendar_cpi_release_date_has_official_citation(self):
+        root = Path(__file__).resolve().parents[1]
+        draft_path = root / "docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json"
+        draft = json.loads(draft_path.read_text(encoding="utf-8"))
+        page14 = next(page for page in draft["pages"] if page["page"] == 14)
+        cpi_url = SOURCES["mospi_cpi"]["url"]
+        citation = next(source for source in page14["sources"] if source["url"] == cpi_url)
+        self.assertEqual(citation["published_on"], "2026-11-12")
+        self.assertIn("CPI", citation["title"])
+
 
 if __name__ == "__main__":
     unittest.main()
