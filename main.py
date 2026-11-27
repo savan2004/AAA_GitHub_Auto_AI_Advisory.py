@@ -2283,8 +2283,8 @@ def breadth_btn(m):
         try:
             safe_send(chat_id, build_breadth())
         except Exception as e:
-            logger.error(f"Breadth err: {e}", exc_info=True)
-            safe_send(chat_id, f"❌ Error: {e}")
+            logger.error("Breadth err: %s", type(e).__name__)
+            safe_send(chat_id, "⚠️ Market breadth is temporarily unavailable. Verified index coverage could not be confirmed; please retry later.")
 
     executor.submit(_run)
 

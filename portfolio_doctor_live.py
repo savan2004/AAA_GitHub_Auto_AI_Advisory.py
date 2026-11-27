@@ -115,7 +115,7 @@ def verified_completed_daily_frame(frame, *, now=None):
         raise PortfolioDoctorError("NO_PRICES") from None
 
 
-def recover_fresh_daily_for_doctor(symbol, *, now=None, fetchers=None):
+def recover_fresh_daily_for_doctor(symbol, *, now=None, fetchers=None, official_pair=None):
     """Repair a stale primary quote using independent full OHLCV histories.
 
     Only inside the disposable, log-suppressed Doctor worker. Each alternate
@@ -137,10 +137,21 @@ def recover_fresh_daily_for_doctor(symbol, *, now=None, fetchers=None):
         )
     for fetch in fetchers:
         try:
-            frame = _clean_frame(fetch())
-            if frame is None:
-                continue
-            fresh = verified_completed_daily_frame(frame, now=now)
+            raw = fetch()
+            if official_pair is not None:
+                from portfolio_doctor_bhavcopy import reconcile_rejected_current_day
+                expected = expected_doctor_session(now)
+                fresh = reconcile_rejected_current_day(
+                    raw, prior=official_pair[0], latest=official_pair[1],
+                    previous_day=previous_doctor_session(expected),
+                    expected_day=expected, now=now)
+                if fresh is None:
+                    continue
+            else:
+                frame = _clean_frame(raw)
+                if frame is None:
+                    continue
+                fresh = verified_completed_daily_frame(frame, now=now)
             closes = fresh["Close"].dropna()
             if len(closes) >= 20:
                 return fresh
@@ -270,6 +281,45 @@ def price_holdings(holdings, *, include_frames=False):
                     frames[sym] = recovered
                     failures.pop(sym, None)
                     price_sources[sym] = "Verified alternate daily OHLCV"
+    # Cross-check both a fresh primary and any fresh alternate against the
+    # public NSE file. Already overlap-verified archive repairs need no repeat.
+    current = [sym for sym in nse_symbols if sym not in failures and
+               not price_sources[sym].startswith("NSE EOD bhavcopy")]
+    if current:
+        try:
+            from market_data import crosscheck_doctor_current_frames
+        except ImportError:
+            crosscheck_doctor_current_frames = None
+        if crosscheck_doctor_current_frames is not None:
+            confirmed, repaired, conflicts = crosscheck_doctor_current_frames(
+                frames, current, now=now)
+            for sym in current:
+                if sym in confirmed:
+                    price_sources[sym] = "NSE EOD bhavcopy matched completed OHLCV"
+                elif sym in repaired:
+                    frames[sym] = repaired[sym]
+                    price_sources[sym] = "NSE EOD bhavcopy + verified prior-session OHLCV history"
+                elif sym not in conflicts:
+                    price_sources[sym] = "Completed provider OHLCV; NSE cross-check unavailable"
+            # A known conflict cannot fall through to the ordinary freshness-only
+            # acceptance path, even if the alternate has the right date.
+            for sym in conflicts:
+                failures[sym] = "NO_PRICES"
+            retry = [sym for sym, pair in conflicts.items() if pair[0] is not None
+                     and price_sources[sym] != "Verified alternate daily OHLCV"]
+            if retry:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=min(3, len(retry))) as pool:
+                    pending = [(sym, pool.submit(recover_fresh_daily_for_doctor, sym,
+                                                 now=now, official_pair=conflicts[sym]))
+                               for sym in retry]
+                    for sym, future in pending:
+                        candidate = future.result()
+                        if candidate is not None:
+                            frames[sym] = candidate
+                            failures.pop(sym, None)
+                            price_sources[sym] = (
+                                "NSE EOD bhavcopy + verified alternate prior-session OHLCV history")
     # Explicit BSE requests never enter NSE recovery. Bare-symbol BSE fallback
     # requires exact provider identity and does not replace an existing NSE
     # history merely because its latest candle is stale.

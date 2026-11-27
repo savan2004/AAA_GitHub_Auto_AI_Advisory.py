@@ -233,6 +233,75 @@ def stitch_one_verified_day(primary, *, prior, latest, previous_day, expected_da
         return None
 
 
+def reconcile_rejected_current_day(frame, *, prior, latest, previous_day, expected_day, now):
+    """Discard a rejected current observation; never mutate the provider frame.
+
+    This explicit reconciliation is separate from the missing-day-only stitch.
+    Both official rows and strict prior overlap/continuity are required.
+    """
+    try:
+        if (not isinstance(frame, pd.DataFrame) or frame.empty
+                or not isinstance(frame.index, pd.DatetimeIndex)
+                or frame.index.hasnans or frame.index.has_duplicates
+                or not frame.index.is_monotonic_increasing
+                or len(set(frame.index.date)) != len(frame)):
+            return None
+        return stitch_one_verified_day(
+            frame.loc[frame.index.date <= previous_day],
+            prior=prior, latest=latest, previous_day=previous_day,
+            expected_day=expected_day, now=now)
+    except (ValueError, TypeError, AttributeError, IndexError):
+        return None
+
+
+def crosscheck_completed_doctor_frames(frames, symbols, *, now):
+    """One batched official check, then one prior file only for conflicts.
+
+    Missing public evidence does not change the existing completed-provider
+    acceptance contract; observed disagreements MUST be resolved or withheld.
+    No customer data is persisted or logged.
+    """
+    from portfolio_doctor_live import expected_doctor_session, previous_doctor_session
+    symbols = list(dict.fromkeys(symbols))
+    if not 1 <= len(symbols) <= MAX_STOCKS:
+        return set(), {}, {}
+    expected = expected_doctor_session(now)
+    previous = previous_doctor_session(expected)
+    try:
+        current = fetch_nse_bhavcopy_rows(expected, symbols)
+    except Exception:
+        current = {}
+    confirmed, repaired, conflicts = set(), {}, {}
+    for sym in symbols:
+        if sym not in current:
+            continue
+        frame = frames.get(sym)
+        if (isinstance(frame, pd.DataFrame) and not frame.empty
+                and frame.index[-1].date() == expected
+                and official_daily_bar_matches(frame.iloc[-1], current[sym])):
+            confirmed.add(sym)
+        else:
+            conflicts[sym] = (None, current[sym])
+    if not conflicts:
+        return confirmed, repaired, conflicts
+    try:
+        prior = fetch_nse_bhavcopy_rows(previous, list(conflicts))
+    except Exception:
+        prior = {}
+    for sym in list(conflicts):
+        pair = (prior.get(sym), current[sym])
+        conflicts[sym] = pair
+        if pair[0] is None:
+            continue
+        recovered = reconcile_rejected_current_day(
+            frames.get(sym), prior=pair[0], latest=pair[1],
+            previous_day=previous, expected_day=expected, now=now)
+        if recovered is not None:
+            repaired[sym] = recovered
+            del conflicts[sym]
+    return confirmed, repaired, conflicts
+
+
 def recover_from_public_bhavcopy(primary_frames, symbols, *, now):
     """Fetch 2 exchange sessions for 1–10 symbols; do not cache or persist."""
     symbols = list(dict.fromkeys(symbols))
