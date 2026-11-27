@@ -10,6 +10,9 @@ from msk_ai_builder_primary import IndexMember, SYMBOL, ISIN
 from msk_ai_builder_evidence import EvidenceError
 
 INDEX_CSV="https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
+# The official 27 Nov 2026 CSV contains 501 unique real constituents.
+# Accept the observed sizes; never truncate the official roster to 500.
+INDEX_SIZES = (500, 501)
 CLOSE_CSV="https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{d}.csv"
 FINAL_ZIP="https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{d}_F_0000.csv.zip"
 HEADERS={"User-Agent":"Mozilla/5.0","Accept":"text/csv,text/plain,*/*",
@@ -74,7 +77,7 @@ def parse_roster(raw):
             rows.append(ListedCompany(IndexMember(s,i),row["COMPANY NAME"],row["INDUSTRY"],row["SERIES"]))
     except csv.Error as exc:
         raise EvidenceError("OFFICIAL_CSV_ROW") from exc
-    if len(rows)!=500 or len({r.member.symbol for r in rows})!=500 or len({r.member.isin for r in rows})!=500:
+    if len(rows) not in INDEX_SIZES or len({r.member.symbol for r in rows})!=len(rows) or len({r.member.isin for r in rows})!=len(rows):
         raise EvidenceError("INCOMPLETE_OR_DUPLICATE_INDEX")
     return tuple(sorted(rows,key=lambda r:r.member.symbol))
 

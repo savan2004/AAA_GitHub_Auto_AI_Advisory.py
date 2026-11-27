@@ -31,6 +31,20 @@ def provider(symbol,timeout):
     return normalize_secondary(symbol,d,now=NOW)
 
 class SourceTests(unittest.TestCase):
+    def test_official_501_members_retained_and_accounted_for(self):
+        raw = roster_csv() + "\nAdditional Company,Other,ADDITIONAL,EQ,INE999999999"
+        roster = parse_roster(raw)
+        self.assertEqual(len(roster), 501)
+        closes = parse_closes(close_csv(), CLOSE, roster)
+        result = plan_review(roster, closes, close_date=CLOSE, now=NOW,
+                             evidence_provider=provider)
+        self.assertEqual(result.universe_size, 501)
+        for invalid in (raw + "\n" + raw.splitlines()[-1],
+                        raw.replace("INE999999999", "INE000000000"),
+                        raw + "\nAnother Company,Other,ANOTHER,EQ,INE999999998"):
+            with self.assertRaises(EvidenceError):
+                parse_roster(invalid)
+
     def test_official_final_archive_identity_and_turnover(self):
         import io
         import zipfile

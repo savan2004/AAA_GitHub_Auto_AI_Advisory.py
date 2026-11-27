@@ -11,7 +11,7 @@ import time
 
 from msk_ai_builder_bank import StagedCompany, BankError, encode_snapshot
 from msk_ai_builder_evidence import EvidenceError, collect_secondary
-from msk_ai_builder_weekly_sources import fetch_roster, fetch_closes, ListedCompany, WeeklyClose
+from msk_ai_builder_weekly_sources import fetch_roster, fetch_closes, ListedCompany, WeeklyClose, INDEX_SIZES
 
 @dataclass(frozen=True)
 class WeeklyReview:
@@ -64,10 +64,10 @@ def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=Non
     if type(max_attempts) is not int or not 20<=max_attempts<=60 or type(deadline_seconds) not in (int,float) or not 1<=deadline_seconds<=600:
         raise BankError("WEEKLY_BUDGET_INVALID")
     roster=tuple(roster)
-    if len(roster)!=500 or any(not isinstance(c,ListedCompany) for c in roster):
+    if len(roster) not in INDEX_SIZES or any(not isinstance(c,ListedCompany) for c in roster):
         raise BankError("INDEX_UNAVAILABLE")
     by_symbol={c.member.symbol:c for c in roster}
-    if len(by_symbol)!=500 or len({c.member.isin for c in roster})!=500:
+    if len(by_symbol)!=len(roster) or len({c.member.isin for c in roster})!=len(roster):
         raise BankError("INDEX_UNAVAILABLE")
     previous=tuple(previous)
     if len(previous)>20 or len(set(previous))!=len(previous):
@@ -124,7 +124,7 @@ def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=Non
     # Every prior company requires a completed assessment or index removal.
     assessed={s for s,_ in scored}|set(decisions)
     if not incumbent_set.issubset(assessed):
-        return WeeklyReview(500,len(closes),tuple(attempts),tuple(scored),(),{},failures,
+        return WeeklyReview(len(roster),len(closes),tuple(attempts),tuple(scored),(),{},failures,
                             "WITHHELD_INCOMPLETE_INCUMBENT_REVIEW")
     # Deterministic sector diversification: maximum five per index industry.
     # Keep passing incumbents first, then fill available slots with alternatives.
@@ -196,9 +196,9 @@ def plan_review(roster,closes,*,previous=(),close_date,now,evidence_provider=Non
                         if c.member.symbol not in selected_symbols|rejected_symbols)[:10]
         # A partial bank cannot replace the previous snapshot in verified mode.
         status="INTERNAL_SECONDARY_STAGING" if len(selected)==20 else "WITHHELD_PRIMARY_COVERAGE"
-        return WeeklyReview(500,len(closes),tuple(attempts),tuple(scored),tuple(selected),
+        return WeeklyReview(len(roster),len(closes),tuple(attempts),tuple(scored),tuple(selected),
                             decisions,failures,status,remaining,tuple(primary_checks),tuple(primary_rejections))
-    return WeeklyReview(500,len(closes),tuple(attempts),tuple(scored),tuple(selected),decisions,failures,
+    return WeeklyReview(len(roster),len(closes),tuple(attempts),tuple(scored),tuple(selected),decisions,failures,
                         "INTERNAL_SECONDARY_STAGING" if selected else "WITHHELD_NO_QUALIFIERS",
                         tuple(c.member.symbol for c in reserves[:10]))
 
