@@ -109,6 +109,16 @@ class MarketDataRecoveryTests(unittest.TestCase):
                 self.assertEqual(report["matched"], 0)
                 self.assertEqual(report["withheld"], 1)
 
+    def test_central_official_recovery_only_requested_equities(self):
+        with patch("portfolio_doctor_bhavcopy.recover_from_public_bhavcopy",
+                   return_value={"TCS": self.frame}) as official:
+            got = md.recover_verified_eod_frames({"TCS": self.frame}, ["TCS"], now=None)
+            self.assertEqual(set(got), {"TCS"})
+            official.assert_called_once_with({"TCS": self.frame}, ["TCS"], now=None)
+            for invalid in (["TCS.BO"], ["^NSEI"], ["BAD/ID"], []):
+                self.assertEqual(md.recover_verified_eod_frames({}, invalid, now=None), {})
+            self.assertEqual(official.call_count, 1)
+
     def test_probe_rejects_alias_duplicates_and_bad_sessions(self):
         from unittest.mock import Mock
         fetch = Mock()

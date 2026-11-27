@@ -252,3 +252,19 @@ def index_history(ticker: str = "^NSEI", period: str = "1y", *, retries: int = 1
         logger.warning(f"[market_data] index {ticker} failed: {e}")
         return None
 
+
+
+def recover_verified_eod_frames(primary_frames, symbols, *, now):
+    """Shared, request-local NSE one-session repair for raw daily equity bars.
+
+    Never logs holdings, writes cache, returns stale bars or changes existing
+    complete candles. The official parser checks exact symbol and session.
+    """
+    import re
+    from portfolio_doctor_bhavcopy import recover_from_public_bhavcopy
+    wanted = list(dict.fromkeys(symbols))
+    if not 1 <= len(wanted) <= 10 or not all(
+        isinstance(s, str) and re.fullmatch(r"[A-Z0-9&-]{2,25}", s) for s in wanted
+    ):
+        return {}
+    return recover_from_public_bhavcopy(primary_frames, wanted, now=now)
