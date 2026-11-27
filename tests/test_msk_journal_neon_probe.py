@@ -58,6 +58,34 @@ class StagingProbeTests(unittest.TestCase):
                 self.assertEqual(normalized, SAMPLE_DSN)
                 self.assertEqual(key, RUN_ID)
 
+
+    def test_accepts_pinned_libpq_conninfo_and_psql_wrapper(self):
+        conninfo = (
+            "host=" + STAGING_HOST + " port=5432 dbname=" + STAGING_DATABASE +
+            " user=probe password=FAKE-NOT-A-SECRET sslmode=require channel_binding=require"
+        )
+        for raw in (conninfo, "psql " + conninfo):
+            with self.subTest(wrapper=raw.startswith("psql ")):
+                self.assertEqual(load_config(env(**{DSN_ENV: raw})), (SAMPLE_DSN, RUN_ID))
+
+    def test_libpq_conninfo_still_rejects_wrong_host_database_and_tls(self):
+        conninfo = (
+            "host=" + STAGING_HOST + " port=5432 dbname=" + STAGING_DATABASE +
+            " user=probe password=FAKE-NOT-A-SECRET sslmode=require"
+        )
+        bad_values = (
+            conninfo.replace(STAGING_HOST, "other.example"),
+            conninfo.replace(STAGING_DATABASE, "production"),
+            conninfo.replace("sslmode=require", "sslmode=disable"),
+            conninfo + " host=other.example",
+        )
+        for bad in bad_values:
+            with self.subTest(bad_case="sanitized"):
+                with self.assertRaises(ProbeError) as caught:
+                    load_config(env(**{DSN_ENV: bad}))
+                self.assertNotIn("FAKE-NOT-A-SECRET", str(caught.exception))
+                self.assertNotIn(STAGING_HOST, str(caught.exception))
+
     def test_rejects_other_driver_schemes(self):
         bad = SAMPLE_DSN.replace("postgresql://", "postgresql+asyncpg://")
         with self.assertRaisesRegex(ProbeError, r"^Staging DSN scheme unsupported: unrecognized") as caught:
