@@ -1,0 +1,198 @@
+{
+  "issue": "2026-11",
+  "as_of": "2026-11-23",
+  "status": "DOCUMENT_REVIEWED_NOT_APPROVED_FOR_PUBLICATION",
+  "market_source": {
+    "name": "NSE Indices, October 2026 Index Dashboard",
+    "url": "https://www.niftyindices.com/Index_Dashboard/Index_Dashboard_OCT2026.pdf",
+    "report_date": "2026-10-31",
+    "return_convention": "Total-return index; 1M/3M/1Y percentages absolute, annualised volatility percentage",
+    "raw_pdf_archived": false
+  },
+  "market_indices": [
+    {
+      "name": "Nifty 50",
+      "m1": 1.95,
+      "m3": -5.29,
+      "y1": -9.45,
+      "vol": 13.9,
+      "pe": 19.3,
+      "pb": 2.83,
+      "dy": 1.42
+    },
+    {
+      "name": "Nifty Bank",
+      "m1": 0.1,
+      "m3": -4.35,
+      "y1": -4.73,
+      "vol": 17.16,
+      "pe": 12.23,
+      "pb": 1.65,
+      "dy": 1.14
+    },
+    {
+      "name": "Nifty 500",
+      "m1": -0.75,
+      "m3": -6.51,
+      "y1": -6.83,
+      "vol": 14.62,
+      "pe": 21,
+      "pb": 3.07,
+      "dy": 1.28
+    },
+    {
+      "name": "Nifty 500 Equal Weight",
+      "m1": -5.12,
+      "m3": -8.9,
+      "y1": -6.14,
+      "vol": 16.88,
+      "pe": 24.82,
+      "pb": 3.11,
+      "dy": 1.08
+    },
+    {
+      "name": "Nifty Midcap 150",
+      "m1": -3.69,
+      "m3": -8.89,
+      "y1": -3.9,
+      "vol": 16.75,
+      "pe": 26.27,
+      "pb": 3.69,
+      "dy": 1.03
+    },
+    {
+      "name": "Nifty Smallcap 250",
+      "m1": -5.78,
+      "m3": -6.29,
+      "y1": -2.61,
+      "vol": 18.14,
+      "pe": 31.28,
+      "pb": 3.23,
+      "dy": 0.78
+    }
+  ],
+  "sectors": [
+    {
+      "name": "Nifty IT",
+      "m1": 18.06
+    },
+    {
+      "name": "Nifty Pharma",
+      "m1": 2.6
+    },
+    {
+      "name": "Nifty PSU Bank",
+      "m1": 2.73
+    },
+    {
+      "name": "Nifty Healthcare Index",
+      "m1": 1.93
+    },
+    {
+      "name": "Nifty Energy",
+      "m1": -4.57
+    },
+    {
+      "name": "Nifty Auto",
+      "m1": -3.31
+    },
+    {
+      "name": "Nifty Metal",
+      "m1": -7.51
+    },
+    {
+      "name": "Nifty Capital Goods",
+      "m1": -7.23
+    }
+  ],
+  "macro": [
+    {
+      "name": "RBI policy repo rate",
+      "value": 5.5,
+      "unit": "%",
+      "period": "2026-10-07",
+      "url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63742"
+    },
+    {
+      "name": "October CPI YoY",
+      "value": 6.09,
+      "unit": "%",
+      "period": "2026-10",
+      "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3"
+    },
+    {
+      "name": "October food CPI YoY",
+      "value": 8.94,
+      "unit": "%",
+      "period": "2026-10",
+      "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3"
+    },
+    {
+      "name": "September IIP YoY",
+      "value": 6.7,
+      "unit": "%",
+      "period": "2026-09",
+      "url": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2329475&lang=2&reg=48"
+    }
+  ],
+  "issuer_results": [
+    {
+      "name": "TCS",
+      "quarter": "Q2 FY27",
+      "published_on": "2026-10-08",
+      "url": "https://nsearchives.nseindia.com/corporate/ixbrl/INTEGRATED_FILING_INDAS_200121_08102026220810_iXBRL_WEB.html",
+      "reporting_currency": "INR",
+      "reported_revenue_inr_crore": 73188,
+      "usd_comparable": false
+    },
+    {
+      "name": "Persistent Systems",
+      "quarter": "Q2 FY27",
+      "usd_revenue_yoy_pct": 20,
+      "reported_revenue_usd_m": 487.6,
+      "published_on": "2026-10-15",
+      "url": "https://www.persistent.com/media/press-releases/q2-fy27-results/",
+      "reporting_currency": "USD"
+    },
+    {
+      "name": "Coforge",
+      "quarter": "Q2 FY27",
+      "usd_revenue_yoy_pct": 40.1,
+      "reported_revenue_usd_m": 652.2,
+      "published_on": "2026-10-23",
+      "url": "https://news.coforge.com/newsroom/press-release/coforge-delivers-an-outstanding-performance-revenue-growth-536-yoy-raises-ebit-margin-guidance-for-the-year?hs_amp=true",
+      "reporting_currency": "USD"
+    }
+  ],
+  "calendar": [
+    {
+      "date": "2026-11-28",
+      "event": "October IIP release (scheduled)",
+      "source": "https://www.mospi.gov.in/uploads/documents/releaseCalender/1793948871564-ARC%202026-27%20updated%20till%20October%202026.pdf"
+    },
+    {
+      "date": "2026-11-30",
+      "event": "FY27 Q2 GDP release (scheduled)",
+      "source": "https://www.mospi.gov.in/uploads/documents/releaseCalender/1793948871564-ARC%202026-27%20updated%20till%20October%202026.pdf"
+    },
+    {
+      "date": "2026-12-02",
+      "event": "RBI MPC meeting begins (scheduled)",
+      "source": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63742"
+    },
+    {
+      "date": "2026-12-14",
+      "event": "November CPI release (scheduled)",
+      "source": "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2335416&lang=1&reg=3"
+    }
+  ],
+  "issuer_comparison_basis": "Only Persistent Systems and Coforge have USD YoY growth plotted; TCS NSE iXBRL is INR-only and excluded from USD bars.",
+  "cover_feature": {
+    "kind": "index_divergence",
+    "observation_month": "2026-10",
+    "primary": "Nifty 50",
+    "secondary": "Nifty Smallcap 250",
+    "editorial_topic": "The sharp split between large-cap Nifty and small-cap returns",
+    "special_edition": false
+  }
+}

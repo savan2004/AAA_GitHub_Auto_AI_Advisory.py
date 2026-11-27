@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MSK Magazine | November 2026 Premium Editorial Print Pilot</title>
+<style>
+@page{size:A4;margin:0}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;color:#122b3c;font-family:Arial,"Helvetica Neue",sans-serif}
+.page{width:210mm;height:297mm;position:relative;page-break-after:always;break-after:page;overflow:hidden;background:#fdfcf8}
+.page:last-child{page-break-after:auto;break-after:auto}
+.serif{font-family:Georgia,"Times New Roman",serif}
+.mono{font-family:"Courier New",monospace}
+.dark{background:#0c2638;color:#f8f7f2}
+.gold{color:#d2ac68}.teal{color:#087779}.neg{color:#bb544f}
+.rule{height:1px;background:#c7d6d1}
+.publication{position:absolute;left:17mm;right:17mm;bottom:7mm;padding-top:2.3mm;border-top:1px solid #d8e0dc;font-size:7pt;letter-spacing:.07em;color:#52666a}
+.publication strong{float:right;color:#087779}
+.locked{color:#a14f47;font-weight:bold}
+.content{padding:15mm 17mm 15mm}
+.overline{font-size:8.5pt;font-weight:bold;letter-spacing:.16em;text-transform:uppercase;color:#087779}
+.tag{display:inline-block;padding:2mm 3mm;border:1px solid #c2d4cb;font-size:8pt;color:#44656a;letter-spacing:.06em}
+.masthead{height:28mm;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d3ded9}
+.masthead img{width:66mm;height:19mm;object-fit:contain;object-position:left}
+.masthead .issue{font-size:9pt;text-align:right;line-height:1.6;letter-spacing:.04em;color:#48636b}
+.page-1{background:#0d2638;color:#f8f7f2}
+.cover-band{background:#fff;color:#0c2638;height:33mm;padding:6mm 17mm;border-bottom:3px solid #d6b772}
+.cover-band img{width:72mm;height:20mm;object-fit:contain;object-position:left center}
+.cover-band .meta{float:right;text-align:right;font-size:9pt;letter-spacing:.08em;line-height:1.5;margin-top:6mm}
+.cover-art{position:absolute;width:116mm;height:116mm;right:-31mm;top:78mm;border:1px solid #294d5e;border-radius:100%}
+.cover-art:before{content:"";position:absolute;inset:15mm;border:1px solid #294d5e;border-radius:100%}
+.cover-art:after{content:"";position:absolute;inset:32mm;border:1px solid #294d5e;border-radius:100%}
+.cover-feature{position:absolute;left:17mm;right:19mm;top:68mm}
+.cover-feature .kicker{font-size:12pt;color:#e2c489;font-weight:bold;letter-spacing:.18em;text-transform:uppercase}
+.cover-feature h1{font-size:39pt;letter-spacing:-.03em;line-height:1.04;margin:11mm 0 9mm;max-width:165mm}
+.cover-feature p{font-size:13pt;line-height:1.45;max-width:148mm;color:#e5eee9}
+.cover-source{position:absolute;left:17mm;top:193mm;font-size:9pt;color:#bed3cf}
+.cover-source a{color:#ead097}
+.cover-bottom{position:absolute;bottom:24mm;left:17mm;right:17mm;border-top:1px solid #51707a;padding-top:10mm;display:flex;gap:7mm}
+.cover-bottom .item{width:32%;border-right:1px solid #4e6870;padding-right:6mm}
+.cover-bottom .item:last-child{border:0}
+.cover-bottom b{font-size:11pt;color:#e1bf82}
+.cover-bottom p{font-size:8pt;color:#d7e3df;line-height:1.5}
+.page-1 .publication{border-color:#466571;color:#d7e3df}
+.page-1 .publication strong{color:#d6b772}
+.headline{font-size:30pt;line-height:1.13;letter-spacing:-.02em;margin:7mm 0 6mm;max-width:173mm}
+.section-label{font-size:8pt;letter-spacing:.15em;color:#bd9457;font-weight:bold;text-transform:uppercase}
+.deck{font-size:12pt;color:#49616d;line-height:1.45}
+.contents-splash{padding-top:9mm}
+.contents-splash h1{font-size:35pt;margin:7mm 0 3mm;line-height:1.06}
+.contents-splash p{font-size:12pt;color:#50656f;max-width:155mm;line-height:1.5}
+.contents-grid{margin-top:12mm;display:flex;gap:13mm}
+.contents-col{width:50%}
+.contents-row{border-top:1px solid #d5dfda;padding:4mm 1mm 2mm 20mm;min-height:23mm;position:relative}
+.contents-row span{font-size:22pt;color:#b69a67;font-family:Georgia,"Times New Roman",serif;position:absolute;left:0;top:3mm;width:17mm}
+.contents-row b{font-size:10.5pt;display:block;margin-left:0;padding-top:1mm}
+.contents-row small{display:block;font-size:7.7pt;line-height:1.4;color:#61787a;margin-left:0;margin-top:1.3mm}
+.editor-note{margin-top:18mm;border-left:3px solid #087779;background:#edf4f0;padding:6mm 7mm 7mm}
+.editor-note h3{font-size:11pt;color:#087779;letter-spacing:.08em}
+.editor-note p{font-size:10pt;line-height:1.6}
+.market-top{display:flex;align-items:end;justify-content:space-between;margin-top:8mm;gap:7mm}
+.market-top .lead-title{width:58%}
+.market-top .lead-title h1{font-size:26pt;margin:3mm 0 4mm}
+.market-top .hero-stat{width:39%;text-align:right}
+.market-top .hero-stat .big{font-size:44pt;line-height:1;font-weight:bold;letter-spacing:-.04em;color:#087779}
+.market-top .hero-stat label{font-size:8.5pt;color:#536d71;letter-spacing:.07em}
+.stats-pair{margin-top:10mm;display:flex;gap:7mm}
+.stat-box{width:50%;background:#edf3f0;padding:7mm 7mm}
+.stat-box .metric{font-size:27pt;font-weight:bold;letter-spacing:-.04em;color:#0e7477}
+.stat-box.down .metric{color:#b14e48}
+.stat-box .caption{font-size:8.7pt;color:#4f6b6a}
+.chart-wrap{margin-top:9mm;border-top:1px solid #d6bf92;padding-top:6mm}
+.chart-title{font-size:9pt;font-weight:bold;color:#426971;letter-spacing:.08em}
+.bar-row{display:flex;align-items:center;height:12mm;border-bottom:1px solid #e0e6e1}
+.bar-name{width:42mm;font-size:8.6pt;font-weight:bold}
+.bar-track{position:relative;height:7mm;width:91mm;background:#edf2ef}
+.bar-axis{position:absolute;left:50%;top:0;bottom:0;width:1px;background:#829797}
+.bar-positive,.bar-negative{position:absolute;top:1.6mm;height:4mm}
+.bar-positive{left:50%;background:#087779}
+.bar-negative{right:50%;background:#b95450}
+.bar-value{width:28mm;text-align:right;font-size:10pt;font-weight:bold;color:#223d4a}
+.article-analysis{display:flex;gap:8mm;margin-top:9mm}
+.article-analysis>div{width:50%;font-size:9pt;line-height:1.55;color:#354e59}
+.article-analysis strong{display:block;font-size:8pt;letter-spacing:.1em;color:#087779;margin-bottom:3mm}
+.sources{position:absolute;left:17mm;right:17mm;bottom:22mm;border-top:1px solid #d0dcd6;padding-top:4mm}
+.sources b{font-size:7.8pt;letter-spacing:.09em;color:#087779}
+.sources a{display:block;font-size:7.8pt;color:#527071;text-decoration:none;margin-top:2mm}
+.sector-head{padding:9mm 0 3mm;border-bottom:1px solid #d6bf92}
+.sector-head h1{font-size:29pt;margin:4mm 0}
+.sector-head p{font-size:11pt;line-height:1.4;color:#536b70}
+.sector-tiles{margin-top:10mm;width:100%;border-spacing:2.5mm;table-layout:fixed}
+.sector-cell{width:25%;height:31mm;background:#d8eae3;padding:5mm 4mm;position:relative;vertical-align:top}
+.sector-cell.down{background:#f4e2df}
+.sector-cell b{display:block;font-size:8.7pt;line-height:1.15;color:#1b3947;min-height:12mm}
+.sector-cell span{display:block;margin-top:4mm;font-size:18pt;font-weight:bold;letter-spacing:-.04em;color:#087779}
+.sector-cell.down span{color:#af4a45}
+.sector-insight{margin-top:12mm;border-top:4px solid #0b7377;padding:7mm 0;display:flex;gap:8mm}
+.sector-insight .huge{width:25%;font-size:35pt;font-weight:bold;color:#0b7377;letter-spacing:-.06em}
+.sector-insight .insight{width:75%;font-size:10pt;line-height:1.55;color:#334f59}
+.sector-insight .insight b{display:block;font-size:9pt;color:#0b7377;margin-bottom:2mm}
+.risk{margin-top:8mm;background:#f4f1eb;border-left:3px solid #a85750;padding:4mm 5mm;font-size:9pt;line-height:1.4;color:#5d5650}
+</style>
+</head>
+<body>
+<section class="page page-1">
+  <div class="cover-band">
+    <img src="{{logo}}" alt="MSK AI BOT logo">
+    <div class="meta">THE MARKET REVIEW<br>NOVEMBER 2026</div>
+  </div>
+  <div class="cover-art"></div>
+  <div class="cover-feature">
+    <div class="kicker">The Market Divide</div>
+    <h1 class="serif">{{cover.headline}}</h1>
+    <p>{{cover.deck}}</p>
+  </div>
+  <div class="cover-source">SOURCE VERIFIED · {{cover.source_date}} · <a href="{{cover.source_url}}">NSE INDICES ORIGINAL DASHBOARD</a></div>
+  <div class="cover-bottom">
+    <div class="item"><b>MARKETS</b><p>Large caps versus the broader market.</p></div>
+    <div class="item"><b>SECTORS</b><p>Eight sectors; winners and laggards.</p></div>
+    <div class="item"><b>RESEARCH</b><p>Facts, risk and sources clearly separated.</p></div>
+  </div>
+  <div class="publication"><span class="locked">UNAPPROVED EDITORIAL DRAFT — PRIVATE REVIEW ONLY</span><strong>01 / PILOT</strong></div>
+</section>
+
+<section class="page content">
+  <header class="masthead"><img src="{{logo}}" alt="MSK AI BOT"><div class="issue">MSK / NOVEMBER 2026<br>EDITORIAL ISSUE</div></header>
+  <div class="contents-splash">
+    <div class="section-label">Inside The Issue</div>
+    <h1 class="serif">Nifty, sectors &amp;<br>what it means for you.</h1>
+    <p>For Indian investors: see what happened in Nifty, Bank Nifty and different sectors. Each figure is tied to a date and an original source.</p>
+  </div>
+  <div class="contents-grid">
+    <div class="contents-col">
+      <div class="contents-row"><span>03</span><b>Executive Market Outlook</b><small>Why one headline missed the bigger move</small></div>
+      <div class="contents-row"><span>04</span><b>Economy & Policy</b><small>Inflation, rates and industrial data</small></div>
+      <div class="contents-row"><span>05</span><b>Nifty 50 Outlook</b><small>Source-based return analysis</small></div>
+      <div class="contents-row"><span>06</span><b>Bank Nifty</b><small>The large-cap comparison</small></div>
+    </div>
+    <div class="contents-col">
+      <div class="contents-row"><span>08</span><b>Sector Performance</b><small>A landscape of winners and laggards</small></div>
+      <div class="contents-row"><span>09</span><b>Company Research</b><small>Large-, mid- and small-cap evidence</small></div>
+      <div class="contents-row"><span>13</span><b>Strategy Lab</b><small>Scenarios, not predictions</small></div>
+      <div class="contents-row"><span>16</span><b>Methodology</b><small>Source dates and limitations</small></div>
+    </div>
+  </div>
+  <div class="editor-note"><h3>MARKET TERMS MADE SIMPLE</h3><p>P/E means price compared with company earnings. CPI means consumer inflation. TRI means index return including reinvested dividends. 25 bps means a 0.25 percentage-point change. These are market facts, not buy or sell calls.</p></div>
+  <div class="publication"><span class="locked">UNAPPROVED EDITORIAL DRAFT — PRIVATE REVIEW ONLY</span><strong>02 / PILOT</strong></div>
+</section>
+
+<section class="page content">
+  <header class="masthead"><img src="{{logo}}" alt="MSK AI BOT"><div class="issue">03 / 16<br>MARKETS</div></header>
+  <div class="market-top">
+    <div class="lead-title"><div class="section-label">The Market Divide / Data Story</div><h1 class="serif">{{market.headline}}</h1></div>
+    <div class="hero-stat"><div class="big">+1.95%</div><label>NIFTY 50 / OCT 2026 TOTAL RETURN</label></div>
+  </div>
+  <div class="stats-pair">
+    <div class="stat-box"><div class="metric">+1.95%</div><div class="caption">Nifty 50 · October total return</div></div>
+    <div class="stat-box down"><div class="metric">-5.78%</div><div class="caption">Nifty Smallcap 250 · October total return</div></div>
+  </div>
+  <div class="chart-wrap"><div class="chart-title">THE SPLIT / OCTOBER 2026 / INDEX TOTAL RETURNS</div>
+    {% for row in rows %}
+    <div class="bar-row"><div class="bar-name">{{row.name}}</div>
+      <div class="bar-track"><span class="bar-axis"></span>{% if row.sign == 'up' %}<span class="bar-positive" style="width:{{row.bar}}%"></span>{% else %}<span class="bar-negative" style="width:{{row.bar}}%"></span>{% endif %}</div>
+      <div class="bar-value">{{'%+.2f'|format(row.value)}}%</div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="article-analysis"><div><strong>WHAT THE NUMBERS MEAN</strong>{{market.analysis[0]}}</div><div><strong>WHAT TO WATCH</strong>{{market.analysis[1]}}</div></div>
+  <div class="sources"><b>PRIMARY SOURCES & DATES</b>
+    {% for s in market.sources %}<a href="{{s.url}}">{{loop.index}} / {{s.title}} · {{s.published_on}}</a>{% endfor %}
+  </div>
+  <div class="publication"><span class="locked">UNAPPROVED EDITORIAL DRAFT — PRIVATE REVIEW ONLY</span><strong>03 / PILOT</strong></div>
+</section>
+
+<section class="page content">
+  <header class="masthead"><img src="{{logo}}" alt="MSK AI BOT"><div class="issue">08 / 16<br>SECTORS</div></header>
+  <div class="sector-head"><div class="section-label">The Eight-Sector Lens</div><h1 class="serif">{{sector.headline}}</h1><p>{{sector.lead}}</p></div>
+  <table class="sector-tiles"><tbody>
+    {% for row in sectors %}
+      {% if loop.index0 % 4 == 0 %}<tr>{% endif %}
+      <td class="sector-cell {{row.status}}"><b>{{row.name}}</b><span>{{'%+.2f'|format(row.value)}}%</span></td>
+      {% if loop.index0 % 4 == 3 %}</tr>{% endif %}
+    {% endfor %}
+  </tbody></table>
+  <div class="sector-insight"><div class="huge">18.06%</div><div class="insight"><b>IT SECTOR LEADS</b>{{sector.analysis[0]}}</div></div>
+  <div class="risk"><b>RISK / WHAT WE DO NOT KNOW</b> — {{sector.risk_note}}</div>
+  <div class="sources"><b>PRIMARY SOURCES & DATES</b>
+    {% for s in sector.sources %}<a href="{{s.url}}">{{loop.index}} / {{s.title}} · {{s.published_on}}</a>{% endfor %}
+  </div>
+  <div class="publication"><span class="locked">UNAPPROVED EDITORIAL DRAFT — PRIVATE REVIEW ONLY</span><strong>08 / PILOT</strong></div>
+</section>
+</body></html>

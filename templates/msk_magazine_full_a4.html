@@ -1,0 +1,84 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><style>{{css|safe}}</style></head><body>
+{% macro badge(n) %}<div class="publication"><span class="locked">UNAPPROVED EDITORIAL DRAFT — PRIVATE REVIEW ONLY</span><strong>{{n}}/16</strong></div>{% endmacro %}
+{% macro sources(n) %}<div class="full-source"><b>ORIGINAL DATA SOURCES & DATES</b>
+{% for s in stories[n].sources %}<a href="{{s.url}}">{{loop.index}}. {{s.title|truncate(34)}} / {{s.published_on}}</a>{% endfor %}
+</div>{% endmacro %}
+{% macro mast(n) %}<div class="masthead"><img src="{{logo}}"><span class="issue">MSK / NOVEMBER 2026<br>{{n}} / 16</span></div>
+<div class="section-label" style="margin-top:6mm">{{sections[n]}}</div>{% endmacro %}
+{% macro explanation(n) %}
+<div class="explain-cols"><article><b>WHY IT MATTERS</b>{{stories[n].analysis[0]}}</article><article><b>WHAT TO WATCH</b>{{stories[n].analysis[1]}}</article></div>
+{% endmacro %}
+{% macro warning(n) %}<div class="bare-risk"><b>RISKS / IMPORTANT LIMITS</b>{{stories[n].risk_note}}</div>{% endmacro %}
+<section class="page page-1">
+<div class="cover-band"><img src="{{logo}}"><div class="meta">MSK MONTHLY MARKET REVIEW<br>NOVEMBER 2026</div></div>
+<div class="cover-art"></div><div class="cover-feature"><div class="kicker">THE MARKET DIVIDE</div><h1 class="serif">{{cover.headline}}</h1><p>{{cover.deck}}</p></div>
+<div class="cover-source"><a href="{{cover.source_url}}">SOURCE: NSE INDICES / {{cover.source_date}}</a></div>
+<div class="cover-bottom"><div class="item"><b>NIFTY</b><p>What really happened in October</p></div><div class="item"><b>SECTORS</b><p>Which sectors rose and fell</p></div><div class="item"><b>RESEARCH</b><p>Company results and risks</p></div></div>
+{{badge(1)}}</section>
+<section class="page content">{{mast(2)}}<div class="contents-splash"><div class="section-label">THE CONTENTS</div><h1 class="serif">Indian markets.<br>Simply explained.</h1><p>Market facts, clear charts and practical explanations for Indian retail investors.</p></div>
+<div class="contents-grid" style="margin-top:8mm"><div class="contents-col">{% for i in range(3,10) %}<div class="contents-row" style="min-height:14mm;padding:1.5mm 1mm"><span>{{i}}</span><b>{{sections[i]}}</b></div>{% endfor %}</div>
+<div class="contents-col">{% for i in range(10,17) %}<div class="contents-row" style="min-height:14mm;padding:1.5mm 1mm"><span>{{i}}</span><b>{{sections[i]}}</b></div>{% endfor %}</div></div>
+<div class="editor-note" style="margin-top:4mm;padding:3mm 4mm"><h3>MARKET TERMS, MADE SIMPLE</h3><p>P/E: price compared with earnings. CPI: consumer inflation. TRI: index return including dividends. 25 bps: 0.25 percentage points.</p></div>{{badge(2)}}</section>
+{% for n in range(3,17) %}
+<section class="page content">{{mast(n)}}
+{% if n in [3,8,12,16] %}
+<div class="chapter-ribbon"><small>THE MSK RESEARCH FEATURE</small><h1>{{stories[n].headline}}</h1><p>{{stories[n].lead}}</p></div>
+{% else %}
+<div class="kicker" style="margin-top:8mm">THE DATA STORY / {{'%02d'|format(n)}}</div><h1 class="feature-title">{{stories[n].headline}}</h1><p class="feature-deck">{{stories[n].lead}}</p>
+{% endif %}
+{% if n == 3 %}
+<div class="number-wall">
+{% for name in ['Nifty 50','Nifty Midcap 150','Nifty Smallcap 250'] %}
+<div class="number {{'dark' if loop.first else ''}}"><h2>{{'%+.2f'|format(index[name].m1)}}%</h2><p>{{name}} / October total return</p></div>{% endfor %}</div>
+<div class="chart-wrap"><div class="chart-title">INDIAN MARKET INDICES / OCTOBER 2026</div>
+{% for row in index_rows %}<div class="bar-row"><div class="bar-name">{{row.name}}</div><div class="bar-track"><span class="bar-axis"></span><span class="{{'bar-positive' if row.up else 'bar-negative'}}" style="width:{{row.bar}}%"></span></div><div class="bar-value">{{'%+.2f'|format(row.value)}}%</div></div>{% endfor %}
+</div>
+{% elif n == 4 %}
+<div class="number-wall">{% for item in [macro['RBI policy repo rate'],macro['October CPI YoY'],macro['October food CPI YoY']] %}
+<div class="number {{'dark' if loop.first else ''}}"><h2>{{'%.2f'|format(item.value)}}%</h2><p>{{item.name}}</p></div>{% endfor %}</div>
+<div class="huge-inset"><label>INDUSTRIAL PRODUCTION / SEPTEMBER</label><strong>{{macro['September IIP YoY'].value}}%</strong><p>Consumer inflation and industry output measure different things.</p></div>
+{% elif n == 5 %}
+<div class="huge-inset"><label>NIFTY 50 / OCTOBER</label><strong>{{'%+.2f'|format(index['Nifty 50'].m1)}}%</strong><p>One good month does not prove the market has turned.</p></div>
+<table class="metrics-table"><tr><th>PERIOD</th><th>TOTAL RETURN</th></tr>{% for v in nifty_periods %}<tr><td>{{v.name}}</td><td>{{'%+.2f'|format(v.value)}}%</td></tr>{% endfor %}</table>
+<div class="reader-callout"><b>WHY NO CANDLESTICKS?</b>Only official period returns are verified here, not complete daily trading bars.</div>
+{% elif n == 6 %}
+<div class="hero-pair"><div class="side"><div class="fig">{{'%+.2f'|format(index['Nifty Bank'].m1)}}%</div><span>Bank Nifty / October</span></div><div class="side"><div class="fig">{{'%+.2f'|format(index['Nifty 50'].m1)}}%</div><span>Nifty 50 / October</span></div></div>
+<div class="number-wall"><div class="number dark"><h2>{{'%.2f'|format(index['Nifty Bank'].pe)}}x</h2><p>Bank Nifty P/E ratio</p></div><div class="number"><h2>{{'%.2f'|format(index['Nifty 50'].pe)}}x</h2><p>Nifty 50 P/E ratio</p></div></div>
+{% elif n == 7 %}
+<div class="hero-pair"><div class="side neg"><div class="fig">{{'%+.2f'|format(index['Nifty 500'].m1)}}%</div><span>Nifty 500</span></div><div class="side neg"><div class="fig">{{'%+.2f'|format(index['Nifty 500 Equal Weight'].m1)}}%</div><span>Nifty 500 Equal Weight</span></div></div>
+<div class="big-quote">4.37 percentage points <small>The two index versions performed very differently.</small></div>
+{% elif n == 8 %}
+<div style="margin-top:5mm"><table style="width:100%;border-spacing:2.5mm;table-layout:fixed">{% for row in sectors %}{% if loop.index0 % 4 == 0 %}<tr>{% endif %}<td class="sector-cell {{'up' if row.up else 'down'}}"><b>{{row.name}}</b><span>{{'%+.2f'|format(row.value)}}%</span></td>{% if loop.index0 % 4 == 3 %}</tr>{% endif %}{% endfor %}</table></div>
+<div class="sector-insight"><div class="huge">+18.06%</div><div class="insight"><b>IT WAS THE STRONGEST SECTOR HERE</b>{{stories[8].analysis[0]}}</div></div>
+{% elif n == 9 %}
+<div class="number-wall"><div class="number dark"><h2>{{'%.2f'|format(index['Nifty 50'].pe)}}x</h2><p>Index P/E</p></div><div class="number"><h2>{{'%.2f'|format(index['Nifty 50'].pb)}}x</h2><p>Price to book</p></div><div class="number"><h2>{{'%.2f'|format(index['Nifty 50'].dy)}}%</h2><p>Dividend yield</p></div></div>
+<div class="company-card strong"><div class="top"><b>TCS</b><small>Q2 FY27 / INR</small></div><div class="featured">Rs 73,188 crore</div><div class="smallcopy">Company's reported consolidated quarterly revenue; not a buy tip.</div></div>
+{% elif n == 10 %}
+<div class="hero-pair"><div class="side neg"><div class="fig">{{'%+.2f'|format(index['Nifty Midcap 150'].m1)}}%</div><span>Midcap 150 / October</span></div><div class="side"><div class="fig">{{'%.2f'|format(index['Nifty Midcap 150'].pe)}}x</div><span>Midcap 150 P/E</span></div></div>
+<div class="company-card"><div class="top"><b>Persistent Systems</b><small>Q2 FY27 / USD</small></div><div class="featured">+20.0% YoY</div><div class="smallcopy">Reported USD revenue $487.6 million.</div></div>
+{% elif n == 11 %}
+<div class="huge-inset"><label>NIFTY SMALLCAP 250 / OCTOBER</label><strong>{{'%+.2f'|format(index['Nifty Smallcap 250'].m1)}}%</strong><p>Smaller companies can be more volatile and harder to sell quickly.</p></div>
+<div class="research-capsules"><div class="cap"><b>P/E</b><strong>{{index['Nifty Smallcap 250'].pe}}</strong><p>Index price/earnings</p></div><div class="cap"><b>VOLATILITY</b><strong>{{index['Nifty Smallcap 250'].vol}}%</strong><p>One-year measure</p></div><div class="cap"><b>DIVIDEND YIELD</b><strong>{{index['Nifty Smallcap 250'].dy}}%</strong><p>Index yield</p></div></div>
+{% elif n == 12 %}
+{% for name in ['TCS','Persistent Systems','Coforge'] %}
+<div class="company-card {{'strong' if loop.first else ''}}"><div class="top"><b>{{name}}</b><small>Q2 FY27 / {{issuers[name].reporting_currency}}</small></div>
+<div class="featured">{% if name=='TCS' %}Rs 73,188 crore{% else %}+{{'%.1f'|format(issuers[name].usd_revenue_yoy_pct)}}% USD YoY{% endif %}</div><div class="smallcopy">{% if name=='TCS' %}INR revenue; not comparable with USD growth figures.{% else %}Reported US-dollar revenue growth. Currency and acquisitions matter.{% endif %}</div></div>
+{% endfor %}
+{% elif n == 13 %}
+<div class="hero-pair"><div class="side"><div class="fig">5.50%</div><span>RBI repo rate</span></div><div class="side"><div class="fig">6.09%</div><span>CPI inflation</span></div></div>
+<div class="split-feature"><div class="split-visual"><h2>Inflation stays high</h2><p>{{stories[n].analysis[0]}}</p></div><div class="split-prose"><b>IF INFLATION EASES</b>{{stories[n].analysis[1]}}</div></div>
+{% elif n == 14 %}
+<div class="timeline">{% for e in calendar %}<div class="timeline-row"><b>{{e.date}}</b><span>{{e.event}}</span></div>{% endfor %}</div>
+<div class="big-quote">No result before the official announcement.</div>
+{% elif n == 15 %}
+<div class="checklist">{% for row in ['Check the company cash flow and debt.','Study earnings changes, not only prices.','Watch whether gains spread beyond Nifty 50.','Recheck RBI, inflation and GDP releases.'] %}<div class="check"><span class="no">0{{loop.index}}</span><p>{{row}}</p></div>{% endfor %}</div>
+<div class="hero-pair"><div class="side"><div class="fig">+1.95%</div><span>Nifty 50</span></div><div class="side neg"><div class="fig">-5.78%</div><span>Smallcap 250</span></div></div>
+{% elif n == 16 %}
+<div class="closing-hero"><h1>Understand the numbers.<br>Understand the risks.</h1><p>Every figure needs a date, a unit and its original source.</p></div>
+<div class="glossary">{% for term,desc in [('P/E','Share price versus earnings'),('CPI','Consumer inflation'),('TRI','Return including reinvested dividends'),('Repo rate','RBI policy rate')] %}<div class="term"><b>{{term}}</b> · {{desc}}</div>{% endfor %}</div>
+{% endif %}
+{% if n not in [8,12,13,14] %}{{explanation(n)}}{% endif %}
+{{warning(n)}}{{sources(n)}}{{badge(n)}}
+</section>
+{% endfor %}
+</body></html>

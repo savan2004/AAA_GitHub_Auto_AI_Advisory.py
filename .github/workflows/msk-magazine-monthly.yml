@@ -4,14 +4,56 @@ on:
   pull_request:
     paths:
       - "scripts/msk_magazine_monthly.py"
+      - "scripts/msk_magazine_nse.py"
+      - "scripts/msk_magazine_editorial.py"
+      - "scripts/msk_magazine_charts.py"
+      - "scripts/msk_magazine_cover_story.py"
+      - "scripts/msk_magazine_premium.py"
+      - "scripts/msk_magazine_full_print.py"
+      - "scripts/msk_magazine_editorial_art_nov2026.py"
+      - "templates/msk_magazine_full_a4.html"
+      - "templates/msk_magazine_full_extra.css"
+      - "templates/msk_magazine_pilot_a4.html"
+      - "scripts/msk_magazine_source_archive.py"
+      - "scripts/msk_magazine_primary_sources.py"
+      - "scripts/msk_magazine_private_pilot.py"
+      - "assets/msk_ai_bot_logo_recreated.png"
       - "tests/test_msk_magazine_monthly.py"
+      - "tests/test_msk_magazine_nse.py"
+      - "tests/test_msk_magazine_editorial.py"
+      - "tests/test_msk_magazine_cover_story.py"
+      - "tests/test_msk_magazine_premium.py"
+      - "tests/test_msk_magazine_source_archive.py"
+      - "tests/test_msk_magazine_primary_sources.py"
+      - "tests/test_msk_magazine_private_pilot.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   push:
     branches: [main]
     paths:
       - "scripts/msk_magazine_monthly.py"
+      - "scripts/msk_magazine_nse.py"
+      - "scripts/msk_magazine_editorial.py"
+      - "scripts/msk_magazine_charts.py"
+      - "scripts/msk_magazine_cover_story.py"
+      - "scripts/msk_magazine_premium.py"
+      - "scripts/msk_magazine_full_print.py"
+      - "scripts/msk_magazine_editorial_art_nov2026.py"
+      - "templates/msk_magazine_full_a4.html"
+      - "templates/msk_magazine_full_extra.css"
+      - "templates/msk_magazine_pilot_a4.html"
+      - "scripts/msk_magazine_source_archive.py"
+      - "scripts/msk_magazine_primary_sources.py"
+      - "scripts/msk_magazine_private_pilot.py"
+      - "assets/msk_ai_bot_logo_recreated.png"
       - "tests/test_msk_magazine_monthly.py"
+      - "tests/test_msk_magazine_nse.py"
+      - "tests/test_msk_magazine_editorial.py"
+      - "tests/test_msk_magazine_cover_story.py"
+      - "tests/test_msk_magazine_premium.py"
+      - "tests/test_msk_magazine_source_archive.py"
+      - "tests/test_msk_magazine_primary_sources.py"
+      - "tests/test_msk_magazine_private_pilot.py"
       - "docs/msk_magazine/**"
       - ".github/workflows/msk-magazine-monthly.yml"
   workflow_dispatch:
@@ -42,13 +84,108 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install PDF-only open-source dependencies
-        run: python -m pip install reportlab==4.2.5 "pypdf>=5,<7" requests==2.32.3 chardet==5.2.0
+        run: python -m pip install reportlab==4.2.5 "pypdf>=5,<7" requests==2.32.3 chardet==5.2.0 Jinja2==3.1.6 plutoprint beautifulsoup4==4.12.3
       - name: Run financial, schedule, document and release-gate tests
         run: python -m unittest discover -s tests -p 'test_msk_magazine_monthly.py' -v
       - name: Run NSE archive downloader and integrated PDF regression tests
         run: python -m unittest discover -s tests -p 'test_msk_magazine_nse.py' -v
+      - name: Check complete authored magazine and all 16 rendered pages
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_editorial.py' -v
+      - name: Run source-PDF provenance regression tests
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_source_archive.py' -v
+      - name: Run macro and issuer source integrity tests
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_primary_sources.py' -v
+      - name: Test private Telegram staging gate without real sends
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_private_pilot.py' -v
+      - name: Test verified news-led monthly cover titles
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_cover_story.py' -v
+      - name: Test premium editorial A4 redesign and source links
+        run: python -m unittest discover -s tests -p 'test_msk_magazine_premium.py' -v
       - name: Compile monthly workflow sources
-        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py
+        run: python -m py_compile scripts/msk_magazine_monthly.py scripts/msk_magazine_nse.py scripts/msk_magazine_editorial.py scripts/msk_magazine_charts.py scripts/msk_magazine_cover_story.py scripts/msk_magazine_premium.py scripts/msk_magazine_source_archive.py scripts/msk_magazine_primary_sources.py scripts/msk_magazine_private_pilot.py
+      - name: Retrieve the exact November PDF approved by owner for safe dry-run
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@v4
+        with:
+          name: MSK-MAGAZINE-NOV2026-VISUAL-PROOF-45238995335
+          run-id: 45238995335
+          github-token: ${{ github.token }}
+          path: owner_approved_proof/2026-11
+      - name: Prove the approved PDF passes private Telegram preflight (ZERO sends)
+        if: github.event_name == 'pull_request'
+        run: |
+          python scripts/msk_magazine_private_pilot.py \
+            --issue-dir owner_approved_proof/2026-11 \
+            --receipt owner_approved_proof/no-send-preflight.json
+
+      - name: Restore pinned November original-source archive (no blocked NSE request)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          test -f owner_approved_proof/2026-11/source_verification/Index_Dashboard_OCT2026.pdf
+          test -f owner_approved_proof/2026-11/source_verification/nse_dashboard_reconciliation.json
+          test -f owner_approved_proof/2026-11/source_verification/primary/primary_source_ledger.json
+          mkdir -p editorial_evidence/2026-11
+          cp -a owner_approved_proof/2026-11/source_verification/. editorial_evidence/2026-11/
+      - name: Recheck archived NSE PDF and seven original macro/issuer files
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.msk_magazine_charts import load_metrics
+          from scripts.msk_magazine_source_archive import verify_nse_dashboard
+          from scripts.msk_magazine_primary_sources import recheck_primary_sources
+          folder = Path('editorial_evidence/2026-11')
+          market = load_metrics(Path('docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json'), '2026-11')
+          proof = verify_nse_dashboard((folder/'Index_Dashboard_OCT2026.pdf').read_bytes(),market)
+          receipt = json.loads((folder/'nse_dashboard_reconciliation.json').read_text())
+          assert proof['sha256'] == receipt['sha256']
+          assert proof['checked_rows'] == receipt['checked_rows']
+          primary = recheck_primary_sources(folder/'primary')
+          assert primary
+          print('NOV2026_ARCHIVED_ORIGINAL_SOURCES_REVERIFIED; no live market source bypass')
+          PY
+
+      - name: Build a private 16-page November editorial visual proof
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -f docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json ]; then
+            python scripts/msk_magazine_monthly.py --issue 2026-11 \
+              --output-dir editorial_proof \
+              --editorial-pack docs/msk_magazine/ISSUE_2026-11_SOURCE_CITED_WORKING_DRAFT.json \
+              --market-pack docs/msk_magazine/ISSUE_2026-11_OFFICIAL_RESEARCH_METRICS.json \
+              --nse-proof-dir editorial_evidence/2026-11 \
+              --primary-proof-dir editorial_evidence/2026-11/primary
+            mkdir -p editorial_proof/2026-11/source_verification
+            cp -a editorial_evidence/2026-11/. editorial_proof/2026-11/source_verification/
+          fi
+      - name: Compile enhanced magazine artwork engine
+        if: github.event_name == 'pull_request'
+        run: python -m py_compile scripts/msk_magazine_editorial_art_nov2026.py
+      - name: Render NSE-informed 16-page premium MSK magazine (private draft only)
+        if: github.event_name == 'pull_request'
+        run: |
+          python -m scripts.msk_magazine_full_print \
+            --output-dir print_proof \
+            --nse-proof-dir editorial_evidence/2026-11 \
+            --primary-proof-dir editorial_evidence/2026-11/primary
+      - name: Archive private premium 16-page magazine for visual review
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MSK-PREMIUM-16PAGE-NOV2026-${{ github.run_id }}
+          path: print_proof/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Store the UNAPPROVED PDF for manual visual review
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MSK-MAGAZINE-NOV2026-VISUAL-PROOF-${{ github.run_id }}
+          path: editorial_proof/2026-11/
+          if-no-files-found: warn
+          retention-days: 14
 
   monthly-draft:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -83,26 +220,57 @@ jobs:
               out.write(f"due={'true' if due else 'false'}\nissue={issue}\n")
           print(f"Issue={issue}; due={due}; manual={manual}")
           PY
+      - name: Select matching research inputs without borrowing another month
+        if: steps.schedule.outputs.due == 'true'
+        env:
+          ISSUE: ${{ steps.schedule.outputs.issue }}
+        run: |
+          set -euo pipefail
+          echo "Checking optional research files for $ISSUE; missing files never block a private draft."
+          if [ -f "docs/msk_magazine/ISSUE_${ISSUE}_SOURCE_CITED_WORKING_DRAFT.json" ] &&
+             [ -f "docs/msk_magazine/ISSUE_${ISSUE}_OFFICIAL_RESEARCH_METRICS.json" ]; then
+            echo "Current-month editorial/market packs found; full verification is separately required."
+          else
+            echo "No complete dated editorial pack; creating a clearly unapproved draft from verified closing values only."
+          fi
       - name: Retrieve month-end official NSE index CSV (fail closed on HTTP errors)
         if: steps.schedule.outputs.due == 'true'
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
-          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "magazine_artifacts/$ISSUE/sources"
-      - name: Create a 16-page UNAPPROVED monthly draft only
+          python scripts/msk_magazine_nse.py --issue "$ISSUE" --output-dir "editorial_source_inputs/$ISSUE/sources"
+      - name: Generate self-contained 16-page UNAPPROVED monthly PDF
         if: steps.schedule.outputs.due == 'true'
         env:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
+          set -euo pipefail
           SOURCE_ARGS=()
-          if [ -f "magazine_artifacts/$ISSUE/sources/source_pack.json" ]; then
-            SOURCE_ARGS=(--source-pack "magazine_artifacts/$ISSUE/sources/source_pack.json" --source-root "magazine_artifacts/$ISSUE/sources")
+          if [ -f "editorial_source_inputs/$ISSUE/sources/source_pack.json" ]; then
+            SOURCE_ARGS+=(--source-pack "editorial_source_inputs/$ISSUE/sources/source_pack.json" --source-root "editorial_source_inputs/$ISSUE/sources")
           fi
+          # Never automatically use unverified editorial figures or reuse a previous issue's NSE PDF.
+          # Source-based sections stay clearly incomplete until their independent proofs exist.
           if [ "${{ github.event_name }}" = "schedule" ]; then
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --scheduled --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
           else
             python scripts/msk_magazine_monthly.py --issue "$ISSUE" --output-dir magazine_artifacts "${SOURCE_ARGS[@]}"
           fi
+          mkdir -p "magazine_artifacts/$ISSUE/sources"
+          if [ -d "editorial_source_inputs/$ISSUE/sources" ]; then
+            cp -a "editorial_source_inputs/$ISSUE/sources/." "magazine_artifacts/$ISSUE/sources/"
+          fi
+          test -f "magazine_artifacts/$ISSUE/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          issue=os.environ["ISSUE"]
+          gate=json.loads((Path("magazine_artifacts")/issue/"release_gate.json").read_text())
+          assert gate["page_count"]==16 and gate["mechanical_pdf_checks"]["passed"]
+          assert gate["publication_allowed"] is False and gate["editorial_approved"] is False
+          assert gate["source_consistency_rows"] >= 0
+          print("MONTHLY_PRIVATE_DRAFT_BUILT:",issue,"verified_csv_observations:",gate["source_consistency_rows"])
+          PY
       - name: Retain PDF and per-page evidence gates as GitHub run artifact
         if: steps.schedule.outputs.due == 'true'
         uses: actions/upload-artifact@v4
@@ -121,6 +289,27 @@ jobs:
           ROOT="magazine_artifacts/$ISSUE"
           test -f "$ROOT/MSK_${ISSUE}_EDITORIAL_DRAFT.pdf"
           test -f "$ROOT/release_gate.json"
+          # Independently verify the completed PDF and fail-closed release state
+          # before creating any durable archive.
+          python - "$ROOT" "$ISSUE" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+          root, issue = Path(sys.argv[1]), sys.argv[2]
+          gate = json.loads((root / "release_gate.json").read_text(encoding="utf-8"))
+          pdf = root / f"MSK_{issue}_EDITORIAL_DRAFT.pdf"
+          if gate.get("issue") != issue or gate.get("draft_pdf") != pdf.name:
+              raise SystemExit("Magazine archive blocked: issue/PDF mismatch")
+          if gate.get("publication_allowed") is not False or gate.get("editorial_approved") is not False:
+              raise SystemExit("Magazine archive blocked: unsafe release state")
+          if gate.get("page_count") != 16 or gate.get("mechanical_pdf_checks", {}).get("passed") is not True:
+              raise SystemExit("Magazine archive blocked: PDF quality gate failed")
+          if hashlib.sha256(pdf.read_bytes()).hexdigest() != gate.get("pdf_sha256"):
+              raise SystemExit("Magazine archive blocked: PDF checksum mismatch")
+          if len(list(root.glob("page_*.json"))) != 16:
+              raise SystemExit("Magazine archive blocked: incomplete page evidence")
+          PY
           (cd "$ROOT" && tar -czf "MSK_${ISSUE}_source_and_page_evidence.tar.gz" sources release_gate.json page_*.json)
           TAG="msk-magazine-${ISSUE}-draft-${GITHUB_RUN_ID}"
           gh release create "$TAG" \
@@ -129,7 +318,7 @@ jobs:
             "$ROOT/MSK_${ISSUE}_source_and_page_evidence.tar.gz" \
             --draft \
             --title "MSK Magazine $ISSUE | UNAPPROVED editorial draft | run $GITHUB_RUN_ID" \
-            --notes "Unapproved 16-page Design 3 editorial draft; financial data may be missing. Human source, logo, visual and publication approval are REQUIRED. No Telegram release."
+            --notes "UNAPPROVED automatic 16-page monthly layout draft. Any missing official figures are WITHHELD, not estimated. A complete V4-level editorial magazine requires current-month verified research, visual QA, and explicit owner approval. No Telegram release."
           echo "Created private draft release: $TAG" >> "$GITHUB_STEP_SUMMARY"
       - name: Report missing publication evidence
         if: steps.schedule.outputs.due == 'true'
@@ -137,8 +326,8 @@ jobs:
           ISSUE: ${{ steps.schedule.outputs.issue }}
         run: |
           echo "### MSK Magazine $ISSUE - UNAPPROVED EDITORIAL DRAFT" >> "$GITHUB_STEP_SUMMARY"
-          echo "16-page A4 draft generated from locked Design 3 index." >> "$GITHUB_STEP_SUMMARY"
-          echo "Financial observations are WITHHELD unless a dated checked source pack is explicitly supplied." >> "$GITHUB_STEP_SUMMARY"
+          echo "Automated 16-page A4 private draft generated on first Monday in IST; all public-release gates remain disabled." >> "$GITHUB_STEP_SUMMARY"
+          echo "Official NSE CSV closing values are included only if downloaded and source-verified for the correct month. Unavailable company/macro research is withheld." >> "$GITHUB_STEP_SUMMARY"
           echo "No automatic Telegram publication, no investment recommendations, no owner approval." >> "$GITHUB_STEP_SUMMARY"
           echo "Draft PDF and page-by-page JSONs are available in the uploaded run artifact (90-day retention)." >> "$GITHUB_STEP_SUMMARY"
       - name: Skip non-first Mondays without errors

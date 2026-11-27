@@ -50,6 +50,34 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertNotIn("gh release publish", workflow)
         self.assertNotIn("sendDocument", workflow)
 
+    def test_monthly_automation_not_hardcoded_to_november(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/msk-magazine-monthly.yml").read_text()
+        monthly = workflow.split("  monthly-draft:", 1)[1]
+        self.assertIn('cron: "30 2 * * 1"', workflow)
+        self.assertIn('SOURCE_ARGS=()', monthly)
+        self.assertIn('steps.schedule.outputs.issue', monthly)
+        self.assertIn('source_pack.json', monthly)
+        self.assertIn('MONTHLY_PRIVATE_DRAFT_BUILT', monthly)
+        self.assertNotIn('NEW_MONTH_REQUIRES_MONTH_SPECIFIC_VERIFIED_SOURCE_ARCHIVE', monthly)
+        self.assertNotIn('Index_Dashboard_OCT2026.pdf', monthly)
+        self.assertNotIn('ISSUE_2026-11', monthly)
+        self.assertIn('publication_allowed', monthly)
+        self.assertIn('--draft', monthly)
+        self.assertNotIn('sendDocument', monthly)
+
+    def test_2027_first_monday_can_self_generate_safe_draft_without_data(self):
+        self.assertEqual(first_monday(2027, 1), date(2027, 1, 4))
+        result = generate("2027-01", self.root / "autodraft",
+                          now=datetime(2027, 1, 4, 2, 30, tzinfo=timezone.utc),
+                          scheduled=True)
+        self.assertEqual(result["page_count"], 16)
+        self.assertEqual(result["source_consistency_rows"], 0)
+        self.assertTrue(result["source_failures"])
+        self.assertFalse(result["editorial_approved"])
+        self.assertFalse(result["publication_allowed"])
+        self.assertTrue(result["mechanical_pdf_checks"]["passed"])
+
     def test_first_mondays(self):
         self.assertEqual(first_monday(2026, 11), date(2026, 11, 2))
         self.assertEqual(first_monday(2026, 12), date(2026, 12, 7))
@@ -150,7 +178,9 @@ class MagazineMonthlyTests(unittest.TestCase):
         )
         self.assertFalse(output["publication_allowed"])
         self.assertFalse(output["editorial_approved"])
-        self.assertFalse(output["logo_asset_provided"])
+        self.assertTrue(output["logo_asset_provided"])
+        self.assertFalse(output["original_logo_authenticated"])
+        self.assertEqual(output["logo_source"], "RECREATED_FROM_USER_REFERENCE_NOT_FINAL_APPROVED")
         self.assertTrue(output["source_failures"])
         self.assertTrue(output["mechanical_pdf_checks"]["passed"])
         pdf = self.root / "out" / "2026-12" / output["draft_pdf"]

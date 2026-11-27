@@ -43,6 +43,10 @@ def _decode_source(body: bytes) -> tuple[list[dict], dict]:
     reader = csv.DictReader(io.StringIO(content))
     fields = reader.fieldnames or []
     lookup = {field.strip().casefold(): field for field in fields if field}
+    if "closing index value" in lookup:
+        if "closing" in lookup:
+            raise ValueError("Ambiguous NSE closing columns")
+        lookup["closing"] = lookup["closing index value"]
     required = ("index name", "index date", "closing")
     if any(name not in lookup for name in required):
         raise ValueError("NSE CSV required columns not found")
@@ -66,31 +70,39 @@ def _decode_source(body: bytes) -> tuple[list[dict], dict]:
                 raise ValueError()
         except (InvalidOperation, ValueError):
             raise ValueError("NSE index closing value is invalid")
-        # The exact original line is used as the source quotation.
-        # CSV records with embedded newlines are rejected for evidence safety.
-        matches = [line for line in raw_lines[1:]
-                   if name in line.upper() and day in line and close in line]
+        # Evidence must match the complete parsed CSV record, not substrings.
+        # Substring matching could confuse 25100 with 125100, or accept a
+        # malformed row that happened to contain all three tokens.
+        if None in row:
+            raise ValueError("NSE CSV row has unexpected extra columns")
+        expected_cells = [row.get(field) for field in fields]
+        matches = []
+        for line in raw_lines[1:]:
+            try:
+                cells = next(csv.reader([line], strict=True))
+            except csv.Error as exc:
+                raise ValueError("Malformed NSE CSV evidence row") from exc
+            if cells == expected_cells:
+                matches.append(line)
         if len(matches) != 1:
-            raise ValueError(f"Cannot prove unique CSV row for {name}")
+            raise ValueError(f"Cannot prove unique exact CSV row for {name}")
         result.append({"name": name, "observed": observed,
                        "value": str(value), "excerpt": matches[0]})
     return result, {"fields": fields, "total_rows": len(raw_lines) - 1}
 
 
-def _download(url: str, *, session=requests, timeout: int = 15) -> bytes:
+def _download(url: str, *, session=requests, timeout: int = 15) -> tuple[bytes, str]:
     r = session.get(url, headers={"User-Agent": USER_AGENT,
                                  "Accept": "text/csv,text/plain,*/*"},
                     timeout=timeout, allow_redirects=True)
     r.raise_for_status()
-    final = urlsplit(r.url)
-    if final.scheme != "https" or (final.hostname or "") not in {
-        "archives.nseindia.com", "nsearchives.nseindia.com"
-    }:
-        raise ValueError("Archive redirected outside official NSE hosts")
+    filename = url.rsplit("/", 1)[1]
+    if r.url not in {base + filename for base in ARCHIVES}:
+        raise ValueError("Response URL differs from the requested dated NSE archive")
     content = r.content
     if not isinstance(content, bytes) or len(content) > MAX_BYTES:
         raise ValueError("NSE archive response is too large")
-    return content
+    return content, r.url
 
 
 def collect(issue: str, output_dir: Path, *, now: date | None = None,
@@ -113,7 +125,7 @@ def collect(issue: str, output_dir: Path, *, now: date | None = None,
         for base in ARCHIVES:
             url = base + "ind_close_all_" + day.strftime("%d%m%Y") + ".csv"
             try:
-                raw = _download(url, session=session)
+                raw, source_url = _download(url, session=session)
                 rows, meta = _decode_source(raw)
                 if not rows or any(r["observed"] != day for r in rows):
                     raise ValueError("No matching NSE index date in CSV")
@@ -132,7 +144,7 @@ def collect(issue: str, output_dir: Path, *, now: date | None = None,
                         observations.append({
                             "page": page, "label": row["name"] + " closing level",
                             "value": row["value"], "unit": "index points",
-                            "observed_on": day.isoformat(), "source_url": url,
+                            "observed_on": day.isoformat(), "source_url": source_url,
                             "source_file": filename, "source_sha256": digest,
                             "source_excerpt": row["excerpt"],
                         })
