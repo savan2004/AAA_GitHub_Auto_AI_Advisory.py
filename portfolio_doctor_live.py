@@ -463,8 +463,8 @@ def run_isolated_memory(filename, payload, timeout=150, *, audit=False):
             titles = [page.extract_text() or "" for page in pdf.pages]
             required = (
                 "01 / PORTFOLIO DASHBOARD",
-                "02 / HOLDING-WISE VERIFIED RESULTS",
-                "03 / HOLDING-WISE VERIFIED RESULTS",
+                "02 / YOUR STOCKS, ONE BY ONE",
+                "03 / YOUR STOCKS, ONE BY ONE",
                 "04 / NIFTY 500 INDUSTRY-PEER WATCHLIST",
                 "05 / RISK, SOURCES AND LIMITS",
             )
