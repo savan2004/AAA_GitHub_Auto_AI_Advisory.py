@@ -47,9 +47,9 @@ def _run(case, folder):
     text = "\n".join(page.extract_text() or "" for page in pages)
     assert all(symbol in text for symbol in symbols), "incomplete PDF holdings"
     assert not any(symbol in text for symbol in forbidden), "concurrent portfolio data crossed requests"
-    assert "Invested: Rs " + invested in text, "incorrect invested total"
+    assert "You invested Rs " + invested in text, "incorrect invested total"
 
-    assert "Unrealised P/L" in text and "RSI14" in text, "missing financial content"
+    assert "Change in value" in text and "RSI (momentum)" in text, "missing financial content"
     if b".BO" in payload:
         assert "Source: BSE exact ticker" in text, "explicit BSE request lost exchange identity"
     money = lambda value: Decimal(value.replace(",", ""))
@@ -66,14 +66,14 @@ def _run(case, folder):
         exchange_close = Decimal(str(official[symbol]["Close"]))
         assert abs(money(close) / exchange_close - 1) <= Decimal("0.0075"), "NSE/Yahoo close disagreement"
         value_total += calc
-    summary = re.search(r"Last-close value: Rs ([0-9,.]+)", text)
-    pnl = re.search(r"Unrealised P/L: Rs ([+0-9,.-]+) \(([+0-9.-]+)%\)", text)
+    summary = re.search(r"LAST-CLOSE VALUE\\s+Rs ([0-9,.]+)", text)
+    pnl = re.search(r"Change in value\\s+Rs ([+0-9,.-]+) \\(([+0-9.-]+)%\\)", text)
     assert summary and pnl, "missing portfolio financial totals"
     assert abs(money(summary[1]) - value_total) <= Decimal("0.05"), "wrong current total"
     calculated_pnl = value_total - money(invested)
     assert abs(money(pnl[1]) - calculated_pnl) <= Decimal("0.05"), "wrong total P/L"
     assert abs(money(pnl[2]) - calculated_pnl / money(invested) * 100) <= Decimal("0.01"), "wrong P/L percent"
-    weights = [money(value) for value in re.findall(r"Portfolio weight ([0-9.]+)%", text)]
+    weights = [money(value) for value in re.findall(r"Weight ([0-9.]+)%", text)]
     assert len(weights) == len(positions), "missing weights"
     assert abs(sum(weights) - 100) <= Decimal("0.3"), "weights do not total 100"
     for weight, (_, qty, _), (close, _, _) in zip(weights, positions, closes):
