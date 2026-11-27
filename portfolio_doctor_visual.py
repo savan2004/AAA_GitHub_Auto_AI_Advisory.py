@@ -368,7 +368,10 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         text_fit(label, x + 10, y - 16, width - 20, 7.6, True, MUTED)
         text_fit(metric, x + 10, y - 44, width - 20, 13, True, color)
     y -= 91
-    subhead('YOUR MONEY AT A GLANCE')
+    if len(top) > 5:
+        line('YOUR MONEY AT A GLANCE', 8, True, 12, NAVY)
+    else:
+        subhead('YOUR MONEY AT A GLANCE')
     fact('You invested', money(invested))
     fact('Value at last close', money(value))
     pnl_pct = 100 * pnl / invested if invested > 0 else 0.0
@@ -386,7 +389,10 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         line('Value coverage: P/E {} | ROE {}. Arithmetic weighting.'.format(
             pe_coverage, roe_coverage), 8)
         line('Screener.in secondary; issuer financials NOT reconciled.', 8, color=MUTED)
-    subhead('WHAT NEEDS YOUR ATTENTION')
+    if len(top) > 5:
+        line('WHAT NEEDS YOUR ATTENTION', 8, True, 12, NAVY)
+    else:
+        subhead('WHAT NEEDS YOUR ATTENTION')
     biggest = top[0]
     line('{} positions | Largest: {} at {:.1f}% of value.'.format(
         len(holdings), biggest['symbol'], biggest['weight']), 9)
@@ -395,8 +401,11 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
              color=RED)
     line('This report describes what the data shows. It does not choose investments for you.', 8,
          color=MUTED)
-    subhead('CURRENT HOLDING ALLOCATION')
-    bar_step = 22 if len(top) > 5 else 37
+    if len(top) > 5:
+        line('CURRENT HOLDING ALLOCATION', 8, True, 12, NAVY)
+    else:
+        subhead('CURRENT HOLDING ALLOCATION')
+    bar_step = 20 if len(top) > 5 else 37
     for row in top:
         pct = float(row['weight'])
         text_fit(row['symbol'], left, y - 1, 86, 9, True, INK)
@@ -408,7 +417,10 @@ def render_pdf(holdings, peers=None, risk=None, companies=None, max_bytes=5 * 10
         text_fit('{:.1f}%'.format(pct), bar_x + bar_w + 12, y - 1, 64, 9, True,
                  RED if pct > 40 else NAVY)
         y -= bar_step
-    subhead('WHAT IS DRIVING RESULTS')
+    if len(top) > 5:
+        line('WHAT IS DRIVING RESULTS', 8, True, 12, NAVY)
+    else:
+        subhead('WHAT IS DRIVING RESULTS')
     line('Top 2 holdings: {:.1f}% of value | Effective stock count: {:.2f} (from {} holdings).'.format(
         insights['top_two_pct'], insights['effective_positions'], len(holdings)), 8.5)
     if insights['top_gain'] or insights['top_loss']:
