@@ -5,7 +5,7 @@ code, never selected or created by model output. No database or paid AI calls.
 """
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Callable, Iterable
 from urllib.parse import urlsplit
 
@@ -16,7 +16,7 @@ MAX_CANDIDATES = 12
 MAX_LEADS = 3
 OFFICIAL_HOSTS = frozenset((
     "nsearchives.nseindia.com", "archives.nseindia.com", "www.nseindia.com",
-    "www.bseindia.com", "api.bseindia.com", "www.bseindia.com",
+    "www.bseindia.com", "api.bseindia.com",
 ))
 SCOPES = frozenset(("raw", "adjusted", "consolidated", "standalone", "not_applicable"))
 UNITS = frozenset(("INR", "INR_CRORE", "INR_LAKH", "PERCENT", "RATIO", "SHARES", "COUNT"))
@@ -125,7 +125,7 @@ def resolve(key: EvidenceKey, *, as_of: date, retrieve: Callable,
     attempts = 0
     exhausted = False
 
-    def ingest(loader):
+    def ingest(loader, expected_url=None):
         nonlocal attempts, exhausted
         attempts += 1
         try:
@@ -134,7 +134,15 @@ def resolve(key: EvidenceKey, *, as_of: date, retrieve: Callable,
                 exhausted = True
                 return
             for c in candidates:
-                if valid_receipt(c, key, as_of) and verify(c, key) is True and c not in checked:
+                if not valid_receipt(c, key, as_of):
+                    continue
+                if expected_url is not None and c.source_url != expected_url:
+                    continue
+                try:
+                    accepted = verify(c, key) is True
+                except Exception:
+                    accepted = False
+                if accepted and c not in checked:
                     checked.append(c)
         except Exception:
             # Provider failures are isolated; never substitute an estimate.
@@ -163,5 +171,5 @@ def resolve(key: EvidenceKey, *, as_of: date, retrieve: Callable,
         except Exception:
             leads = ()
         for url in leads:
-            ingest(lambda: fetch_lead(key, url))
+            ingest(lambda: fetch_lead(key, url), expected_url=url)
     return result() or Resolution("withheld_missing", (), attempts)
