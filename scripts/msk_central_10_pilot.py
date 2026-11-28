@@ -148,7 +148,12 @@ def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
 if __name__=="__main__":
     p=argparse.ArgumentParser()
     p.add_argument("--session",required=True,type=date.fromisoformat)
+    p.add_argument("--recovery-file",default="msk_ai_missing_data.json")
     args=p.parse_args()
     result=run(args.session)
+    from msk_central_missing_v4 import build_recovery_bank, write_recovery_bank
+    bank = build_recovery_bank(result, args.session)
+    write_recovery_bank(args.recovery_file, bank)
+    print("MSK_AI_RECOVERY_BANK "+json.dumps(bank,sort_keys=True),flush=True)
     print("MSK_10_PILOT "+json.dumps(result,sort_keys=True),flush=True)
     raise SystemExit(0 if result["status"]=="pilot_observed" else 1)
