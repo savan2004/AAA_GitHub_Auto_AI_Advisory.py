@@ -51,6 +51,36 @@ class FilingTests(unittest.TestCase):
         self.assertFalse(result.audited)
         self.assertEqual(result.status,"EXTRACTED_PUBLICATION_TIME_UNVERIFIED")
 
+    def test_legacy_actuals_nse_template_uses_explicit_rupee_scale(self):
+        # Synthetic regression of the observed official 2025 schema,
+        # not real prices or a copied company's financial statements.
+        body=fixture().replace(b">INR<",b">INR (in Actuals)<").replace(
+            b"<tr><td>Level of rounding used in financial results</td><td>Lakhs</td></tr>",b"")
+        body=body.replace(b"1,23,456.78",b"12345678000").replace(b"(2,345.67)",b"-234567000")
+        result=self.extract(body)
+        self.assertEqual(result.revenue_cr,Decimal("1234.5678"))
+        self.assertEqual(result.profit_cr,Decimal("-23.4567"))
+        with self.assertRaisesRegex(EvidenceError,"FILING_UNIT_CONFLICT"):
+            self.extract(fixture().replace(b">INR<",b">INR (in Actuals)<"))
+        with self.assertRaises(EvidenceError):
+            self.extract(body.replace(b"INR (in Actuals)",b"USD (in Actuals)"))
+        with self.assertRaises(EvidenceError):
+            self.extract(body.replace(b"Standalone",b"Consolidated",1))
+        with self.assertRaises(EvidenceError):
+            self.extract(body.replace(MEMBER.isin.encode(),b"INE999999999"))
+
+    def test_legacy_first_quarter_blank_ytd_dates_do_not_change_discrete_quarter(self):
+        body=fixture().replace(b">INR<",b">INR (in Actuals)<").replace(
+            b"<tr><td>Level of rounding used in financial results</td><td>Lakhs</td></tr>",b"")
+        body=body.replace(b"1,23,456.78",b"12345678000").replace(b"(2,345.67)",b"-234567000")
+        body=body.replace(b"<td>01-07-2026</td><td>01-04-2026</td>",b"<td>01-04-2026</td><td></td>").replace(
+            b"<td>30-09-2026</td><td>30-09-2026</td>",b"<td>30-06-2026</td><td></td>")
+        def extract(raw):
+            return extract_quarter(DownloadedFiling(URL,raw,NOW),MEMBER,expected_end=date(2026,6,30),now=NOW)
+        self.assertEqual(extract(body).revenue_cr,Decimal("1234.5678"))
+        with self.assertRaisesRegex(EvidenceError,"FILING_PERIOD_MISMATCH"):
+            extract(body.replace(b"<td>30-06-2026</td><td></td>",b"<td>30-06-2026</td><td>30-06-2026</td>"))
+
     def test_reject_wrong_identity_scope_dates_unit_and_missing_fields(self):
         for old,new in (
             (b"FIXTURE",b"WRONG"),(MEMBER.isin.encode(),b"INE999999999"),

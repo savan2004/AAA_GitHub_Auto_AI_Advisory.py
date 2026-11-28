@@ -158,15 +158,28 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
     get=lambda key:_one(g,key,columns=1)[0]
     if (get("NSE Symbol"),get("ISIN"))!=(member.symbol,member.isin):
         raise EvidenceError("FILING_IDENTITY_MISMATCH")
-    if get("Description of presentation currency")!="INR" or get("Nature of report standalone or consolidated")!=expected_scope:
+    currency=get("Description of presentation currency")
+    if currency not in ("INR","INR (in Actuals)") or get("Nature of report standalone or consolidated")!=expected_scope:
         raise EvidenceError("FILING_SCOPE_OR_CURRENCY_UNSUPPORTED")
     if get("Reporting Type")!="Quarterly":
         raise EvidenceError("FILING_PERIOD_UNSUPPORTED")
-    unit=get("Level of rounding used in financial results")
-    divisor={"Lakhs":Decimal(100),"Crores":Decimal(1),"Thousands":Decimal(10000),
-             "Rupees":Decimal(10000000)}.get(unit)
-    if divisor is None:
-        raise EvidenceError("FILING_UNIT_UNSUPPORTED")
+    # Official historical template explicitly declares unscaled INR, and
+    # omits the modern rounding row. Observed in ADANIPORTS Jun 2025
+    # (filing 108491), BEL Mar 2025 (91913), ICICIBANK Jun 2025 (104150).
+    # Never infer units from magnitude or a secondary vendor's number.
+    legacy_actuals=currency=="INR (in Actuals)"
+    unit_label="Level of rounding used in financial results"
+    if legacy_actuals:
+        if any(_label(cell)==_label(unit_label) for row in g for cell in row[:2]):
+            if get(unit_label) not in ("Rupees","Actuals"):
+                raise EvidenceError("FILING_UNIT_CONFLICT")
+        divisor=Decimal(10000000)
+    else:
+        unit=get(unit_label)
+        divisor={"Lakhs":Decimal(100),"Crores":Decimal(1),"Thousands":Decimal(10000),
+                 "Rupees":Decimal(10000000)}.get(unit)
+        if divisor is None:
+            raise EvidenceError("FILING_UNIT_UNSUPPORTED")
     path = urlsplit(document.url).path
     banking = "/INTEGRATED_FILING_BANKING_" in path
     # The NSE BANKING issuer header uses "Name of bank", unlike INDAS.
@@ -207,6 +220,22 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
     audit=quarter("Whether results are audited or unaudited")
     if audit not in ("Audited","Unaudited"):
         raise EvidenceError("FILING_AUDIT_UNKNOWN")
+    # Older first-quarter reports sometimes omit both YTD dates (the
+    # discrete quarter itself is the FY-to-date period). Check the actual
+    # quarterly column regardless; a partially missing/contradictory
+    # YTD date pair must not authorize a relaxed reconciliation.
+    ytd_start=_one(rows,"Date of start of reporting period",columns=2)[1].strip()
+    ytd_end=_one(rows,"Date of end of reporting period",columns=2)[1].strip()
+    legacy_q1_without_ytd_dates=(legacy_actuals and end.month==6 and not ytd_start and not ytd_end)
+    if legacy_actuals and (not ytd_start or not ytd_end) and not legacy_q1_without_ytd_dates:
+        raise EvidenceError("FILING_PERIOD_MISMATCH")
+    def reconciliation_columns(fields):
+        # If first-quarter YTD figures are absent in ALL the required
+        # source fields, reconcile the single reported quarter. If even
+        # one YTD figure is present, keep the original two-column checks.
+        if legacy_q1_without_ytd_dates and all(not f[1].strip() for f in fields):
+            return (0,)
+        return (0,1)
     revenue=_amount(quarter(revenue_label),divisor)
     profit=_amount(quarter(profit_label),divisor)
     excise = None
@@ -230,7 +259,7 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
         minority=bank_field("Profit (loss) of minority interest")
         attributable=bank_field(
             "Net Profit (loss) after taxes minority interest and share of profit (loss) of associates")
-        for k in (0,1):
+        for k in reconciliation_columns((interest,other,total,period_profit,associates,minority,attributable)):
             earned=_amount(interest[k],divisor)
             others=_amount(other[k],divisor)
             reported_total=_amount(total[k],divisor)
@@ -262,7 +291,7 @@ def extract_quarter(document, member, *, expected_end, now, scope="standalone"):
             duties=_one(rows,"Excise Duty",columns=2)
             other=_one(rows,"Other Expenses",columns=2)
             subtotal=_one(rows,"Total other expenses",columns=2)
-            for k in (0,1):
+            for k in reconciliation_columns((duties,other,subtotal)):
                 duty=_amount(duties[k],divisor)
                 extra=_amount(other[k],divisor)
                 reported=_amount(subtotal[k],divisor)
