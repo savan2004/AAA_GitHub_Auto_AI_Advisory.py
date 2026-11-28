@@ -49,3 +49,28 @@ class DiscoveryTests(unittest.TestCase):
     def test_ambiguity_rejected(self):
         with self.assertRaisesRegex(EvidenceError,"AMBIGUOUS_REVISION"):
             parse([row(),row(ixbrl=URL.replace("212819","212820"))])
+
+class LegacyDiscoveryTests(unittest.TestCase):
+    def test_legacy_reference_only_and_identity_guards(self):
+        from msk_ai_builder_discovery import parse_legacy_listing
+        from msk_ai_builder_primary import IndexMember
+        member=IndexMember("FIXTURE","INE000000001")
+        period=date(2024,12,31)
+        base=dict(symbol=member.symbol,isin=member.isin,fromDate="01-Oct-2024",
+                  toDate="31-Dec-2024",consolidated="Consolidated",period="Quarterly",
+                  cumulative="Non-cumulative",broadCastDate="16-Jan-2025 20:15:20",
+                  exchdisstime="16-Jan-2025 20:15:46",
+                  xbrl="https://nsearchives.nseindia.com/corporate/xbrl/INDAS_123_456_16012025081520.xml")
+        def parse(rows):
+            return parse_legacy_listing(rows,member=member,period_end=period,scope="consolidated",now=NOW)
+        result=parse([base,dict(base,consolidated="Non-Consolidated")])
+        self.assertEqual(result["status"],"LEGACY_REFERENCES_DISCOVERED_ONLY")
+        self.assertEqual(result["publication_status"],"WITHHELD")
+        self.assertEqual(len(result["references"]),1)
+        for change in (dict(isin="INE999999999"),dict(cumulative="Cumulative"),
+                       dict(fromDate="01-Apr-2024"),dict(xbrl="https://example.org/x.xml"),
+                       dict(exchdisstime="15-Jan-2025 20:15:46"),dict(toDate="30-Sep-2024")):
+            with self.subTest(change=change),self.assertRaises(EvidenceError):
+                parse([dict(base,**change)])
+        other=dict(base,xbrl=base["xbrl"].replace("123","124"))
+        self.assertEqual(len(parse([base,other])["references"]),2)

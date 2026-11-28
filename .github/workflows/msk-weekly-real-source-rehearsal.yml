@@ -154,8 +154,15 @@ jobs:
               "Full 20-company latest-quarter match not met; see SOURCE_FAILURE_DIAGNOSTIC and attached report")
           # Keep already verified latest observations; exercise seven missing
           # historical periods per company without approving or writing production.
+          from msk_ai_builder_discovery import discover_legacy_quarter
           history = audit_quarter_history(staged_companies, primary_checks,
-              deadline_seconds=300, checkpoint=lambda result:persist(quarter_history=result))
+              deadline_seconds=300, checkpoint=lambda result:persist(quarter_history=result),
+              legacy_discover=discover_legacy_quarter)
+          for row in history["companies"]:
+              for period,obs in row["periods"].items():
+                  if "legacy_discovery" in obs:
+                      print("LEGACY_SOURCE_DISCOVERY",row["symbol"],period,
+                            json.dumps(obs["legacy_discovery"],sort_keys=True))
           persist(quarter_history=history)
           print("HISTORICAL_QUARTER_COVERAGE",json.dumps({
               k:v for k,v in history.items() if k!="companies"},sort_keys=True))

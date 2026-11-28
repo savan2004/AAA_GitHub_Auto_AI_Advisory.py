@@ -253,7 +253,7 @@ def diagnose_quarter(member, evidence, *, listing=fetch_listing,
 
 
 def audit_quarter_history(companies, latest_checks, *, verify=None,
-                          deadline_seconds=300, clock=None, checkpoint=None):
+                          deadline_seconds=300, clock=None, checkpoint=None, legacy_discover=None):
     """Exercise missing primary periods, newest first across all selected issuers.
 
     Keep the already matched latest quarter; never re-fetch it. Failures and
@@ -321,6 +321,15 @@ def audit_quarter_history(companies, latest_checks, *, verify=None,
                 diagnostic=classify_failure(exc)
                 obs={"status":diagnostic["reason_code"],"stage":diagnostic["stage"],
                      "next_action":diagnostic["next_action"],"publication_status":"WITHHELD"}
+                if legacy_discover and period<date(2025,3,31) and str(exc)=="FILING_METADATA_COVERAGE":
+                    try:
+                        obs["legacy_discovery"]=legacy_discover(c.member,c.evidence,period_end=period)
+                    except EvidenceError as legacy_exc:
+                        obs["legacy_discovery"]={"status":classify_failure(legacy_exc)["reason_code"],
+                                                 "publication_status":"WITHHELD"}
+                    except Exception:
+                        obs["legacy_discovery"]={"status":"LEGACY_METADATA_UNAVAILABLE",
+                                                 "publication_status":"WITHHELD"}
             except Exception:
                 obs={"status":"HISTORICAL_PROVIDER_UNAVAILABLE","publication_status":"WITHHELD"}
             rows[c.member.symbol]["periods"][period.isoformat()]=obs
