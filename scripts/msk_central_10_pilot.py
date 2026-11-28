@@ -53,7 +53,7 @@ def financial_status(statements):
 def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
         fetch_statements=None):
     from scripts.msk_central_500_evidence import ROSTERS, fetch, _roster_details
-    from smart_chart_eod_recovery import final_archive_rows
+    from smart_chart_eod_recovery import final_archive_rows, ArchiveRecovery, yahoo_host_history
     from market_data import bulk_history
     from msk_chart_release import validated_daily_history
     from portfolio_doctor_bhavcopy import official_daily_bar_matches
@@ -85,13 +85,36 @@ def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
                                  adjusted=False, max_fallbacks=10, download_timeout=10)
     except Exception:
         frames = {}
+    # Reuse the existing shared, bounded official trailing-session repair.
+    recovery = ArchiveRecovery([s+'.NS' for s in PILOT], session, fetch=fetch_archive)
+    recovery.archives[session] = official
     rows = {}
     for sym in PILOT:
         entry = {"isin":roster[sym], "history_bars":0,"history_shape_valid":False,
                  "latest_raw_ohlcv_match":False, "technical_calculated":False,
                  "financial_status":"missing", "official_quarter_comparison":"not_attempted"}
         try:
-            data = validated_daily_history(frames.get(sym), str(session))
+            original = frames.get(sym)
+            diagnostics = {}
+            data = validated_daily_history(original, str(session), diagnostics=diagnostics)
+            entry["initial_history_rejections"] = diagnostics
+            entry["history_recovery"] = "not_needed"
+            def usable(frame):
+                return (frame is not None and len(frame) >= 200 and
+                        official_daily_bar_matches(frame.iloc[-1], official.get(sym+".NS")))
+            if not usable(data) and original is not None:
+                repaired = recovery(sym+".NS", original)
+                if usable(repaired):
+                    data = repaired
+                    entry["history_recovery"] = "official_trailing_session"
+            if not usable(data):
+                alternate = yahoo_host_history(sym+".NS", str(session), recover=recovery)
+                alternate = validated_daily_history(alternate, str(session))
+                if usable(alternate):
+                    data = alternate
+                    entry["history_recovery"] = "alternate_chart_host"
+                else:
+                    entry["history_recovery"] = "withheld"
             if data is not None:
                 entry["history_bars"] = len(data)
                 entry["history_shape_valid"] = True
