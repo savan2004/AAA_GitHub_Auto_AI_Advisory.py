@@ -116,10 +116,27 @@ def _one(rows, label, *, columns):
     return found[0]
 
 def _date(text):
-    try:
-        return datetime.strptime(text,"%d-%m-%Y").date()
-    except (ValueError,TypeError) as exc:
-        raise EvidenceError("FILING_DATE_INVALID") from exc
+    """Two explicit NSE iXBRL date formats, without guessing day/month order."""
+    if isinstance(text,str):
+        value=text.strip()
+        if re.fullmatch(r"[0-9]{2}-[0-9]{2}-[0-9]{4}",value):
+            fmt="%d-%m-%Y"
+        elif re.fullmatch(r"[0-9]{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}",value,re.I):
+            # Original 2025 NSE filings use dates such as 05-Aug-2025.
+            # Explicit month mapping avoids reliance on runner locale.
+            day,month,year=value.split("-")
+            months=("jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec")
+            try:
+                return date(int(year),months.index(month.lower())+1,int(day))
+            except ValueError as exc:
+                raise EvidenceError("FILING_DATE_INVALID") from exc
+        else:
+            raise EvidenceError("FILING_DATE_INVALID")
+        try:
+            return datetime.strptime(value,fmt).date()
+        except ValueError as exc:
+            raise EvidenceError("FILING_DATE_INVALID") from exc
+    raise EvidenceError("FILING_DATE_INVALID")
 
 def _amount(text, divisor):
     raw=text.strip().replace(",","")

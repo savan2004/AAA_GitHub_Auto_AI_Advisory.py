@@ -81,6 +81,27 @@ class FilingTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError,"FILING_PERIOD_MISMATCH"):
             extract(body.replace(b"<td>30-06-2026</td><td></td>",b"<td>30-06-2026</td><td>30-06-2026</td>"))
 
+    def test_legacy_actuals_with_observed_nse_text_month_dates(self):
+        # Reproduce the date/unit schema observed in the original NSE 2025
+        # IndAS filings, while keeping entirely synthetic financial values.
+        body=fixture().replace(b">INR<",b">INR (in Actuals)<").replace(
+            b"<tr><td>Level of rounding used in financial results</td><td>Lakhs</td></tr>",b"")
+        body=body.replace(b"1,23,456.78",b"12345678000").replace(b"(2,345.67)",b"-234567000")
+        for numeric,named in ((b"12-11-2026",b"12-Nov-2026"),
+                              (b"01-07-2026",b"01-Jul-2026"),
+                              (b"01-04-2026",b"01-Apr-2026"),
+                              (b"30-09-2026",b"30-Sep-2026")):
+            body=body.replace(numeric,named)
+        result=self.extract(body)
+        self.assertEqual(result.revenue_cr,Decimal("1234.5678"))
+        self.assertEqual(result.profit_cr,Decimal("-23.4567"))
+        self.assertEqual(result.end,END)
+        for bad in (b"31-Sep-2026",b"09/30/2026",b"30-Unknown-2026",b"30-Jun-2026"):
+            with self.subTest(bad=bad),self.assertRaises(EvidenceError):
+                self.extract(body.replace(b"30-Sep-2026",bad))
+        with self.assertRaises(EvidenceError):
+            self.extract(body.replace(b"12-Nov-2026",b"12-Nov-2027"))
+
     def test_reject_wrong_identity_scope_dates_unit_and_missing_fields(self):
         for old,new in (
             (b"FIXTURE",b"WRONG"),(MEMBER.isin.encode(),b"INE999999999"),
