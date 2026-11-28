@@ -1,9 +1,14 @@
-name: MSK isolated TA-Lib indicator reference
+name: MSK independent mathematical indicator reference
 on:
   pull_request:
+    branches: [main]
     paths:
+      - 'msk_math_reference_audit.py'
       - 'msk_talib_reference_audit.py'
       - 'technical_indicators.py'
+      - 'msk_indicator_math.py'
+      - 'msk_core_data_guard.py'
+      - 'scripts/msk_reference_indicators.py'
       - 'tests/test_msk_talib_reference_audit.py'
       - '.github/workflows/msk-talib-reference.yml'
 permissions:
@@ -11,18 +16,21 @@ permissions:
 jobs:
   reference:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
+    env:
+      MSK_RESEARCH_ONLY: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install --only-binary=:all: numpy==2.2.6 pandas==2.2.3 TA-Lib==0.6.8
+      - run: python -m pip install --only-binary=:all: numpy==1.26.4 pandas==2.2.2
       - run: python -m unittest discover -s tests -p 'test_msk_talib_reference_audit.py' -v
-      - run: python msk_talib_reference_audit.py > msk-talib-synthetic-audit.json
+      - run: python msk_math_reference_audit.py > msk-math-synthetic-audit.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: msk-talib-synthetic-audit
-          path: msk-talib-synthetic-audit.json
-          if-no-files-found: error
+          name: msk-math-synthetic-audit
+          path: msk-math-synthetic-audit.json
+          if-no-files-found: warn
           retention-days: 7
