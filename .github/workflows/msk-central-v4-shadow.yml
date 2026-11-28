@@ -1,0 +1,48 @@
+name: MSK Central V4 offline safety
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'msk_central_*_v4.py'
+      - 'tests/test_msk_central_*_v4.py'
+      - 'scripts/msk_central_500_evidence.py'
+      - 'scripts/msk_central_10_pilot.py'
+      - 'scripts/msk_central_100_pilot.py'
+      - '.github/workflows/msk-central-v4-shadow.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run dependency-free isolated contracts
+        run: python3 -m unittest discover -s tests -p 'test_msk_central_*_v4.py' -v
+  hundred-stock-pilot:
+    if: github.event.pull_request.number == 300
+    needs: offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing public data dependencies
+        run: python -m pip install numpy==1.26.4 pandas==2.2.2 requests==2.32.3 yfinance==0.2.61 curl_cffi==0.7.4
+      - name: Test official Nifty 100 in bounded ten-stock batches
+        run: python -m scripts.msk_central_100_pilot --session 2026-11-27
+      - name: Retain missing-data recovery bank even on incomplete pilot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msk-ai-missing-data
+          path: |
+            msk_ai_missing_data.json
+            msk_100_pilot_report.json
+          if-no-files-found: warn
+          retention-days: 7
