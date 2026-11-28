@@ -27,6 +27,41 @@ class FiveHundredTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             roster_rows(ROSTER_BYTES + b"\nOTHER,IN0000000999")
 
+    def test_official_transitional_roster_and_dummy(self):
+        from scripts.msk_central_500_evidence import _roster_details
+        data=("Company Name,Symbol,ISIN Code,Series\n"+
+              "\n".join(f"Company {s},{s},{i},EQ" for s,i in ROSTER.items())+
+              "\nExtra,OTHER,INE123456789,BE\nDummy HEG Ltd.,DUMMYHEG,DUM545A01024,EQ").encode()
+        roster,series,placeholders=_roster_details(data)
+        self.assertEqual(len(roster),501)
+        self.assertEqual(series["OTHER"],"BE")
+        self.assertEqual(placeholders,["DUMMYHEG"])
+        self.assertNotIn("DUMMYHEG",roster)
+        self.assertNotIn("DUMMYHEG",series)
+        with self.assertRaises(ValueError):
+            _roster_details(data+b"\nInvalid,DUMMY2,DUM545A01024,EQ")
+
+    def test_series_exact_and_full_transitional_coverage(self):
+        data=("Company Name,Symbol,ISIN Code,Series\n"+
+              "\n".join(f"Company {s},{s},{i},EQ" for s,i in ROSTER.items())+
+              "\nExtra,OTHER,INE123456789,BE").encode()
+        original=archive()
+        with zipfile.ZipFile(io.BytesIO(original)) as z:
+            text=z.read("final.csv").decode()
+        buf=io.BytesIO()
+        with zipfile.ZipFile(buf,"w") as z:
+            z.writestr("final.csv",text+"\n"+f"{DAY},OTHER,BE,INE123456789,100,110,90,105,100")
+        report=probe(DAY,get=lambda url,_:data if url in ROSTERS else buf.getvalue())
+        self.assertEqual((report["roster_count"],report["verified_eod_count"]),(501,501))
+        self.assertEqual(report["status"],"verified")
+        self.assertEqual(report["operating_core_limit"],500)
+        self.assertEqual(report["total_limit"],700)
+        self.assertEqual(report["admission_status"],"NOT_EVALUATED")
+        self.assertEqual(report["non_eq_members"],["OTHER"])
+        report=probe(DAY,get=lambda url,_:data if url in ROSTERS else original)
+        self.assertEqual(report["status"],"withheld_partial")
+        self.assertEqual(report["missing"],["OTHER"])
+
     def test_exact_session_and_identity(self):
         good, bad = archive_rows(archive(), ROSTER, DAY)
         self.assertEqual(len(good), 500)

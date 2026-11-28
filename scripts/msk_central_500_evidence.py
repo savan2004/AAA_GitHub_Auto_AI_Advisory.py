@@ -2,7 +2,9 @@
 
 No third-party dependencies, credentials, customer output or database writes.
 Membership is the current official CSV at retrieval time, not a historical
-membership assertion. Only final UDiFF EQ rows with matching ISIN count.
+membership assertion. Match the exact official symbol, ISIN and trading series.
+The audit observes the full roster (500/501 real constituents); it does not
+change the central engine's separate 500 regular / 700 total admission caps.
 """
 import argparse
 import csv
@@ -46,7 +48,7 @@ def fetch(url, limit):
         return data
 
 
-def roster_rows(data):
+def _roster_details(data):
     reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig")))
     names = {str(h).strip().upper(): h for h in reader.fieldnames or []}
     if len(names) != len(reader.fieldnames or []):
@@ -55,23 +57,47 @@ def roster_rows(data):
     isin_col = names.get("ISIN CODE") or names.get("ISIN")
     if not symbol_col or not isin_col:
         raise ValueError("missing roster identity columns")
-    result = {}
+    series_col=names.get("SERIES")
+    company_col=names.get("COMPANY NAME")
+    result, series, placeholders = {}, {}, []
     for row in reader:
+        if None in row or any(value is None for value in row.values()):
+            raise ValueError("invalid roster row")
         sym = row[symbol_col].strip().upper()
         isin = row[isin_col].strip().upper()
-        if not SYMBOL.fullmatch(sym) or not ISIN.fullmatch(isin) or sym in result:
+        kind = row[series_col].strip().upper() if series_col else "EQ"
+        company = row[company_col].strip() if company_col else ""
+        # Same explicitly identified non-tradable NSE placeholder as #233.
+        if (sym,isin,company,kind)==("DUMMYHEG","DUM545A01024","Dummy HEG Ltd.","EQ"):
+            if placeholders:
+                raise ValueError("duplicate roster placeholder")
+            placeholders.append(sym)
+            continue
+        if (not SYMBOL.fullmatch(sym) or not ISIN.fullmatch(isin)
+                or sym in result or kind not in ("EQ","BE","RR")):
             raise ValueError("invalid or duplicate roster member")
         result[sym] = isin
-        if len(result) > 500:
-            raise ValueError("roster exceeds 500")
-    if len(result) != 500 or len(set(result.values())) != 500:
-        raise ValueError("official roster is not 500 unique symbol/ISIN pairs")
-    return result
+        series[sym] = kind
+        if len(result) > 501:
+            raise ValueError("roster exceeds observed official size")
+    if len(result) not in (500,501) or len(set(result.values())) != len(result):
+        raise ValueError("official roster count or uniqueness invalid")
+    # A transitional 501-row roster requires the full official schema.
+    if len(result)==501 and not (series_col and company_col):
+        raise ValueError("transitional roster missing official metadata")
+    return result,series,placeholders
 
 
-def archive_rows(data, roster, session):
+def roster_rows(data):
+    return _roster_details(data)[0]
+
+
+def archive_rows(data, roster, session, *, series=None):
     required = {"TRADDT","TCKRSYMB","SCTYSRS","ISIN","OPNPRIC","HGHPRIC",
                 "LWPRIC","CLSPRIC","TTLTRADGVOL"}
+    series = series if series is not None else {sym:"EQ" for sym in roster}
+    if set(series)!=set(roster) or any(v not in ("EQ","BE","RR") for v in series.values()):
+        raise ValueError("invalid roster series")
     accepted, bad, seen, eq_total = set(), set(), set(), 0
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         members = [m for m in archive.infolist() if not m.is_dir() and m.filename.lower().endswith(".csv")]
@@ -83,14 +109,16 @@ def archive_rows(data, roster, session):
             if not required.issubset(headers) or len(headers) != len(reader.fieldnames or []):
                 raise ValueError("missing or duplicate archive headers")
             for row in reader:
-                if row["SCTYSRS"].strip() != "EQ":
+                kind=row["SCTYSRS"].strip()
+                if kind=="EQ":
+                    eq_total += 1
+                    if row["TRADDT"].strip() != session.isoformat():
+                        raise ValueError("wrong session in official archive")
+                sym = row["TCKRSYMB"].strip()
+                if sym not in roster or kind!=series[sym]:
                     continue
-                eq_total += 1
                 if row["TRADDT"].strip() != session.isoformat():
                     raise ValueError("wrong session in official archive")
-                sym = row["TCKRSYMB"].strip()
-                if sym not in roster:
-                    continue
                 if sym in seen:
                     bad.add(sym)
                     continue
@@ -119,9 +147,13 @@ def probe(session, *, get=fetch, retrieved_at=None):
     for url in ROSTERS:
         try:
             data = get(url, 2_000_000)
-            roster = roster_rows(data)
+            roster,series,placeholders = _roster_details(data)
             report.update(roster_count=len(roster), roster_source=url,
-                          roster_sha256=hashlib.sha256(data).hexdigest())
+                          roster_sha256=hashlib.sha256(data).hexdigest(),
+                          nontradable_placeholders=placeholders,
+                          non_eq_members=sorted(sym for sym in series if series[sym]!="EQ"),
+                          operating_core_limit=500, total_limit=700,
+                          admission_status="NOT_EVALUATED")
             break
         except (ValueError, TypeError, KeyError, AttributeError, OSError, URLError, csv.Error, UnicodeError) as exc:
             report["attempts"].append({"source":url, "error":type(exc).__name__})
@@ -132,11 +164,11 @@ def probe(session, *, get=fetch, retrieved_at=None):
         url = template.format(day=session.strftime("%Y%m%d"))
         try:
             data = get(url, 4_000_000)
-            ok, bad = archive_rows(data, roster, session)
+            ok, bad = archive_rows(data, roster, session,series=series)
             report.update(verified_eod_count=len(ok), missing=sorted(set(roster)-ok),
                           rejected=sorted(bad), archive_source=url,
                           archive_sha256=hashlib.sha256(data).hexdigest(),
-                          status="verified" if len(ok)==500 else "withheld_partial")
+                          status="verified" if len(ok)==len(roster) else "withheld_partial")
             # A valid official file with missing rows is evidence of a gap;
             # don't silently fill it with another date or different source.
             break

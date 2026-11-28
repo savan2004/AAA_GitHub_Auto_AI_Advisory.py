@@ -24,5 +24,5 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - name: Verify exact 500 official members and 27 November final OHLCV
+      - name: Verify full observed official roster and 27 November final OHLCV
         run: python3 scripts/msk_central_500_evidence.py --session 2026-11-27
