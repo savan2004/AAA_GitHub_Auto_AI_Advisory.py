@@ -50,6 +50,22 @@ def financial_status(statements):
     return "fresh_secondary_candidate"
 
 
+def recover_independent_history(symbol, session, recovery, *, usable, alternate=None):
+    """Reuse #292's two-session official overlap check, only for missing work.
+
+    The existing 200-bar pilot gate remains in the caller. No short history,
+    different price basis, or unverified alternate is promoted.
+    """
+    if alternate is None:
+        from overnight_index_sources import _verified_full_history_alternate
+        alternate = _verified_full_history_alternate
+    try:
+        candidate = alternate(symbol, session, recovery)
+        return candidate if usable(candidate) else None
+    except Exception:
+        return None
+
+
 def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
         fetch_statements=None, symbols=PILOT):
     symbols = tuple(symbols)
@@ -119,7 +135,16 @@ def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
                     data = alternate
                     entry["history_recovery"] = "alternate_chart_host"
                 else:
-                    entry["history_recovery"] = "withheld"
+                    # Existing #292 has a separate full-history recovery
+                    # path for no_verified_trailing_anchor. It independently
+                    # checks the current AND prior official archive. Do not
+                    # make this call for histories already satisfying the gate.
+                    independent = recover_independent_history(sym, session, recovery, usable=usable)
+                    if independent is not None:
+                        data = independent
+                        entry["history_recovery"] = "independent_history_official_overlap"
+                    else:
+                        entry["history_recovery"] = "withheld"
             if data is not None:
                 entry["history_bars"] = len(data)
                 entry["history_shape_valid"] = True
@@ -127,6 +152,12 @@ def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
                     data.iloc[-1], official.get(sym+".NS"))
                 if entry["latest_raw_ohlcv_match"] and len(data)>=200:
                     entry["technical_calculated"] = bool(technical_values(data))
+                    entry["technical_status"] = ("calculated" if entry["technical_calculated"]
+                                                  else "indicator_validation_failed")
+                elif entry["latest_raw_ohlcv_match"]:
+                    entry["technical_status"] = "insufficient_bars_for_sma200"
+                else:
+                    entry["technical_status"] = "unverified_latest_bar"
         except Exception as exc:
             entry["history_error"] = type(exc).__name__
         try:

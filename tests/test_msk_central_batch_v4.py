@@ -25,3 +25,21 @@ class BatchStageTests(unittest.TestCase):
         self.assertEqual(counts["technical_calculated"],99)
         self.assertEqual(status,"pilot_incomplete")
         self.assertEqual(summarize(rows,completed=99)[1],"pilot_incomplete")
+
+class IndependentRecoveryTests(unittest.TestCase):
+    def test_only_independent_usable_candidate_is_returned(self):
+        from scripts.msk_central_10_pilot import recover_independent_history
+        from unittest.mock import Mock
+        from datetime import date
+        day=date(2026,11,27)
+        recovery=object()
+        verified=object()
+        source=Mock(return_value=verified)
+        result=recover_independent_history("TECHM",day,recovery,
+                    usable=lambda frame:frame is verified,alternate=source)
+        self.assertIs(result,verified)
+        source.assert_called_once_with("TECHM",day,recovery)
+        self.assertIsNone(recover_independent_history("VAML",day,recovery,
+                    usable=lambda frame:False,alternate=source))
+        self.assertIsNone(recover_independent_history("TECHM",day,recovery,
+                    usable=lambda frame:False,alternate=Mock(side_effect=ValueError("source unavailable"))))
