@@ -51,6 +51,67 @@ class OfficialIndexMembershipTests(unittest.TestCase):
             self.assertTrue(again["cached"])
             self.assertEqual(get.call_count, 1)
 
+    def test_nifty100_official_mirror_after_archive_http_errors(self):
+        response = Mock()
+        response.content = nse_csv(100)
+        response.raise_for_status.return_value = None
+        with patch.object(ic, "_CACHE", {}), patch.object(
+                ic.requests, "get", side_effect=[
+                    ic.requests.HTTPError("403"), ic.requests.HTTPError("403"), response]) as get:
+            universe = ic.get_index_universe("conservative")
+            self.assertEqual(len(universe["symbols"]), 100)
+            self.assertEqual(universe["industries"]["TEST001"], "Sector1")
+            self.assertEqual(get.call_count, 3)
+            self.assertEqual(get.call_args.args[0], ic._NIFTY100_OFFICIAL_MIRROR)
+            self.assertTrue(ic.get_index_universe("conservative")["cached"])
+            self.assertEqual(get.call_count, 3)
+
+    def test_nifty100_mirror_wrong_count_fails_closed(self):
+        response = Mock()
+        response.content = nse_csv(99)
+        response.raise_for_status.return_value = None
+        with patch.object(ic, "_CACHE", {}), patch.object(
+                ic.requests, "get", side_effect=[
+                    ic.requests.HTTPError("403"), ic.requests.HTTPError("403"), response,
+                    *[ic.requests.HTTPError("403") for _ in range(3)]]):
+            with patch.object(ic,"_snapshot_path",return_value=None), self.assertRaises(RuntimeError):
+                ic.get_index_universe("conservative")
+
+    def test_exact_disjoint_components_recover_official_membership(self):
+        first=Mock(content=nse_csv(50))
+        second=Mock(content=nse_csv(50).replace(b"TEST",b"NEXT"))
+        with patch.object(ic,"_CACHE",{}), patch.object(ic,"_snapshot_path",return_value=None), patch.object(
+                ic.requests,"get",side_effect=[*[ic.requests.HTTPError("403") for _ in range(3)],first,second]):
+            universe=ic.get_index_universe("conservative")
+        self.assertEqual(len(set(universe["symbols"])),100)
+        self.assertEqual(universe["industries"]["NEXT001"],"Sector1")
+        self.assertEqual(universe["source"],"Official NSE Nifty 50 + Next 50")
+
+    def test_same_day_snapshot_and_expired_or_duplicate_rejected(self):
+        import tempfile
+        import json
+        from datetime import datetime,timedelta
+        with tempfile.TemporaryDirectory() as tmp, patch.object(ic,"_CACHE",{}), patch.object(
+                ic,"_snapshot_path",return_value=Path(tmp)/"members.json"):
+            response=Mock(content=nse_csv(100))
+            with patch.object(ic.requests,"get",return_value=response):
+                original=ic.get_index_universe("conservative")
+            with patch.object(ic,"_CACHE",{}), patch.object(ic.requests,"get",side_effect=ic.requests.HTTPError("403")):
+                snapshot=ic.get_index_universe("conservative")
+                self.assertEqual(snapshot["symbols"],original["symbols"])
+                self.assertTrue(snapshot["cached"])
+                path=ic._snapshot_path()
+                value=json.loads(path.read_text())
+                value["captured_at"]=(datetime.now(ic.IST)-timedelta(days=1)).isoformat()
+                path.write_text(json.dumps(value))
+                with self.assertRaises(RuntimeError):
+                    ic.get_index_universe("conservative")
+                value["captured_at"]=datetime.now(ic.IST).isoformat()
+                value["symbols"][0]=value["symbols"][1]
+                path.write_text(json.dumps(value))
+                with self.assertRaises(RuntimeError):
+                    ic.get_index_universe("conservative")
+
     def test_old_midcap150_constituents_cannot_be_accepted_as_midcap100(self):
         self.assertEqual(ic.INDEXES["moderate"]["count"], 100)
         self.assertEqual(ic.INDEXES["moderate"]["filename"],
@@ -171,6 +232,28 @@ class ResultDeliveryTests(unittest.TestCase):
             self.assertEqual(sorted(cid for cid, _ in deliveries), [101, 202])
             cached = top5.request_index_top5("moderate", 303, lambda *a: None)
             self.assertIn("Cached recent index scan", cached)
+
+
+
+
+
+class DynamicRiskRewardTests(unittest.TestCase):
+    def test_risk_reward_uses_actual_entry_stop_and_targets(self):
+        universe = {"symbols": tuple(f"S{i}" for i in range(100)), "cap": "Large Cap",
+                    "name": "Nifty 100", "source": "Official NSE constituent CSV",
+                    "asof": "27 Nov 2026", "industries": {}}
+        rows = [dict(sym=f"SYM{i}", sector=f"Industry{i%4}", score=100-i,
+                     tech_score=90-i, overall_score=89-i, fund_score=80-i,
+                     fund_status="VALIDATED", signal="WAIT", risk_pct=6.67,
+                     risk_label="MEDIUM", roe=16.5, pe=21.0,
+                     de=.25, pb=None, fin=False, profit_growth=17.0,
+                     sales_growth=12.0, quarter="2026-06-30",
+                     ltp=150, chg=1.2, rsi=60, adx=23.5, entry=150, sl=140,
+                     t1=165, t2=175, rr1=1.5, asof="2026-11-26") for i in range(12)]
+        out = top5._format_index_result("conservative", universe, rows, 100)
+        self.assertIn("R:R 1:1.5", out)
+        self.assertIn("(1:2.5)", out)
+        self.assertNotIn("(R:R 1:2) | T2", out)
 
 
 if __name__ == "__main__":

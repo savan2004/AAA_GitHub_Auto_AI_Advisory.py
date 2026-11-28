@@ -82,6 +82,21 @@ class RecoveryTests(unittest.TestCase):
         self.assertIsNone(individual_chart_history("ASIANPAINT.NS",DAY,fetch=fetch,
                                                     recovery=lambda *_:None))
 
+    def test_individual_repair_preserves_official_provenance_and_validates_result(self):
+        from smart_chart_eod_recovery import individual_chart_history
+        stale = history()
+        stale.attrs["history_source"] = "Yahoo"
+        def fetch(day, wanted):
+            return {SYMBOL: (dict(official(), High=102.) if day == PREVIOUS else official(102.))}
+        archive = ArchiveRecovery([SYMBOL], DAY, fetch=fetch)
+        result = individual_chart_history(SYMBOL, DAY, fetch=lambda sym: stale,
+                                          recovery=archive)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.attrs["history_source"], "Yahoo individual + NSE final archive")
+        self.assertEqual(result.Close.iloc[-1], 102.)
+        self.assertIsNone(individual_chart_history(SYMBOL, DAY, fetch=lambda sym: stale,
+                                                    recovery=lambda sym, frame: stale))
+
     def test_price_missing_with_zero_volume_or_verified_positive_volume(self):
         def fetch(day,wanted):
             return {SYMBOL:(dict(official(),High=102.) if day == PREVIOUS else official(102.))}
@@ -95,7 +110,7 @@ class RecoveryTests(unittest.TestCase):
                 self.assertIsNotNone(result)
                 self.assertEqual(result.Volume.iloc[-1],1000.)
 
-    def test_mismatch_partial_latest_and_multiple_missing_sessions_fail(self):
+    def test_mismatch_partial_latest_and_four_missing_sessions_fail(self):
         def fetch(day,wanted):
             return {SYMBOL:dict(official(), High=102., Volume=2000.)}
         self.assertIsNone(ArchiveRecovery([SYMBOL],DAY,fetch=fetch)(SYMBOL,history()))
@@ -104,11 +119,59 @@ class RecoveryTests(unittest.TestCase):
             calls.append(a)
             return {}
         partial = history()
-        partial.loc[pd.Timestamp(DAY),"Open"] = 103.
+        partial.loc[pd.Timestamp(DAY),"Open"] = -1.
         recover = ArchiveRecovery([SYMBOL],DAY,fetch=forbidden)
         self.assertIsNone(recover(SYMBOL,partial))
-        self.assertIsNone(recover(SYMBOL,history().drop(pd.Timestamp(PREVIOUS))))
+        self.assertIsNone(recover(SYMBOL,history().drop(pd.DatetimeIndex(["2026-11-23", "2026-11-20", "2026-11-19"]))))
         self.assertEqual(calls,[])
+
+    def test_two_missing_sessions_recover_from_one_shared_older_archive(self):
+        older = date(2026, 11, 20)
+        calls = []
+        def fetch(day, wanted):
+            calls.append(day)
+            return {symbol: (official(102.) if day == DAY else dict(official(), High=102.))
+                    for symbol in wanted}
+        recover = ArchiveRecovery([SYMBOL, "TCS.NS"], DAY, fetch=fetch)
+        frame = history()
+        frame.loc[pd.Timestamp(PREVIOUS), ["Open", "High", "Low", "Close"]] = np.nan
+        for symbol in (SYMBOL, "TCS.NS"):
+            result = recover(symbol, frame)
+            self.assertIsNotNone(result)
+            self.assertEqual([t.date() for t in result.index[-3:]], [older, PREVIOUS, DAY])
+            self.assertEqual(result.Close.iloc[-1], 102.)
+        self.assertEqual(calls, [DAY, PREVIOUS, older])
+        frame.loc[pd.Timestamp(PREVIOUS), "Close"] = 100.
+        self.assertIsNone(recover(SYMBOL, frame))
+
+    def test_three_missing_sessions_keep_date_and_full_overlap_contract(self):
+        days = [date(2026, 11, number) for number in (19, 20, 23, 25)]
+        frame = history().drop(pd.DatetimeIndex(days[1:3]))
+        calls = []
+        def fetch(day, wanted):
+            calls.append(day)
+            return {SYMBOL: dict(official(), High=102.)}
+        recover = ArchiveRecovery([SYMBOL], DAY, fetch=fetch)
+        result = recover(SYMBOL, frame)
+        self.assertIsNotNone(result)
+        self.assertEqual([stamp.date() for stamp in result.index[-4:]], days)
+        self.assertEqual(calls, list(reversed(days)))
+
+    def test_partial_observed_prices_must_match_official_candle(self):
+        def fetch(day, wanted):
+            return {SYMBOL: (official(102.) if day == DAY else dict(official(), High=102.))}
+        recover = ArchiveRecovery([SYMBOL], DAY, fetch=fetch)
+        frame = history()
+        frame.loc[pd.Timestamp(DAY), ["Open", "High", "Low", "Close"]] = [100., 103., 99., 102.]
+        self.assertIsNotNone(recover(SYMBOL, frame))
+        frame.loc[pd.Timestamp(DAY), ["Close", "Volume"]] = [np.nan, 1200.]
+        result = recover(SYMBOL, frame)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.Volume.iloc[-1], 1000.)
+        self.assertEqual(result.Close.iloc[-1], 102.)
+        frame.loc[pd.Timestamp(DAY), "Open"] = 101.
+        self.assertIsNone(recover(SYMBOL, frame))
+        self.assertIn("latest_price_mismatch_Open", recover.rejection_reasons)
 
     def test_adjusted_price_mismatch_and_volume_mismatch_have_exact_reasons(self):
         from smart_chart_eod_recovery import stitch_final_day, prior_history
@@ -141,6 +204,23 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(got[SYMBOL]["Close"],102.)
         self.assertEqual(final_archive_rows(DAY,[SYMBOL],get=lambda *a,**k:Response(make(PREVIOUS))),{})
         self.assertEqual(final_archive_rows(DAY,[SYMBOL],get=lambda *a,**k:Response(make(DAY,True))),{})
+
+    def test_official_full_cash_fallback_uses_exact_session_and_eq_identity(self):
+        header = "SYMBOL,SERIES,DATE1,PREV_CLOSE,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,TTL_TRD_QNTY\n"
+        lines = ["SBIN,EQ,25-Nov-2026,101,100,103,99,102,1000\n"]
+        lines += [f"OTHER{i},EQ,25-Nov-2026,101,100,103,99,102,1000\n" for i in range(400)]
+        calls = []
+        def fetch(url, **kwargs):
+            calls.append(url)
+            if "BhavCopy" in url:
+                return Response(b"", 403)
+            return Response((header + "".join(lines)).encode())
+        result = final_archive_rows(DAY, [SYMBOL], get=fetch)
+        self.assertEqual(result[SYMBOL]["Close"], 102.)
+        self.assertEqual(result[SYMBOL]["PreviousClose"], 101.)
+        self.assertEqual(len(calls), 3)
+        self.assertIn("nsearchives.nseindia.in", calls[1])
+        self.assertIsNone(final_archive_rows(PREVIOUS, [SYMBOL], get=fetch).get(SYMBOL))
 
     def test_yahoo_second_host_requires_current_correct_symbol(self):
         dates = pd.bdate_range(end=DAY,periods=80,tz="Asia/Kolkata")

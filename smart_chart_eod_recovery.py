@@ -20,6 +20,12 @@ from msk_chart_release import REQUIRED, validated_daily_history
 
 UA = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
 ARCHIVE = "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{day}_F_0000.csv.zip"
+ARCHIVE_MIRROR = ARCHIVE.replace("nsearchives.nseindia.com", "nsearchives.nseindia.in")
+FULL_CASH_REPORT = "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{day}.csv"
+_UDIFF_FIELDS = ("TCKRSYMB", "SCTYSRS", "TRADDT", "OPNPRIC", "HGHPRIC",
+                 "LWPRIC", "CLSPRIC", "TTLTRADGVOL", "PRVSCLSGPRIC")
+_CASH_FIELDS = ("SYMBOL", "SERIES", "DATE1", "OPEN_PRICE", "HIGH_PRICE",
+                "LOW_PRICE", "CLOSE_PRICE", "TTL_TRD_QNTY", "PREV_CLOSE")
 YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
 MAX_ZIP = 4_000_000
 MAX_CSV = 20_000_000
@@ -47,69 +53,81 @@ def _matches(a, b):
     return math.isclose(float(a), float(b), rel_tol=1e-6, abs_tol=.01)
 
 
+def _read_official_rows(source, day, wanted, columns, date_format):
+    reader = csv.DictReader(source)
+    names = {str(name).strip().upper() for name in (reader.fieldnames or [])}
+    if not set(columns).issubset(names) or len(names) != len(reader.fieldnames or []):
+        return {}
+    ticker, series, trade_date, *prices = columns
+    rows, bad, seen = {}, set(), set()
+    eq_total = 0
+    for raw_row in reader:
+        row = {str(k).strip().upper(): str(v or "").strip() for k, v in raw_row.items()}
+        if row.get(series) != "EQ":
+            continue
+        eq_total += 1
+        if row.get(trade_date, "").upper() != day.strftime(date_format).upper():
+            return {}
+        symbol = row.get(ticker, "").upper() + ".NS"
+        if symbol not in wanted:
+            continue
+        if symbol in seen:
+            bad.add(symbol)
+            continue
+        seen.add(symbol)
+        try:
+            fields = {key: _number(row[col]) for key, col in zip((*REQUIRED, "PreviousClose"), prices)}
+            if (any(fields[k] <= 0 for k in ("Open", "High", "Low", "Close", "PreviousClose"))
+                    or fields["Volume"] < 0
+                    or fields["High"] < max(fields["Open"], fields["Close"], fields["Low"])
+                    or fields["Low"] > min(fields["Open"], fields["Close"], fields["High"])):
+                bad.add(symbol)
+                continue
+            rows[symbol] = fields
+        except (ValueError, KeyError, TypeError, OverflowError):
+            bad.add(symbol)
+    return {sym: row for sym, row in rows.items() if sym not in bad} if eq_total >= 400 else {}
+
+
 def final_archive_rows(day, wanted, *, get=None):
-    """Fetch one final official ZIP; keep only exact requested EQ symbols."""
+    """Fetch an exact-date final exchange report through bounded official sources."""
     wanted = set(wanted)
     if not wanted or len(wanted) > 1000:
         return {}
     get = get or requests.get
-    try:
-        with get(ARCHIVE.format(day=day.strftime("%Y%m%d")), headers=UA,
-                 stream=True, timeout=(4, 8), allow_redirects=False) as response:
-            print(f"NSE_FINAL_ARCHIVE session={day} status={response.status_code}", flush=True)
-            payload = _response_bytes(response, MAX_ZIP)
-        if not payload:
-            return {}
-        with zipfile.ZipFile(io.BytesIO(payload)) as z:
-            files = [x for x in z.infolist() if not x.is_dir() and x.filename.lower().endswith(".csv")]
-            if len(files) != 1 or not 50_000 <= files[0].file_size <= MAX_CSV:
-                return {}
-            with z.open(files[0]) as raw, io.TextIOWrapper(raw, encoding="utf-8-sig") as source:
-                reader = csv.DictReader(source)
-                names = {str(x).strip().upper() for x in (reader.fieldnames or [])}
-                required = {"TCKRSYMB", "SCTYSRS", "TRADDT", "OPNPRIC", "HGHPRIC",
-                            "LWPRIC", "CLSPRIC", "PRVSCLSGPRIC", "TTLTRADGVOL"}
-                if not required.issubset(names) or len(names) != len(reader.fieldnames or []):
-                    return {}
-                rows, bad, seen = {}, set(), set()
-                eq_total = 0
-                for raw_row in reader:
-                    row = {str(k).strip().upper(): str(v or "").strip() for k, v in raw_row.items()}
-                    if row.get("SCTYSRS") != "EQ":
+    sources = (
+        (ARCHIVE.format(day=day.strftime("%Y%m%d")), "udiff", MAX_ZIP),
+        (ARCHIVE_MIRROR.format(day=day.strftime("%Y%m%d")), "udiff-mirror", MAX_ZIP),
+        (FULL_CASH_REPORT.format(day=day.strftime("%d%m%Y")), "full-cash", MAX_CSV),
+    )
+    for url, label, limit in sources:
+        try:
+            with get(url, headers=UA, stream=True, timeout=(4, 8),
+                     allow_redirects=False) as response:
+                print(f"NSE_FINAL_ARCHIVE session={day} source={label} status={response.status_code}", flush=True)
+                payload = _response_bytes(response, limit)
+            if not payload:
+                continue
+            if label == "full-cash":
+                data = _read_official_rows(io.StringIO(payload.decode("utf-8-sig")), day,
+                                           wanted, _CASH_FIELDS, "%d-%b-%Y")
+            else:
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    files = [x for x in archive.infolist()
+                             if not x.is_dir() and x.filename.lower().endswith(".csv")]
+                    if len(files) != 1 or not 50_000 <= files[0].file_size <= MAX_CSV:
                         continue
-                    eq_total += 1
-                    # The date is checked on every equity record, not just the chosen stock.
-                    if row.get("TRADDT") != day.isoformat():
-                        return {}
-                    sym = row.get("TCKRSYMB", "").upper() + ".NS"
-                    if sym not in wanted:
-                        continue
-                    if sym in seen:
-                        bad.add(sym)
-                        continue
-                    seen.add(sym)
-                    try:
-                        fields = {key: _number(row[col]) for key, col in
-                                  zip((*REQUIRED, "PreviousClose"), ("OPNPRIC", "HGHPRIC", "LWPRIC",
-                                      "CLSPRIC", "TTLTRADGVOL", "PRVSCLSGPRIC"))}
-                        if (any(fields[k] <= 0 for k in ("Open","High","Low","Close","PreviousClose"))
-                                or fields["Volume"] < 0 or fields["High"] < max(fields["Open"],fields["Close"],fields["Low"])
-                                or fields["Low"] > min(fields["Open"],fields["Close"],fields["High"])):
-                            bad.add(sym)
-                            continue
-                        rows[sym] = fields
-                    except (ValueError, KeyError, TypeError, OverflowError):
-                        bad.add(sym)
-                if eq_total < 400:
-                    return {}
-                return {sym: row for sym, row in rows.items() if sym not in bad}
-    except (requests.RequestException, OSError, ValueError, TypeError, KeyError,
-            zipfile.BadZipFile, RuntimeError, csv.Error, UnicodeError) as exc:
-        print(f"NSE_FINAL_ARCHIVE session={day} unavailable={type(exc).__name__}", flush=True)
-        return {}
+                    with archive.open(files[0]) as raw, io.TextIOWrapper(raw, encoding="utf-8-sig") as text:
+                        data = _read_official_rows(text, day, wanted, _UDIFF_FIELDS, "%Y-%m-%d")
+            if data:
+                return data
+        except (requests.RequestException, OSError, ValueError, TypeError, KeyError,
+                zipfile.BadZipFile, RuntimeError, csv.Error, UnicodeError) as exc:
+            print(f"NSE_FINAL_ARCHIVE session={day} source={label} unavailable={type(exc).__name__}", flush=True)
+    return {}
 
 
-def prior_history(frame, expected, previous):
+def prior_history(frame, expected, previous, *, diagnostics=None):
     """Remove only the unfilled target-date placeholder and verified holiday slots."""
     from portfolio_doctor_live import doctor_trading_session
     try:
@@ -126,20 +144,23 @@ def prior_history(frame, expected, previous):
         if not data.index.is_unique:
             return None
         target = data.loc[data.index == pd.Timestamp(expected)]
-        # A fully or partially observed price candle is never overwritten.
-        # Yahoo bulk downloads may fill volume with zero even though all
-        # four prices are missing. A positive observed volume must match
-        # the final exchange volume exactly before the day is recovered.
-        reported_volume = None
+        # Partial provider candles may be completed only when each observed
+        # field agrees with the exact-session official row. Zero volume on
+        # an otherwise empty provider placeholder is not an observation.
+        observed = {}
         if len(target):
             row = target.iloc[0]
-            if not row[["Open","High","Low","Close"]].isna().all():
-                return None
-            if not pd.isna(row["Volume"]):
-                volume = _number(row["Volume"])
-                if volume < 0:
+            for field in REQUIRED:
+                if pd.isna(row[field]):
+                    continue
+                value = _number(row[field])
+                if value < 0 or (field != "Volume" and value == 0):
                     return None
-                reported_volume = volume if volume > 0 else None
+                observed[field] = value
+            if len(observed) == len(REQUIRED):
+                return None
+            if observed == {"Volume": 0}:
+                observed.clear()
         data = data.loc[data.index <= pd.Timestamp(previous)]
         # Valid older bars do not need a calendar lookup. The existing
         # reviewed calendar covers 2026 only; never discard an unknown-year gap.
@@ -153,9 +174,9 @@ def prior_history(frame, expected, previous):
             except RuntimeError:
                 pass
         data = data.drop(index=drop)
-        verified = validated_daily_history(data, previous.isoformat())
+        verified = validated_daily_history(data, previous.isoformat(), diagnostics=diagnostics)
         if verified is not None:
-            verified.attrs["target_placeholder_volume"] = reported_volume
+            verified.attrs["target_observed_fields"] = observed
         return verified
     except (ValueError, TypeError, KeyError, AttributeError, RuntimeError):
         return None
@@ -178,8 +199,16 @@ def stitch_final_day(primary, previous, expected, prior, latest, *, diagnostics=
             return reject("prior_price_mismatch_" + "_".join(differences))
         if float(last["Volume"]) != float(prior["Volume"]):
             return reject("prior_volume_mismatch")
-        reported_volume = primary.attrs.get("target_placeholder_volume")
-        if reported_volume is not None and reported_volume != float(latest["Volume"]):
+        observed = primary.attrs.get("target_observed_fields", {})
+        observed_prices = {key: value for key, value in observed.items() if key != "Volume"}
+        for field, value in observed_prices.items():
+            if not _matches(value, latest[field]):
+                return reject("latest_price_mismatch_" + field)
+        # An incomplete candle's provider volume can be provisional. Use
+        # the entire official final candle when its available prices agree.
+        # With only volume observed, require its exact match as before.
+        if (not observed_prices and "Volume" in observed
+                and observed["Volume"] != float(latest["Volume"])):
             return reject("latest_volume_mismatch")
         if not _matches(prior["Close"], latest["PreviousClose"]):
             return reject("previous_close_continuity")
@@ -192,14 +221,32 @@ def stitch_final_day(primary, previous, expected, prior, latest, *, diagnostics=
         return reject("invalid_overlap")
 
 
+def recovery_seed(frame, expected, previous, *, diagnostics=None):
+    """Return a verified anchor and up to three incomplete trailing sessions."""
+    from portfolio_doctor_live import previous_doctor_session
+
+    sessions = [expected, previous]
+    for _ in range(3):
+        anchor = sessions[-1]
+        targets = []
+        for day in reversed(sessions[:-1]):
+            history = prior_history(frame, day, anchor, diagnostics=diagnostics)
+            if history is None:
+                break
+            targets.append((day, history.attrs.get("target_observed_fields", {})))
+        else:
+            return history, anchor, targets
+        sessions.append(previous_doctor_session(anchor))
+    return None, None, ()
+
+
 class ArchiveRecovery:
-    """Lazy two-file fetch for the entire selected universe; no per-stock downloads."""
+    """Share up to four dated official files across the entire shortlist."""
     def __init__(self, symbols, session, *, fetch=final_archive_rows):
         self.symbols = frozenset(symbols)
         self.expected = date.fromisoformat(str(session))
         self.fetch = fetch
-        self.loaded = False
-        self.current = self.previous = {}
+        self.archives = {}
         self.recovered = 0
         self.rejection_reasons = {}
 
@@ -208,25 +255,39 @@ class ArchiveRecovery:
         if symbol not in self.symbols or not doctor_trading_session(self.expected):
             return None
         previous = previous_doctor_session(self.expected)
-        history = prior_history(frame, self.expected, previous)
-        if history is None:
-            return None
-        if not self.loaded:
-            self.loaded = True
-            self.current = self.fetch(self.expected, self.symbols)
-            if self.current:
-                self.previous = self.fetch(previous, self.symbols)
-            print(f"NSE_FINAL_ARCHIVE_COVERAGE latest={len(self.current)} prior={len(self.previous)}", flush=True)
         reasons = {}
-        result = stitch_final_day(history, previous, self.expected, self.previous.get(symbol), self.current.get(symbol), diagnostics=reasons)
-        if result is not None:
+        history, anchor, targets = recovery_seed(frame, self.expected, previous, diagnostics=reasons)
+        if history is None:
+            print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reason=no_verified_trailing_anchor "
+                  f"checks={reasons}", flush=True)
+            return None
+
+        # Reject missing newest evidence before reaching for older files.
+        # The calendar bounds the shared cache to at most four session dates.
+        for day in [self.expected, *[day for day, _ in reversed(targets[:-1])], anchor]:
+            if day not in self.archives:
+                self.archives[day] = self.fetch(day, self.symbols)
+                print(f"NSE_FINAL_ARCHIVE_COVERAGE session={day} rows={len(self.archives[day])}", flush=True)
+            if symbol not in self.archives[day]:
+                print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reason=missing_official_row session={day}", flush=True)
+                return None
+
+        reasons = {}
+        for day, observed in targets:
+            history.attrs["target_observed_fields"] = observed
+            history = stitch_final_day(history, anchor, day, self.archives[anchor][symbol],
+                                       self.archives[day][symbol], diagnostics=reasons)
+            if history is None:
+                break
+            anchor = day
+        if history is not None:
             self.recovered += 1
-            print(f"NSE_FINAL_RECOVERY_OK symbol={symbol} session={self.expected} rows={len(result)} close={result.Close.iloc[-1]:.2f}", flush=True)
+            print(f"NSE_FINAL_RECOVERY_OK symbol={symbol} session={self.expected} rows={len(history)} close={history.Close.iloc[-1]:.2f}", flush=True)
         else:
             for reason, count in reasons.items():
                 self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + count
             print(f"NSE_FINAL_RECOVERY_REJECT symbol={symbol} reasons={reasons}", flush=True)
-        return result
+        return history
 
 
 def yahoo_host_history(symbol, session, *, get=None, recover=None):
@@ -281,7 +342,7 @@ def preliminary_rank(frame, session):
     from portfolio_doctor_live import previous_doctor_session
     try:
         day = date.fromisoformat(str(session))
-        history = prior_history(frame, day, previous_doctor_session(day))
+        history, _, _ = recovery_seed(frame, day, previous_doctor_session(day))
         if history is None:
             return None
         close = history.Close
@@ -311,12 +372,14 @@ def individual_chart_history(symbol, session, *, fetch, alternate=None, official
             if frame is None:
                 continue
             complete = validated_daily_history(frame, session)
+            source = getattr(frame, "attrs", {}).get("history_source", label)
             if complete is None and label == "Yahoo individual":
-                complete = recovery(symbol, frame)
+                repaired = recovery(symbol, frame)
+                complete = validated_daily_history(repaired, session)
                 if complete is not None:
-                    label += " + NSE final archive"
+                    source = label + " + NSE final archive"
             if complete is not None:
-                complete.attrs["history_source"] = getattr(frame, "attrs", {}).get("history_source", label)
+                complete.attrs["history_source"] = source
                 return complete
         except Exception as exc:
             print(f"CHART_INDIVIDUAL_SOURCE symbol={symbol} source={label} error={type(exc).__name__}", flush=True)

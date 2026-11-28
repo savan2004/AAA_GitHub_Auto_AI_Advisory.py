@@ -1,0 +1,75 @@
+name: MSK Core Data Acceptance
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'data_engine.py'
+      - 'market_data.py'
+      - 'msk_history_incremental_pilot.py'
+      - 'msk_public_incremental_history.py'
+      - 'tests/test_public_incremental_history.py'
+      - 'central_incremental_probe.py'
+      - 'tests/test_market_data_recovery.py'
+      - 'msk_history_quality.py'
+      - 'msk_ai_data_recovery.py'
+      - 'tests/test_msk_ai_data_recovery.py'
+      - 'tests/test_msk_history_quality.py'
+      - 'technical_indicators.py'
+      - 'swing_trades.py'
+      - 'msk_intraday_trade.py'
+      - 'investment_screener.py'
+      - 'portfolio_doctor_calculations.py'
+      - 'research_filing_evidence.py'
+      - 'financial_quality.py'
+      - 'fundamentals.py'
+      - 'research_data.py'
+      - 'tests/test_msk_fundamental_guard_v3.py'
+      - 'msk_core_data_guard.py'
+      - 'msk_indicator_math.py'
+      - 'scripts/msk_reference_indicators.py'
+      - 'tests/test_msk_core_data_guard.py'
+      - 'scripts/msk_model_eval.py'
+      - 'tests/test_msk_model_eval.py'
+      - '.github/workflows/msk-core-data-acceptance.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+      fail-fast: false
+    env:
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install 'numpy==1.26.4' 'pandas==2.2.2' 'requests==2.32.3'
+      - run: python -m unittest discover -s tests -p test_msk_core_data_guard.py -v
+      - run: python -m unittest discover -s tests -p test_msk_fundamental_guard_v3.py -v
+      - run: python -m unittest discover -s tests -p test_msk_financial_provenance.py -v
+      - run: python -m unittest discover -s tests -p test_msk_history_quality.py -v
+      - run: python -m unittest discover -s tests -p test_market_data_recovery.py -v
+      - run: python -m unittest discover -s tests -p test_public_incremental_history.py -v
+      - run: python -m unittest discover -s tests -p test_menu_end_to_end.py -v
+      - run: python -m unittest discover -s tests -p test_msk_model_eval.py -v
+      - run: python -m unittest discover -s tests -p test_msk_ai_data_recovery.py -v
+  independent-indicators:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'numpy>=2,<3' 'pandas>=2.2,<3' 'TA-Lib>=0.6.5,<0.9'
+      - run: python scripts/msk_reference_indicators.py

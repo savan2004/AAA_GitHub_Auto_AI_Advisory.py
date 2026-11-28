@@ -32,6 +32,51 @@ def enabled():
             and os.getenv("MSK_RESEARCH_DRIVE_FOLDER_ID") == FOLDER)
 
 
+def _archive_config_status():
+    """Return fixed diagnostic codes only; never log credential values."""
+    if os.getenv("MSK_RESEARCH_DRIVE_ENABLED") != "1":
+        return "DISABLED"
+    if os.getenv("MSK_RESEARCH_DRIVE_FOLDER_ID") != FOLDER:
+        return "FOLDER_NOT_CONFIGURED"
+    if any(not os.getenv("MSK_DRIVE_" + k, "").strip()
+           for k in ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN")):
+        return "OAUTH_CONFIGURATION_MISSING"
+    return "CONFIGURED"
+
+
+def probe_drive_access():
+    """Opt-in, read-only OAuth/folder check; works while archiving is disabled."""
+    if os.getenv("MSK_DRIVE_READONLY_PROBE", "").strip() != "1":
+        return False
+    if os.getenv("MSK_RESEARCH_DRIVE_FOLDER_ID") != FOLDER:
+        LOG.warning("MSK_DRIVE_PROBE_FAILED stage=config reason=FOLDER_NOT_CONFIGURED")
+        return False
+    if any(not os.getenv("MSK_DRIVE_" + k, "").strip()
+           for k in ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN")):
+        LOG.warning("MSK_DRIVE_PROBE_FAILED stage=config reason=OAUTH_CONFIGURATION_MISSING")
+        return False
+    client = None
+    stage = "oauth_folder"
+    try:
+        client = Drive()
+        stage = "list"
+        rows = client.list()
+        LOG.info("MSK_DRIVE_PROBE_PASS folder_verified=true managed_count=%d", len(rows))
+        return True
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        status = status if type(status) is int and 100 <= status <= 599 else "-"
+        if getattr(response, "url", "") == "https://oauth2.googleapis.com/token":
+            stage = "token_exchange"
+        LOG.warning("MSK_DRIVE_PROBE_FAILED stage=%s type=%s http=%s",
+                    stage, type(exc).__name__, status)
+        return False
+    finally:
+        if client is not None:
+            client.close()
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -94,6 +139,10 @@ class Drive:
         self.folder, self.tag = folder, tag
         self.minimum, self.maximum = ((25_000, MAX_BYTES) if folder == FOLDER
                                       else (10_000, 15_000_000))
+        if any(not os.getenv("MSK_DRIVE_" + k, "").strip()
+               for k in ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN")):
+            LOG.warning("MSK_DRIVE_CONFIG_BLOCKED reason=OAUTH_CONFIGURATION_MISSING")
+            raise ValueError("Drive OAuth configuration missing")
         secret = {k: os.environ["MSK_DRIVE_" + k.upper()]
                   for k in ("client_id", "client_secret", "refresh_token")}
         response = requests.post("https://oauth2.googleapis.com/token",
@@ -232,23 +281,31 @@ def load_cloud_report(symbol, *, output_dir="output/reports"):
 def store_cloud_report(symbol, path, price_session):
     """Upload after release validation; evict oldest only after read-back proof."""
     if not enabled():
+        LOG.warning("MSK_DRIVE_ARCHIVE_SKIPPED reason=%s", _archive_config_status())
         return False
     client = None
+    stage = "session"
     try:
         symbol = _valid_symbol(symbol)
         session = datetime.strptime(price_session, "%d-%b-%Y").date().isoformat()
         if session != _session():
+            LOG.warning("MSK_DRIVE_ARCHIVE_SKIPPED symbol=%s reason=SESSION_MISMATCH", symbol)
             return False
+        stage = "pdf_validation"
         from pdf_release_gate import validate_research_pdf
         quality = validate_research_pdf(path, expected_symbol=symbol, min_pages=8)
         if not 25_000 <= quality["bytes"] <= MAX_BYTES:
+            LOG.warning("MSK_DRIVE_ARCHIVE_SKIPPED symbol=%s reason=PDF_SIZE", symbol)
             return False
         raw = Path(path).read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
         if len(raw) != quality["bytes"]:
+            LOG.warning("MSK_DRIVE_ARCHIVE_SKIPPED symbol=%s reason=PDF_BYTES_CHANGED", symbol)
             return False
         with _LOCK:
+            stage = "oauth_folder"
             client = Drive()
+            stage = "list"
             before = client.list()
             # Validate FIFO timestamps before any mutation. If a previous cleanup
             # failed, stop further uploads instead of growing unboundedly.
@@ -258,25 +315,32 @@ def store_cloud_report(symbol, path, price_session):
             now = _now()
             for item in before:
                 if _fresh(item, symbol, session, now):
+                    stage = "existing_readback"
                     client.download(item)
+                    LOG.info("MSK_DRIVE_REUSED symbol=%s session=%s", symbol, session)
                     return True
             if session != _session():
+                LOG.warning("MSK_DRIVE_ARCHIVE_SKIPPED symbol=%s reason=SESSION_CHANGED", symbol)
                 return False
+            stage = "upload"
             props = {"archive": TAG, "symbol": symbol, "session": session,
                      "generatedAt": now.isoformat(), "sha256": digest}
             uploaded = client.upload({"name": f"{symbol}_{session}_{now:%Y%m%dT%H%M%S%fZ}.pdf",
                                       "mimeType": "application/pdf", "parents": [FOLDER],
                                       "appProperties": props}, raw)
+            stage = "readback"
             checked = client.get(uploaded["id"])
             if not _managed(checked) or checked.get("appProperties") != props:
                 raise ValueError("Upload metadata not verified")
             if client.download(checked) != raw:
                 raise ValueError("Upload bytes not verified")
+            stage = "reconcile"
             after = client.list()
             if ({x["id"] for x in after} != {x["id"] for x in before} | {checked["id"]}
                     or len(after) != len(before) + 1):
                 raise ValueError("Concurrent archive mutation; no deletion")
             if len(after) > LIMIT:
+                stage = "retention"
                 victim = ordered[0]
                 client.delete(victim)
                 remaining = client.list()
@@ -285,7 +349,10 @@ def store_cloud_report(symbol, path, price_session):
             LOG.info("MSK_DRIVE_ARCHIVED symbol=%s session=%s", symbol, session)
             return True
     except Exception as exc:
-        LOG.warning("MSK_DRIVE_ARCHIVE_FAILED type=%s", type(exc).__name__)
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        status = status if type(status) is int and 100 <= status <= 599 else "-"
+        LOG.warning("MSK_DRIVE_ARCHIVE_FAILED stage=%s type=%s http=%s",
+                    stage, type(exc).__name__, status)
         return False
     finally:
         if client:

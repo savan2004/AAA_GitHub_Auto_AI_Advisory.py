@@ -93,6 +93,42 @@ class ChartReleaseTests(unittest.TestCase):
         data.loc[data.index[43:48], "High"] = [100.6,100.7,101.,100.7,100.6]
         self.assertIsNone(chart_plan(data, "BUY", 2.))
 
+    def test_plan_reasons_distinguish_missing_structure_and_low_rr(self):
+        diag = {}
+        self.assertIsNone(chart_plan(history(), "WAIT", 2., diagnostics=diag))
+        self.assertEqual(diag["reason"], "no_directional_signal")
+        data = history()
+        data["High"] = 103.
+        self.assertIsNone(chart_plan(data, "BUY", 2., diagnostics=diag))
+        self.assertEqual(diag["reason"], "missing_structure_or_stop_too_tight")
+        data = history()
+        data.loc[data.index[43:48], "High"] = [100.6,100.7,101.,100.7,100.6]
+        self.assertIsNone(chart_plan(data, "BUY", 2., diagnostics=diag))
+        self.assertEqual(diag["reason"], "nearest_structure_below_minimum_rr")
+        self.assertIsNotNone(chart_plan(history(), "BUY", 2., diagnostics=diag))
+        self.assertEqual(diag["reason"], "structure_and_rr_valid")
+
+    def test_directional_rounding_never_erodes_stop_or_overshoots_target(self):
+        from msk_target_levels import calculate_targets
+        data = history()
+        data.loc[data.index[40], "Low"] = 99.207
+        data.loc[data.index[20], "High"] = 110.207
+        atr = 2.03
+        raw = calculate_targets(data.High.to_numpy(), data.Low.to_numpy(),
+                                len(data)-1, entry=100., atr=atr, side="LONG")
+        sl,t1,t2,rr1,rr2 = chart_plan(data, "BUY", atr)
+        self.assertLessEqual(sl, raw["sl"])
+        self.assertLessEqual(t1, raw["t1"])
+        self.assertAlmostEqual(rr1, (t1-100.)/(100.-sl))
+        short = data.copy()
+        short["High"], short["Low"] = 200.-data["Low"], 200.-data["High"]
+        raw = calculate_targets(short.High.to_numpy(), short.Low.to_numpy(),
+                                len(short)-1, entry=100., atr=atr, side="SHORT")
+        sl,t1,t2,rr1,rr2 = chart_plan(short, "SELL", atr)
+        self.assertGreaterEqual(sl, raw["sl"])
+        self.assertGreaterEqual(t1, raw["t1"])
+        self.assertAlmostEqual(rr1, (100.-t1)/(sl-100.))
+
     def test_wire_prices_reject_wrong_direction_and_zero_risk(self):
         self.assertIsNone(rounded_levels("BUY", 100, 0, 0, 0))
         self.assertEqual(rounded_levels("SELL",100,101,90,0), (101.,90.,None,10.,None))

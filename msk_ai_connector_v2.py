@@ -13,6 +13,8 @@ from typing import Mapping
 
 import requests
 
+from msk_ai_output_guard_v3 import check_completion, gemini_text, check_visible_text
+
 
 GROQ_MODEL = "openai/gpt-oss-120b"
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -104,8 +106,7 @@ def _numbers(text):
 
 
 def _response_text(obj, provider):
-    if not isinstance(obj, dict):
-        raise ValueError("AI_PROVIDER_SCHEMA")
+    check_completion(obj, provider)
     if provider in ("groq", "openai"):
         choices = obj.get("choices")
         if not isinstance(choices, list) or not choices:
@@ -118,8 +119,7 @@ def _response_text(obj, provider):
             raise ValueError("AI_PROVIDER_SCHEMA")
         content = candidates[0].get("content") if isinstance(candidates[0], dict) else None
         parts = content.get("parts", []) if isinstance(content, dict) else []
-        text = "".join(str(x.get("text") or "") for x in parts
-                       if isinstance(x, dict)) if isinstance(parts, list) else None
+        text = gemini_text(parts)
     else:
         text = obj.get("response")
     if not isinstance(text, str) or not 1 <= len(text.strip()) <= _MAX_OUTPUT_CHARS:
@@ -176,7 +176,7 @@ def _request(provider, key, messages, tokens, model, transport):
         payload = response.json()
     except (ValueError, TypeError):
         raise ValueError("AI_PROVIDER_SCHEMA") from None
-    return _response_text(payload, provider)
+    return check_visible_text(_response_text(payload, provider), key)
 
 
 def request_ai(messages, max_tokens=500, system="", *, financial=False,
@@ -196,7 +196,8 @@ def request_ai(messages, max_tokens=500, system="", *, financial=False,
         return AIResponse("", "", "", "AI_PROVIDER_NOT_CONFIGURED_OR_ALLOWED", ())
     post = transport or requests.post
     attempts = []
-    source_numbers = _numbers(" ".join(x["content"] for x in payload))
+    # Prior assistant output and system instructions are not financial evidence.
+    source_numbers = _numbers(" ".join(x["content"] for x in payload if x["role"] == "user"))
     for provider, key, default_model in providers:
         model = env.get("MSK_" + provider.upper() + "_MODEL", default_model)
         # Explicitly reject retired IDs rather than wasting requests/quotas.

@@ -112,6 +112,15 @@ def verified_pdf_history(symbol, base_fetch, expected_session, alternate_fetch=N
     # Keep the existing publisher's full-year minimum. Other research reports
     # previously accepted 60 sessions; do not silently increase their minimum.
     minimum = 200 if symbol in ("SBIN", "DLF") else 60
+    # Only the explicitly configured scheduled public-report worker uses disk
+    # snapshots. Interactive and private calls preserve their existing path.
+    import os
+    snapshot = os.environ.get("MSK_PUBLIC_HISTORY_PATH", "")
+    if snapshot and symbol in ("SBIN", "DLF") and alternate_fetch is None:
+        from msk_public_incremental_history import refresh_public_history
+        incremental = refresh_public_history(symbol, expected_session, snapshot)
+        if incremental is not None:
+            return incremental
     try:
         original = base_fetch(symbol, "1y")
         verified = normalize_real_history(original, expected_session, minimum=minimum)

@@ -29,6 +29,7 @@ from io import StringIO
 
 import requests
 import pandas as pd
+from msk_history_quality import clean_daily_history
 
 logger = logging.getLogger(__name__)
 
@@ -67,19 +68,33 @@ _HEADERS = {
 
 _mem: Dict[str, dict] = {}
 _mem_lock = threading.Lock()
+_MEM_MAX_ENTRIES = 128
 
 
 def _mem_get(key: str, ttl: int):
     with _mem_lock:
         entry = _mem.get(key)
-        if entry and time.time() - entry["ts"] < ttl:
+        if entry and 0 <= time.time() - entry["ts"] < min(ttl, entry.get("ttl", ttl)):
             return entry["val"]
+        if entry and not 0 <= time.time() - entry["ts"] < entry.get("ttl", ttl):
+            _mem.pop(key, None)
     return None
 
 
-def _mem_set(key: str, val, ttl: int):  # noqa: ARG001
+def _mem_set(key: str, val, ttl: int, *, stored_at=None):
+    now = time.time()
+    ts = now if stored_at is None else stored_at
+    if not 0 <= now - ts < ttl:
+        return
     with _mem_lock:
-        _mem[key] = {"val": val, "ts": time.time()}
+        _mem.pop(key, None)
+        _mem[key] = {"val": val, "ts": ts, "ttl": ttl}
+        if len(_mem) > _MEM_MAX_ENTRIES:
+            for old in [k for k, e in _mem.items()
+                        if not 0 <= now-e["ts"] < e.get("ttl", ttl)]:
+                _mem.pop(old, None)
+        while len(_mem) > _MEM_MAX_ENTRIES:
+            _mem.pop(next(iter(_mem)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -94,8 +109,8 @@ def _disk_get(key: str, ttl: int):
         with _disk_lock:
             with shelve.open(CACHE_FILE, flag="r") as db:
                 entry = db.get(key)
-        if entry and time.time() - entry["ts"] < ttl:
-            return entry["val"]
+        if entry and 0 <= time.time() - entry["ts"] < min(ttl, entry.get("ttl", ttl)):
+            return entry
     except Exception:
         pass
     return None
@@ -105,7 +120,7 @@ def _disk_set(key: str, val, ttl: int = 0):  # noqa: ARG001
     try:
         with _disk_lock:
             with shelve.open(CACHE_FILE, flag="c") as db:
-                db[key] = {"val": val, "ts": time.time()}
+                db[key] = {"val": val, "ts": time.time(), "ttl": ttl}
     except Exception:
         pass
 
@@ -115,10 +130,12 @@ def cached_get(key: str, ttl: int):
     v = _mem_get(key, ttl)
     if v is not None:
         return v
-    v = _disk_get(key, ttl)
-    if v is not None:
-        _mem_set(key, v, ttl)   # promote to memory
-    return v
+    entry = _disk_get(key, ttl)
+    if entry is None:
+        return None
+    _mem_set(key, entry["val"], min(ttl, entry.get("ttl", ttl)),
+             stored_at=entry["ts"])
+    return entry["val"]
 
 
 def cached_set(key: str, val, ttl: int):
@@ -309,7 +326,8 @@ def _yahoo_v10_fundamentals(symbol: str) -> Optional[dict]:
                 "pb":             raw(ks, "priceToBook"),
                 "roe":            raw(fd, "returnOnEquity"),
                 "eps":            raw(ks, "trailingEps"),
-                "dividend_yield": raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield"),
+                "dividend_yield": (raw(sd, "dividendYield") if raw(sd, "dividendYield") is not None else raw(sd, "trailingAnnualDividendYield")),
+                "dividend_yield_unit": "fraction",
                 "high52":         raw(sd, "fiftyTwoWeekHigh"),
                 "low52":          raw(sd, "fiftyTwoWeekLow"),
                 "market_cap":     raw(pr, "marketCap"),
@@ -513,7 +531,7 @@ def _yfinance_hist(symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
         try:
             _wait_for_rate_slot()
             tk = yf.Ticker(symbol)
-            df = tk.history(period=period, auto_adjust=True, timeout=15)
+            df = tk.history(period=period, auto_adjust=False, timeout=15)
             if not df.empty:
                 df = df[["Open", "High", "Low", "Close", "Volume"]]
                 return df
@@ -545,9 +563,9 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
     yahoo_sym = raw if is_index or is_bse else f"{sym_clean}.NS"
 
     ttl = TTL_HIST if period not in ("5d", "2d", "1d") else TTL_PRICE
-    cache_key = f"hist_{yahoo_sym}_{period}"
+    cache_key = f"hist_raw_validated_v2_{yahoo_sym}_{period}"
 
-    cached = cached_get(cache_key, ttl)
+    cached = clean_daily_history(cached_get(cache_key, ttl))
     if cached is not None:
         logger.debug(f"[Cache HIT] {cache_key}")
         return cached
@@ -558,11 +576,11 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
         "1y": "1y", "6mo": "6mo", "3mo": "3mo",
         "2mo": "3mo", "1mo": "1mo", "5d": "5d", "2d": "5d",
     }.get(period, "1y")
-    df = _yahoo_v8_hist(yahoo_sym, period=yf_period)
+    df = clean_daily_history(_yahoo_v8_hist(yahoo_sym, period=yf_period))
 
     if (df is None or df.empty) and not is_index and not is_bse:
         logger.info("[DataEngine] Yahoo v8 unavailable for %s; trying NSE equity history", sym_clean)
-        df = _nse_hist(sym_clean)
+        df = clean_daily_history(_nse_hist(sym_clean))
 
     if (df is None or df.empty) and not is_index:
         logger.info("[DataEngine] earlier sources unavailable for %s; trying Stooq", sym_clean)
@@ -570,15 +588,15 @@ def get_hist(symbol: str, period: str = "1y") -> pd.DataFrame:
             "1y": 365, "6mo": 180, "3mo": 90,
             "2mo": 60, "1mo": 30, "5d": 5, "2d": 2,
         }
-        df = _stooq_hist(yahoo_sym, period_days=days_map.get(period, 365))
+        df = clean_daily_history(_stooq_hist(yahoo_sym, period_days=days_map.get(period, 365)))
 
     if df is None or df.empty:
         logger.info(f"[DataEngine] Stooq failed for {sym_clean} — trying yfinance (last resort)")
         time.sleep(_jitter(3))
-        df = _yfinance_hist(yahoo_sym, period=period)
+        df = clean_daily_history(_yfinance_hist(yahoo_sym, period=period))
 
     if df is not None and not df.empty:
-        cached_set(cache_key, df, ttl)
+        cached_set(cache_key, df.copy(), ttl)
         logger.info(f"[DataEngine] {sym_clean} history: {len(df)} rows fetched")
         return df
 
@@ -647,8 +665,12 @@ def _verified_quote_payload(payload, source, expected_symbol, *, now_epoch=None)
                else _CLOSED_SESSION_QUOTE_AGE_SECONDS)
     if age < -120 or age > max_age:
         return None
+    if is_open and (stamp_ist.date() != now.date() or
+                    (stamp_ist.hour, stamp_ist.minute) < (9, 15)):
+        return None
     return {
         "price": price,
+        "provider_symbol": reported_symbol.upper(),
         "quote_timestamp": stamp.timestamp(),
         "quote_asof_ist": stamp_ist.isoformat(timespec="seconds"),
         "quote_source": source,
@@ -732,7 +754,8 @@ def get_info(symbol: str) -> dict:
     is_index = raw.startswith("^")
     sym_clean = raw.removesuffix(".NS").removesuffix(".NSE")
     yahoo_sym = raw if is_index or raw.endswith(".BO") else f"{sym_clean}.NS"
-    cache_key = f"info_v3_roe_unit_{yahoo_sym}"
+    cache_key = (f"info_v3_roe_unit_{yahoo_sym}" if is_index else
+                 f"info_v4_explicit_yield_unit_{yahoo_sym}")
 
     cached = cached_get(cache_key, TTL_PRICE if is_index else TTL_FUND)
     if cached is not None:
@@ -846,24 +869,15 @@ def clear_cache(symbol: Optional[str] = None):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def calc_rsi(close: pd.Series, period: int = 14) -> float:
-    """RSI(14) — self-contained so callers don't need to import calc functions."""
-    if len(close) < period + 1:
-        return 50.0
-    delta     = close.diff()
-    gain      = delta.clip(lower=0)
-    loss      = -delta.clip(upper=0)
-    avg_gain  = gain.rolling(period).mean()
-    avg_loss  = loss.rolling(period).mean()
-    avg_loss  = avg_loss.replace(0, 1e-10)
-    rsi       = 100 - (100 / (1 + avg_gain / avg_loss))
-    val       = rsi.iloc[-1]
-    return round(float(val), 1) if pd.notna(val) else 50.0
+    """Shared Wilder RSI; NaN means insufficient or invalid history."""
+    from msk_core_data_guard import wilder_rsi_series
+    values = wilder_rsi_series(close, period)
+    return round(float(values.iloc[-1]), 1) if len(values) else float("nan")
 
 
 def calc_ema(close: pd.Series, span: int) -> float:
-    ema = close.ewm(span=span, adjust=False).mean()
-    val = ema.iloc[-1]
-    return round(float(val), 2) if pd.notna(val) else float(close.iloc[-1])
+    from technical_indicators import calc_ema as shared_ema
+    return shared_ema(close, span)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

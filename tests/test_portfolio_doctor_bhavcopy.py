@@ -115,6 +115,35 @@ class BhavcopySafeguards(unittest.TestCase):
         self.assertEqual(check(archive(duplicate=True)), {})
         self.assertEqual(check(b"not a zip"), {})
 
+        # A blocked official host can use the same-date official mirror.
+        import requests
+        for failure in ("403", "timeout"):
+            calls = []
+            def mirror_get(url, **kw):
+                calls.append(url)
+                if len(calls) == 1:
+                    return SimpleNamespace(ok=False)
+                if len(calls) == 2:
+                    if failure == "timeout":
+                        raise requests.Timeout("archive timeout")
+                    return SimpleNamespace(ok=False, status_code=403)
+                return SimpleNamespace(ok=True, content=archive())
+            self.assertEqual(nse.fetch_nse_bhavcopy_rows(
+                TUESDAY, ["SAMPLEA"], get=mirror_get), {"SAMPLEA": records(TUESDAY)})
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(calls[1], nse.FINAL_ARCHIVE_HOSTS[0] +
+                             "/content/cm/BhavCopy_NSE_CM_0_0_0_20261117_F_0000.csv.zip")
+            self.assertEqual(calls[2], nse.FINAL_ARCHIVE_HOSTS[1] +
+                             "/content/cm/BhavCopy_NSE_CM_0_0_0_20261117_F_0000.csv.zip")
+
+        calls = []
+        def unavailable(url, **kw):
+            calls.append(url)
+            return SimpleNamespace(ok=False, status_code=403)
+        self.assertEqual(nse.fetch_nse_bhavcopy_rows(
+            TUESDAY, ["SAMPLEA"], get=unavailable), {})
+        self.assertEqual(len(calls), 3)
+
     def test_file_not_published_or_equity_absent_does_not_invent(self):
         none = nse.fetch_nse_bhavcopy_rows(
             TUESDAY, ["SAMPLEA"], get=lambda *_a, **_kw:
@@ -194,6 +223,201 @@ class BhavcopySafeguards(unittest.TestCase):
         self.assertIsNone(nse.stitch_one_verified_day(
             price_frame(), prior=records(MONDAY), latest=latest,
             previous_day=MONDAY, expected_day=TUESDAY, now=NOW))
+
+    def test_ten_symbol_archive_is_one_request_and_eleven_is_rejected(self):
+        wanted = ["DUMMY%05d" % i for i in range(10)]
+        calls = []
+        def get(url, **kw):
+            calls.append(url)
+            return SimpleNamespace(ok=True, content=csv_bytes())
+        self.assertEqual(set(nse.fetch_nse_bhavcopy_rows(TUESDAY, wanted, get=get)), set(wanted))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(nse.fetch_nse_bhavcopy_rows(TUESDAY, wanted + ["SAMPLEA"], get=get), {})
+        self.assertEqual(len(calls), 1)
+
+    def test_strict_overlap_rejects_price_volume_and_prev_close_mismatch(self):
+        for field, value in (("Close", 100.2), ("Volume", 10001)):
+            prior = dict(records(MONDAY), **{field: value})
+            self.assertIsNone(nse.stitch_one_verified_day(
+                price_frame(), prior=prior, latest=records(TUESDAY),
+                previous_day=MONDAY, expected_day=TUESDAY, now=NOW))
+        latest = dict(records(TUESDAY), PreviousClose=100.2)
+        self.assertIsNone(nse.stitch_one_verified_day(
+            price_frame(), prior=records(MONDAY), latest=latest,
+            previous_day=MONDAY, expected_day=TUESDAY, now=NOW))
+
+    def test_doctor_five_and_ten_stale_holdings_recovered_in_two_session_fetches(self):
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        for count in (5, 10):
+            with self.subTest(count=count):
+                holdings = [{"symbol": "SAMPLE%02d" % i, "qty": 2, "buy": 90}
+                            for i in range(count)]
+                symbols = [h["symbol"] for h in holdings]
+                frames = {s: price_frame() for s in symbols}
+                def fetch(day, wanted):
+                    self.assertEqual(set(wanted), set(symbols))
+                    return {s: records(day) for s in wanted}
+                with patch("market_data.bulk_history", return_value=frames), \
+                     patch.object(nse, "fetch_nse_bhavcopy_rows", side_effect=fetch) as official, \
+                     patch.object(doctor, "recover_fresh_daily_for_doctor") as alternate, \
+                     patch.object(doctor, "datetime", Clock):
+                    rows, verified = doctor.price_holdings(holdings, include_frames=True)
+                self.assertEqual(len(rows), count)
+                self.assertEqual(len(verified), count)
+                self.assertEqual(official.call_count, 2)
+                alternate.assert_not_called()
+                self.assertTrue(all(row["close"] == 103 and row["date"] == TUESDAY.isoformat()
+                                    and row["rsi14"] is not None and row["ema50"] is not None
+                                    and "NSE EOD bhavcopy" in row["price_source"] for row in rows))
+                self.assertAlmostEqual(sum(row["weight"] for row in rows), 100.)
+                self.assertTrue(all(row["pnl"] == 26 for row in rows))
+
+    def test_public_probe_accepts_same_date_streamed_archive_only(self):
+        from scripts.msk_doctor_public_eod_probe import verify_final_archive
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        def transport(url, **kwargs):
+            return SimpleNamespace(status_code=403, ok=False)
+        def streamed(day, wanted):
+            self.assertEqual(wanted, ["INFY.NS"])
+            return {"INFY.NS": records(day)}
+        with patch("requests.get", side_effect=transport), \
+             patch("smart_chart_eod_recovery.final_archive_rows", side_effect=streamed) as fetch:
+            verify_final_archive(complete, now=NOW, expected=TUESDAY)
+            self.assertEqual(fetch.call_count, 2)
+        with patch("requests.get", side_effect=transport), \
+             patch("smart_chart_eod_recovery.final_archive_rows", return_value={}):
+            with self.assertRaisesRegex(SystemExit, "archive_unverified"):
+                verify_final_archive(complete, now=NOW, expected=TUESDAY)
+
+    def test_public_probe_switches_from_conflicting_fresh_to_exact_official(self):
+        from scripts.msk_doctor_public_eod_probe import verify_final_archive
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        primary = complete.copy()
+        primary.loc[primary.index[-1], "Volume"] = 9999
+        with patch("requests.get", return_value=SimpleNamespace(status_code=403, ok=False)), \
+             patch("smart_chart_eod_recovery.final_archive_rows",
+                   side_effect=lambda day, wanted: {"INFY.NS": records(day)}), \
+             patch("builtins.print") as output:
+            recovered = verify_final_archive(primary, now=NOW, expected=TUESDAY,
+                alternate_fetch=lambda: self.fail("prior verified; no second provider needed"))
+        self.assertEqual(recovered.iloc[-1]["Volume"], 10000)
+        self.assertEqual(primary.iloc[-1]["Volume"], 9999)
+        self.assertEqual(recovered.attrs["doctor_eod_path"], "primary:official-recovery-conflict")
+        self.assertTrue(any("official_ohlcv_mismatch" in str(call) for call in output.call_args_list))
+
+    def test_public_probe_switches_history_only_when_primary_overlap_fails(self):
+        from scripts.msk_doctor_public_eod_probe import verify_final_archive
+        primary = price_frame()
+        primary.loc[primary.index[-1], "Volume"] = 9999
+        attempts = []
+        def alternate():
+            attempts.append(True)
+            return price_frame()
+        with patch("requests.get", return_value=SimpleNamespace(status_code=403, ok=False)), \
+             patch("smart_chart_eod_recovery.final_archive_rows",
+                   side_effect=lambda day, wanted: {"INFY.NS": records(day)}):
+            recovered = verify_final_archive(primary, now=NOW, expected=TUESDAY,
+                                             alternate_fetch=alternate)
+            self.assertEqual(attempts, [True])
+            self.assertEqual(recovered.attrs["doctor_eod_path"], "alternate:official-recovery-stale")
+            self.assertEqual(recovered.iloc[-1]["Close"], 103)
+            with self.assertRaisesRegex(SystemExit, "prior_overlap_or_continuity"):
+                verify_final_archive(primary, now=NOW, expected=TUESDAY,
+                                     alternate_fetch=lambda: primary)
+            duplicate = pd.concat([price_frame(), price_frame().iloc[-1:]])
+            with self.assertRaisesRegex(SystemExit, "prior_overlap_or_continuity"):
+                verify_final_archive(duplicate, now=NOW, expected=TUESDAY,
+                                     alternate_fetch=lambda: None)
+
+    def test_public_probe_missing_primary_and_failed_alternative_never_invent(self):
+        from scripts.msk_doctor_public_eod_probe import verify_final_archive
+        with patch("requests.get", return_value=SimpleNamespace(status_code=403, ok=False)), \
+             patch("smart_chart_eod_recovery.final_archive_rows",
+                   side_effect=lambda day, wanted: {"INFY.NS": records(day)}):
+            recovered = verify_final_archive(None, now=NOW, expected=TUESDAY,
+                                             alternate_fetch=price_frame)
+            self.assertEqual(recovered.iloc[-1]["Close"], 103)
+            def broken():
+                raise TimeoutError("offline")
+            with self.assertRaisesRegex(SystemExit, "prior_overlap_or_continuity"):
+                verify_final_archive(None, now=NOW, expected=TUESDAY, alternate_fetch=broken)
+
+    def test_doctor_live_fresh_conflict_recovers_exact_official_without_mutating_input(self):
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        bad = complete.copy()
+        bad.loc[bad.index[-1], "Volume"] = 9999
+        with patch("market_data.bulk_history", return_value={"SAMPLEA": bad}), \
+             patch.object(nse, "fetch_nse_bhavcopy_rows",
+                 side_effect=lambda day, wanted: {"SAMPLEA": records(day)}) as fetch, \
+             patch.object(doctor, "recover_fresh_daily_for_doctor") as alt, \
+             patch.object(doctor, "datetime", Clock):
+            rows, frames = doctor.price_holdings(
+                [{"symbol":"SAMPLEA", "qty":2, "buy":90}], include_frames=True)
+        self.assertEqual(fetch.call_count, 2)
+        alt.assert_not_called()
+        self.assertEqual(rows[0]["close"], 103)
+        self.assertEqual(frames["SAMPLEA"].iloc[-1]["Volume"], 10000)
+        self.assertEqual(bad.iloc[-1]["Volume"], 9999)
+        self.assertTrue(rows[0]["price_source"].startswith("NSE EOD"))
+
+    def test_doctor_live_bad_prior_uses_only_officially_reconciled_alternate(self):
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        bad = complete.copy()
+        bad.loc[bad.index[-2:], "Volume"] = 9999
+        actual_recover = doctor.recover_fresh_daily_for_doctor
+        for alternate, succeeds in ((price_frame(), True), (bad, False)):
+            with self.subTest(succeeds=succeeds), \
+                 patch("market_data.bulk_history", return_value={"SAMPLEA": bad}), \
+                 patch.object(nse, "fetch_nse_bhavcopy_rows",
+                     side_effect=lambda day, wanted: {"SAMPLEA": records(day)}) as fetch, \
+                 patch.object(doctor, "recover_fresh_daily_for_doctor",
+                     side_effect=lambda sym, **kw: actual_recover(
+                         sym, fetchers=(lambda: alternate,), **kw)) as alt, \
+                 patch.object(doctor, "datetime", Clock):
+                holdings = [{"symbol":"SAMPLEA", "qty":2, "buy":90, "exchange":"NSE"}]
+                if succeeds:
+                    rows = doctor.price_holdings(holdings)
+                    self.assertEqual(rows[0]["close"], 103)
+                    self.assertIn("alternate prior-session", rows[0]["price_source"])
+                else:
+                    with self.assertRaisesRegex(doctor.PortfolioDoctorError, "NO_PRICES"):
+                        doctor.price_holdings(holdings)
+                self.assertEqual(fetch.call_count, 2)
+                alt.assert_called_once()
+
+    def test_doctor_live_matching_current_is_one_batch_and_conflict_without_prior_fails(self):
+        complete = nse.stitch_one_verified_day(price_frame(), prior=records(MONDAY),
+            latest=records(TUESDAY), previous_day=MONDAY, expected_day=TUESDAY, now=NOW)
+        bad = complete.copy()
+        bad.loc[bad.index[-1], "Volume"] = 9999
+        with patch.object(nse, "fetch_nse_bhavcopy_rows",
+                          return_value={"SAMPLEA": records(TUESDAY)}) as fetch:
+            confirmed, repaired, conflicts = nse.crosscheck_completed_doctor_frames(
+                {"SAMPLEA": complete}, ["SAMPLEA"], now=NOW)
+            self.assertEqual(confirmed, {"SAMPLEA"})
+            self.assertEqual((repaired, conflicts), ({}, {}))
+            fetch.assert_called_once()
+        with patch.object(nse, "fetch_nse_bhavcopy_rows",
+                          side_effect=[{"SAMPLEA": records(TUESDAY)}, {}]):
+            confirmed, repaired, conflicts = nse.crosscheck_completed_doctor_frames(
+                {"SAMPLEA": bad}, ["SAMPLEA"], now=NOW)
+            self.assertEqual((confirmed, repaired), (set(), {}))
+            self.assertEqual(conflicts["SAMPLEA"], (None, records(TUESDAY)))
 
     def test_request_data_kept_in_memory_and_no_sensitive_logging(self):
         path = Path(nse.__file__).read_text(encoding="utf-8")

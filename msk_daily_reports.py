@@ -23,6 +23,7 @@ NAMES = {
 WEIGHTS = (0.30, 0.25, 0.20, 0.15, 0.10)
 VERDICT_FIVE = "SCREENING COMPLETE — 5 RESEARCH CANDIDATES"
 VERDICT_NONE = "SCREENING COMPLETE — NO QUALIFYING SETUP TODAY"
+VERDICT_INCOMPLETE = "SCREENING INCOMPLETE — VERIFIED DATA PENDING"
 
 
 def parse_request(message):
@@ -344,8 +345,29 @@ def format_report(profile, records, stats, session, *, now=None, breadth=None, q
     day = date.fromisoformat(str(session))
     if day > now.date():
         raise ValueError("future_candle_is_not_valid")
-    ranked = _ranked(profile, records, stats, day)
-    quotes = quotes or {}
+    # Production snapshots always supply full-index coverage. Never turn
+    # an incomplete collection into a market verdict. Also check the live
+    # underlying rows against saved summary counts before showing rankings.
+    incomplete = False
+    coverage_note = ""
+    if "expected" in stats:
+        expected = stats.get("expected")
+        matching = [r for r in records.values() if isinstance(r,dict)
+                    and r.get("membership_hash")==stats.get("membership_hash")]
+        reviewed = sum(r.get("fund_attempted") is True for r in matching)
+        fresh = sum(isinstance(r.get("technical"),dict)
+                    and r["technical"].get("asof")==str(day)
+                    for r in matching)
+        from overnight_index_reports import PRICE_REQUIRED
+        incomplete = (type(expected) is not int or expected <= 0
+                      or len(matching)!=expected or reviewed!=expected
+                      or fresh < PRICE_REQUIRED*expected
+                      or reviewed!=stats.get("reviewed")
+                      or fresh!=stats.get("price_fresh"))
+        coverage_note = (f"Financial reviews: {reviewed}/{expected}; "
+                         f"current-session price records: {fresh}/{expected}.")
+    ranked = [] if incomplete else _ranked(profile, records, stats, day)
+    quotes = {} if incomplete else (quotes or {})
     if profile == "conservative" and len(ranked) == 5:
         return _large_cap_telegram_print(ranked, day, now, breadth, quotes, cap)
     label = (f"As of {day.isoformat()} close" if day == now.date()
@@ -363,7 +385,10 @@ def format_report(profile, records, stats, session, *, now=None, breadth=None, q
         "🎯 <b>TOP 5 RANKED CANDIDATES</b>",
         "━━━━━━━━━━━━━━━━━━━━━━━",
     ]
-    if len(ranked) < 5:
+    if incomplete:
+        lines.append("Verified index research is incomplete. No ranking issued.")
+        lines.append(coverage_note)
+    elif len(ranked) < 5:
         lines.append(f"NO QUALIFYING SETUP TODAY: {len(ranked)}/5 companies "
                      "have complete financial, price, risk and liquidity evidence.")
     else:
@@ -409,16 +434,22 @@ def format_report(profile, records, stats, session, *, now=None, breadth=None, q
             ])
     lines.extend(["", "━━━━━━━━━━━━━━━━━━━━━━━",
                   "🧠 <b>MARKET CONTEXT</b>"])
-    lines.extend(_context(breadth, day, segment, cap))
+    if incomplete:
+        lines.append("Current-session stock levels are not fully verified.")
+    else:
+        lines.extend(_context(breadth, day, segment, cap))
     lines.extend(["", "✅ <b>ACTION SUMMARY</b>"])
     if len(ranked) == 5:
         watch = ", ".join(f"{sym} >₹{_num(t['entry']):,.2f}" for _, sym, _, t in ranked)
         lines.append("Watch: " + watch)
         lines.append("Enter only after confirmed breakout, supporting volume and stop risk within limit.")
+    elif incomplete:
+        lines.append("WAIT — awaiting verified data recovery and report refresh.")
     else:
         lines.append("Keep a WAIT stance until five data-complete, liquid candidates emerge.")
         lines.append("No BUY signal from missing or stale evidence.")
-    lines.extend(["", "⛔ STATUS: " + (VERDICT_FIVE if len(ranked) == 5 else VERDICT_NONE),
+    lines.extend(["", "⛔ STATUS: " + (VERDICT_INCOMPLETE if incomplete else
+                                     VERDICT_FIVE if len(ranked) == 5 else VERDICT_NONE),
                   f"📍 Data as of {day.isoformat()}. Educational purposes only.",
                   "━━━━━━━━━━━━━━━━━━━━━━━"])
     out = "\n".join(lines)
@@ -437,6 +468,8 @@ def render_latest_profile(profile, *, now=None):
         report = store.get_report(profile)
         if not report:
             raise ValueError("no_completed_market_session")
+        if str(report.get("day")) != str(_session(now=now)):
+            raise ValueError("no_current_completed_market_session")
         if profile in ("moderate", "aggressive"):
             # Midcap150 and Smallcap250 old ledgers must never be relabeled
             # as current official 100-member rankings. Verify exact session,

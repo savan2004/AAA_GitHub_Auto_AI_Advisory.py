@@ -95,8 +95,9 @@ class DoctorRecoveryTests(unittest.TestCase):
         self.assertEqual(result[0]["weight"], 100.0)
 
     def test_verified_public_bhavcopy_repairs_primary_without_alt_provider(self):
-        fake = SimpleNamespace(bulk_history=lambda *_a, **_kw: {"SAMPLEA": self.old})
-        with patch.dict(sys.modules, {"market_data": fake}), \
+        # Mock only the provider call, not the entire central module; exercise
+        # the actual shared recovery wrapper and keep the no-alternate assertion.
+        with patch("market_data.bulk_history", return_value={"SAMPLEA": self.old}), \
              patch("portfolio_doctor_bhavcopy.recover_from_public_bhavcopy",
                    return_value={"SAMPLEA": self.new}) as official, \
              patch.object(doctor, "recover_fresh_daily_for_doctor",
