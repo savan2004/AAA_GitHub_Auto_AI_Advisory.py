@@ -73,6 +73,56 @@ def fetch_tej_history(symbol:str, session:date, *, http=None):
         return None
 
 
+def _verified_full_history_alternate(symbol, session, recovery, *, providers=None):
+    """Replace an unusable history, never splice incompatible price bases.
+
+    Confirm both final sessions against the SAME shared official archives.
+    An independently downloaded history cannot bypass exact date, OHLCV,
+    previous-close continuity or minimum history requirements.
+    """
+    from msk_chart_release import validated_daily_history, REQUIRED
+    from portfolio_doctor_live import previous_doctor_session
+    from smart_chart_eod_recovery import _matches
+    from smart_chart_nse_history import official_nse_chart_history
+
+    day=date.fromisoformat(str(session))
+    prior_day=previous_doctor_session(day)
+    ticker=symbol+".NS"
+    if providers is None:
+        providers=(
+            ("NSE historical API",lambda:official_nse_chart_history(ticker,str(day))),
+            ("TejHQ / NSE bhavcopy",lambda:fetch_tej_history(symbol,day)),
+        )
+    # Reuse existing official files; do not make two downloads per stock.
+    for stamp in (day,prior_day):
+        if stamp not in recovery.archives:
+            recovery.archives[stamp]=recovery.fetch(stamp,recovery.symbols)
+    current=recovery.archives[day].get(ticker)
+    previous=recovery.archives[prior_day].get(ticker)
+    if not current or not previous:
+        return None
+    if not _matches(previous["Close"],current["PreviousClose"]):
+        return None
+    if abs(current["Open"]/current["PreviousClose"]-1)>.40:
+        return None
+    for label,provider in providers:
+        try:
+            good=validated_daily_history(provider(),str(day))
+            if good is None or len(good)<80 or good.index[-2].date()!=prior_day:
+                continue
+            for row,official in ((good.iloc[-2],previous),(good.iloc[-1],current)):
+                if (any(not _matches(row[k],official[k]) for k in REQUIRED if k!="Volume")
+                        or float(row["Volume"])!=float(official["Volume"])):
+                    break
+            else:
+                good.attrs["history_source"]=label+" + NSE final overlap"
+                print(f"TOP5_FULL_HISTORY_RECOVERY_OK symbol={symbol} source={label}",flush=True)
+                return good
+        except Exception as exc:
+            print(f"TOP5_FULL_HISTORY_UNAVAILABLE symbol={symbol} source={label} type={type(exc).__name__}",flush=True)
+    return None
+
+
 def collect_completed_index_histories(symbols, session, *, batch_size=20,
                                       max_seconds=240, download=None):
     """Same raw, bounded batch and NSE recovery contract as Smart Chart.
@@ -145,6 +195,19 @@ def collect_completed_index_histories(symbols, session, *, batch_size=20,
                 accept(symbol,frame,frame.attrs.get("history_source","Yahoo chart hosts"))
         except Exception as exc:
             print(f"TOP5_ALTERNATE_UNAVAILABLE symbol={symbol} type={type(exc).__name__}",flush=True)
+    # If all Yahoo transports fail, obtain an independent complete history.
+    # Bound work to the remaining symbols and existing overall deadline.
+    for symbol in symbols:
+        if symbol in completed:
+            continue
+        if time.monotonic()-started >= max_seconds:
+            break
+        try:
+            frame=_verified_full_history_alternate(symbol,session,recovery)
+            if frame is not None:
+                accept(symbol,frame,frame.attrs["history_source"])
+        except Exception as exc:
+            print(f"TOP5_FULL_HISTORY_FAILED symbol={symbol} type={type(exc).__name__}",flush=True)
     print(f"TOP5_HISTORY_COVERAGE verified={len(completed)}/{len(symbols)} "
           f"missing={','.join(sym for sym in symbols if sym not in completed)}",flush=True)
     return completed

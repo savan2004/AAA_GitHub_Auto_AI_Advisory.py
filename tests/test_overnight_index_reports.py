@@ -599,12 +599,38 @@ class OvernightLedgerTests(unittest.TestCase):
         dates=pd.bdate_range(end=self.day,periods=100)
         fresh=pd.DataFrame(dict(Open=100.,High=101.,Low=99.,Close=100.,Volume=1000.),index=dates)
         with patch("smart_chart_eod_recovery.ArchiveRecovery") as recovery, \
-             patch("smart_chart_eod_recovery.yahoo_host_history",side_effect=[fresh,fresh.iloc[:-1]]) as alternate:
+             patch("smart_chart_eod_recovery.yahoo_host_history",side_effect=[fresh,fresh.iloc[:-1]]) as alternate, \
+             patch("overnight_index_sources._verified_full_history_alternate",return_value=None) as independent:
             recovery.return_value.return_value=None
             got=collect_completed_index_histories(["ONE","TWO","THREE"],self.day,
                 download=lambda **kw:pd.concat({"ONE.NS":fresh},axis=1))
         self.assertEqual(set(got),{"ONE","TWO"})
         self.assertEqual([c.args[0] for c in alternate.call_args_list],["TWO.NS","THREE.NS"])
+        self.assertEqual([c.args[0] for c in independent.call_args_list],["THREE"])
+
+    def test_independent_full_history_requires_two_official_overlaps(self):
+        import pandas as pd
+        from overnight_index_sources import _verified_full_history_alternate
+        from portfolio_doctor_live import previous_doctor_session
+        from smart_chart_eod_recovery import ArchiveRecovery
+        dates=pd.bdate_range(end=self.day,periods=100)
+        fresh=pd.DataFrame(dict(Open=100.,High=101.,Low=99.,Close=100.,Volume=1000.),index=dates)
+        prior=previous_doctor_session(self.day)
+        official=dict(Open=100.,High=101.,Low=99.,Close=100.,Volume=1000.,PreviousClose=100.)
+        fetch=Mock(return_value={"ONE.NS":official})
+        recovery=ArchiveRecovery(["ONE.NS"],self.day,fetch=fetch)
+        bad=fresh.copy()
+        bad.loc[bad.index[-2],"Volume"]=999.
+        bad2=fresh.copy()
+        bad2.loc[bad2.index[-1],"Close"]=99.5
+        providers=(("bad overlap",lambda:bad),("bad last",lambda:bad2))
+        self.assertIsNone(_verified_full_history_alternate("ONE",self.day,recovery,providers=providers))
+        got=_verified_full_history_alternate("ONE",self.day,recovery,
+                    providers=providers+(("valid",lambda:fresh),))
+        self.assertIsNotNone(got)
+        self.assertEqual(got.attrs["history_source"],"valid + NSE final overlap")
+        self.assertEqual(fetch.call_count,2)
+        self.assertEqual(set(recovery.archives),{self.day,prior})
 
     def test_cleaning_nan_and_store_documented_no_connection(self):
         self.assertIsNone(n._clean(float("nan")))
