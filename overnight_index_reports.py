@@ -197,7 +197,7 @@ def _member_hash(universe):
     return hashlib.sha256(",".join(sorted(universe["symbols"])).encode()).hexdigest()[:16]
 
 
-def collect_profile(profile, store, session=None, *, batch_size=50,
+def collect_profile(profile, store, session=None, *, batch_size=20,
                     delay_s=0.8, max_seconds=4.5 * 3600):
     """Attempt the FULL official index, always checkpointing each symbol.
 
@@ -206,7 +206,7 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
     """
     if profile not in INDEXES:
         raise ValueError("Unknown index profile")
-    from market_data import bulk_history
+    from overnight_index_sources import collect_completed_index_histories
     from top5_company_ratings import fetch_company_evidence
     from top5_technical_ratings import technical_candidate
 
@@ -216,23 +216,17 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
     symbols=tuple(universe["symbols"])
     identity=_member_hash(universe)
     saved=store.rows(session,profile)
-    # Data is downloaded for the whole index in bounded 50-stock chunks.
-    # Fresh prices still require bar-session validation later.
+    # Recover only missing histories with the proven Smart Chart route.
+    # Financial review and trade qualification remain separate.
     pending_price=[s for s in symbols
                    if s not in NONTRADABLE_INDEX_PLACEHOLDERS and
                    (not _fresh(saved.get(s,{}).get("technical"),session)
                     or saved.get(s,{}).get("membership_hash")!=identity)]
-    prices=bulk_history(pending_price,"6mo",chunk_size=batch_size,
-                        cache_ttl=0,adjusted=False,retries=1) if pending_price else {}
+    prices=collect_completed_index_histories(
+        pending_price,session,batch_size=batch_size,
+        max_seconds=min(240,max_seconds)) if pending_price else {}
     if not isinstance(prices,dict):
         prices={}
-
-    # Shared official archives: recover missing final candles once per date,
-    # not one archive download per constituent. Use raw OHLCV and the same
-    # exact-date/overlap/continuity gates as the verified Smart Chart.
-    from smart_chart_eod_recovery import ArchiveRecovery
-    import pandas as pd
-    recovery=ArchiveRecovery([sym+".NS" for sym in pending_price],session)
     examined=0
     for sym in symbols:
         old=saved.get(sym,{})
@@ -275,20 +269,17 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
                     tech=technical_candidate(sym,frame,profile,candidate_now)
                 except (TypeError,ValueError,KeyError,AttributeError):
                     tech=None
-            source="Yahoo bulk NSE daily OHLCV"
-            # A stale or partially populated bulk history is not a valid
-            # completed-session record. Try the shared official final archive
-            # first; do not change an already accepted current candle.
-            if not _fresh(tech,session) and isinstance(frame,pd.DataFrame):
-                try:
-                    repaired=recovery(sym+".NS",frame)
-                    if repaired is not None:
-                        recovered=technical_candidate(sym,repaired,profile,candidate_now)
-                        if _fresh(recovered,session):
-                            tech=recovered
-                            source="Yahoo raw OHLCV + NSE final archive"
-                except (TypeError,ValueError,KeyError,AttributeError,RuntimeError,OSError):
-                    LOG.warning("MSK_INDEX_NSE_RECOVERY_UNAVAILABLE symbol=%s",sym)
+            source=(frame.attrs.get("history_source","Yahoo raw OHLCV")
+                    if frame is not None and isinstance(getattr(frame,"attrs",None),dict)
+                    else "Yahoo raw OHLCV")
+            # The collector validates history separately from the technical
+            # score. A valid history may still fail liquidity or scoring.
+            if frame is not None and not frame.empty:
+                row["history_asof"]=str(session)
+                row["history_bars"]=len(frame) if hasattr(frame,"__len__") else None
+            else:
+                row["history_asof"]=None
+                row["history_bars"]=None
             # Retry keyless bhavcopy after the nightly publication window.
             # No routine retries for already-fresh Yahoo prices.
             if (not _fresh(tech,session) and
@@ -301,6 +292,8 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
                         if _fresh(recovered,session):
                             tech=recovered
                             source="TejHQ / NSE bhavcopy (raw EOD)"
+                            row["history_asof"]=str(session)
+                            row["history_bars"]=len(alternate) if hasattr(alternate,"__len__") else None
                     except (TypeError,ValueError,KeyError,AttributeError):
                         pass
             if _fresh(tech,session):
@@ -333,8 +326,15 @@ def collect_profile(profile, store, session=None, *, batch_size=50,
         examined+=1
         if delay_s and need_fund:
             time.sleep(delay_s)
+    current=store.rows(session,profile)
+    history_count=sum(
+        current.get(sym,{}).get("membership_hash")==identity and
+        (current.get(sym,{}).get("history_asof")==str(session) or
+         _fresh(current.get(sym,{}).get("technical"),session))
+        for sym in symbols)
     return dict(profile=profile,session=str(session),
                 expected=len(symbols),examined=examined,member_hash=identity,
+                history_verified=history_count,
                 elapsed_s=round(time.monotonic()-started,1))
 
 

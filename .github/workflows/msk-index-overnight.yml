@@ -10,6 +10,7 @@ on:
     paths:
       - 'overnight_index_reports.py'
       - 'overnight_index_sources.py'
+      - 'smart_chart_eod_recovery.py'
       - 'index_top5.py'
       - 'index_constituents.py'
       - 'tests/test_overnight_index_reports.py'
@@ -54,6 +55,48 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_overnight_index_reports.py' -v
       - name: Check legacy index contracts in isolated compatibility mode
         run: MSK_INDEX_PREPARED_ONLY=0 python -m unittest discover -s tests -p 'test_index_top5.py' -v
+
+  pr-real-price-coverage:
+    # Public market sources only. No production secrets, database or sends.
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      MSK_RESEARCH_ONLY: '1'
+      PYTHONUNBUFFERED: '1'
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing runtime
+        run: pip install -r requirements.txt
+      - name: Prove production Top 5 history collector on all 100 real NSE members
+        run: |
+          python - <<'PY'
+          from index_constituents import get_index_universe
+          from overnight_index_reports import _session
+          from overnight_index_sources import collect_completed_index_histories
+          from top5_technical_ratings import technical_candidate
+          from datetime import datetime
+          from index_constituents import IST
+          day=_session()
+          universe=get_index_universe("conservative")
+          symbols=tuple(universe["symbols"])
+          if universe.get("stale") or len(symbols)!=100 or len(set(symbols))!=100:
+              raise RuntimeError("Exact official Nifty 100 membership unavailable")
+          histories=collect_completed_index_histories(symbols,day,max_seconds=240)
+          technical=0
+          for sym,frame in histories.items():
+              result=technical_candidate(sym,frame,"conservative",
+                  datetime.combine(day,datetime.min.time(),tzinfo=IST).replace(hour=16))
+              if result and result.get("asof")==str(day):
+                  technical+=1
+          print(f"TOP5_REAL_HISTORY_ACCEPTANCE session={day} verified={len(histories)}/100 technical={technical}/100")
+          if set(histories)!=set(symbols):
+              raise RuntimeError("Nifty 100 history collection incomplete")
+          PY
 
   pr-real-collection:
     # Maintainer-labeled opt-in on own repo branch; no production service.
