@@ -72,9 +72,45 @@ class OfficialIndexMembershipTests(unittest.TestCase):
         response.raise_for_status.return_value = None
         with patch.object(ic, "_CACHE", {}), patch.object(
                 ic.requests, "get", side_effect=[
-                    ic.requests.HTTPError("403"), ic.requests.HTTPError("403"), response]):
-            with self.assertRaises(RuntimeError):
+                    ic.requests.HTTPError("403"), ic.requests.HTTPError("403"), response,
+                    *[ic.requests.HTTPError("403") for _ in range(3)]]):
+            with patch.object(ic,"_snapshot_path",return_value=None), self.assertRaises(RuntimeError):
                 ic.get_index_universe("conservative")
+
+    def test_exact_disjoint_components_recover_official_membership(self):
+        first=Mock(content=nse_csv(50))
+        second=Mock(content=nse_csv(50).replace(b"TEST",b"NEXT"))
+        with patch.object(ic,"_CACHE",{}), patch.object(ic,"_snapshot_path",return_value=None), patch.object(
+                ic.requests,"get",side_effect=[*[ic.requests.HTTPError("403") for _ in range(3)],first,second]):
+            universe=ic.get_index_universe("conservative")
+        self.assertEqual(len(set(universe["symbols"])),100)
+        self.assertEqual(universe["industries"]["NEXT001"],"Sector1")
+        self.assertEqual(universe["source"],"Official NSE Nifty 50 + Next 50")
+
+    def test_same_day_snapshot_and_expired_or_duplicate_rejected(self):
+        import tempfile
+        import json
+        from datetime import datetime,timedelta
+        with tempfile.TemporaryDirectory() as tmp, patch.object(ic,"_CACHE",{}), patch.object(
+                ic,"_snapshot_path",return_value=Path(tmp)/"members.json"):
+            response=Mock(content=nse_csv(100))
+            with patch.object(ic.requests,"get",return_value=response):
+                original=ic.get_index_universe("conservative")
+            with patch.object(ic,"_CACHE",{}), patch.object(ic.requests,"get",side_effect=ic.requests.HTTPError("403")):
+                snapshot=ic.get_index_universe("conservative")
+                self.assertEqual(snapshot["symbols"],original["symbols"])
+                self.assertTrue(snapshot["cached"])
+                path=ic._snapshot_path()
+                value=json.loads(path.read_text())
+                value["captured_at"]=(datetime.now(ic.IST)-timedelta(days=1)).isoformat()
+                path.write_text(json.dumps(value))
+                with self.assertRaises(RuntimeError):
+                    ic.get_index_universe("conservative")
+                value["captured_at"]=datetime.now(ic.IST).isoformat()
+                value["symbols"][0]=value["symbols"][1]
+                path.write_text(json.dumps(value))
+                with self.assertRaises(RuntimeError):
+                    ic.get_index_universe("conservative")
 
     def test_old_midcap150_constituents_cannot_be_accepted_as_midcap100(self):
         self.assertEqual(ic.INDEXES["moderate"]["count"], 100)

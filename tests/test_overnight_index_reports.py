@@ -48,7 +48,7 @@ class OvernightLedgerTests(unittest.TestCase):
         for profile,count in (("conservative",100),("moderate",100),("aggressive",100)):
             universe=make_universe(profile,count)
             with patch.object(n,"get_index_universe",return_value=universe), \
-                 patch("market_data.bulk_history",return_value={
+                 patch("overnight_index_sources.collect_completed_index_histories",return_value={
                     sym:Mock(empty=False) for sym in universe["symbols"]}) as bulk, \
                  patch("top5_technical_ratings.technical_candidate",
                        side_effect=lambda sym,*args:technical(sym)) as candle, \
@@ -63,7 +63,7 @@ class OvernightLedgerTests(unittest.TestCase):
             self.assertEqual(len(bulk.call_args.args[0]),count)
             self.assertEqual(len(self.store.rows(self.day,profile)),count)
             with patch.object(n,"get_index_universe",return_value=universe), \
-                 patch("market_data.bulk_history") as repeat, \
+                 patch("overnight_index_sources.collect_completed_index_histories") as repeat, \
                  patch("top5_company_ratings.fetch_company_evidence") as duplicated:
                 result=n.collect_profile(profile,self.store,self.day,delay_s=0)
                 self.assertEqual(result["examined"],count)
@@ -77,7 +77,7 @@ class OvernightLedgerTests(unittest.TestCase):
         universe["symbols"]=tuple(members)
         universe["industries"]["DUMMYHEG"]="Capital Goods"
         with patch.object(n,"get_index_universe",return_value=universe), \
-             patch("market_data.bulk_history",return_value={
+             patch("overnight_index_sources.collect_completed_index_histories",return_value={
                  sym:Mock(empty=False) for sym in members if sym!="DUMMYHEG"
              }) as price, \
              patch("top5_technical_ratings.technical_candidate",
@@ -110,7 +110,7 @@ class OvernightLedgerTests(unittest.TestCase):
                 "technical":technical(sym)
             })
         with patch.object(n,"get_index_universe",return_value=universe), \
-             patch("market_data.bulk_history") as bulk, \
+             patch("overnight_index_sources.collect_completed_index_histories") as bulk, \
              patch("top5_company_ratings.fetch_company_evidence",
                    return_value=evidence("conservative")) as fetch:
             n.collect_profile("conservative",self.store,self.day,delay_s=0)
@@ -525,7 +525,7 @@ class OvernightLedgerTests(unittest.TestCase):
     def test_stale_market_candles_cannot_generate_overnight_ready(self):
         universe=make_universe("conservative",100)
         with patch.object(n,"get_index_universe",return_value=universe), \
-             patch("market_data.bulk_history",return_value={
+             patch("overnight_index_sources.collect_completed_index_histories",return_value={
                sym:Mock(empty=False) for sym in universe["symbols"]}), \
              patch("top5_technical_ratings.technical_candidate",
                    side_effect=lambda sym,*a:technical(sym,"2026-10-28")), \
@@ -536,10 +536,101 @@ class OvernightLedgerTests(unittest.TestCase):
             ready=n.finalize_profile("conservative",self.store,self.day)
         self.assertEqual(ready["state"],"PARTIAL")
         self.assertEqual(ready["stats"]["price_fresh"],0)
-        self.assertIn("SCREENING COMPLETE — NO QUALIFYING SETUP TODAY",ready["text"])
+        self.assertIn("SCREENING INCOMPLETE — VERIFIED DATA PENDING",ready["text"])
+        self.assertIn("current-session price records: 0/100",ready["text"])
         self.assertIn("Data as of",ready["text"])
         self.assertIn("not ready",n.load_prepared_report("conservative",store=self.store,
               now=datetime(2026,11,12,10,tzinfo=n.IST)).lower())
+
+    def test_shared_nse_recovery_preserves_validated_financials(self):
+        import pandas as pd
+        universe=make_universe("conservative",2)
+        digest=n._member_hash(universe)
+        repaired=pd.DataFrame({"Close":[100.]})
+        repaired.attrs["history_source"]="Yahoo raw OHLCV + NSE final archive"
+        for sym in universe["symbols"]:
+            self.store.write_row(self.day,"conservative",sym,{
+                "membership_hash":digest,"fund_attempted":True,
+                "fund_status":"VALIDATED","fundamental":evidence(),
+                "technical":None})
+        with patch.object(n,"get_index_universe",return_value=universe), \
+             patch("overnight_index_sources.collect_completed_index_histories",return_value={
+                 sym:repaired for sym in universe["symbols"]}) as collect, \
+             patch("top5_technical_ratings.technical_candidate",side_effect=lambda sym,*a:technical(sym)), \
+             patch("top5_company_ratings.fetch_company_evidence") as financial:
+            result=n.collect_profile("conservative",self.store,self.day,delay_s=0)
+            financial.assert_not_called()
+            self.assertEqual(result["history_verified"],2)
+            self.assertEqual(collect.call_args.args[0],["TEST000","TEST001"])
+        for row in self.store.rows(self.day,"conservative").values():
+            self.assertEqual(row["price_reason"],"ok")
+            self.assertEqual(row["price_source"],"Yahoo raw OHLCV + NSE final archive")
+            self.assertEqual(row["fund_status"],"VALIDATED")
+            self.assertEqual(row["fundamental"],evidence())
+
+    def test_exact_history_collection_100_and_shared_recovery(self):
+        import pandas as pd
+        from overnight_index_sources import collect_completed_index_histories
+        symbols=["TEST%03d"%i for i in range(100)]
+        dates=pd.bdate_range(end=self.day,periods=100)
+        fresh=pd.DataFrame(dict(Open=100.,High=101.,Low=99.,Close=100.,Volume=1000.),index=dates)
+        stale=fresh.iloc[:-1]
+        batches=[]
+        def download(**kw):
+            batches.append(kw["tickers"])
+            self.assertEqual(kw["period"],"1y")
+            self.assertFalse(kw["auto_adjust"])
+            return pd.concat({sym:stale for sym in kw["tickers"]},axis=1)
+        with patch("smart_chart_eod_recovery.ArchiveRecovery") as recovery, \
+             patch("smart_chart_eod_recovery.yahoo_host_history") as alternate:
+            recovery.return_value.return_value=fresh
+            got=collect_completed_index_histories(symbols,self.day,download=download)
+            recovery.assert_called_once_with([s+".NS" for s in symbols],str(self.day))
+            self.assertEqual(recovery.return_value.call_count,100)
+            alternate.assert_not_called()
+        self.assertEqual([len(x) for x in batches],[20]*5)
+        self.assertEqual(set(got),set(symbols))
+        self.assertTrue(all(f.attrs["history_source"]=="Yahoo raw OHLCV + NSE final archive"
+                            for f in got.values()))
+
+    def test_missing_history_alternate_only_and_no_stale_acceptance(self):
+        import pandas as pd
+        from overnight_index_sources import collect_completed_index_histories
+        dates=pd.bdate_range(end=self.day,periods=100)
+        fresh=pd.DataFrame(dict(Open=100.,High=101.,Low=99.,Close=100.,Volume=1000.),index=dates)
+        with patch("smart_chart_eod_recovery.ArchiveRecovery") as recovery, \
+             patch("smart_chart_eod_recovery.yahoo_host_history",side_effect=[fresh,fresh.iloc[:-1]]) as alternate, \
+             patch("overnight_index_sources._verified_full_history_alternate",return_value=None) as independent:
+            recovery.return_value.return_value=None
+            got=collect_completed_index_histories(["ONE","TWO","THREE"],self.day,
+                download=lambda **kw:pd.concat({"ONE.NS":fresh},axis=1))
+        self.assertEqual(set(got),{"ONE","TWO"})
+        self.assertEqual([c.args[0] for c in alternate.call_args_list],["TWO.NS","THREE.NS"])
+        self.assertEqual([c.args[0] for c in independent.call_args_list],["THREE"])
+
+    def test_independent_full_history_requires_two_official_overlaps(self):
+        import pandas as pd
+        from overnight_index_sources import _verified_full_history_alternate
+        from portfolio_doctor_live import previous_doctor_session
+        from smart_chart_eod_recovery import ArchiveRecovery
+        dates=pd.bdate_range(end=self.day,periods=100)
+        fresh=pd.DataFrame(dict(Open=100.,High=101.,Low=99.,Close=100.,Volume=1000.),index=dates)
+        prior=previous_doctor_session(self.day)
+        official=dict(Open=100.,High=101.,Low=99.,Close=100.,Volume=1000.,PreviousClose=100.)
+        fetch=Mock(return_value={"ONE.NS":official})
+        recovery=ArchiveRecovery(["ONE.NS"],self.day,fetch=fetch)
+        bad=fresh.copy()
+        bad.loc[bad.index[-2],"Volume"]=999.
+        bad2=fresh.copy()
+        bad2.loc[bad2.index[-1],"Close"]=99.5
+        providers=(("bad overlap",lambda:bad),("bad last",lambda:bad2))
+        self.assertIsNone(_verified_full_history_alternate("ONE",self.day,recovery,providers=providers))
+        got=_verified_full_history_alternate("ONE",self.day,recovery,
+                    providers=providers+(("valid",lambda:fresh),))
+        self.assertIsNotNone(got)
+        self.assertEqual(got.attrs["history_source"],"valid + NSE final overlap")
+        self.assertEqual(fetch.call_count,2)
+        self.assertEqual(set(recovery.archives),{self.day,prior})
 
     def test_cleaning_nan_and_store_documented_no_connection(self):
         self.assertIsNone(n._clean(float("nan")))
@@ -707,7 +798,7 @@ class TejFallbackTests(unittest.TestCase):
             with n.EvidenceStore("sqlite:///"+str(Path(temp)/"x.db")) as store:
                 with patch.object(n,"get_index_universe",return_value=universe), \
                      patch.dict(os.environ,{"MSK_INDEX_TEJ_FALLBACK":"1"}), \
-                     patch("market_data.bulk_history",return_value={}), \
+                     patch("overnight_index_sources.collect_completed_index_histories",return_value={}), \
                      patch("overnight_index_sources.fetch_tej_history",
                            return_value=Mock(empty=False)) as alternate, \
                      patch("top5_technical_ratings.technical_candidate",
