@@ -5,6 +5,7 @@ on:
     paths:
       - 'msk_central_*_v4.py'
       - 'tests/test_msk_central_*_v4.py'
+      - 'scripts/msk_central_500_evidence.py'
       - '.github/workflows/msk-central-v4-shadow.yml'
 permissions:
   contents: read
@@ -16,3 +17,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run dependency-free isolated contracts
         run: python3 -m unittest discover -s tests -p 'test_msk_central_*_v4.py' -v
+  official-eod-500:
+    if: github.event.pull_request.number == 300
+    needs: offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact 500 official members and 27 November final OHLCV
+        run: python3 scripts/msk_central_500_evidence.py --session 2026-11-27
