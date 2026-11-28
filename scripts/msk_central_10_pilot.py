@@ -1,4 +1,4 @@
-"""Ten public equities only; shadow QA, no storage, AI calls or Telegram.
+"""Bounded batch of up to ten public equities; shadow QA, no Telegram.
 
 Existing MSK history, technical and financial adapters are reused. History
 shape and latest bar match are measured separately from complete historical
@@ -51,7 +51,10 @@ def financial_status(statements):
 
 
 def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
-        fetch_statements=None):
+        fetch_statements=None, symbols=PILOT):
+    symbols = tuple(symbols)
+    if not 1 <= len(symbols) <= 10 or len(set(symbols)) != len(symbols):
+        raise ValueError("batch must contain 1–10 unique stocks")
     from scripts.msk_central_500_evidence import ROSTERS, fetch, _roster_details
     from smart_chart_eod_recovery import final_archive_rows, ArchiveRecovery, yahoo_host_history
     from market_data import bulk_history
@@ -69,31 +72,33 @@ def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
     for url in ROSTERS:
         try:
             roster, series, _ = _roster_details(fetch_roster(url, 2_000_000))
-            if all(s in roster and series[s]=="EQ" for s in PILOT):
+            if all(s in roster for s in symbols):
                 roster_source = url
                 break
         except Exception:
             continue
     if not roster_source:
-        return {"status":"withheld_roster","target":10,"stocks":{}}
+        return {"status":"withheld_roster","target":len(symbols),"stocks":{}}
     try:
-        official = fetch_archive(session, [s+".NS" for s in PILOT])
+        official = fetch_archive(session, [s+".NS" for s in symbols if series[s]=="EQ"])
     except Exception:
         official = {}
     try:
-        frames = fetch_histories(PILOT, period="1y", chunk_size=10, retries=0,
+        frames = fetch_histories(symbols, period="1y", chunk_size=10, retries=0,
                                  adjusted=False, max_fallbacks=10, download_timeout=10)
     except Exception:
         frames = {}
     # Reuse the existing shared, bounded official trailing-session repair.
-    recovery = ArchiveRecovery([s+'.NS' for s in PILOT], session, fetch=fetch_archive)
+    recovery = ArchiveRecovery([s+'.NS' for s in symbols if series[s]=="EQ"], session, fetch=fetch_archive)
     recovery.archives[session] = official
     rows = {}
-    for sym in PILOT:
+    for sym in symbols:
         entry = {"isin":roster[sym], "history_bars":0,"history_shape_valid":False,
                  "latest_raw_ohlcv_match":False, "technical_calculated":False,
                  "financial_status":"missing", "official_quarter_comparison":"not_attempted"}
         try:
+            if series[sym] != "EQ":
+                raise ValueError("non-EQ series requires exact-series history evidence")
             original = frames.get(sym)
             diagnostics = {}
             data = validated_daily_history(original, str(session), diagnostics=diagnostics)
@@ -133,14 +138,14 @@ def run(session, *, fetch_roster=None, fetch_archive=None, fetch_histories=None,
         except Exception as exc:
             entry["financial_error"] = type(exc).__name__
         rows[sym] = entry
-        print("MSK_10_STOCK "+json.dumps({"symbol":sym,**entry},sort_keys=True),flush=True)
+        print("MSK_BATCH_STOCK "+json.dumps({"symbol":sym,**entry},sort_keys=True),flush=True)
     counts = {k:sum(r[k] is True for r in rows.values())
               for k in ("history_shape_valid","latest_raw_ohlcv_match","technical_calculated")}
     counts["fresh_financial_candidates"] = sum(r["financial_status"]=="fresh_secondary_candidate" for r in rows.values())
     counts["partial_official_quarter_matches"] = sum(r["official_quarter_comparison"]=="partial_match" for r in rows.values())
     return {"target":10,"session":str(session),"roster_source":roster_source,"stocks":rows,
-            "counts":counts,"status":"pilot_observed" if counts["technical_calculated"]==10
-            and counts["fresh_financial_candidates"]==10 else "pilot_incomplete",
+            "counts":counts,"status":"pilot_observed" if counts["technical_calculated"]==len(symbols)
+            and counts["fresh_financial_candidates"]==len(symbols) else "pilot_incomplete",
             "full_history_independently_verified":False,
             "full_fundamentals_independently_verified":False}
 
