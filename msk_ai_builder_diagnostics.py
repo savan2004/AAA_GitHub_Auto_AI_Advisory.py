@@ -252,6 +252,83 @@ def diagnose_quarter(member, evidence, *, listing=fetch_listing,
         return failure
 
 
+def audit_quarter_history(companies, latest_checks, *, verify=None,
+                          deadline_seconds=300, clock=None, checkpoint=None):
+    """Exercise missing primary periods, newest first across all selected issuers.
+
+    Keep the already matched latest quarter; never re-fetch it. Failures and
+    unattempted periods are explicit. A full numerical match is still not
+    independent review, annual verification, or customer approval.
+    """
+    import time
+    from msk_ai_builder_quarter_check import check_historical_quarter
+    verify=verify or check_historical_quarter
+    clock=clock or time.monotonic
+    started=clock()
+    companies=tuple(companies)
+    latest_checks=tuple(latest_checks)
+    if (not 1<=len(companies)<=20 or not 1<=deadline_seconds<=600
+            or len({c.member.symbol for c in companies})!=len(companies)):
+        raise EvidenceError("HISTORY_AUDIT_INVALID_INPUT")
+    latest={x.get("symbol"):x for x in latest_checks if isinstance(x,dict)}
+    if len(latest)!=len(latest_checks) or set(latest)!={c.member.symbol for c in companies}:
+        raise EvidenceError("HISTORY_AUDIT_LATEST_COVERAGE")
+    rows={}
+    def matched(obs,c,period,status):
+        return (isinstance(obs,dict) and obs.get("status")==status
+                and obs.get("symbol")==c.member.symbol and obs.get("isin")==c.member.isin
+                and obs.get("period")==period.isoformat() and obs.get("scope")==c.evidence.scope
+                and obs.get("publication_status")=="WITHHELD"
+                and isinstance(obs.get("document_sha256"),str)
+                and re.fullmatch(r"[0-9a-f]{64}",obs["document_sha256"]) is not None)
+    for c in companies:
+        quarters=tuple(p.end for p in c.evidence.quarterly)
+        if len(quarters)!=8 or len(set(quarters))!=8 or tuple(sorted(quarters))!=quarters:
+            raise EvidenceError("HISTORY_AUDIT_PERIODS")
+        obs=latest[c.member.symbol]
+        if not matched(obs,c,quarters[-1],"LATEST_QUARTER_MATCHED_ONLY"):
+            raise EvidenceError("HISTORY_AUDIT_LATEST_IDENTITY")
+        rows[c.member.symbol]={"symbol":c.member.symbol,"isin":c.member.isin,
+            "scope":c.evidence.scope,"periods":{d.isoformat():{
+                "status":"NOT_ATTEMPTED","publication_status":"WITHHELD"} for d in quarters},
+            "publication_status":"WITHHELD"}
+        rows[c.member.symbol]["periods"][quarters[-1].isoformat()]=obs
+    def snapshot():
+        result=list(rows.values())
+        count=sum(p["status"] in ("LATEST_QUARTER_MATCHED_ONLY","HISTORICAL_QUARTER_MATCHED_ONLY")
+                  for r in result for p in r["periods"].values())
+        attempted=sum(p["status"]!="NOT_ATTEMPTED" for r in result for p in r["periods"].values())
+        return {"requested":len(result)*8,"matched":count,"attempted":attempted,
+                "companies_complete":sum(all(p["status"] in (
+                    "LATEST_QUARTER_MATCHED_ONLY","HISTORICAL_QUARTER_MATCHED_ONLY")
+                    for p in r["periods"].values()) for r in result),
+                "companies":result,"publication_status":"WITHHELD",
+                "remaining_release_gates":["five annual primary periods","valuation and risk",
+                    "corporate actions","completed-session price reconciliation","independent review and release approval"]}
+    if checkpoint:
+        checkpoint(snapshot())
+    # Round robin by period avoids spending the whole budget on one issuer.
+    for offset in range(2,9):
+        for c in companies:
+            if clock()-started>=deadline_seconds:
+                return snapshot()
+            period=c.evidence.quarterly[-offset].end
+            try:
+                obs=verify(c.member,c.evidence,period_end=period)
+                if not matched(obs,c,period,"HISTORICAL_QUARTER_MATCHED_ONLY"):
+                    raise EvidenceError("HISTORY_AUDIT_OBSERVATION_IDENTITY")
+            except EvidenceError as exc:
+                diagnostic=classify_failure(exc)
+                obs={"status":diagnostic["reason_code"],"stage":diagnostic["stage"],
+                     "next_action":diagnostic["next_action"],"publication_status":"WITHHELD"}
+            except Exception:
+                obs={"status":"HISTORICAL_PROVIDER_UNAVAILABLE","publication_status":"WITHHELD"}
+            rows[c.member.symbol]["periods"][period.isoformat()]=obs
+            if checkpoint:
+                checkpoint(snapshot())
+    return snapshot()
+
+
 def diagnostic_summary(rows, *, requested=None):
     """Small actionable result for CI: exactly which issuer and contract failed."""
     checked = list(rows)

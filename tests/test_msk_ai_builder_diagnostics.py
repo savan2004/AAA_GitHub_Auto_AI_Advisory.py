@@ -32,6 +32,44 @@ class ResearchFailureDiagnostics(unittest.TestCase):
         self.assertIn("MISSING", rendered)
         self.assertFalse(summary["rehearsal_passed"])
 
+    def test_history_audit_reuses_latest_and_never_approves(self):
+        from types import SimpleNamespace
+        from msk_ai_builder_diagnostics import audit_quarter_history
+        snap,listing,download=self.inputs()
+        latest=diagnose_quarter(MEMBER,snap,listing=listing,download=download,clock=lambda:NOW)
+        company=SimpleNamespace(member=MEMBER,evidence=snap)
+        def verify(member,evidence,*,period_end):
+            if period_end==snap.quarterly[-2].end:
+                raise EvidenceError("FILING_METADATA_COVERAGE")
+            return dict(latest,period=period_end.isoformat(),status="HISTORICAL_QUARTER_MATCHED_ONLY")
+        call=Mock(side_effect=verify)
+        report=audit_quarter_history([company],[latest],verify=call,clock=lambda:0)
+        self.assertEqual((report["matched"],report["requested"],report["attempted"]),(7,8,8))
+        self.assertEqual(report["companies_complete"],0)
+        self.assertEqual(call.call_count,7)
+        self.assertNotIn(snap.quarterly[-1].end,[c.kwargs["period_end"] for c in call.call_args_list])
+        self.assertEqual(report["publication_status"],"WITHHELD")
+        self.assertEqual(report["companies"][0]["periods"][snap.quarterly[-2].end.isoformat()]["status"],
+                         "FILING_METADATA_COVERAGE")
+
+    def test_history_audit_deadline_marks_unattempted_and_wrong_identity_rejected(self):
+        from types import SimpleNamespace
+        from msk_ai_builder_diagnostics import audit_quarter_history
+        snap,listing,download=self.inputs()
+        latest=diagnose_quarter(MEMBER,snap,listing=listing,download=download,clock=lambda:NOW)
+        company=SimpleNamespace(member=MEMBER,evidence=snap)
+        call=Mock(return_value=dict(latest,isin="WRONG",status="HISTORICAL_QUARTER_MATCHED_ONLY",
+                                   period=snap.quarterly[-2].end.isoformat()))
+        report=audit_quarter_history([company],[latest],verify=call,
+                deadline_seconds=1,clock=Mock(side_effect=[0,0,2]))
+        self.assertEqual((report["matched"],report["attempted"],report["requested"]),(1,2,8))
+        self.assertEqual(report["companies"][0]["periods"][snap.quarterly[-2].end.isoformat()]["status"],
+                         "HISTORY_AUDIT_OBSERVATION_IDENTITY")
+        self.assertEqual(report["companies"][0]["periods"][snap.quarterly[-3].end.isoformat()]["status"],
+                         "NOT_ATTEMPTED")
+        with self.assertRaises(EvidenceError):
+            audit_quarter_history([company],[dict(latest,isin="WRONG")],verify=call)
+
     def inputs(self):
         return QuarterCheckTests().setup_inputs()
 

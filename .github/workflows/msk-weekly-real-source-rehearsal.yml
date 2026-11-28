@@ -59,7 +59,7 @@ jobs:
           from msk_ai_builder_evidence import EvidenceError
           from msk_ai_builder_discovery import fetch_listing
           from msk_ai_builder_diagnostics import (
-              diagnose_quarter, diagnostic_summary, diagnostic_markdown)
+              diagnose_quarter, diagnostic_summary, diagnostic_markdown, audit_quarter_history)
 
           def connect(_):
               return psycopg.connect("postgresql://builder_test:local_ci_only@localhost:5432/builder_test")
@@ -69,6 +69,7 @@ jobs:
           env = {"MSK_BUILDER_WEEKLY_JOB_ENABLED": "1"}
           primary_checks = []
           diagnostics = {}
+          staged_companies = []
           focus = {"COFORGE", "ICICIBANK", "BANKBARODA", "MCX", "RELIANCE"}
           # Persist the entire investigation after every company; never
           # overwrite 20-company data with just the later first/replay result.
@@ -113,6 +114,7 @@ jobs:
               result, version = stage_week(bank, quarter_verifier=verify_candidate, **kwargs)
               print("PUBLIC_PERIOD_FAILURES", json.dumps(result.failures, sort_keys=True))
               primary_checks.extend(result.primary_checks)
+              staged_companies.extend(result.companies)
               persist(primary_rejections=result.primary_rejections, reserves=result.reserves)
               print("PRIMARY_REJECTIONS", json.dumps(result.primary_rejections, sort_keys=True))
               print("PRIMARY_QUARTER_CHECKS", json.dumps(primary_checks, sort_keys=True))
@@ -150,6 +152,18 @@ jobs:
           assert {c["symbol"] for c in primary_checks} == {r["symbol"] for r in rows["companies"]}
           assert match_count == first["selected"] == 20 and diagnostic["rehearsal_passed"], (
               "Full 20-company latest-quarter match not met; see SOURCE_FAILURE_DIAGNOSTIC and attached report")
+          # Keep already verified latest observations; exercise seven missing
+          # historical periods per company without approving or writing production.
+          history = audit_quarter_history(staged_companies, primary_checks,
+              deadline_seconds=300, checkpoint=lambda result:persist(quarter_history=result))
+          persist(quarter_history=history)
+          print("HISTORICAL_QUARTER_COVERAGE",json.dumps({
+              k:v for k,v in history.items() if k!="companies"},sort_keys=True))
+          for row in history["companies"]:
+              print("HISTORICAL_ISSUER_PERIODS",row["symbol"],json.dumps({
+                  period:obs["status"] for period,obs in row["periods"].items()},sort_keys=True))
+          assert history["matched"]==history["requested"]==160, (
+              "Eight-quarter primary coverage incomplete; see quarter_history in attached report")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
