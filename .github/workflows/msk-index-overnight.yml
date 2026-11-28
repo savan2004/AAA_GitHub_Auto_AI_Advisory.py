@@ -65,11 +65,18 @@ jobs:
       MSK_RESEARCH_ONLY: '1'
       PYTHONUNBUFFERED: '1'
       TZ: Asia/Kolkata
+      MSK_TOP5_MEMBERSHIP_SNAPSHOT: .msk-public-cache/top5-nifty100.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Restore recent official membership snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: .msk-public-cache/top5-nifty100.json
+          key: msk-top5-membership-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: msk-top5-membership-
       - name: Install existing runtime
         run: pip install -r requirements.txt
       - name: Prove production Top 5 history collector on all 100 real NSE members
@@ -97,6 +104,12 @@ jobs:
           if set(histories)!=set(symbols):
               raise RuntimeError("Nifty 100 history collection incomplete")
           PY
+      - name: Save verified membership even if price coverage fails
+        if: always() && hashFiles('.msk-public-cache/top5-nifty100.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .msk-public-cache/top5-nifty100.json
+          key: msk-top5-membership-${{ github.run_id }}-${{ github.run_attempt }}
 
   pr-real-collection:
     # Maintainer-labeled opt-in on own repo branch; no production service.
