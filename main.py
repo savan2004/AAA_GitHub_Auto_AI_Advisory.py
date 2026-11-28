@@ -1658,6 +1658,8 @@ def portfolio_doctor_start(m):
               "NSE is preferred; BSE requires an exact verified match. "
               "(maximum 10 stocks / 5 MB; session open for 15 minutes). "
               "Use /doctor_format to receive the blank CSV again. "
+              "For an illustrative model, add a file caption or first pasted line such as "
+              "<code>Model medium 36</code>. Choose low, medium or high and 6, 18, 36 or 60 months. "
               "A private educational PDF is sent only with "
               "verified recent closing prices. MSK does not save your holdings or report. "
               "Telegram retains chat messages and files under its own rules.")
@@ -1688,7 +1690,9 @@ def portfolio_doctor_text(m):
     from portfolio_doctor_live import parse_holdings, PortfolioDoctorError
 
     raw = m.text or ""
-    payload = raw.encode("utf-8")
+    first, _, rest = raw.partition("\n")
+    model_request = first if first.lower().startswith("model ") else ""
+    payload = (rest if model_request else raw).encode("utf-8")
     if len(payload) > 2048 or not raw.strip():
         safe_send(m.chat.id, "Paste up to 10 rows, one per line, for example SBIN 100 840. You can retry in this session.")
         return
@@ -1760,8 +1764,19 @@ def portfolio_doctor_document(m, _typed_payload=None):
                 return
             safe_send(uid, "Checking recent market prices for your private, one-time report.")
             # PDF and holdings travel through worker stdin/stdout, never a local file.
+            request_text = ((getattr(m, "text", "") if _typed_payload is not None
+                             else getattr(m, "caption", "")) or "").partition("\n")[0].strip()
             if audit_requested:
                 pdf_bytes = run_isolated_memory(name, payload, timeout=150, audit=True)
+            elif request_text.lower().startswith("model "):
+                from portfolio_doctor_allocation import parse_preferences
+                try:
+                    preferences = parse_preferences(request_text)
+                except ValueError:
+                    allow_retry = True
+                    safe_send(uid, "Choose Model low/medium/high followed by 6, 18, 36 or 60. Example: Model medium 36.")
+                    return
+                pdf_bytes = run_isolated_memory(name, payload, timeout=150, preferences=preferences)
             else:
                 pdf_bytes = run_isolated_memory(name, payload, timeout=150)
             # A full 9-page company report is an existing separate product.

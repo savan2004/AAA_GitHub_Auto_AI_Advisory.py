@@ -42,6 +42,16 @@ class Nifty500ResearchTests(unittest.TestCase):
         roster = official_nifty500_industries(get=get)
         self.assertEqual(len(roster), 500)
         self.assertEqual(roster["SAMPLE000"], "Power")
+        from portfolio_doctor_peers import ARCHIVE_ROSTER, OFFICIAL_ROSTER
+        requests_seen = []
+        def mirror_only(url, **kwargs):
+            requests_seen.append(url)
+            return SimpleNamespace(ok=url == OFFICIAL_ROSTER, content=csv)
+        source = {}
+        self.assertEqual(official_nifty500_industries(get=mirror_only, provenance=source), roster)
+        self.assertEqual(requests_seen, [ARCHIVE_ROSTER, OFFICIAL_ROSTER])
+        self.assertEqual(source["roster_url"], OFFICIAL_ROSTER)
+        self.assertTrue(datetime.fromisoformat(source["roster_observed"]))
         self.assertEqual(official_nifty500_industries(
             get=lambda *a, **kw: SimpleNamespace(ok=True, content=
                 csv.replace(b"SAMPLE499", b"SAMPLE000"))), {})
@@ -49,6 +59,12 @@ class Nifty500ResearchTests(unittest.TestCase):
             get=lambda *a, **kw: SimpleNamespace(ok=False, content=csv)), {})
         self.assertEqual(official_nifty500_industries(
             get=lambda *a, **kw: SimpleNamespace(ok=True, content=b"<html>oops</html>")), {})
+
+    def test_bse_symbol_cannot_establish_nse_membership(self):
+        rows = [{"symbol": "SJVN", "exchange": "BSE"}, {"symbol": "NTPC", "price_source": "BSE:NTPC"}]
+        result = research_industry_peers(rows, members=members(), history_fetcher=self.fail, now=NOW)
+        self.assertEqual(result["held_industries"], {})
+        self.assertEqual(result["pool"], 0)
 
     def test_same_industry_candidates_must_be_fresh_verified_and_not_held(self):
         checked = []

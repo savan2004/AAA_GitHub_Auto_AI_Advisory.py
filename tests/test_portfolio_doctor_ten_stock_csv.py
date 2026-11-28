@@ -68,6 +68,78 @@ def handler(name, environment):
 
 
 class TenStocksAcceptance(unittest.TestCase):
+    def test_allocation_appendix_is_bound_to_holdings_and_profile(self):
+        import portfolio_doctor_live as doctor
+        symbols = [f"SAMPLE{i:02}" for i in range(10)]
+        frames = {s: candles(i) for i, s in enumerate(symbols)}
+        rows = [stock_record(s, frames[s]) for s in symbols]
+        rows[-1]["exchange"] = "BSE"
+        peers = dict(roster_verified=True, roster_observed="2026-11-23",
+                     roster_url="official roster fixture", doctor_preferences=("medium", 36),
+                     held_industries={s: "Capital Goods" for s in symbols[:-1]})
+        report = build_pdf_bytes(rows, peers=peers,
+                                 companies=prepare_company_pages(rows, frames, now=NOW),
+                                 risk=calculate_historical_risk(rows, frames, now=NOW))
+        pages = texts(report)
+        self.assertEqual(len(pages), 17)
+        self.assertIn("Industrials | current", pages[-1])
+        self.assertIn("Unknown / unclassified | current", pages[-1])
+        from portfolio_doctor_report import _report_records
+        from decimal import Decimal
+        normalized = _report_records(rows)
+        current_total = sum((r["value"] for r in normalized), Decimal(0))
+        self.assertIn(f"Current total: Rs {current_total:,.2f} (100.00%).", pages[-1])
+        self.assertIn(f"(Rs {normalized[-1]['value']:,.2f})", pages[-1])
+        self.assertIn("Unavailable: no approved research", pages[-1])
+        self.assertNotIn("ILLUSTRATIVE REBALANCING", "".join(pages))
+        data = ("\n".join([s+",1,95" for s in symbols[:-1]]+["BSE:"+symbols[-1]+",1,95"])).encode()
+        child = SimpleNamespace(returncode=0, stdout=report, stderr=b"")
+        with patch.object(doctor.subprocess, "run", return_value=child):
+            self.assertEqual(doctor.run_isolated_memory("p.csv", data, preferences=("medium",36)), report)
+            for payload, profile in ((data, ("low",6)), (data.replace(b",1,", b",2,"), ("medium",36))):
+                with self.assertRaises(doctor.PortfolioDoctorError):
+                    doctor.run_isolated_memory("p.csv", payload, preferences=profile)
+
+    def test_model_arithmetic_includes_paise_and_keeps_exchanges_distinct(self):
+        from datetime import date
+        from decimal import Decimal as D
+        from portfolio_doctor_allocation import allocation_review
+        from portfolio_doctor_report import _report_records
+        from msk_ai_builder_allocation import ApprovedCandidate, allocate_portfolio
+        rec = stock_record("SAMPLE01", candles(0))
+        rec.update(exchange="BSE", qty=1000, close=100.25)
+        other = stock_record("SAMPLE02", candles(1))
+        other.update(qty=1, close=50.47)
+        rows = _report_records([rec, other])
+        session = date.fromisoformat(ASOF)
+        def offline_approved(profile, raw, *, latest_session):
+            candidate = ApprovedCandidate("SAMPLE01", "IN0000000001", "Capital Goods",
+                                          latest_session, D("100"), D("85"))
+            return allocate_portfolio(profile, [candidate], expected_session=session), {}
+        with patch("msk_ai_builder_automatic.automatic_enabled", return_value=True), \
+             patch("portfolio_doctor_live.expected_doctor_session", return_value=session), \
+             patch("msk_ai_builder_automatic.approved_plan", side_effect=offline_approved):
+            review = allocation_review(rows, {}, ("medium", 36))
+            model_pdf = build_pdf_bytes([rec, other], peers={"doctor_preferences": ("medium", 36)})
+        model_pages = texts(model_pdf)
+        self.assertIn("Modeled cash", model_pages[-2])
+        self.assertIn("Current total: Rs 100,300.47 (100.00%).", model_pages[-2])
+        self.assertIn("proposed", model_pages[-2])
+        self.assertIn("(Rs 15,000.00)", model_pages[-2])
+        self.assertIn("ILLUSTRATIVE REBALANCING", model_pages[-1])
+        self.assertIn("NSE:SAMPLE01", model_pages[-1])
+        self.assertIn("BSE:SAMPLE01", model_pages[-1])
+        import portfolio_doctor_live as doctor
+        child = SimpleNamespace(returncode=0, stdout=model_pdf, stderr=b"")
+        with patch.object(doctor.subprocess, "run", return_value=child):
+            self.assertEqual(doctor.run_isolated_memory("test.csv", b"BSE:SAMPLE01,1000,95\nSAMPLE02,1,95",
+                             preferences=("medium", 36)), model_pdf)
+        self.assertIn(("BSE","SAMPLE01"), review["stocks"])
+        self.assertIn(("NSE","SAMPLE01"), review["proposed"])
+        self.assertEqual(review["total"], D("100300.47"))
+        self.assertEqual(sum(review["targets"].values())+review["cash"], review["total"])
+        self.assertEqual(review["cash"] % 1, D(".47"))
+
     def test_blank_csv_editable_template_and_ten_positions(self):
         self.assertEqual(MAX_STOCKS, 10)
         template = blank_doctor_csv_template()

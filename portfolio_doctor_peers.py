@@ -14,6 +14,7 @@ from datetime import datetime
 from portfolio_doctor_live import IST
 
 OFFICIAL_ROSTER = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
+ARCHIVE_ROSTER = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 MIN_MEMBERS = 450
 MAX_MEMBERS = 550
 MAX_SCREENED = 180  # Cover a typical 151-peer pool, while bounding free-tier resources.
@@ -21,16 +22,28 @@ MAX_RESULTS = 12
 MAX_PER_INDUSTRY = 3
 
 
-def official_nifty500_industries(*, get=None):
-    """Return official Symbol->Industry membership or empty on uncertain evidence."""
+def official_nifty500_industries(*, get=None, provenance=None):
+    """Use either official public roster without disclosing any holdings."""
     import requests
     get = get or requests.get
+    for url in (ARCHIVE_ROSTER, OFFICIAL_ROSTER):
+        try:
+            response = get(url, timeout=(2, 2), allow_redirects=False,
+                           headers={"User-Agent": "Mozilla/5.0", "Accept": "text/csv",
+                                    "Referer": "https://www.nseindia.com/"})
+            if response.ok and getattr(response, "status_code", 200) == 200:
+                members = _parse_roster(response.content)
+                if members:
+                    if provenance is not None:
+                        provenance.update(roster_url=url, roster_observed=datetime.now(IST).date().isoformat())
+                    return members
+        except (requests.RequestException, ValueError, TypeError):
+            continue
+    return {}
+
+
+def _parse_roster(raw):
     try:
-        response = get(OFFICIAL_ROSTER, timeout=8,
-                       headers={"User-Agent": "Mozilla/5.0", "Accept": "text/csv"})
-        if not getattr(response, "ok", False):
-            return {}
-        raw = response.content
         if not isinstance(raw, bytes) or not 10_000 <= len(raw) <= 400_000:
             return {}
         reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
@@ -51,7 +64,7 @@ def official_nifty500_industries(*, get=None):
             if len(members) > MAX_MEMBERS:
                 return {}
         return members if MIN_MEMBERS <= len(members) <= MAX_MEMBERS else {}
-    except (requests.RequestException, UnicodeError, ValueError, TypeError,
+    except (UnicodeError, ValueError, TypeError,
             csv.Error, OverflowError):
         return {}
 
@@ -75,6 +88,8 @@ def research_industry_peers(holdings, *, members=None, history_fetcher=None,
     if not isinstance(members, dict) or not MIN_MEMBERS <= len(members) <= MAX_MEMBERS:
         return out
 
+    holdings = [row for row in holdings if row.get("exchange") != "BSE"
+                and not str(row.get("price_source", "")).startswith("BSE:")]
     held = {str(row.get("symbol", "")).upper() for row in holdings}
     out["held_industries"] = {sym: members[sym] for sym in held if sym in members}
     # Row values are verified holdings-only figures. Do not persist or log them.
