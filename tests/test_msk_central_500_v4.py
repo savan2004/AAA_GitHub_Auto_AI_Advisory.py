@@ -9,8 +9,8 @@ ROSTER = {f"S{i}": f"IN{i:010d}" for i in range(500)}
 ROSTER_BYTES = ("Symbol,ISIN Code\n" + "\n".join(f"{s},{i}" for s,i in ROSTER.items())).encode()
 
 
-def archive(*, missing=None, wrong=None, duplicate=None, session=DAY):
-    head = "TRADDT,TCKRSYMB,SCTYSRS,ISIN,OPNPRIC,HGHPRIC,LWPRIC,CLSPRIC,TTLTRADGVOL\n"
+def archive(*, missing=None, wrong=None, duplicate=None, session=DAY, headers=None):
+    head = (headers or "TradDt,TckrSymb,SctySrs,ISIN,OpnPric,HghPric,LwPric,ClsPric,TtlTradgVol") + "\n"
     rows = [f"{session},{s},EQ,{i if s!=wrong else 'IN9999999999'},100,110,90,105,100"
             for s,i in ROSTER.items() if s!=missing]
     if duplicate:
@@ -71,6 +71,14 @@ class FiveHundredTests(unittest.TestCase):
         self.assertEqual(bad, {"S3","S5"})
         with self.assertRaises(ValueError):
             archive_rows(archive(session=date(2026,11,26)), ROSTER, DAY)
+
+    def test_case_normalization_and_duplicate_header_rejection(self):
+        mixed = " TradDt , TckrSymb ,SctySrs,ISIN,OpnPric,HghPric,LwPric,ClsPric,TtlTradgVol"
+        self.assertEqual(len(archive_rows(archive(headers=mixed), ROSTER, DAY)[0]),500)
+        with self.assertRaisesRegex(ValueError,"duplicate archive headers"):
+            archive_rows(archive(headers=mixed+",tradDT"), ROSTER, DAY)
+        with self.assertRaisesRegex(ValueError,"missing archive fields: ISIN"):
+            archive_rows(archive(headers=mixed.replace("ISIN","Other")), ROSTER, DAY)
 
     def test_probe_counts_and_hash(self):
         calls = []

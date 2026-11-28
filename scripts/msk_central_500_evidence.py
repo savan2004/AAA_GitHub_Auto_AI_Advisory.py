@@ -105,16 +105,23 @@ def archive_rows(data, roster, session, *, series=None):
             raise ValueError("invalid archive shape")
         with archive.open(members[0]) as raw, io.TextIOWrapper(raw, encoding="utf-8-sig") as stream:
             reader = csv.DictReader(stream)
-            headers = set(reader.fieldnames or [])
-            if not required.issubset(headers) or len(headers) != len(reader.fieldnames or []):
-                raise ValueError("missing or duplicate archive headers")
-            for row in reader:
-                kind=row["SCTYSRS"].strip()
+            # Match the proven smart_chart_eod_recovery.py UDiFF normalization.
+            # NSE publishes mixed-case fields (TradDt, TckrSymb, SctySrs, ...).
+            headers = {str(h).strip().upper() for h in reader.fieldnames or []}
+            if len(headers) != len(reader.fieldnames or []):
+                raise ValueError("duplicate archive headers")
+            if not required.issubset(headers):
+                raise ValueError("missing archive fields: " + ",".join(sorted(required-headers)))
+            for raw_row in reader:
+                if None in raw_row or any(v is None for v in raw_row.values()):
+                    raise ValueError("malformed archive row")
+                row = {str(k).strip().upper(): str(v).strip() for k,v in raw_row.items()}
+                kind=row["SCTYSRS"].strip().upper()
                 if kind=="EQ":
                     eq_total += 1
                     if row["TRADDT"].strip() != session.isoformat():
                         raise ValueError("wrong session in official archive")
-                sym = row["TCKRSYMB"].strip()
+                sym = row["TCKRSYMB"].strip().upper()
                 if sym not in roster or kind!=series[sym]:
                     continue
                 if row["TRADDT"].strip() != session.isoformat():
@@ -124,7 +131,7 @@ def archive_rows(data, roster, session, *, series=None):
                     continue
                 seen.add(sym)
                 try:
-                    if row["ISIN"].strip() != roster[sym]:
+                    if row["ISIN"].strip().upper() != roster[sym]:
                         raise ValueError("ISIN mismatch")
                     o,h,l,c,v = (Decimal(row[k]) for k in ("OPNPRIC","HGHPRIC","LWPRIC","CLSPRIC","TTLTRADGVOL"))
                     if (not all(x.is_finite() for x in (o,h,l,c,v)) or min(o,h,l,c) <= 0
@@ -156,7 +163,8 @@ def probe(session, *, get=fetch, retrieved_at=None):
                           admission_status="NOT_EVALUATED")
             break
         except (ValueError, TypeError, KeyError, AttributeError, OSError, URLError, csv.Error, UnicodeError) as exc:
-            report["attempts"].append({"source":url, "error":type(exc).__name__})
+            report["attempts"].append({"source":url, "error":type(exc).__name__,
+                                       "detail":str(exc)[:180] if type(exc) is ValueError else None})
     if not roster:
         return report
     report["missing"] = sorted(roster)
@@ -174,7 +182,8 @@ def probe(session, *, get=fetch, retrieved_at=None):
             break
         except (ValueError, TypeError, KeyError, AttributeError, OSError, URLError, csv.Error,
                 UnicodeError, zipfile.BadZipFile, RuntimeError) as exc:
-            report["attempts"].append({"source":url, "error":type(exc).__name__})
+            report["attempts"].append({"source":url, "error":type(exc).__name__,
+                                       "detail":str(exc)[:180] if type(exc) is ValueError else None})
     return report
 
 
