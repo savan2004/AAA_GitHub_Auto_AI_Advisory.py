@@ -1,0 +1,54 @@
+# MSK Bot only. Free-tier, opt-in offline QA; never start the bot.
+# No schedules, production credentials, Neon connections, Telegram or deploy.
+version: 2.1
+parameters:
+  run-msk-qa:
+    type: boolean
+    default: false
+jobs:
+  msk-offline-regression:
+    docker:
+      - image: cimg/python:3.11
+    resource_class: small
+    environment:
+      MSK_RESEARCH_ONLY: "1"
+      MPLBACKEND: Agg
+      MPLCONFIGDIR: /tmp/msk-matplotlib
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - checkout
+      - run:
+          name: Verify exact source revision and required test files
+          command: |
+            git rev-parse HEAD
+            for f in tests/test_msk_ai_builder_beta.py tests/test_msk_private_beta_wizard.py tests/test_portfolio_builder_form.py tests/test_market_data_recovery.py tests/test_portfolio_doctor_bhavcopy.py; do
+              test -f "$f" || exit 1
+            done
+      - run:
+          name: Install existing project dependencies
+          command: python -m pip install --disable-pip-version-check --no-input -r requirements.txt
+      - run:
+          name: Compile bot without starting it
+          command: python -m py_compile main.py
+      - run:
+          name: Verify portfolio form and private research preview safety
+          command: |
+            python -m unittest discover -s tests -p test_msk_ai_builder_beta.py -v
+            python -m unittest discover -s tests -p test_msk_private_beta_wizard.py -v
+            python -m unittest discover -s tests -p test_portfolio_builder_form.py -v
+      - run:
+          name: Verify incremental market history and official price reconciliation
+          command: |
+            python -m unittest discover -s tests -p test_market_data_recovery.py -v
+            python -m unittest discover -s tests -p test_portfolio_doctor_bhavcopy.py -v
+workflows:
+  msk-offline-qa:
+    when:
+      or:
+        - equal: [ci/msk-circleci-offline-qa-20261128, << pipeline.git.branch >>]
+        - << pipeline.parameters.run-msk-qa >>
+    jobs:
+      - msk-offline-regression
