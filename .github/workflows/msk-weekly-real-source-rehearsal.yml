@@ -6,6 +6,8 @@ on:
       - 'msk_ai_builder_evidence.py'
       - 'msk_ai_builder_quarter_check.py'
       - 'msk_ai_builder_discovery.py'
+      - 'msk_ai_builder_legacy_xml.py'
+      - 'tests/test_msk_ai_builder_legacy_xml.py'
       - 'msk_ai_builder_filings.py'
       - 'msk_ai_builder_diagnostics.py'
       - 'tests/test_msk_ai_builder_diagnostics.py'
@@ -42,6 +44,7 @@ jobs:
       - name: Verify issuer BANKING source arithmetic and disclosed-excise reconciliation
         run: python -m unittest discover -s tests -p 'test_msk_ai_builder_bank_accounting.py' -v
       - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_discovery.py' -v
+      - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_legacy_xml.py' -v
       - run: python -m unittest discover -s tests -p 'test_msk_ai_builder_quarter_check.py' -v
       - name: Test machine-readable failure diagnosis without full market refresh
         run: python -m unittest discover -s tests -p 'test_msk_ai_builder_diagnostics.py' -v
@@ -155,14 +158,17 @@ jobs:
           # Keep already verified latest observations; exercise seven missing
           # historical periods per company without approving or writing production.
           from msk_ai_builder_discovery import discover_legacy_quarter
+          from msk_ai_builder_legacy_xml import verify_legacy_quarter
           history = audit_quarter_history(staged_companies, primary_checks,
-              deadline_seconds=300, checkpoint=lambda result:persist(quarter_history=result),
-              legacy_discover=discover_legacy_quarter)
+              deadline_seconds=420, checkpoint=lambda result:persist(quarter_history=result),
+              legacy_discover=discover_legacy_quarter,legacy_verify=verify_legacy_quarter)
           for row in history["companies"]:
               for period,obs in row["periods"].items():
                   if "legacy_discovery" in obs:
                       print("LEGACY_SOURCE_DISCOVERY",row["symbol"],period,
                             json.dumps(obs["legacy_discovery"],sort_keys=True))
+                      print("LEGACY_NUMERIC_RESULT",row["symbol"],period,
+                            obs.get("legacy_verification",obs["status"]))
           persist(quarter_history=history)
           print("HISTORICAL_QUARTER_COVERAGE",json.dumps({
               k:v for k,v in history.items() if k!="companies"},sort_keys=True))

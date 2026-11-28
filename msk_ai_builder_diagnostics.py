@@ -253,7 +253,7 @@ def diagnose_quarter(member, evidence, *, listing=fetch_listing,
 
 
 def audit_quarter_history(companies, latest_checks, *, verify=None,
-                          deadline_seconds=300, clock=None, checkpoint=None, legacy_discover=None):
+                          deadline_seconds=300, clock=None, checkpoint=None, legacy_discover=None, legacy_verify=None):
     """Exercise missing primary periods, newest first across all selected issuers.
 
     Keep the already matched latest quarter; never re-fetch it. Failures and
@@ -323,7 +323,18 @@ def audit_quarter_history(companies, latest_checks, *, verify=None,
                      "next_action":diagnostic["next_action"],"publication_status":"WITHHELD"}
                 if legacy_discover and period<date(2025,3,31) and str(exc)=="FILING_METADATA_COVERAGE":
                     try:
-                        obs["legacy_discovery"]=legacy_discover(c.member,c.evidence,period_end=period)
+                        discovery=legacy_discover(c.member,c.evidence,period_end=period)
+                        obs["legacy_discovery"]=discovery
+                        if legacy_verify and discovery.get("status")=="LEGACY_REFERENCES_DISCOVERED_ONLY":
+                            try:
+                                recovered=legacy_verify(c.member,c.evidence,period_end=period,discovery=discovery)
+                                if not matched(recovered,c,period,"HISTORICAL_QUARTER_MATCHED_ONLY"):
+                                    raise EvidenceError("HISTORY_AUDIT_OBSERVATION_IDENTITY")
+                                obs={**recovered,"legacy_discovery":discovery}
+                            except EvidenceError as verify_exc:
+                                obs["legacy_verification"]=classify_failure(verify_exc)["reason_code"]
+                            except Exception:
+                                obs["legacy_verification"]="LEGACY_XML_UNAVAILABLE"
                     except EvidenceError as legacy_exc:
                         obs["legacy_discovery"]={"status":classify_failure(legacy_exc)["reason_code"],
                                                  "publication_status":"WITHHELD"}
