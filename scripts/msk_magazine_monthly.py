@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -109,6 +109,220 @@ def _source_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _receipt_timestamp(value: str) -> datetime | None:
+    """Parse a receipt timestamp only when it carries an explicit UTC offset."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def validate_source_receipts(pack: dict, accepted_rows: dict[int, list[dict]],
+                             source_root: Path, issue: str, as_of: date,
+                             validation_time: datetime | None = None) -> dict:
+    """Check receipt structure and local byte consistency, not authenticity.
+
+    Receipt claims are self-reported. A passing check never authenticates source
+    retrieval or reviewer identity; that remains a separate release requirement.
+    """
+    validation_time = validation_time or datetime.now(timezone.utc)
+    if validation_time.tzinfo is None or validation_time.utcoffset() is None:
+        return {"passed": False, "receipts_checked": 0,
+                "failures": ["Validation timestamp must include timezone"]}
+    validation_time = validation_time.astimezone(timezone.utc)
+    accepted = [row for rows in accepted_rows.values() for row in rows]
+    failures = []
+    if not accepted:
+        return {"passed": False, "receipts_checked": 0,
+                "failures": ["No accepted source observations to receipt-check"]}
+    receipts = pack.get("source_receipts")
+    if not isinstance(receipts, list) or not receipts:
+        return {"passed": False, "receipts_checked": 0,
+                "failures": ["No source_receipts handoff records supplied"]}
+    root = source_root.resolve(strict=True)
+    expected = {(row["source_url"], row["source_file"], row["source_sha256"])
+                for row in accepted}
+    checked = set()
+    for i, receipt in enumerate(receipts, 1):
+        try:
+            if not isinstance(receipt, dict):
+                raise MagazineError("Receipt must be an object")
+            if receipt.get("issue") != issue:
+                raise MagazineError("Receipt issue mismatch")
+            key = (receipt.get("source_url"), receipt.get("source_file"),
+                   receipt.get("source_sha256"))
+            if key not in expected:
+                raise MagazineError("Receipt does not match an accepted observation")
+            if key in checked:
+                raise MagazineError("Duplicate receipt for source bytes")
+            fetched = _receipt_timestamp(receipt.get("fetched_at_utc"))
+            reviewed = _receipt_timestamp(receipt.get("reviewed_at_utc"))
+            if fetched is None or reviewed is None:
+                raise MagazineError("Fetch/review timestamps must include timezone")
+            if fetched > validation_time or reviewed > validation_time:
+                raise MagazineError("Receipt timestamp is in the future relative to validation")
+            if fetched.date() > as_of or reviewed.date() > as_of:
+                raise MagazineError("Receipt timestamp is after issue evidence cutoff")
+            if reviewed < fetched:
+                raise MagazineError("Review timestamp precedes source retrieval")
+            if type(receipt.get("http_status")) is not int or receipt["http_status"] != 200:
+                raise MagazineError("Source retrieval must record HTTP 200")
+            if receipt.get("reviewer_verified") is not True:
+                raise MagazineError("Independent reviewer confirmation is missing")
+            reviewer = receipt.get("reviewer")
+            notes = receipt.get("review_notes")
+            if not isinstance(reviewer, str) or not reviewer.strip():
+                raise MagazineError("Reviewer name/identity is missing")
+            if not isinstance(notes, str) or len(notes.strip()) < 20:
+                raise MagazineError("Reviewer cross-check notes are missing")
+            name = receipt.get("source_file")
+            if not isinstance(name, str) or not name or Path(name).is_absolute():
+                raise MagazineError("Receipt source file must be relative")
+            path = (root / name).resolve(strict=True)
+            if not path.is_relative_to(root) or not path.is_file():
+                raise MagazineError("Receipt source file outside trusted directory")
+            if hashlib.sha256(path.read_bytes()).hexdigest() != receipt.get("source_sha256"):
+                raise MagazineError("Receipt byte checksum mismatch")
+            checked.add(key)
+        except (MagazineError, OSError, ValueError, TypeError, KeyError) as exc:
+            failures.append(f"Receipt {i}: {exc}")
+    missing = expected - checked
+    if missing:
+        failures.append(f"Missing receipts for {len(missing)} accepted source observation(s)")
+    return {"passed": not failures and checked == expected,
+            "receipts_checked": len(checked), "failures": failures,
+            "schema_only": True,
+            "human_independent_authentication_required": True}
+
+
+
+def validate_handoff_manifest(pack: dict, issue: str,
+                              validation_time: datetime | None = None) -> dict:
+    """Validate the edition-level AiAutoUpdate handoff envelope.
+
+    This checks required fields and date/count consistency only. It cannot
+    authenticate the source chat, publisher, approval, or document contents.
+    """
+    failures = []
+    validation_time = validation_time or datetime.now(timezone.utc)
+    if not isinstance(validation_time, datetime) or validation_time.tzinfo is None or validation_time.utcoffset() is None:
+        return {"passed": False, "failures": ["Validation timestamp must include timezone"],
+                "schema_only": True, "human_independent_authentication_required": True}
+    validation_time = validation_time.astimezone(timezone.utc)
+    receipt = pack.get("handoff_receipt") if isinstance(pack, dict) else None
+    if not isinstance(receipt, dict):
+        return {"passed": False, "failures": ["No edition-level handoff_receipt supplied"],
+                "schema_only": True, "human_independent_authentication_required": True}
+
+    if receipt.get("issue") != issue:
+        failures.append("Handoff issue mismatch")
+    if receipt.get("source_project") != "AiAutoUpdate":
+        failures.append("Source project must be AiAutoUpdate")
+    if not isinstance(receipt.get("source_chat"), str) or not receipt["source_chat"].strip():
+        failures.append("Source chat/channel identity is missing")
+    message_id = receipt.get("source_message_id")
+    if type(message_id) is not int or message_id <= 0:
+        failures.append("Positive source_message_id is required")
+
+    published = _receipt_timestamp(receipt.get("published_at"))
+    approved = _receipt_timestamp(receipt.get("approval_timestamp"))
+    if published is None:
+        failures.append("published_at must include an explicit UTC offset")
+    elif published > validation_time:
+        failures.append("Handoff publication timestamp is in the future")
+    if approved is None:
+        failures.append("approval_timestamp must include an explicit UTC offset")
+    elif approved > validation_time:
+        failures.append("Handoff approval timestamp is in the future")
+    if not isinstance(receipt.get("approved_by"), str) or not receipt["approved_by"].strip():
+        failures.append("approved_by is missing")
+    if receipt.get("editorial_signoff") is not True:
+        failures.append("Source handoff editorial sign-off is missing")
+
+    as_of = None
+    try:
+        as_of = date.fromisoformat(receipt.get("as_of", ""))
+    except (TypeError, ValueError):
+        failures.append("as_of must be an ISO calendar date")
+    if as_of is not None and published is not None:
+        if as_of > published.date():
+            failures.append("as_of is later than published_at")
+        try:
+            year, month = (int(part) for part in issue.split("-"))
+            next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+            issue_end = next_month - timedelta(days=1)
+            if as_of > issue_end:
+                failures.append("as_of is after the issue month")
+        except (TypeError, ValueError):
+            failures.append("Issue month is invalid for handoff validation")
+
+    document_ids = receipt.get("source_document_ids", [])
+    document_urls = receipt.get("source_document_urls", [])
+    if not isinstance(document_ids, list) or not isinstance(document_urls, list):
+        failures.append("Source document IDs and URLs must be lists")
+        document_ids, document_urls = [], []
+    else:
+        if any(not isinstance(item, str) or not item.strip() for item in document_ids):
+            failures.append("Source document IDs contain an empty or invalid value")
+        if len(set(item for item in document_ids if isinstance(item, str))) != len(document_ids):
+            failures.append("Source document IDs must be unique")
+        for item in document_urls:
+            try:
+                parsed = urlsplit(item) if isinstance(item, str) else None
+                if (parsed is None or parsed.scheme != "https" or not parsed.hostname or
+                        parsed.username or parsed.password or parsed.query or parsed.fragment):
+                    failures.append("Source document URLs must be safe HTTPS links without credentials, query strings or fragments")
+                    break
+            except ValueError:
+                failures.append("Source document URL is invalid")
+                break
+        if not document_ids and not document_urls:
+            failures.append("At least one source document ID or URL is required")
+        if document_ids and document_urls and len(document_ids) != len(document_urls):
+            failures.append("Source document ID/URL counts do not match")
+
+    coverage = receipt.get("coverage")
+    if not isinstance(coverage, dict):
+        failures.append("Coverage counts are missing")
+        coverage_summary = None
+    else:
+        keys = ("universe_size", "verified_count", "missing_count")
+        values = [coverage.get(key) for key in keys]
+        if any(type(value) is not int or value < 0 for value in values):
+            failures.append("Coverage counts must be non-negative integers")
+            coverage_summary = None
+        else:
+            universe, verified, missing = values
+            if verified + missing != universe:
+                failures.append("Coverage verified_count + missing_count must equal universe_size")
+            coverage_summary = {"universe_size": universe,
+                                "verified_count": verified,
+                                "missing_count": missing}
+
+    data_failures = receipt.get("data_failures")
+    if not isinstance(data_failures, list) or any(
+            not isinstance(item, str) or not item.strip() for item in data_failures):
+        failures.append("data_failures must be a list of non-empty descriptions")
+        data_failures = []
+
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "schema_only": True,
+        "human_independent_authentication_required": True,
+        "partial_coverage": bool(coverage_summary and coverage_summary["missing_count"]) or bool(data_failures),
+        "coverage": coverage_summary,
+        "data_failures": data_failures,
+        "source_document_count": max(len(document_ids), len(document_urls)),
+        "source_message_id_present": type(message_id) is int and message_id > 0,
+    }
+
+
 def validate_evidence(pack: dict, issue: str, source_root: Path,
                       as_of: date) -> tuple[dict[int, list[dict]], list[str]]:
     """Require exact official-source bytes and matching excerpt/value.
@@ -121,6 +335,8 @@ def validate_evidence(pack: dict, issue: str, source_root: Path,
     rows = pack.get("observations", [])
     if not isinstance(rows, list):
         raise MagazineError("Observations must be a list")
+    if not rows:
+        return {}, ["No financial observations supplied; source data withheld"]
     by_page: dict[int, list[dict]] = {}
     failures = []
     root = source_root.resolve(strict=True)
@@ -339,11 +555,38 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
             "existing draft, page evidence, or release ledger"
         )
     dest.mkdir(parents=True, exist_ok=False)
+    source_receipt_validation = {"passed": False, "receipts_checked": 0,
+                                 "failures": ["Source receipt validation not run"]}
+    source_handoff_validation = {
+        "passed": False, "failures": ["No edition-level handoff manifest supplied"],
+        "schema_only": True, "human_independent_authentication_required": True,
+    }
     if source_pack is not None:
         if source_root is None:
             raise MagazineError("--source-root required with --source-pack")
-        source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
-        by_page, failures = validate_evidence(source, issue, source_root, now.astimezone(IST).date())
+        try:
+            source = json.loads(Path(source_pack).read_text(encoding="utf-8"))
+            source_handoff_validation = validate_handoff_manifest(
+                source, issue, validation_time=now)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            by_page, failures = {}, [f"Unreadable or invalid source evidence pack: {type(exc).__name__}"]
+        else:
+            try:
+                by_page, failures = validate_evidence(
+                    source, issue, source_root, now.astimezone(IST).date())
+                source_receipt_validation = validate_source_receipts(
+                    source, by_page, source_root, issue, now.astimezone(IST).date(),
+                    validation_time=now)
+            except OSError as exc:
+                # A missing/unreadable source directory must not suppress the
+                # unapproved issue draft. Withhold all observations instead.
+                by_page, failures = {}, [
+                    f"Source evidence directory unavailable: {type(exc).__name__}"
+                ]
+                source_receipt_validation = {
+                    "passed": False, "receipts_checked": 0,
+                    "failures": failures[:],
+                }
     else:
         by_page, failures = {}, ["No independently retrieved financial source pack supplied"]
     pdf_file = dest / f"MSK_{issue}_EDITORIAL_DRAFT.pdf"
@@ -377,6 +620,14 @@ def generate(issue: str, output_dir: Path, *, master_path: Path = DEFAULT_MASTER
     result = {"issue": issue, "draft_pdf": pdf_file.name,
               "pdf_sha256": hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
               "page_count": 16, "source_consistency_rows": sum(map(len, by_page.values())),
+              "source_receipt_validation": source_receipt_validation,
+              "source_receipt_structurally_valid": source_receipt_validation["passed"],
+              "source_handoff_validation": source_handoff_validation,
+              "source_handoff_structurally_valid": source_handoff_validation["passed"],
+              "source_authenticity_verified": False,
+              "source_provenance_blocker": (
+                  "Local source hashes and self-reported receipts do not prove " 
+                  "independent retrieval or reviewer identity; independent evidence is required"),
               "source_failures": failures, "logo_asset_provided": bool(logo_file and logo_file.is_file()),
               "mechanical_pdf_checks": qa, "editorial_approved": False,
               "publication_allowed": False, "pages": pages}

@@ -10,6 +10,7 @@ import unittest
 from scripts.msk_magazine_monthly import (
     DEFAULT_MASTER, MagazineError, audit_pdf, first_monday,
     generate, is_monthly_due, issue_for, load_master, validate_evidence,
+    validate_source_receipts, validate_handoff_manifest,
 )
 
 
@@ -100,6 +101,20 @@ class MagazineMonthlyTests(unittest.TestCase):
         self.assertFalse(by_page[3])
         self.assertTrue(any("conflicting published numbers" in e for e in errors))
 
+    def test_candidate_only_dry_run_snapshot_is_not_financial_evidence(self):
+        # Mirrors the metadata/candidate-only shape of an unapproved dry-run
+        # snapshot; candidate rows are not dated, source-matched observations.
+        pack = {
+            "issue": "2026-11",
+            "report": {"publishable": False, "dry_run": True},
+            "candidates": [{"symbol": "EXAMPLE", "price": 123.45}],
+        }
+        rows, errors = validate_evidence(
+            pack, "2026-11", self.source_root, date(2026, 11, 27)
+        )
+        self.assertEqual(rows, {})
+        self.assertIn("No financial observations supplied", " ".join(errors))
+
     def test_wrong_source_hash_fails(self):
         row = copy.deepcopy(self.row)
         row["source_sha256"] = "a" * 64
@@ -170,6 +185,169 @@ class MagazineMonthlyTests(unittest.TestCase):
             generate("2026-11", self.root / "out",
                      now=datetime(2026, 12, 7, 2, 30, tzinfo=timezone.utc),
                      scheduled=True)
+
+    def _receipt(self, row=None, *, fetch_time="2026-11-16T10:00:00Z",
+                  review_time="2026-11-16T10:15:00Z"):
+        row = row or self.row
+        return {
+            "issue": "2026-11",
+            "source_url": row["source_url"],
+            "source_file": row["source_file"],
+            "source_sha256": row["source_sha256"],
+            "fetched_at_utc": fetch_time,
+            "http_status": 200,
+            "reviewer_verified": True,
+            "reviewer": "Test-only reviewer",
+            "reviewed_at_utc": review_time,
+            "review_notes": "Test fixture cross-check; not real evidence.",
+        }
+
+
+    def _handoff(self):
+        return {
+            "issue": "2026-11",
+            "source_project": "AiAutoUpdate",
+            "source_chat": "AutoAiAdvisory (SK)",
+            "source_message_id": 12345,
+            "published_at": "2026-11-27T12:00:00Z",
+            "as_of": "2026-11-27",
+            "approved_by": "Test-only source owner",
+            "approval_timestamp": "2026-11-27T12:15:00Z",
+            "source_document_ids": ["test-document-001"],
+            "source_document_urls": [],
+            "coverage": {"universe_size": 10, "verified_count": 8, "missing_count": 2},
+            "data_failures": ["Two rows intentionally missing in this test fixture"],
+            "editorial_signoff": True,
+        }
+
+    def test_handoff_manifest_requires_complete_edition_receipt(self):
+        valid = validate_handoff_manifest(
+            {"handoff_receipt": self._handoff()}, "2026-11",
+            validation_time=datetime(2026, 11, 28, 3, 30, tzinfo=timezone.utc))
+        self.assertTrue(valid["passed"])
+        self.assertTrue(valid["schema_only"])
+        self.assertTrue(valid["human_independent_authentication_required"])
+        self.assertTrue(valid["partial_coverage"])
+        self.assertEqual(valid["coverage"]["missing_count"], 2)
+
+        for field in ("source_message_id", "approved_by", "coverage", "editorial_signoff"):
+            with self.subTest(missing=field):
+                receipt = self._handoff()
+                receipt.pop(field)
+                rejected = validate_handoff_manifest(
+                    {"handoff_receipt": receipt}, "2026-11",
+                    validation_time=datetime(2026, 11, 28, 3, 30, tzinfo=timezone.utc))
+                self.assertFalse(rejected["passed"])
+
+    def test_handoff_manifest_rejects_future_dates_and_bad_coverage(self):
+        receipt = self._handoff()
+        receipt["approval_timestamp"] = "2026-11-29T00:00:00Z"
+        future = validate_handoff_manifest(
+            {"handoff_receipt": receipt}, "2026-11",
+            validation_time=datetime(2026, 11, 28, 3, 30, tzinfo=timezone.utc))
+        self.assertFalse(future["passed"])
+        self.assertIn("future", " ".join(future["failures"]).casefold())
+
+        receipt = self._handoff()
+        receipt["coverage"]["verified_count"] = 9
+        unbalanced = validate_handoff_manifest(
+            {"handoff_receipt": receipt}, "2026-11",
+            validation_time=datetime(2026, 11, 28, 3, 30, tzinfo=timezone.utc))
+        self.assertFalse(unbalanced["passed"])
+        self.assertIn("coverage", " ".join(unbalanced["failures"]).casefold())
+
+    def test_handoff_structure_does_not_authenticate_financial_data(self):
+        pack = {"issue": "2026-11", "observations": [],
+                "handoff_receipt": self._handoff()}
+        pack_path = self.root / "handoff_only_pack.json"
+        pack_path.write_text(json.dumps(pack), encoding="utf-8")
+        output = generate(
+            "2026-11", self.root / "out", source_pack=pack_path,
+            source_root=self.source_root,
+            now=datetime(2026, 11, 28, 3, 30, tzinfo=timezone.utc))
+        self.assertTrue(output["source_handoff_structurally_valid"])
+        self.assertFalse(output["source_authenticity_verified"])
+        self.assertFalse(output["editorial_approved"])
+        self.assertFalse(output["publication_allowed"])
+        self.assertEqual(output["source_handoff_validation"]["coverage"]["missing_count"], 2)
+
+
+    def test_future_receipt_timestamp_is_rejected(self):
+        accepted, errors = self.verify()
+        self.assertFalse(errors)
+        receipt = self._receipt(fetch_time="2026-11-16T18:00:00Z",
+                                review_time="2026-11-16T18:15:00Z")
+        gate = validate_source_receipts(
+            {"source_receipts": [receipt]}, accepted, self.source_root,
+            "2026-11", date(2026, 11, 16),
+            validation_time=datetime(2026, 11, 16, 17, 0, tzinfo=timezone.utc))
+        self.assertFalse(gate["passed"])
+        self.assertIn("future relative to validation", " ".join(gate["failures"]))
+
+    def test_receipt_schema_pass_still_withholds_authenticity(self):
+        pack = {"issue": "2026-11", "observations": [self.row],
+                "source_receipts": [self._receipt()]}
+        pack_path = self.root / "pack_with_receipt.json"
+        pack_path.write_text(json.dumps(pack), encoding="utf-8")
+        output = generate("2026-11", self.root / "out",
+                         source_pack=pack_path, source_root=self.source_root,
+                         now=datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc))
+        self.assertTrue(output["source_receipt_structurally_valid"])
+        self.assertIs(output["source_authenticity_verified"], False)
+        self.assertIs(output["publication_allowed"], False)
+        self.assertTrue(output["source_receipt_validation"]["schema_only"])
+
+    def test_missing_receipt_fails_closed_for_authenticity(self):
+        pack = {"issue": "2026-11", "observations": [self.row]}
+        pack_path = self.root / "pack_without_receipt.json"
+        pack_path.write_text(json.dumps(pack), encoding="utf-8")
+        output = generate("2026-11", self.root / "out",
+                         source_pack=pack_path, source_root=self.source_root,
+                         now=datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc))
+        self.assertFalse(output["source_receipt_structurally_valid"])
+        self.assertIs(output["source_authenticity_verified"], False)
+        self.assertIs(output["publication_allowed"], False)
+        self.assertIn("No source_receipts", " ".join(output["source_receipt_validation"]["failures"]))
+
+    def test_corrupt_source_pack_generates_data_withheld_draft(self):
+        pack_path = self.root / "corrupt_source_pack.json"
+        pack_path.write_text("{bad JSON", encoding="utf-8")
+        output = generate("2026-11", self.root / "out",
+                         source_pack=pack_path, source_root=self.source_root,
+                         now=datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(output["source_consistency_rows"], 0)
+        self.assertFalse(output["publication_allowed"])
+        self.assertTrue(any("invalid source evidence pack" in item
+                           for item in output["source_failures"]))
+        pdf = self.root / "out" / "2026-11" / output["draft_pdf"]
+        self.assertTrue(pdf.is_file())
+
+    def test_missing_source_directory_still_generates_withheld_draft(self):
+        pack = self.root / "pack_with_missing_source_directory.json"
+        pack.write_text(json.dumps({
+            "issue": "2026-11", "observations": [self.row],
+            "source_receipts": [],
+        }), encoding="utf-8")
+        missing_root = self.root / "missing-source-directory"
+        self.assertFalse(missing_root.exists())
+
+        output = generate(
+            "2026-11", self.root / "out",
+            source_pack=pack, source_root=missing_root,
+            now=datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(output["source_consistency_rows"], 0)
+        self.assertFalse(output["source_receipt_structurally_valid"])
+        self.assertFalse(output["source_authenticity_verified"])
+        self.assertFalse(output["editorial_approved"])
+        self.assertFalse(output["publication_allowed"])
+        self.assertIn("Source evidence directory unavailable",
+                      " ".join(output["source_failures"]))
+        self.assertFalse(output["source_receipt_validation"]["passed"])
+        pdf = self.root / "out" / "2026-11" / output["draft_pdf"]
+        self.assertTrue(pdf.is_file())
+        self.assertTrue(output["mechanical_pdf_checks"]["passed"])
 
     def test_real_input_keeps_claim_unapproved(self):
         pack = self.root / "pack.json"
